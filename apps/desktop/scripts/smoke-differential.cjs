@@ -47,6 +47,7 @@ async function main() {
     for (const name of await fs.readdir(root)) {
       if (name.startsWith('Bike4Mind-0.2.3-')) await fs.copyFile(path.join(root, name), path.join(assets, name));
     }
+    await fs.copyFile(path.join(__dirname, '..', 'install.sh'), path.join(assets, 'install.sh'));
     execFileSync('python3', [path.join(__dirname, 'distribution.py'), assets], {
       env: {
         ...process.env,

@@ -34,6 +34,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import FileStorageBar from '../../common/FileStorageBar';
+import StorageBreakdown from '../../common/StorageBreakdown';
 import ShareDocumentModal from '../../common/ShareModal';
 import CreateKnowledgeFromUrl from '../../Knowledge/CreateKnowledgeFromUrl';
 import { useKnowledgeModal } from '../../Knowledge/KnowledgeModal';
@@ -708,7 +709,6 @@ const FileBrowserContent = () => {
                 gap: '10px',
                 maxWidth: { xs: '100%', md: '430px' },
                 flex: { xs: 0, md: 1 },
-                height: { xs: 'auto', md: '32px' },
                 mt: { xs: '0px', md: '8px' },
               }}
             >
@@ -716,6 +716,7 @@ const FileBrowserContent = () => {
                 currentStorageInBytes={currentUser?.currentStorageSize ?? 0}
                 storageLimitInBytes={storageLimitToBytes(currentUser?.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB)}
               />
+              <StorageBreakdown overlay />
             </Box>
           </Stack>
 

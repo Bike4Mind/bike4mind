@@ -237,6 +237,8 @@ export interface ICompletionOptions {
     accumCacheWriteTokens?: number;
     /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
     accumTurnUsage?: TurnUsage[];
+    /** Stays undefined until a turn reports a count - see reasoningTokens.ts. */
+    accumReasoningTokens?: number;
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -356,6 +358,12 @@ export type CompletionInfo = {
   toolStarted?: ToolStarted;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Provider-reported reasoning/thinking tokens: a SUBSET of `outputTokens`, not
+   * additive, and never billed separately. Absent when the provider reported nothing.
+   * Same accumulate-across-tool-turns contract as the other token counts.
+   */
+  reasoningTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
   toolsUsed?: Array<RecordableToolUse>;

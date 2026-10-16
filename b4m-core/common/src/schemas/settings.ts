@@ -227,9 +227,10 @@ When you report a time-sensitive fact, state what it is as of - the date of the 
  * forced retrieval already shows on out-of-corpus questions, reached by a different route. Three of
  * its clauses are load-bearing for a specific co-resident path, not general hedging:
  * - "from an attached document" - a small attached corpus is INLINED rather than deferred to
- *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval deliberately steps aside on
- *   an attached-files turn (`forcedRetrievalAbstention` emits nothing there). Without this clause
- *   the section tells the model to go searching for content already sitting in its context.
+ *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval steps aside on an
+ *   attached-files turn in a chat with no chosen lake (`forcedRetrievalAbstention` emits nothing
+ *   there). Without this clause the section tells the model to go searching for content already
+ *   sitting in its context.
  * - "already been searched on this turn" - on a forced turn that found nothing,
  *   `forcedRetrievalNoContextPrompt` instructs the model to say the library does not cover the
  *   question. A nudge to search then invites a second identical query - a billed query embedding,
@@ -466,6 +467,17 @@ export const SettingKeySchema = z.enum([
 
   // Knowledge
   'enableAutoChunk',
+
+  // Skill Market moderation
+  'SkillMarketHighRiskTools',
+  'SkillMarketUrlAllowlist',
+  'SkillMarketClassifierMinConfidence',
+  'SkillMarketAuditSampleRate',
+  'SkillMarketReviewSlaHours',
+  'SkillMarketDailySubmitLimit',
+  'SkillMarketMaxListingsPerUser',
+  'SkillMarketPublicMinAccountAgeDays',
+  'SkillMarketReportAutoHideThreshold',
 
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
@@ -2814,6 +2826,86 @@ export const settingsMap = {
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
     category: 'AI Moderation',
   }),
+  SkillMarketHighRiskTools: makeStringSetting({
+    key: 'SkillMarketHighRiskTools',
+    name: 'Skill Market High-Risk Tools',
+    defaultValue: '',
+    description:
+      'Comma-separated tool names that force a Skill Market listing into human review, in addition to the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketUrlAllowlist: makeStringSetting({
+    key: 'SkillMarketUrlAllowlist',
+    name: 'Skill Market URL Allowlist',
+    defaultValue: '',
+    description:
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketClassifierMinConfidence: makeNumberSetting({
+    key: 'SkillMarketClassifierMinConfidence',
+    name: 'Skill Market Classifier Min Confidence',
+    defaultValue: 0.8,
+    min: 0,
+    max: 1,
+    description: 'Below this classifier confidence a passing skill lands in the review tier instead of clean.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketAuditSampleRate: makeNumberSetting({
+    key: 'SkillMarketAuditSampleRate',
+    name: 'Skill Market Audit Sample Rate',
+    defaultValue: 0.1,
+    min: 0,
+    max: 1,
+    description: 'Share of auto-approved Skill Market versions sent to the admin audit queue.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReviewSlaHours: makeNumberSetting({
+    key: 'SkillMarketReviewSlaHours',
+    name: 'Skill Market Review SLA (hours)',
+    defaultValue: 72,
+    min: 1,
+    int: true,
+    description:
+      'A held Skill Market version waiting longer than this triggers a daily reminder to the author and reviewers. It is never auto-approved.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketDailySubmitLimit: makeNumberSetting({
+    key: 'SkillMarketDailySubmitLimit',
+    name: 'Skill Market Daily Submit Limit',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Max Skill Market submissions (new listings plus new versions) per user per 24 hours.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketMaxListingsPerUser: makeNumberSetting({
+    key: 'SkillMarketMaxListingsPerUser',
+    name: 'Skill Market Max Listings Per User',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'Max live (not withdrawn or delisted) Skill Market listings one author may hold.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketPublicMinAccountAgeDays: makeNumberSetting({
+    key: 'SkillMarketPublicMinAccountAgeDays',
+    name: 'Skill Market Public Min Account Age (days)',
+    defaultValue: 3,
+    min: 0,
+    description: 'Accounts younger than this cannot publish Public listings (Organization and Unlisted are allowed).',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReportAutoHideThreshold: makeNumberSetting({
+    key: 'SkillMarketReportAutoHideThreshold',
+    name: 'Skill Market Report Auto-Hide Threshold',
+    defaultValue: 3,
+    min: 1,
+    int: true,
+    description:
+      'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
+    category: 'AI Moderation',
+  }),
   FormatPromptTemplate: makeStringSetting({
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
@@ -4178,7 +4270,8 @@ export const settingsMap = {
       `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
       `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
       'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
-      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'query, so a value above the floor measured for the default model needs confirmation ' +
+      'to save. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
       'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
       '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
       'Re-measure after changing the embedding model.',
@@ -4973,16 +5066,13 @@ export const settingsMap = {
     // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
     max: 100_000,
     description:
-      'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
-      'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
-      'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
-      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
-      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
-      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
+      'Runaway brake on a single eligible hybrid compute job run on real external compute hardware ' +
+      '(see EnableHardwareCompute): a run whose reserved worst-case cost exceeds this is rejected before ' +
+      'submission, independent of the live device roster. It exists to stop a looping run or a client ' +
+      'retry bug, not to set a spending budget. The default suits a deployment that pays for hardware ' +
+      'out of its own funds; where hardware spend is funded and metered separately, size it so the ' +
+      'largest planned run fits under it (up to $100k, no deploy needed). A run above the per-user daily ' +
+      'cap is still rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -5011,13 +5101,12 @@ export const settingsMap = {
     min: 1,
     max: 100_000,
     description:
-      "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
+      "Rolling 24h per-user ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
-      'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
-      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
-      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
-      'patterns emerge.',
+      'hardware (see EnableHardwareCompute). A cumulative runaway brake alongside the per-run cost ceiling ' +
+      'and the concurrent-run cap, not a spending budget. The default suits a deployment that pays for ' +
+      'hardware out of its own funds; where hardware spend is funded and metered separately, size it to a ' +
+      'heavy day of planned runs. Raise it here without a deploy.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,

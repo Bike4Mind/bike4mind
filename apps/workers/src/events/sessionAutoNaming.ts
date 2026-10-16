@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import { questRepository, Session, sessionRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';

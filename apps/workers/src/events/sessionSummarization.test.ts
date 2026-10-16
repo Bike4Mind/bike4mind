@@ -33,7 +33,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Passthrough the wrapper so the raw handler runs without connectDB / Config.
-vi.mock('@server/utils/eventContext', () => ({
+vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
@@ -212,6 +212,30 @@ describe('sessionSummarization summary-file lookup', () => {
       expect.objectContaining({ id: 'fabfile-owner' }),
       expect.anything()
     );
+  });
+
+  it('skips a re-summary that would grow the file past the quota, keeping the old file', async () => {
+    h.fabFileStore.push({ id: 'fabfile-owner', userId: OWNER, sessionId: SESSION_ID, tags: [] });
+    h.updateFabFile.mockRejectedValueOnce(
+      new StorageLimitError('File size exceeds storage limit', {
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    // The rewrite is charged to the owner, so the update needs the user repository.
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ users: expect.anything() }) })
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not created or updated'));
   });
 
   // A stored meta-tag or prefix-arm content tag is never carried through by hand here -

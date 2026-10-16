@@ -40,10 +40,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockSubCreate = vi.fn();
+const mockFindUserSub = vi.fn();
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockSubCreate(...a),
     findByPriceIdAndOwner: vi.fn().mockResolvedValue(null),
+    findUserSubscriptionByPriceId: (...a: unknown[]) => mockFindUserSub(...a),
   },
 }));
 
@@ -57,6 +59,7 @@ vi.mock('@server/utils/auditLog', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import handler from '../grant-subscription';
 
 function call(seats: number) {
@@ -100,5 +103,57 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     const { run } = call(4.5);
     await expect(run()).rejects.toThrow();
     expect(mockOrgCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/users/[userId]/grant-subscription - individual', () => {
+  const plan = SUBSCRIPTION_PLANS[0];
+
+  function callIndividual(priceId: string) {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { userId: 'user-1' },
+      body: { subscriptionType: 'individual', priceId, durationMonths: 2 },
+    });
+    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = { isAdmin: true, id: 'admin-1' };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockFindUserSub.mockResolvedValue(null);
+  });
+
+  it('creates an admin-grant row granted by the admin and adds plan credits times months', async () => {
+    const { res, run } = callIndividual(plan.priceId);
+    await run();
+
+    expect(mockSubCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'user-1', priceId: plan.priceId, grantedBy: 'admin-1', quantity: 1 })
+    );
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'user-1', credits: plan.credits * 2 }),
+      expect.anything()
+    );
+    expect(res._getJSONData()).toMatchObject({ success: true, credits: plan.credits * 2 });
+  });
+
+  it('rejects when the user already has an active subscription for the plan', async () => {
+    mockFindUserSub.mockResolvedValue({ status: 'active' });
+    const { run } = callIndividual(plan.priceId);
+
+    await expect(run()).rejects.toThrow('User already has an active subscription for this plan');
+    expect(mockSubCreate).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown plan', async () => {
+    const { run } = callIndividual('price_nope');
+
+    await expect(run()).rejects.toThrow('Invalid subscription plan');
+    expect(mockSubCreate).not.toHaveBeenCalled();
   });
 });

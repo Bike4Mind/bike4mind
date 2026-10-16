@@ -21,7 +21,7 @@ import { toV1AgentError, v1FieldLabel } from '@server/agents/v1AgentErrors';
 
 // Named so every agent id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
 
 // A malformed or unknown id, a soft-deleted agent and a system/org agent all come back null or
 // ownerless from findById, so assertAgentAccess answers 404 for every one of them.

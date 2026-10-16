@@ -195,6 +195,14 @@ const RetrievalCoverageSchema = subSchema({
   reasons: [{ type: String, required: false }],
 });
 
+// Required fields and default: undefined for the reason RetrievalCoverageSchema gives: the client
+// banners a reply on this field's presence.
+const RetrievalFloorRejectionSchema = subSchema({
+  floorPct: { type: Number, required: true },
+  measuredPct: { type: Number, required: true },
+  embeddingModel: { type: String, required: true },
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -435,6 +443,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
     retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalFloorRejection` (parity test enforces it).
+    retrievalFloorRejection: { type: RetrievalFloorRejectionSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -451,6 +461,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     ],
     offeredTools: [{ type: String, required: false }],
     toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
+    redirectedFrom: { type: String, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -1132,7 +1143,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
     if (agentExecutionIds.length === 0) return [];
-    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestContentView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1329,7 +1341,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     newerThan?: Date;
     limit?: number;
   }): Promise<StaleRunningQuestView[]> {
-    // MUST STAY IN SYNC with `QuestTimeoutView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestTimeoutView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1677,8 +1690,9 @@ export const questRepository = new QuestRepository(Quest);
  * Content fields the stranded-quest settle reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
- * projection in the query above still has to list the same fields by hand.
+ * `QuestContentView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. The projection in the query above still has to list the same fields by
+ * hand.
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
@@ -1697,8 +1711,8 @@ export type UnfinishedQuestView = { id: string } & Pick<
  * Everything the liveness recovery decision reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestTimeoutView` (questTimeoutRecovery.ts) cannot drift on field types.
- * `updatedAt` is declared here because it lives on the mongo document, not on
+ * `QuestTimeoutView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. `updatedAt` is declared here because it lives on the mongo document, not on
  * `IChatHistoryItem`. The projection in the query above still lists the same
  * fields by hand.
  */

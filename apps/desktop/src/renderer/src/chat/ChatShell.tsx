@@ -20,7 +20,7 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
-import { GlobeIcon } from './icons';
+import { GlobeIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -31,6 +31,13 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { SettingsScreen } from './SettingsPanel';
+import { TerminalPanel } from './TerminalPanel';
+import {
+  isTerminalToggle,
+  readTerminalOpenSessions,
+  withTerminalOpen,
+  writeTerminalOpenSessions,
+} from './terminalPanelState';
 import { TodoPanel } from './TodoPanel';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
@@ -49,6 +56,7 @@ import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { WebLinkContext } from './WebResults';
 import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
+import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
@@ -154,6 +162,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     clearRenameError,
     apply,
   } = useSessions();
+  const {
+    sections: userSections,
+    actions: sectionActions,
+    error: sectionError,
+    dismissError: dismissSectionError,
+  } = useSidebarSections();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [remembered] = useState(readLastSession);
   const [mode, setMode] = useState<ChatSessionMode>(remembered?.mode ?? 'chat');
@@ -189,6 +203,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const [tasksOpen, setTasksOpen] = useState(() => readPanelFlag('open'));
   const [tasksWide, setTasksWide] = useState(() => readPanelFlag('wide'));
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
+  // Per conversation rather than one flag: see terminalPanelState.ts.
+  const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
+  // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
+  const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
@@ -215,6 +233,41 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       writeBrowserPaneOpen(!current);
       return !current;
     });
+  }, []);
+
+  const terminalOpen = !!activeId && terminalSessions.includes(activeId);
+  const setTerminalOpen = useCallback((sessionId: string, open: boolean) => {
+    setTerminalSessions(current => {
+      const next = withTerminalOpen(current, sessionId, open);
+      writeTerminalOpenSessions(next);
+      return next;
+    });
+  }, []);
+  const toggleTerminal = useCallback(() => {
+    if (!activeId) return;
+    setTerminalOpen(activeId, !terminalOpen);
+    if (!terminalOpen) setTerminalFocus(current => ({ sessionId: activeId, seq: (current?.seq ?? 0) + 1 }));
+  }, [activeId, terminalOpen, setTerminalOpen]);
+  const hideTerminal = useCallback(() => {
+    if (activeId) setTerminalOpen(activeId, false);
+  }, [activeId, setTerminalOpen]);
+
+  // A focus request belongs to the conversation it was made in; switching away and back must not
+  // pull the keyboard out of the composer.
+  useEffect(() => setTerminalFocus(null), [activeId]);
+
+  const toggleTerminalRef = useRef(toggleTerminal);
+  toggleTerminalRef.current = toggleTerminal;
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isTerminalToggle(event) || screenRef.current !== 'conversation') return;
+      event.preventDefault();
+      toggleTerminalRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const showBrowserPane = useCallback(() => {
@@ -487,6 +540,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onRename={(session, title) => void rename(session, title)}
         renameError={renameError}
         onDismissRenameError={clearRenameError}
+        userSections={userSections}
+        sectionActions={sectionActions}
+        sectionError={sectionError}
+        onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
           <TurnDot
@@ -526,6 +583,33 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
                   here cannot reach the pane, and a tooltip over the pane would be drawn behind
                   the web page - see agentBrowser.ts. */}
+              <Tooltip
+                size="sm"
+                variant="soft"
+                placement="bottom-end"
+                title={
+                  activeId
+                    ? terminalOpen
+                      ? 'Hide the terminal (Ctrl+`)'
+                      : 'Show the terminal (Ctrl+`)'
+                    : 'Open a conversation to use the terminal.'
+                }
+              >
+                <Box component="span" sx={{ display: 'inline-flex' }}>
+                  <IconButton
+                    size="sm"
+                    variant={terminalOpen ? 'soft' : 'plain'}
+                    color="neutral"
+                    disabled={!activeId}
+                    aria-pressed={terminalOpen}
+                    aria-label={terminalOpen ? 'Hide the terminal' : 'Show the terminal'}
+                    onClick={toggleTerminal}
+                    data-testid="chat-toggle-terminal-btn"
+                  >
+                    <TerminalIcon />
+                  </IconButton>
+                </Box>
+              </Tooltip>
               <Tooltip
                 size="sm"
                 variant="soft"
@@ -764,6 +848,17 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               </Stack>
             }
           />
+
+          {terminalOpen && activeId && (
+            <TerminalPanel
+              key={activeId}
+              sessionId={activeId}
+              column={conversationColumn}
+              focusRequest={terminalFocus?.sessionId === activeId ? terminalFocus.seq : 0}
+              onHide={hideTerminal}
+              onOpenLink={openInBrowserPane}
+            />
+          )}
         </Stack>
       )}
 

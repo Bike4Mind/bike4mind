@@ -265,6 +265,12 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
   }
 
+  /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
+  async addTagsToUser(userId: string, tags: string[]): Promise<void> {
+    if (tags.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
   /** Remove one group id from one user. */
   async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });

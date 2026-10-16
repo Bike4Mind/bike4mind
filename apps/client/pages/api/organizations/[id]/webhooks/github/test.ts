@@ -40,6 +40,8 @@ const HTTP_TIMEOUT_MS = 5000; // 5 second timeout for test requests
 const RATE_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 
+const isRedirectStatus = (status: number) => status >= 300 && status < 400;
+
 const handler = baseApi().post(
   asyncHandler<{}, TestResponse, TestRequest, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
@@ -133,6 +135,9 @@ const handler = baseApi().post(
         },
         body: payloadString,
         signal: controller.signal,
+        // validateTargetUrl only vetted targetUrl itself; following a redirect would let a public host
+        // bounce this signed POST to an address it never checked.
+        redirect: 'manual',
       });
       clearTimeout(timeoutId);
 
@@ -150,7 +155,10 @@ const handler = baseApi().post(
         success: false,
         statusCode: response.status,
         latencyMs,
-        error: `HTTP ${response.status}: ${response.statusText}`,
+        // Status code only: the reason phrase and redirect target are the endpoint's text, not ours to echo.
+        error: isRedirectStatus(response.status)
+          ? 'Target URL responded with a redirect; webhook endpoints must not redirect'
+          : `HTTP ${response.status}`,
       });
     } catch (error) {
       clearTimeout(timeoutId);
@@ -165,11 +173,12 @@ const handler = baseApi().post(
         });
       }
 
+      req.logger.warn('[Webhook Test] Delivery failed', { orgId, error });
       return res.status(200).json({
         success: false,
         statusCode: 0,
         latencyMs,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: 'Could not reach the target URL',
       });
     }
   })

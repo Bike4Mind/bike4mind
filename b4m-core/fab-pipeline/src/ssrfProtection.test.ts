@@ -5,8 +5,10 @@ import type https from 'https';
 import {
   isPrivateIP,
   isPrivateOrInternalHostname,
+  isNonPublicHostname,
   validateUrlForFetch,
   ssrfSafeLookup,
+  createSsrfSafeLookup,
   ssrfSafeHttpAgent,
   ssrfSafeHttpsAgent,
   SSRF_BLOCKED_CODE,
@@ -500,6 +502,79 @@ describe('SSRF - connect-time lookup pin (DNS rebinding)', () => {
     expect(agentOptions(ssrfSafeHttpsAgent).lookup).toBe(ssrfSafeLookup);
     expect(agentOptions(ssrfSafeHttpAgent).keepAlive).toBe(false);
     expect(agentOptions(ssrfSafeHttpsAgent).keepAlive).toBe(false);
+  });
+});
+
+/**
+ * The admission seam the self-host CIDR opt-in builds on: a caller of `createSsrfSafeLookup` can admit
+ * specific private addresses, and every address it does not admit must still be judged as `ssrfSafeLookup`
+ * judges it. A mutant that admitted the whole record because ONE entry matched would pass a single-address
+ * test, so the mixed-record case is the one that matters.
+ */
+describe('SSRF - connect-time lookup with a private-address admission predicate', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const lookupWith = (
+    addresses: dns.LookupAddress[],
+    isAllowedPrivate: (address: string, family: number) => boolean
+  ): Promise<{ err: NodeJS.ErrnoException | null; address: unknown }> => {
+    vi.spyOn(dns, 'lookup').mockImplementation(((_host: string, _opts: unknown, cb: unknown) => {
+      (cb as (e: Error | null, a?: dns.LookupAddress[]) => void)(null, addresses);
+    }) as unknown as typeof dns.lookup);
+
+    const lookup = createSsrfSafeLookup({ isAllowedPrivate });
+    return new Promise(resolve => {
+      lookup('host.example.com', {}, (err, address) => resolve({ err, address }));
+    });
+  };
+
+  const admitTenTwenty = (address: string): boolean => address.startsWith('10.20.');
+
+  it('admits an address the predicate allows and hands it to the socket', async () => {
+    const { err, address } = await lookupWith([{ address: '10.20.3.4', family: 4 }], admitTenTwenty);
+    expect(err).toBeNull();
+    expect(address).toBe('10.20.3.4');
+  });
+
+  it('refuses a record that mixes an admitted and an unadmitted private address', async () => {
+    const { err, address } = await lookupWith(
+      [
+        { address: '10.20.0.5', family: 4 },
+        { address: '10.99.0.1', family: 4 },
+      ],
+      admitTenTwenty
+    );
+    expect(err?.code).toBe(SSRF_BLOCKED_CODE);
+    expect(err?.message).toContain('10.99.0.1');
+    expect(address).toBe('');
+  });
+});
+
+describe('isNonPublicHostname', () => {
+  it('refuses localhost, single-label names and the private-use suffixes', () => {
+    expect(isNonPublicHostname('localhost')).toBe(true);
+    expect(isNonPublicHostname('x.localhost')).toBe(true);
+    expect(isNonPublicHostname('intranet')).toBe(true);
+    expect(isNonPublicHostname('printer.lan')).toBe(true);
+    expect(isNonPublicHostname('foo.corp')).toBe(true);
+    expect(isNonPublicHostname('db.internal')).toBe(true);
+    expect(isNonPublicHostname('nas.home.arpa')).toBe(true);
+  });
+
+  it('judges a trailing-dot FQDN spelling the same as the bare name', () => {
+    expect(isNonPublicHostname('intranet.')).toBe(true);
+    expect(isNonPublicHostname('printer.lan.')).toBe(true);
+    expect(isNonPublicHostname('foo.corp.')).toBe(true);
+    expect(isNonPublicHostname('FOO.CORP.')).toBe(true);
+    expect(isNonPublicHostname('localhost.')).toBe(true);
+  });
+
+  it('leaves public names alone', () => {
+    expect(isNonPublicHostname('example.com')).toBe(false);
+    expect(isNonPublicHostname('api.example.com')).toBe(false);
+    expect(isNonPublicHostname('example.com.')).toBe(false);
   });
 });
 

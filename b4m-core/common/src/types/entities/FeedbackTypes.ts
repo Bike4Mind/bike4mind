@@ -157,6 +157,33 @@ export interface FeedbackDeliveryResult {
   channels: Record<FeedbackDeliveryChannel, FeedbackChannelDelivery>;
 }
 
+/**
+ * Whether anything actually went WRONG delivering a report - which is not the same question as
+ * `delivered`, and is the one a submitter's confirmation line wants answered.
+ *
+ * `delivered` is false both when a channel threw and when every channel was deliberately skipped
+ * (feedback-to-Slack switched off, no recipients configured, a non-production stage an operator
+ * has not opted in). Reading `delivered === false` as failure tells a user on staging that "we
+ * could not notify the team" on every single send, though nothing failed and the report is sitting
+ * on the admin Feedback page - and it contradicts postFeedbackToSlack, which logs the same
+ * `nonprod_unconfigured` skip as a warning precisely because it is the expected default.
+ *
+ * So a failed channel counts only when NOTHING else got through. When Slack throws and the email
+ * goes out, `delivered` is true and the team has been told - warning the submitter there would be
+ * the same false line in a new place. Ops is not relying on this either way: the handler's own
+ * `isIncident` logs and alarms on a dead channel regardless of what the other one did, so this
+ * answers only the submitter's question - did this reach anybody.
+ *
+ * A reply with no `delivery` at all (a rolling deploy answering from an instance that predates
+ * the field) is not news either.
+ */
+export function feedbackDeliveryFailed(delivery?: {
+  channels?: Partial<Record<FeedbackDeliveryChannel, { outcome?: string } | undefined>>;
+}): boolean {
+  const outcomes = Object.values(delivery?.channels ?? {}).map(channel => channel?.outcome);
+  return outcomes.includes('failed') && !outcomes.includes('delivered');
+}
+
 /** POST /api/feedback response: the saved document plus how far delivery got.
  * `contentTruncated` is echoed here (not read off the document itself - it lives on the
  * FeedbackText sibling, not FeedbackModel) so a caller can tell the submitter their text was cut. */

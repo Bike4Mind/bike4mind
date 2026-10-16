@@ -1275,7 +1275,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
+            "description": "The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
           },
           "includeLibraryFiles": {
             "type": "boolean",
@@ -1573,6 +1573,10 @@
                   },
                   "outputTokens": {
                     "type": "number"
+                  },
+                  "reasoningTokens": {
+                    "type": "number",
+                    "description": "Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count."
                   },
                   "cacheReadInputTokens": {
                     "type": "number"
@@ -12745,7 +12749,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on for a session that has never set it; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],
@@ -16099,7 +16103,7 @@
       "get": {
         "operationId": "getMe",
         "summary": "Get the authenticated caller",
-        "description": "Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != \"free\"` for \"is this caller paying\" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.",
+        "description": "Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != \"free\"` for \"does this caller hold a paid plan (own or org seat)\" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != \"free\"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.",
         "tags": [
           "Account"
         ],

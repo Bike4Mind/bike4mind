@@ -45,6 +45,8 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
@@ -52,7 +54,7 @@ import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
@@ -253,7 +255,7 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
-export function registerChat(auth: AuthService): RegisteredChat {
+export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'sessionClosed'> = {}): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
@@ -285,6 +287,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  // App-wide like approval-mode.json; see SidebarSectionStore.
+  const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
@@ -407,6 +411,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     media,
     videoJobs,
     activity,
+    sidebarSections,
     mcp,
     browser,
     artifacts,
@@ -419,6 +424,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: broadcast,
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionClosed: hooks.sessionClosed,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
@@ -531,6 +537,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
   });
+  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+    store.get(sessionId).then(
+      session => session !== null,
+      () => false
+    )
+  );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );

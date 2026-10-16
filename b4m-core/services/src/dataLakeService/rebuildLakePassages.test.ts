@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, effectiveTagPrefixArm } from '@bike4mind/common';
-import { detectUnderChunkedFiles, countFailedLakeFiles, detectStaleEmbeddingSpaceFiles } from './rebuildLakePassages';
+import {
+  detectUnderChunkedFiles,
+  countFailedLakeFiles,
+  countRebuildingLakeFiles,
+  detectStaleEmbeddingSpaceFiles,
+} from './rebuildLakePassages';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 
 const lake = {
@@ -199,6 +204,14 @@ describe('registry-lake membership scope', () => {
     const countFailedFilesByScope = vi.fn().mockResolvedValue(0);
     await countFailedLakeFiles(REGISTRY_LAKE, { db: { fabFiles: { countFailedFilesByScope } } });
     expect(countFailedFilesByScope).toHaveBeenCalledWith(registryMembershipScope(REGISTRY_LAKE));
+  });
+
+  it('scopes countRebuildingLakeFiles the same way as countFailedLakeFiles', async () => {
+    const countRebuildingFilesByScope = vi.fn().mockResolvedValue(2);
+    expect(await countRebuildingLakeFiles(REGISTRY_LAKE, { db: { fabFiles: { countRebuildingFilesByScope } } })).toBe(
+      2
+    );
+    expect(countRebuildingFilesByScope).toHaveBeenCalledWith(registryMembershipScope(REGISTRY_LAKE));
   });
 
   it('keeps a persisted lake on the creator-anchored scope, so the two kinds are not collapsed', async () => {

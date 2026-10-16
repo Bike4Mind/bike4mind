@@ -29,7 +29,7 @@ import {
   shredBelief,
   shredPrincipalMemory,
 } from '@server/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@server/memory/factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 import { createSurvivingSourcesResolver } from '@server/memory/lakeSourceReachability';

@@ -72,6 +72,14 @@ vi.mock('@server/utils/config', () => ({
   }),
 }));
 
+// A sentinel so the assertion below is identity, not deep equality: the factory must hand the
+// generated table through untouched, and a placeholder `{}` would otherwise pass a deep check.
+const workspaceDeniedToolsSentinel = vi.hoisted(() => ({ 'sentinel-surface': ['sentinel_tool'] }));
+
+vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+  premiumWorkspaceDeniedTools: workspaceDeniedToolsSentinel,
+}));
+
 describe('chatCompletionDefaults factory lazy contract', () => {
   beforeEach(() => {
     resourceAccessLog.length = 0;
@@ -350,5 +358,13 @@ describe('getDefaultChatCompletionOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 20000);
+
+  // Every ChatCompletionProcess this factory feeds applies the surface denials from this option;
+  // losing it here silently re-opens them on chat, opti, voice, Slack and the API for one route.
+  it('carries the contributed surface denials into the options', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+
+    expect(getDefaultChatCompletionOptions().workspaceDeniedTools).toBe(workspaceDeniedToolsSentinel);
   }, 20000);
 });

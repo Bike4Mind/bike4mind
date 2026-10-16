@@ -111,11 +111,37 @@ describe('HelpModal', () => {
     expect(h.logEventMutate).toHaveBeenCalledWith(expect.objectContaining({ metadata: { id: 'fb1' } }));
   });
 
-  it('shows a warning toast instead of success when nothing was delivered', async () => {
+  it('thanks rather than warns when both channels were only skipped', async () => {
+    // Staging with no non-prod webhook or recipient list: `delivered` is false, but nothing
+    // failed and the report is on the admin Feedback page. Warning here told every staging
+    // submitter the team was not notified.
     h.createFeedbackOnServer.mockResolvedValue({
       id: 'fb1',
       content: 'great app',
-      delivery: { delivered: false, channels: {} },
+      delivery: {
+        delivered: false,
+        channels: {
+          slack: { outcome: 'skipped', reason: 'nonprod_unconfigured' },
+          email: { outcome: 'skipped', reason: 'nonprod_unconfigured' },
+        },
+      },
+    });
+    renderModal();
+
+    submitFeedback('great app');
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('shows a warning toast instead of success when a channel failed', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      content: 'great app',
+      delivery: {
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'skipped', reason: 'disabled' } },
+      },
     });
     renderModal();
 
@@ -156,7 +182,10 @@ describe('HelpModal', () => {
       id: 'fb1',
       content: 'a very long report cut at the cap',
       contentTruncated: true,
-      delivery: { delivered: false, channels: {} },
+      delivery: {
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'skipped', reason: 'disabled' } },
+      },
     });
     renderModal();
 

@@ -1,19 +1,26 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
+  ArtifactTypeSchema,
   DEFAULT_TTS_PROVIDER,
   GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
   ImagePromptResolutionSchema,
   joinReplySlots,
   PROMPT_TEXT_MAX,
+  PublishVisibilitySchema,
   questReplyText,
+  SLUG_OWNED_BY_OTHER,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
+  type UploadUrlRequest,
+  type UploadUrlResponse,
 } from '@bike4mind/common';
 import {
+  apiErrorCode,
   apiErrorRetryAfterSeconds,
   apiErrorStatus,
   B4mApiClient,
@@ -141,6 +148,14 @@ export const TOOL_META: ToolMeta[] = [
       "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
     scope: 'ai:generate',
   },
+  {
+    name: 'publish_artifact',
+    title: 'Publish artifact',
+    description:
+      "Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing an artifact updates its existing page and keeps that page's visibility unless you pass one; a first publish defaults to public.",
+    // The publish routes declare no required scope; this is only the hint a 403 names.
+    scope: 'files:write',
+  },
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -264,6 +279,21 @@ const generateImageShape = {
   promptResolution: ImagePromptResolutionSchema.optional().describe(
     "'auto' (default) rewrites the prompt against the notebook history; 'literal' sends it as written"
   ),
+};
+
+// A new page publishes at the user tier, where 'project' is not allowed (SCOPE_POLICY.user)
+// and 'organization' would 403 every member but the owner (checkVisibility matches the org
+// against the user-tier scopeId), so only the two that work there are offered.
+const publishVisibilitySchema = PublishVisibilitySchema.extract(['public', 'private']);
+
+const publishArtifactShape = {
+  artifactId: z.string().min(1).describe('The artifact id'),
+  visibility: publishVisibilitySchema
+    .optional()
+    .describe(
+      "Who can open the link: 'public' (anyone) or 'private' (only you); omit to keep an existing page's visibility (a first publish is public)"
+    ),
+  title: z.string().min(1).max(200).optional().describe("Page title; defaults to the artifact's title"),
 };
 
 const textToSpeechShape = {
@@ -604,6 +634,103 @@ export async function generateImage(
   };
 }
 
+const PUBLISH_INDEX_PATH = 'index.html';
+const PUBLISH_INDEX_MIME = 'text/html';
+const PUBLISH_TITLE_MAX = 200;
+const PUBLISH_FALLBACK_TITLE = 'Shared artifact';
+const PUBLISH_DEFAULT_VISIBILITY = 'public';
+const SLUG_TITLE_MAX = 48;
+const SLUG_ARTIFACT_HASH_LENGTH = 8;
+const SLUG_DISCRIMINATOR_LENGTH = 6;
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, SLUG_TITLE_MAX)
+    .replace(/-+$/, '');
+}
+
+/**
+ * Stable per artifact, so republishing updates the same page in place. Artifact
+ * ids all share an `artifact_` prefix, so the suffix hashes the whole id rather
+ * than taking a prefix of it.
+ */
+function artifactSlug(title: string, artifactId: string): string {
+  const hash = createHash('sha256').update(artifactId).digest('hex').slice(0, SLUG_ARTIFACT_HASH_LENGTH);
+  return `${slugify(title) || 'artifact'}-${hash}`;
+}
+
+/** The artifact-content doc carries the body as `content`; anything else has none to publish. */
+function artifactContentText(content: unknown): string | undefined {
+  if (!content || typeof content !== 'object') return undefined;
+  const text = (content as Record<string, unknown>).content;
+  return typeof text === 'string' && text.trim() ? text : undefined;
+}
+
+/**
+ * Open the draft, retrying once under a discriminated slug when the derived slug
+ * already belongs to another publisher (the same fallback the web Share flow uses).
+ */
+async function openPublishDraft(client: B4mApiClient, request: UploadUrlRequest): Promise<UploadUrlResponse> {
+  try {
+    return await client.requestPublishUpload(request);
+  } catch (err) {
+    if (apiErrorCode(err) !== SLUG_OWNED_BY_OTHER) throw err;
+    const discriminator = randomUUID().replace(/-/g, '').slice(0, SLUG_DISCRIMINATOR_LENGTH);
+    return client.requestPublishUpload({ ...request, slug: `${request.slug}-${discriminator}` });
+  }
+}
+
+/**
+ * Publish an artifact: upload its RAW content and let finalize render it
+ * (source.artifactType), so the page matches an in-app publish byte for byte with
+ * no CLI-side renderer. An artifact the caller already published (from the app or
+ * here) is republished in place at its existing tier/scope/slug, as the in-app
+ * update flow does; otherwise it becomes a new user-tier page.
+ */
+export async function publishArtifact(
+  client: B4mApiClient,
+  args: { artifactId: string; visibility?: z.infer<typeof publishVisibilitySchema>; title?: string }
+) {
+  const { artifact, content } = await client.getArtifact(args.artifactId);
+  const body = artifactContentText(content);
+  if (!body) throw new Error(`artifact ${artifact.id} has no content to publish`);
+  const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
+  if (!artifactType.success)
+    throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
+  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
+
+  const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
+  const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
+  const existing = await client.findPublishedArtifact(artifact.id);
+  const request: UploadUrlRequest = {
+    tier: existing?.tier ?? 'user',
+    scopeId: existing?.scopeId ?? artifact.userId,
+    slug: existing?.slug ?? artifactSlug(title, artifact.id),
+    title,
+    visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
+    ...(existing?.description !== undefined && { description: existing.description }),
+    ...(existing?.commentPolicy !== undefined && { commentPolicy: existing.commentPolicy }),
+    source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifactType.data },
+    files: [{ path: PUBLISH_INDEX_PATH, size: Buffer.byteLength(body), mimeType: PUBLISH_INDEX_MIME }],
+  };
+  // The existing slug is the caller's own, so a collision there is a real error, not a retry.
+  const draft = existing ? await client.requestPublishUpload(request) : await openPublishDraft(client, request);
+
+  const upload = draft.uploadUrls.find(u => u.path === PUBLISH_INDEX_PATH);
+  if (!upload) throw new Error(`publish draft ${draft.draftId} returned no upload URL for ${PUBLISH_INDEX_PATH}`);
+  await client.uploadPublishDraftFile(upload.url, body, PUBLISH_INDEX_MIME);
+
+  const published = await client.finalizePublish(draft.draftId);
+  return {
+    publicId: published.publicId,
+    url: new URL(published.url, client.baseURL).toString(),
+    visibility: published.visibility,
+  };
+}
+
 function toResult(value: unknown): CallToolResult {
   const structuredContent =
     value && typeof value === 'object' && !Array.isArray(value)
@@ -917,5 +1044,15 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
           onProgress: progressReporter(extra, () => 'rendering image'),
         })
       )
+  );
+
+  server.registerTool(
+    'publish_artifact',
+    {
+      title: meta('publish_artifact').title,
+      description: meta('publish_artifact').description,
+      inputSchema: publishArtifactShape,
+    },
+    args => run('files:write', () => publishArtifact(client, args))
   );
 }

@@ -1,10 +1,7 @@
-import { isAxiosError } from 'axios';
 import { VIDEO_GENERATION_API_ERROR_CODES } from '@bike4mind/common';
+import { describeGenerationError } from './generationErrors';
 
 type VideoGenerationApiErrorCode = (typeof VIDEO_GENERATION_API_ERROR_CODES)[number];
-
-// Shared by every generation-job surface (video and music both rate-limit the same way).
-export const GENERATION_RATE_LIMITED_MESSAGE = 'Too many requests. Wait a moment and try again.';
 
 // Keyed by the API's errorCode (b4m-core/common/src/schemas/videoGenerations.ts). The response's `error` text is
 // never shown: user-facing messages come from the code (spec section 8).
@@ -25,15 +22,6 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   invalid_idempotency_key: 'The request could not be sent. Try again.',
 };
 
-const isVideoApiErrorCode = (value: unknown): value is VideoGenerationApiErrorCode =>
-  typeof value === 'string' && (VIDEO_GENERATION_API_ERROR_CODES as readonly string[]).includes(value);
-
-const readErrorCode = (data: unknown): unknown =>
-  typeof data === 'object' && data !== null && 'errorCode' in data ? data.errorCode : undefined;
-
 export function describeVideoGenerationError(error: unknown, fallback: string): string {
-  if (!isAxiosError(error)) return fallback;
-  if (error.response?.status === 429) return GENERATION_RATE_LIMITED_MESSAGE;
-  const code = readErrorCode(error.response?.data);
-  return isVideoApiErrorCode(code) ? MESSAGES[code] : fallback;
+  return describeGenerationError(VIDEO_GENERATION_API_ERROR_CODES, MESSAGES, error, fallback);
 }

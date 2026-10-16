@@ -49,7 +49,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 
 // "Ciphertext" here is the plaintext with a prefix, so the ledger tests can read their own fixtures.
-vi.mock('./factCipher', () => ({
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({
   createKeyProvider: () => ({ getDek: async () => dek }),
   decryptFact: (_k: Buffer, s: { cipher: string }) => (s.cipher.startsWith('enc:') ? s.cipher.slice(4) : null),
   decryptVector: () => [9, 9, 9, 9],

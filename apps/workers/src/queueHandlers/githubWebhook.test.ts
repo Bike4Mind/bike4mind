@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
 }));
 
-vi.mock('@server/integrations/github/handlers', () => ({
+vi.mock('@workers/integrations/github/handlers', () => ({
   createHandlerRegistry: vi.fn().mockReturnValue({}),
   getHandler: mockGetHandler,
 }));

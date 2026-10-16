@@ -1,5 +1,5 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { runLakeResearch } from '@server/dataLakes/runLakeResearch';
+import { runLakeResearch } from '@workers/dataLakes/runLakeResearch';
 import { z, ZodError } from 'zod';
 
 const ResearchRunPayload = z.object({

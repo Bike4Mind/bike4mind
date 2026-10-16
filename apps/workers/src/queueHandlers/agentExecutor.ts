@@ -72,7 +72,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
-import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
+import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import {
   ReActAgent,
@@ -153,6 +153,7 @@ import {
   delegationOffer,
   DELEGATION_TOOLS,
   runHasAttachments,
+  sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
@@ -206,11 +207,11 @@ import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/util
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
-import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
-import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
+import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
-import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
+import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
@@ -1912,11 +1913,15 @@ async function processExecution(
     // even when the parent run didn't enable it — and Lattice never leaks into the
     // parent's own toolbelt because this pool is kept out of `tools`. See
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
+    //
+    // The pool is granted from a subagent's own `allowedTools`, so it never passes through this
+    // run's `enabledTools` filter above - the session denials have to travel with it.
     const subagentLatticeTools = buildSubagentLatticeToolPool(
       toolDeps,
       toolCallbacks,
       subagentToolConfig,
-      toolAvailability
+      toolAvailability,
+      sessionDeniedTools(session)
     );
 
     // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
@@ -1973,7 +1978,7 @@ async function processExecution(
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
       sessionDisabledTools: mcpSessionDisabledTools(
-        session.disabledTools,
+        sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
         execution.profileDeniedTools
       ),
@@ -3656,7 +3661,8 @@ async function processSubagentDispatch(
       toolDeps,
       toolCallbacks,
       subagentToolConfig,
-      toolAvailability
+      toolAvailability,
+      [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])]
     );
 
     // Created here rather than alongside its watchdog below because the tools built on the next
@@ -3669,7 +3675,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
-      sessionDisabledTools: [...(session.disabledTools ?? []), ...(child.scopeDeniedTools ?? [])],
+      sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the

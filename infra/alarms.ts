@@ -791,7 +791,7 @@ if (isMonitoredStage) {
   });
 
   /**
-   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * The dimension set apps/workers/src/modelDiscovery/metrics.ts stamps on every datum.
    * CloudWatch keys a custom metric by namespace + name + the exact dimension
    * set and never rolls up, so an alarm that omits these watches an empty
    * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
@@ -807,7 +807,7 @@ if (isMonitoredStage) {
    * evaluation periods is three scheduled runs; a period with no run at all
    * does not breach, which keeps a disabled or preview stage quiet.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts
    * Namespace: Lumina5/ModelDiscovery / RunFailures
    */
   new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
@@ -1003,7 +1003,7 @@ if (isMonitoredStage) {
    *
    * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
    * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
    * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
    * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).

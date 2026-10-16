@@ -13,19 +13,12 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
 import type { Request } from 'express';
 
-/**
- * Loads one FabFile the caller may read, with a fresh signed `fileUrl` when it is serveable
- * (withheld by moderation otherwise - see fabFileService's generateSignedUrl). Throws
- * NotFoundError when neither the per-file ACL nor any accessible data lake grants it.
- *
- * Shared by the SPA-internal `GET /api/files/{id}` and the public `GET /api/v1/files/{id}`, so
- * the two doors cannot authorize differently.
- */
-export async function loadAccessibleFabFile(req: Request, id: string) {
+/** Storage and repository adapter shared by the file read doors. */
+export function buildFabFileAdapter(req: Request) {
   // Browser URLs only differ from private ones when S3_PRESIGN_ENDPOINT is set (see S3Storage), and only
   // then must they stay out of the shared URL cache. Without it the cached URL is valid for every reader.
   const browserSigningIsDistinct = Boolean(process.env.S3_PRESIGN_ENDPOINT?.trim());
-  const adapter = {
+  return {
     db: {
       fabFiles: fabFileRepository,
       users: userRepository,
@@ -43,6 +36,18 @@ export async function loadAccessibleFabFile(req: Request, id: string) {
       },
     },
   };
+}
+
+/**
+ * Loads one FabFile the caller may read, with a fresh signed `fileUrl` when it is serveable
+ * (withheld by moderation otherwise - see fabFileService's generateSignedUrl). Throws
+ * NotFoundError when neither the per-file ACL nor any accessible data lake grants it.
+ *
+ * Shared by the SPA-internal `GET /api/files/{id}` and the public `GET /api/v1/files/{id}`, so
+ * the two doors cannot authorize differently.
+ */
+export async function loadAccessibleFabFile(req: Request, id: string) {
+  const adapter = buildFabFileAdapter(req);
 
   try {
     return await fabFilesService.getFabFile(req.user.id, { id }, adapter);

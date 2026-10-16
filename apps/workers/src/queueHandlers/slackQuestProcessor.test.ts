@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+// The same module instance the handler imports, so the assertion below pins identity, not a copy.
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -106,5 +108,13 @@ describe('slackQuestProcessor getStaticOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 120_000);
+
+  // This factory is hand-maintained (unlike the shared defaults), so losing the table here
+  // silently re-opens every surface denial on the Slack route only.
+  it('carries the contributed surface denials into the options', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+
+    expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
   }, 120_000);
 });

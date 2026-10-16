@@ -37,6 +37,7 @@ import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveDeprecatedModelId,
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
@@ -236,6 +237,9 @@ const baseOptions = {
   user: mockUser as any,
   sessionId: 'session1',
   tokenizer: mockTokenizer as any,
+  // The contributed surface denials. Only the cases that set `mockSession.surface` to a key in here
+  // resolve anything; every other test leaves the session with no surface at all.
+  workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
 };
 
 describe('ChatCompletionProcess', () => {
@@ -586,6 +590,91 @@ describe('ChatCompletionProcess', () => {
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
 
+  describe('a deprecated-model redirect', () => {
+    const successor = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT-4.1',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+
+    it('reply metadata names the model that answered and records the requested model', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      // Assert on what the turn persisted, not only on the in-memory quest object.
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: ChatModels.GPT4,
+        model: { name: ChatModels.GPT4_1 },
+      });
+    });
+
+    it('records no redirect when none happened', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.promptMeta.redirectedFrom).toBeUndefined();
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
+    });
+
+    it('keeps an existing redirect record rather than overwriting it', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'earlier-model';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: 'earlier-model',
+        model: { name: ChatModels.GPT4_1 },
+      });
+    });
+
+    it('keeps the redirect record when the successor fails and nothing answers the turn', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      // No fallback (shouldTriggerFallback stays false): the redirect is the only swap, and the
+      // successor then fails, so no model produced a reply.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('gated model')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      // The terminal error rethrows after the error save; swallow it to inspect what was persisted.
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
+      expect(lastSave.promptMeta.redirectedFrom).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4_1);
+    });
+  });
+
   describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
       mockSession.userId = 'user1';
@@ -769,6 +858,116 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('a turn redirected off an unavailable model', () => {
+    const redirectNotices = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter(([, status]) => typeof status === 'string' && status.includes('is unavailable'));
+
+    it('tells the user once which model answered in place of the unavailable one', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      const notices = redirectNotices(sendStatusUpdate);
+      expect(notices).toHaveLength(1);
+      expect(notices[0][1]).toBe(`gpt-5-chat-latest is unavailable; answering with ${ChatModels.GPT4}`);
+    });
+
+    it('says nothing when the successor turns out to be unusable', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      mockedGetAvailableModels.mockResolvedValue([]);
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow('Invalid LLM backend specified');
+
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
+    });
+
+    it('says nothing when the turn was not redirected', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
+    });
+
+    // Queue and agent runs reach Process without ChatCompletionInvoke, so it records the redirect itself.
+    it('records a redirect first seen here and relabels the reply with the model that answers', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: 'gpt-5-chat-latest', backend: ModelBackend.OpenAI };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.redirectedFrom).toBe('gpt-5-chat-latest');
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(1);
+    });
+
+    it('describes the model block from the successor when it records a redirect first seen here', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = {
+        name: 'gpt-5-chat-latest',
+        type: 'image',
+        backend: ModelBackend.Anthropic,
+        contextWindow: 111,
+        supportsTools: true,
+        parameters: { temperature: 0.2 },
+      };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 2000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+          supportsVision: true,
+        },
+      ] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.model).toMatchObject({
+        name: ChatModels.GPT4,
+        type: 'text',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 2000,
+        maxTokens: 100,
+        supportsVision: true,
+        parameters: { temperature: 0.2 },
+      });
+      expect(mockQuest.promptMeta.model.supportsTools).toBeUndefined();
+    });
+  });
+
   describe('a user stop', () => {
     it('landing before processing starts is honoured instead of saving running over it', async () => {
       mockSession.userId = 'user1';
@@ -776,7 +975,7 @@ describe('ChatCompletionProcess', () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
       mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await service.process({ body, logger: mockLogger });
 
@@ -1557,6 +1756,56 @@ describe('ChatCompletionProcess', () => {
   });
 
   describe('process', () => {
+    // Wiring test: the chat turn wraps its tools in the consecutive-failure guard, so a tool the
+    // model keeps calling with inputs it cannot handle stops running (toolFailureGuard.ts).
+    it('stops running a tool after repeated consecutive failures within a turn', async () => {
+      const impl = vi.fn().mockRejectedValue(new Error('parse error'));
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([
+        {
+          toolFn: impl,
+          toolSchema: { name: 'math_evaluate', description: 'math', parameters: { type: 'object', properties: {} } },
+        },
+      ]);
+      const errors: string[] = [];
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          for (let i = 0; i < 8; i++) {
+            await opts.tools[0].toolFn({ expression: `bad ${i}` }).catch((e: Error) => errors.push(e.message));
+          }
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      buildToolsSpy.mockRestore();
+
+      expect(impl).toHaveBeenCalledTimes(4);
+      expect(errors).toHaveLength(8);
+      expect(errors[7]).toContain('Not run: "math_evaluate"');
+    });
+
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
@@ -3958,6 +4207,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+      // No redirect here: the turn switched models only by falling back, so redirectedFrom stays
+      // unset and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.redirectedFrom).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call
@@ -4296,6 +4548,79 @@ describe('ChatCompletionProcess', () => {
       // Same-provider degradation on the earlier hops; the cross-provider guarantee only on the last.
       expect(optsSeen.slice(0, 4).every(o => o.preferUntriedBackend === false)).toBe(true);
       expect(optsSeen[4].preferUntriedBackend).toBe(true);
+    });
+
+    it('a redirected turn that falls back over several hops credits the reply to the final hop', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      });
+
+      // Hop 1 fails too; hop 2 answers.
+      let hopN = 0;
+      mockedGetLlmWithFallback.mockImplementation(async () => {
+        hopN++;
+        const id = `hop-model-${hopN}`;
+        const answers = hopN >= 2;
+        return {
+          model: {
+            id,
+            type: 'text',
+            name: `Hop ${hopN}`,
+            backend: ModelBackend.Anthropic,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi
+              .fn()
+              .mockImplementation(
+                async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                  if (!answers) throw new Error('ServiceUnavailableException: hop outage');
+                  await cb(['Hi!']);
+                }
+              ),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: id,
+          },
+          attempt: 1,
+        } as any;
+      });
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4_1,
+          type: 'text',
+          name: 'GPT-4.1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(hopN).toBe(2);
+      expect(mockQuest.promptMeta).toMatchObject({ redirectedFrom: ChatModels.GPT4, model: { name: 'hop-model-2' } });
     });
 
     // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop
@@ -6281,6 +6606,8 @@ describe('ChatCompletionProcess', () => {
       priorToolNames?: string[];
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
+      disabledTools?: string[];
+      surface?: string;
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -6291,6 +6618,8 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockClear();
 
       mockSession.agentIds = params.sessionAgentIds ?? [];
+      mockSession.disabledTools = params.disabledTools;
+      mockSession.surface = params.surface;
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
         getModelInfo: vi.fn().mockResolvedValue([]),
@@ -6363,6 +6692,28 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // The final tool pass strips only the schema, so a denylist entry for delegate_to_agent has to
+    // withhold the "Agent Delegation" prompt section here as well - otherwise the model is named a
+    // tool it cannot call. The predicate is unit-tested in autoAddedToolGating.test.ts; these pin
+    // that the chat call site actually feeds it the resolved denials.
+    it('does NOT expose delegate_to_agent when the session denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        disabledTools: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    it('does NOT expose delegate_to_agent when the surface denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        surface: 'delegation-denied-surface',
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     // An @mention is only a delegation signal when it names an agent the store can actually run.
@@ -6585,11 +6936,15 @@ describe('ChatCompletionProcess', () => {
       skipAutoOffers?: boolean;
       disabledTools?: string[];
       connectedMcpTools?: boolean;
+      /** The session's `surface`; a key in `baseOptions.workspaceDeniedTools` resolves denials. */
+      surface?: string;
       /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
       deniedFromBuild?: boolean;
     }) => {
       const previousDisabledTools = mockSession.disabledTools;
+      const previousSurface = mockSession.surface;
       mockSession.disabledTools = opts.disabledTools;
+      mockSession.surface = opts.surface;
       const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
         name,
         toolFn: vi.fn(),
@@ -6660,6 +7015,7 @@ describe('ChatCompletionProcess', () => {
         buildToolsSpy.mockRestore();
         buildToolPromptSpy.mockRestore();
         mockSession.disabledTools = previousDisabledTools;
+        mockSession.surface = previousSurface;
       }
     };
 
@@ -6686,6 +7042,27 @@ describe('ChatCompletionProcess', () => {
       expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
     });
 
+    // The contributed table is read once, into the same `deniedTools` local the session denylist
+    // feeds, so a turn on a denied surface loses the tool even though nothing is stored on the
+    // session. Dropping the surface argument at that one site re-opens every surface denial.
+    it('threads the surface denials through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'denied-surface' });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__search']);
+    });
+
+    it('unions the surface denials with the session denylist', async () => {
+      const { passedOptions } = await runWithOptions({
+        surface: 'denied-surface',
+        disabledTools: ['notion__create_page'],
+      });
+      expect(passedOptions?.sessionDisabledTools?.sort()).toEqual(['notion__create_page', 'notion__search']);
+    });
+
+    it('leaves a session on an unnamed surface with no denials', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'other-surface' });
+      expect(passedOptions?.sessionDisabledTools).toBeUndefined();
+    });
+
     it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
       const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
@@ -6709,6 +7086,17 @@ describe('ChatCompletionProcess', () => {
         deniedFromBuild: true,
       });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    // Same for the contributed denials: they ride the same options, so the tool must be gone from
+    // the prompt as well as from the build.
+    it('keeps a surface-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        surface: 'denied-surface',
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__create_page']);
     });
   });
 
@@ -7557,6 +7945,7 @@ describe('ChatCompletionProcess', () => {
   // no second count, and a lake block the budget dropped bills nothing.
   describe('lake retrieval promoted out of the system-prompt residual', () => {
     const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const lakePrompt = { role: 'system' as const, content: 'LAKE-OPERATING-PROMPT' };
     const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
 
     // Content-keyed so a message counts the same way in the six source totals and in
@@ -7569,7 +7958,12 @@ describe('ChatCompletionProcess', () => {
         return sum + 1;
       }, 0);
 
-    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+    const runWithLakeSources = async (opts: {
+      withLakes: boolean;
+      dropRetrieval?: boolean;
+      dropLakePrompt?: boolean;
+      lakePrompt?: boolean;
+    }) => {
       mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
       mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
@@ -7601,15 +7995,21 @@ describe('ChatCompletionProcess', () => {
       let builtMessages: IMessage[] = [];
       mockedBuildAndSortMessages.mockImplementation(
         async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
-          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages].filter(
+            message => !(opts.dropRetrieval && message === chunk) && !(opts.dropLakePrompt && message === lakePrompt)
+          );
           return { messages: builtMessages, messageTruncation: null } as any;
         }
       );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
+      const onRetrievalDropped = vi.fn();
       if (opts.withLakes) {
-        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('knowledgeRetrieval', {
+          getContextMessages: async () => (opts.lakePrompt ? [lakePrompt, chunk] : [chunk]),
+          onContextDropped: onRetrievalDropped,
+        } as any);
         service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
       }
 
@@ -7622,8 +8022,51 @@ describe('ChatCompletionProcess', () => {
       // Re-derive the residual the way the write site does, independently of the promotion:
       // total over the payload it counted, less the user prompt (the only known non-system source).
       const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
-      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual, onRetrievalDropped };
     };
+
+    it('tells forced retrieval when the budget dropped its block', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true, dropRetrieval: true });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      expect(onRetrievalDropped.mock.calls[0][0]).toMatchObject({ id: startQuestParams.questId });
+      // The delivered set is what the feature decides on, so assert on it: the passages were the
+      // shed message and must not read as delivered.
+      expect((onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>).has(chunk)).toBe(false);
+    });
+
+    it('leaves forced retrieval alone when its block was delivered', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true });
+      expect(onRetrievalDropped).not.toHaveBeenCalled();
+    });
+
+    it('tells forced retrieval when the lake prompt was kept but its passages were dropped', async () => {
+      // The lake prompt and the passages are separate messages of the one source, so a kept prompt
+      // must not stand in for the dropped passages: the chips rest on the passages alone.
+      const { onRetrievalDropped } = await runWithLakeSources({
+        withLakes: true,
+        dropRetrieval: true,
+        lakePrompt: true,
+      });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      const delivered = onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>;
+      expect(delivered.has(lakePrompt)).toBe(true);
+      expect(delivered.has(chunk)).toBe(false);
+    });
+
+    it('hands forced retrieval the delivered passages when only the lake prompt was dropped', async () => {
+      // The hook fires on any shed message of the source, so the set it passes has to be the real
+      // per-message payload: these passages reached the model and must read as delivered, or the
+      // feature would withdraw chips the answer is entitled to.
+      const { onRetrievalDropped } = await runWithLakeSources({
+        withLakes: true,
+        dropLakePrompt: true,
+        lakePrompt: true,
+      });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      const delivered = onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>;
+      expect(delivered.has(chunk)).toBe(true);
+      expect(delivered.has(lakePrompt)).toBe(false);
+    });
 
     it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
       const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
@@ -8112,6 +8555,57 @@ describe('ChatCompletionProcess', () => {
       expect(callCount).toBe(2);
     });
   });
+
+  // Follow-up retrieval reads the earlier user turns off `priorUserPrompts`, so this assignment is the
+  // only thing that turns that behavior on in production. The feature tests inject `priorUserPrompts`
+  // straight into the feature context, so they would stay green with the assignment deleted; pin the
+  // hand-off from the fetched history here instead.
+  describe('follow-up context from quest history', () => {
+    const run = async (history: IMessage[]) => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([history, history.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      return service.priorUserPrompts;
+    };
+
+    it('collects the user text turns, oldest first, and nothing else', async () => {
+      const priorUserPrompts = await run([
+        { role: 'user', content: 'Tell me about Alder.' },
+        { role: 'assistant', content: 'Alder is a vendor.' },
+        // A tool-result turn is an array content, not a question to borrow a subject from.
+        { role: 'user', content: [{ type: 'tool_result', content: 'ignored' }] as any },
+        { role: 'user', content: 'What about their pricing?' },
+      ]);
+
+      expect(priorUserPrompts).toEqual(['Tell me about Alder.', 'What about their pricing?']);
+    });
+  });
 });
 
 describe('addPairedTool', () => {
@@ -8542,6 +9036,16 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
 });
 
 describe('resolveDeniedTools', () => {
+  it('unions the surface denials with the session and request denylists', () => {
+    expect(resolveDeniedTools(['tool_a'], ['tool_b'], ['tool_b', 'tool_c'])?.sort()).toEqual([
+      'tool_a',
+      'tool_b',
+      'tool_c',
+    ]);
+    expect(resolveDeniedTools(undefined, undefined, ['tool_c'])).toEqual(['tool_c']);
+    expect(resolveDeniedTools(undefined, undefined, [])).toBeUndefined();
+  });
+
   it('unions the session denylist with the request deniedTools', () => {
     expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
       'create_data_lake',

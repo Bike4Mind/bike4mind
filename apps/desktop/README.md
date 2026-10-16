@@ -351,6 +351,14 @@ and mammoth, and electron-builder ships what is declared. Bundling that one subp
 those still ship. Fixing that is a change to `b4m-core/mcp`'s entry points, not to this
 config.
 
+`node-pty` (the terminal panel's pty) is the one native dependency, so it is a `dependency`
+and stays external, while `@xterm/*` is bundled into the renderer and lives in
+`devDependencies`. It is pinned to a 1.2 beta because 1.1.0 publishes its macOS
+`spawn-helper` without the execute bit, and every spawn then fails with `posix_spawnp failed`.
+`electron-builder.yml` unpacks it from the asar (a `.node` file and the helper both have to be
+real files) and turns `npmRebuild` off: the module is N-API with prebuilt binaries for every
+target, so a rebuild would only compile a different binary from the one dev runs.
+
 ## Layout
 
 ```
@@ -492,6 +500,10 @@ token.
   `registerAuth()` must be called from inside `whenReady()`. Where
   `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
   memory-only and the UI says so - it never falls back to writing plaintext.
+- **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
+  the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
+  sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
+  starts signed out.
 - **Per-environment tokens.** Switching between Production, Local Dev and a self-hosted URL
   restores the session already cached for that endpoint instead of forcing another device
   flow, matching the CLI.

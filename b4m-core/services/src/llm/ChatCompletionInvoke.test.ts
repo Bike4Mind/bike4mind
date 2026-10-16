@@ -332,6 +332,33 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     ).rejects.toThrow(/is replaced by/);
   });
 
+  it('records the retired id in promptMeta.redirectedFrom and labels the reply with the successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(mockDb.quests.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMeta: expect.objectContaining({
+          redirectedFrom: HIDDEN_ID,
+          model: expect.objectContaining({ name: SUCCESSOR_ID, contextWindow: 1000 }),
+        }),
+      })
+    );
+  });
+
+  it('records no redirect for a current model', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    const { promptMeta } = mockDb.quests.create.mock.calls[0][0];
+    expect(promptMeta).not.toHaveProperty('redirectedFrom');
+    expect(promptMeta.model.name).toBe(SUCCESSOR_ID);
+  });
+
   it('still rejects an unmapped model that is not in the catalog', async () => {
     mockedGetAvailableModels.mockResolvedValue([successor] as any);
 

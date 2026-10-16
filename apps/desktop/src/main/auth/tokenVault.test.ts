@@ -117,4 +117,89 @@ describe('TokenVault', () => {
     await store.clearAuthTokens();
     expect(await store.getAuthTokens()).toBeNull();
   });
+
+  describe('two processes sharing one vault file', () => {
+    const HOSTED = 'https://b4m.example.com';
+    const ROTATED: AuthTokens = { ...TOKENS, accessToken: 'access-2', refreshToken: 'refresh-2' };
+
+    it('reloadTokens sees a rotation the other process wrote, where getTokens serves its cache', async () => {
+      const file = memoryFile();
+      const mine = new TokenVault(fakeCipher(), file, silentLogger);
+      const theirs = new TokenVault(fakeCipher(), file, silentLogger);
+      await mine.setTokens(HOSTED, TOKENS);
+
+      await theirs.setTokens(HOSTED, ROTATED);
+
+      expect(await mine.getTokens(HOSTED)).toEqual(TOKENS);
+      expect(await mine.reloadTokens(HOSTED)).toEqual(ROTATED);
+      // The reload refreshed the cache, so the request path now carries the new token too.
+      expect(await mine.getTokens(HOSTED)).toEqual(ROTATED);
+      expect(await mine.storeFor(HOSTED).reloadAuthTokens?.()).toEqual(ROTATED);
+    });
+
+    it('reloadTokens reports a sign-out the other process made', async () => {
+      const file = memoryFile();
+      const mine = new TokenVault(fakeCipher(), file, silentLogger);
+      const theirs = new TokenVault(fakeCipher(), file, silentLogger);
+      await mine.setTokens(HOSTED, TOKENS);
+
+      await theirs.clearTokens(HOSTED);
+
+      expect(await mine.reloadTokens(HOSTED)).toBeNull();
+      expect(await mine.getTokens(HOSTED)).toBeNull();
+    });
+
+    it('a write never puts back tokens the other process replaced', async () => {
+      const file = memoryFile();
+      const mine = new TokenVault(fakeCipher(), file, silentLogger);
+      const theirs = new TokenVault(fakeCipher(), file, silentLogger);
+      await mine.setTokens(HOSTED, TOKENS);
+      await mine.getEnvironment();
+
+      await theirs.setTokens(HOSTED, ROTATED);
+      // Unrelated writes from the instance holding the stale copy.
+      await mine.setEnvironment({ preset: 'custom', customUrl: 'https://other.example.com' });
+      await mine.setTokens('https://other.example.com', TOKENS);
+
+      expect(await new TokenVault(fakeCipher(), file, silentLogger).getTokens(HOSTED)).toEqual(ROTATED);
+    });
+  });
+
+  it('keeps its cached tokens when a reload fails to decrypt, but a cold read still clears', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    let failDecrypt = false;
+    const cipher = fakeCipher();
+    const flaky: SecretCipher = {
+      ...cipher,
+      decryptString: encrypted => {
+        if (failDecrypt) throw new Error('keychain hiccup');
+        return cipher.decryptString(encrypted);
+      },
+    };
+    const file = memoryFile();
+    const vault = new TokenVault(flaky, file, logger);
+    await vault.setTokens('https://b4m.example.com', TOKENS);
+
+    failDecrypt = true;
+
+    expect(await vault.reloadTokens('https://b4m.example.com')).toEqual(TOKENS);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('keeping the copy in memory'));
+    expect(JSON.parse(file.contents ?? '{}').tokens['https://b4m.example.com']).toBeTruthy();
+
+    const cold = new TokenVault(flaky, file, logger);
+    expect(await cold.getTokens('https://b4m.example.com')).toBeNull();
+  });
+
+  it('logs why it clears a blob it cannot decrypt', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const file = memoryFile(
+      JSON.stringify({ version: 1, tokens: { 'https://b4m.example.com': Buffer.from('garbage').toString('base64') } })
+    );
+    const vault = new TokenVault(fakeCipher(), file, logger);
+
+    expect(await vault.getTokens('https://b4m.example.com')).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/clearing stored credentials .* vault decrypt failed/)
+    );
+  });
 });

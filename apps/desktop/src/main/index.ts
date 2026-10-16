@@ -1,3 +1,5 @@
+// First, before any module that could read userData or touch safeStorage; see appIdentity.ts.
+import './bootstrapIdentity';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
@@ -10,7 +12,9 @@ import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlo
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
+import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
+import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
 import { appWindows } from './windows';
 
@@ -99,6 +103,10 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
 });
 
 void app.whenReady().then(async () => {
+  // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
+  // warnings before app ready are not persisted.
+  persistConsoleWarnings(console, app.getPath('logs'));
+
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(macAppIcon);
@@ -108,8 +116,20 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   registerAccount(auth);
   registerUsage(auth);
-  const { service: chat, background, mcp, browser, pullRequests } = registerChat(auth);
+  const {
+    service: chat,
+    background,
+    mcp,
+    browser,
+    pullRequests,
+  } = registerChat(auth, {
+    sessionClosed: sessionId => terminals.killSession(sessionId),
+  });
   closeAgentBrowsers = () => browser.closeAll();
+  const terminals = registerTerminals(async sessionId => {
+    const session = await chat.getSession(sessionId);
+    return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
+  });
 
   // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
   // once. Declared here because the updater's install path does that teardown itself and must
@@ -131,7 +151,12 @@ void app.whenReady().then(async () => {
     },
     prepareQuit: async () => {
       quitting = true;
-      await Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()]).catch(() => undefined);
+      await Promise.all([
+        background.shutdown(),
+        mcp.shutdown(),
+        terminals.shutdown(),
+        browser.cookies.clearOnQuit(),
+      ]).catch(() => undefined);
     },
   });
 
@@ -158,7 +183,7 @@ void app.whenReady().then(async () => {
     event.preventDefault();
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()])
+    void Promise.all([background.shutdown(), mcp.shutdown(), terminals.shutdown(), browser.cookies.clearOnQuit()])
       .catch(() => undefined)
       .finally(() => app.quit());
   });
@@ -172,6 +197,7 @@ void app.whenReady().then(async () => {
     // grace period above must not leave a process group behind.
     background.shutdownSync();
     mcp.shutdownSync();
+    terminals.shutdownSync();
     browser.closeAll();
   });
 
@@ -182,6 +208,7 @@ void app.whenReady().then(async () => {
     process.on(signal, () => {
       background.shutdownSync();
       mcp.shutdownSync();
+      terminals.shutdownSync();
       app.quit();
     });
   }

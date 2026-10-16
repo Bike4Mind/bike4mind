@@ -859,6 +859,17 @@ export const RetrievalCoverageSchema = z.object({
   reasons: z.array(z.string()),
 });
 
+/**
+ * Written only when forced retrieval injected nothing because every scored passage fell under an
+ * absolute floor an operator configured above the one measured for the embedding space. Single
+ * producer (ChatCompletionFeatures, the no-match exit); the chat banner reads it.
+ */
+export const RetrievalFloorRejectionSchema = z.object({
+  floorPct: z.number(),
+  measuredPct: z.number(),
+  embeddingModel: z.string(),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
@@ -871,6 +882,8 @@ export const PromptMetaZodSchema = z.object({
   /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
    * one-level-spread-merge reason as `retrieval` above. */
   retrievalCoverage: RetrievalCoverageSchema.optional(),
+  /** See RetrievalFloorRejectionSchema. Top-level for the same reason as `retrieval` above. */
+  retrievalFloorRejection: RetrievalFloorRejectionSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`
@@ -886,6 +899,8 @@ export const PromptMetaZodSchema = z.object({
   /** The public /api/chat request's `toolMode`, kept so tool-calling evals can split by it. Absent
    * when the request set none, which includes every in-app turn. */
   toolMode: ChatToolModeSchema.optional(),
+  /** The retired model id the turn was asked to run on, set only when it was redirected to `model.name`. */
+  redirectedFrom: z.string().optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),

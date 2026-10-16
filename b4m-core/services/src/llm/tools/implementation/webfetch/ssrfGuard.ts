@@ -4,16 +4,19 @@ import { lookup } from 'node:dns/promises';
 /**
  * SSRF guard for direct server-side fetches this service makes against user/model-supplied origins.
  *
- * The main web_fetch path is SSRF-immune by construction when Firecrawl does the fetching on its own
- * infra. Two paths dial an origin directly and must reject private/loopback/link-local/cloud-
- * metadata targets: the llms.txt probe (`probeLlmsTxt`, response body never read) and the keyless
- * `plainFetchScrape` fallback, which DOES return page content. Callers must also use
- * `redirect: 'error'` so a public origin cannot 302-pivot to an internal address after the check.
+ * A self-hosted Firecrawl fetches from inside our network, so it is NOT immune by construction: the
+ * Firecrawl wrapper (`firecrawlApp.ts`) pre-flights every scrape through this guard. That check is
+ * pre-flight only - Firecrawl re-resolves DNS itself, so the vetted address cannot be pinned; it
+ * stops a private literal or a host that currently resolves private, not a DNS rebind. Two paths
+ * dial an origin directly and must reject private/loopback/link-local/cloud-metadata targets: the
+ * llms.txt probe (`probeLlmsTxt`, response body never read) and the keyless `plainFetchScrape`
+ * fallback, which DOES return page content. Callers must also use `redirect: 'error'` so a public
+ * origin cannot 302-pivot to an internal address after the check.
  *
  * Because plainFetchScrape returns content, the lookup->connect DNS-rebind race matters there: it
  * uses `resolveAndVetUrl` and pins the vetted IP for http (see plainFetch.ts), which removes the
- * race for http. The `unsafeFetchUrlReason` boolean form (llms.txt probe) keeps the repo's accepted
- * best-effort posture (external-image.ts) since its body is never read.
+ * race for http. The `unsafeFetchUrlReason` boolean form (llms.txt probe)
+ * keeps the repo's accepted best-effort posture (external-image.ts) since its body is never read.
  *
  * Private-address classification is delegated to `isPrivateIP` from `@bike4mind/fab-pipeline` -
  * this file used to reimplement the same per-hextet IPv6 prefix list and drifted out of sync with
@@ -39,7 +42,10 @@ export function unsafeHostnameReason(hostname: string): string | null {
   return null;
 }
 
-export type VettedFetchTarget = { safe: true; address: string; family: number } | { safe: false; reason: string };
+export type VettedFetchTarget =
+  | { safe: true; address: string; family: number }
+  /** `retryable` marks a transient failure (a DNS hiccup) rather than a permanent block. */
+  | { safe: false; reason: string; retryable?: boolean };
 
 /**
  * Full guard (protocol + literal hostname + resolved-address check) that also RETURNS the vetted
@@ -58,13 +64,15 @@ export async function resolveAndVetUrl(url: URL): Promise<VettedFetchTarget> {
   try {
     addresses = await lookup(host, { all: true });
   } catch {
-    return { safe: false, reason: 'dns resolution failed' };
+    // A lookup failure is transient (EAI_AGAIN, SERVFAIL), not a verdict on the target: mark it
+    // retryable so a caller does not treat a DNS hiccup as a permanent refusal.
+    return { safe: false, reason: 'dns resolution failed', retryable: true };
   }
   for (const { address } of addresses) {
     if (isPrivateIP(address)) return { safe: false, reason: 'resolves to a private/reserved address' };
   }
   const first = addresses[0];
-  if (!first) return { safe: false, reason: 'dns resolution failed' };
+  if (!first) return { safe: false, reason: 'dns resolution failed', retryable: true };
   return { safe: true, address: first.address, family: first.family };
 }
 

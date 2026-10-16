@@ -17,7 +17,7 @@ import { Quest, questRepository } from '../QuestModel';
 // artifacts[].type is the live example, since parseArtifacts emits 'html', never 'text'.
 const FULL_PROMPT_META = {
   model: {
-    name: 'claude-opus-5',
+    name: 'claude-opus-5-5',
     type: 'text',
     backend: 'anthropic',
     contextWindow: 200000,
@@ -159,6 +159,7 @@ const FULL_PROMPT_META = {
     partial: true,
     reasons: ['more than the 100-document candidate cap matched, so some were never considered'],
   },
+  retrievalFloorRejection: { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' },
   functionCalls: [
     {
       name: 'web_search',
@@ -173,6 +174,7 @@ const FULL_PROMPT_META = {
   ],
   offeredTools: ['web_search'],
   toolMode: 'smart',
+  redirectedFrom: 'claude-opus-5',
   performance: {
     totalResponseTime: 1000,
     contextRetrievalTime: 100,

@@ -476,7 +476,7 @@ export const DataLakeBatchMetrics = {
  * `swept` = it ran (finding nothing is still a sweep), `failed` = it threw and the caller caught.
  *
  * Kept here rather than imported from the worker so a metrics module never depends on a worker:
- * `ChunkRescueSweepResult` in server/s3/chunkRescueSweep.ts declares the first two and the
+ * `ChunkRescueSweepResult` in apps/workers/src/s3/chunkRescueSweep.ts declares the first two and the
  * reconciler cron supplies the third, and assignability to this union is what keeps them in sync.
  */
 export type ChunkRescueOutcome = 'disabled' | 'swept' | 'failed';

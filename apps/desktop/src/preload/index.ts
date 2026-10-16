@@ -30,6 +30,7 @@ import {
   type DesktopApi,
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
+import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } from '@shared/terminal';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 
@@ -215,6 +216,16 @@ const api: DesktopApi = {
       }
     },
   },
+  sidebar: {
+    getSections: () => ipcRenderer.invoke(IPC_CHANNELS.sidebarGetSections),
+    createSection: (name: string, sessionId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarCreateSection, name, sessionId),
+    renameSection: (sectionId: string, name: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarRenameSection, sectionId, name),
+    deleteSection: (sectionId: string) => ipcRenderer.invoke(IPC_CHANNELS.sidebarDeleteSection, sectionId),
+    moveSession: (sessionId: string, sectionId: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarMoveSession, sessionId, sectionId),
+  },
   mcp: {
     getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
     addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
@@ -251,6 +262,27 @@ const api: DesktopApi = {
       const handler = (_event: unknown, summary: PrSummaryEvent) => listener(summary);
       ipcRenderer.on(IPC_CHANNELS.prSummaryChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.prSummaryChanged, handler);
+    },
+  },
+  terminal: {
+    list: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.terminalList, sessionId),
+    create: (request: TerminalCreateRequest) => ipcRenderer.invoke(IPC_CHANNELS.terminalCreate, request),
+    attach: (terminalId: string) => ipcRenderer.invoke(IPC_CHANNELS.terminalAttach, terminalId),
+    detach: (terminalId: string) => ipcRenderer.send(IPC_CHANNELS.terminalDetach, terminalId),
+    write: (terminalId: string, data: string) => ipcRenderer.send(IPC_CHANNELS.terminalInput, terminalId, data),
+    resize: (terminalId: string, cols: number, rows: number) =>
+      ipcRenderer.send(IPC_CHANNELS.terminalResize, terminalId, cols, rows),
+    restart: (terminalId: string) => ipcRenderer.invoke(IPC_CHANNELS.terminalRestart, terminalId),
+    close: (terminalId: string) => ipcRenderer.invoke(IPC_CHANNELS.terminalClose, terminalId),
+    onData: listener => {
+      const handler = (_event: unknown, event: TerminalDataEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.terminalData, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.terminalData, handler);
+    },
+    onChanged: listener => {
+      const handler = (_event: unknown, event: TerminalsChangedEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.terminalsChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.terminalsChanged, handler);
     },
   },
   shell: {

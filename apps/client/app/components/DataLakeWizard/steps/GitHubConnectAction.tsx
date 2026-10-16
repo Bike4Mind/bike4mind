@@ -5,7 +5,7 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { acceptsConnectorContent, isGitHubLakeAccessLost } from '@bike4mind/common';
+import { acceptsConnectorContent, isGitHubLakeAccessLost, type ISessionDocument } from '@bike4mind/common';
 import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
@@ -102,7 +102,14 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  * unknown origin asks to switch it first; an absent origin reads as curated, the stored default. The
  * switch rides on the start request (`ensureConnectorFed`), so a refused start leaves the origin alone.
  */
-export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLake }) {
+export default function GitHubConnectAction({
+  lake,
+  onChatStarted,
+}: {
+  lake: LakeSourcePanelLake;
+  /** Lets a surface embedding this card handle "Ask about this repo" itself instead of navigating away. */
+  onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
+}) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   // Keyed by lake: the header reuses this instance across lake selections, so a prompt opened on one
   // lake must not stay open (and confirm) on the next.
@@ -235,6 +242,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
             lake={lake}
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
             testId="github-ask-about-repo-btn"
+            onChatStarted={onChatStarted}
           >
             Ask about this repo
           </StartLakeChatButton>

@@ -34,13 +34,23 @@ const REWRITE_SITES = [
 ];
 
 /** Content-upload call shapes, used to spot a rewrite site nobody added to the list above. */
-const UPLOAD_PATTERN = /(getFilesStorage\(\)\.upload\(|storage\.upload\()/;
+const UPLOAD_PATTERN = /(getFilesStorage\(\)\.upload\(|storage\.upload\(|\.uploadFile\(|PutObjectCommand)/;
 
 /** First-write and backup paths: they upload bytes but invalidate nothing. */
 const NOT_A_REWRITE = new Set([
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
+  // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
+  'apps/client/pages/api/files/[id]/upload.ts',
+  // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.
+  'apps/client/pages/api/files/copy-generated-image.ts',
+  'apps/client/pages/api/files/createFabFile.ts',
+  'apps/client/pages/api/files/createFabFileURL.ts',
+  'apps/client/pages/api/files/generate-presigned-urls-batch.ts',
 ]);
+
+/** Rewrite sites that charge through the accounting helper but do not use the extracted-count patch. */
+const CHARGED_ELSEWHERE = ['b4m-core/services/src/researchTaskService/utils.ts'];
 
 const read = (rel: string) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
@@ -51,7 +61,12 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
 
   // The list above is only as good as its completeness, so hunt for a site nobody listed.
   it('has no unlisted file that uploads FabFile content', () => {
-    const searchRoots = ['apps/client/pages/api/fabfiles', 'b4m-core/services/src/fabFileService'];
+    const searchRoots = [
+      'apps/client/pages/api/fabfiles',
+      'apps/client/pages/api/files',
+      'b4m-core/services/src/fabFileService',
+      'b4m-core/services/src/researchTaskService',
+    ];
     const found: string[] = [];
 
     const walk = (dir: string) => {
@@ -67,13 +82,35 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     };
     searchRoots.forEach(walk);
 
-    const unaccounted = found.filter(f => !REWRITE_SITES.includes(f) && !NOT_A_REWRITE.has(f));
+    const unaccounted = found.filter(
+      f => !REWRITE_SITES.includes(f) && !NOT_A_REWRITE.has(f) && !CHARGED_ELSEWHERE.includes(f)
+    );
     expect(
       unaccounted,
       `These upload FabFile content but are neither listed as rewrite sites nor excluded as first-write/backup. ` +
         `If one rewrites an existing file's bytes, spread ${PATCH} into its update and add it to REWRITE_SITES; ` +
         `if it only writes a new file or a backup copy, add it to NOT_A_REWRITE with a reason.`
     ).toEqual([]);
+  });
+
+  // A rewrite that skips the accounting helper charges the full new size on its S3 event and never
+  // refunds the old one (fabFileService/rewriteStorage.ts). The research re-crawl rewrites bytes too,
+  // outside the extracted-count roots, so it is pinned by name. fabFileService/edit.ts is exempt: it has no production caller.
+  it.each([
+    ...REWRITE_SITES.filter(rel => rel !== 'b4m-core/services/src/fabFileService/edit.ts'),
+    ...CHARGED_ELSEWHERE,
+  ])('%s charges its rewrite through the storage accounting helper', rel => {
+    // Comments stripped (keeping `://` in strings) so a commented-out call cannot satisfy this.
+    const source = read(rel).replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, '$1');
+    const branches = source.split('commitContentRewrite(');
+    expect(branches.length).toBeGreaterThan(1);
+    // Every commit is preceded, since the previous one, by a quota check and then the upload.
+    for (const branch of branches.slice(0, -1)) {
+      const check = branch.indexOf('assertRewriteFits(');
+      expect(check).toBeGreaterThanOrEqual(0);
+      expect(branch.lastIndexOf('.upload(')).toBeGreaterThan(check);
+    }
+    expect(source).not.toMatch(/FabFile\.(updateOne|findOneAndUpdate)\(/);
   });
 
   // undefined is stripped from a Mongoose $set, so that form of the fix silently changes nothing.

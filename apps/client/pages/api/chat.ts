@@ -64,7 +64,7 @@ const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
@@ -273,7 +273,7 @@ const handler = nextRouteForContract(chatContract, {
       sessionId,
       message_received: true,
       timestamp: new Date().toISOString(),
-      model: internalRequest.params.model,
+      model: completedQuest.promptMeta?.model?.name ?? internalRequest.params.model,
       response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
@@ -311,7 +311,8 @@ const handler = nextRouteForContract(chatContract, {
     sessionId,
     message_received: true,
     timestamp: new Date().toISOString(),
-    model: internalRequest.params.model,
+    // invoke swaps a retired id for its successor; report the model the turn runs on.
+    model: quest.promptMeta?.model?.name ?? internalRequest.params.model,
     message: 'Message queued for processing. Use the quest ID to check status.',
     ...(toolMeta && { tools: toolMeta }),
     tracking_info: {

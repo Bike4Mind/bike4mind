@@ -65,6 +65,7 @@
     "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
     "trim:ai-edit-versions": "tsx src/trim-ai-edit-versions.ts",
     "backfill:show-credits-used": "tsx src/backfill-show-credits-used.ts",
+    "backfill:fabfile-owner-organization": "tsx src/backfill-fabfile-owner-organization.ts",
     "report:external-active-users": "tsx src/external-active-users.ts",
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
     "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",

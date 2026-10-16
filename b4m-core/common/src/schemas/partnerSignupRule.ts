@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { PENDING_FREE_CREDITS_TAG } from '../constants/user';
+import { DEVELOPER_USER_TAGS } from './user';
+import { QA_INGEST_USER_TAG } from './qa';
 
 /**
  * Public mail providers that must never be configured as a partner signup rule
@@ -25,6 +28,20 @@ export const DISALLOWED_SIGNUP_RULE_DOMAINS: readonly string[] = [
   'mail.com',
   'yandex.com',
   'zoho.com',
+];
+
+/**
+ * Tags that gate privileged access elsewhere (developer, tavern, QA ingest, LLM/quest debug,
+ * opti rapid-reply). Lowercase: some gates match case-insensitively, so every casing is blocked.
+ */
+export const RESERVED_PARTNER_RULE_TAGS: readonly string[] = [
+  ...DEVELOPER_USER_TAGS.map(tag => tag.toLowerCase()),
+  'tavern',
+  QA_INGEST_USER_TAG,
+  'debugllmendpoint',
+  'debugquestmaster',
+  'debugprojectnotebookfeature',
+  'opti',
 ];
 
 /** Normalize a domain the same way the entitlement layer does (trim + lowercase). */
@@ -60,6 +77,31 @@ const entitlementKeySchema = z
 // the update path inheriting create's defaults.
 const entitlementsSchema = z.array(entitlementKeySchema).max(20, 'Too many entitlements');
 const signupCreditsSchema = z.number().int('Credits must be a whole number').min(0, 'Credits cannot be negative');
+const userTagSchema = z
+  .string()
+  .trim()
+  .min(1, 'Tag cannot be empty')
+  .max(128, 'Tag is too long')
+  // System-managed: stamping it at signup would re-mark a verified user as awaiting free credits.
+  .refine(tag => tag !== PENDING_FREE_CREDITS_TAG, { message: `"${PENDING_FREE_CREDITS_TAG}" is a reserved tag` })
+  // Privileged tags outlive the rule, so they are never domain-wide grants.
+  .refine(tag => !RESERVED_PARTNER_RULE_TAGS.includes(tag.toLowerCase()), {
+    message: 'Developer, tavern, QA, debug and opti tags are reserved',
+  });
+// Duplicates are dropped rather than rejected; the grant merges with $addToSet regardless.
+const tagsSchema = z
+  .array(userTagSchema)
+  .max(20, 'Too many tags')
+  .transform(tags => [...new Set(tags)]);
+const subscriptionSchema = z.object({
+  // That the priceId is a known plan is checked server-side: b4m-core cannot see the plan catalog.
+  priceId: z.string().trim().min(1, 'Plan is required'),
+  durationMonths: z
+    .number()
+    .int('Duration must be a whole number of months')
+    .min(1, 'Duration must be at least 1 month')
+    .max(12, 'Duration cannot exceed 12 months'),
+});
 const labelSchema = z.string().trim().max(120);
 const notesSchema = z.string().trim().max(2000);
 
@@ -84,6 +126,8 @@ export const createPartnerSignupRuleSchema = z.object({
   entitlements: entitlementsSchema,
   signupCredits: signupCreditsSchema,
   organizationId: organizationIdSchema.optional(),
+  tags: tagsSchema.optional(),
+  subscription: subscriptionSchema.nullable().optional(),
   enabled: z.boolean().default(true),
   label: labelSchema.optional(),
   notes: notesSchema.optional(),
@@ -99,6 +143,9 @@ export const updatePartnerSignupRuleSchema = z
     entitlements: entitlementsSchema.optional(),
     signupCredits: signupCreditsSchema.optional(),
     organizationId: organizationIdSchema.optional(),
+    tags: tagsSchema.optional(),
+    // `null` clears the subscription; omitting the field leaves it untouched.
+    subscription: subscriptionSchema.nullable().optional(),
     enabled: z.boolean().optional(),
     label: labelSchema.optional(),
     notes: notesSchema.optional(),
