@@ -5,6 +5,7 @@ import {
   MCP_CONNECTION_SECRET_PATHS,
   RESERVED_MCP_CONNECTION_SLUGS,
   toMcpConnectionPublic,
+  toMcpDisplayUrl,
   type IMcpConnectionDocument,
 } from './McpConnectionTypes';
 import { McpServerName } from './McpServerTypes';
@@ -49,7 +50,8 @@ describe('toMcpConnectionPublic', () => {
     userId: 'user-1',
     slug: 'linear',
     displayName: 'Linear',
-    url: 'https://mcp.linear.app/mcp',
+    urlEnc: 'SECRET-0',
+    displayUrl: 'https://mcp.linear.app/mcp',
     urlHost: 'mcp.linear.app',
     transport: 'auto',
     auth: {
@@ -83,7 +85,9 @@ describe('toMcpConnectionPublic', () => {
     expect(serialized).not.toMatch(/Enc"/);
     expect(view).not.toHaveProperty('refreshLease');
     expect(view).not.toHaveProperty('ownerKey');
-    expect(MCP_CONNECTION_SECRET_PATHS).toHaveLength(5);
+    expect(view).not.toHaveProperty('url');
+    expect(view.displayUrl).toBe('https://mcp.linear.app/mcp');
+    expect(MCP_CONNECTION_SECRET_PATHS).toContain('urlEnc');
   });
 
   it('reports token presence and the key tail only', () => {
@@ -95,5 +99,19 @@ describe('toMcpConnectionPublic', () => {
   it('omits auth sub-objects the connection does not have', () => {
     const view = toMcpConnectionPublic({ ...doc, auth: { kind: 'none' } });
     expect(view.auth).toEqual({ kind: 'none' });
+  });
+});
+
+describe('toMcpDisplayUrl', () => {
+  it.each([
+    ['https://mcp.linear.app/mcp', 'https://mcp.linear.app/mcp'],
+    ['https://mcp.example.com/mcp?api_key=s3cr3t&x=1', 'https://mcp.example.com/mcp'],
+    ['https://mcp.example.com:8443/v1/sse', 'https://mcp.example.com:8443/v1/sse'],
+    ['https://hooks.example.com/u/abcdefghijklmnopqrstWXYZ/mcp', 'https://hooks.example.com/u/...WXYZ/mcp'],
+    ['https://example.com/1234567890123456789', 'https://example.com/1234567890123456789'],
+    ['https://example.com/12345678901234567890', 'https://example.com/...7890'],
+    ['https://example.com', 'https://example.com/'],
+  ])('%s -> %s', (url, expected) => {
+    expect(toMcpDisplayUrl(url)).toBe(expected);
   });
 });

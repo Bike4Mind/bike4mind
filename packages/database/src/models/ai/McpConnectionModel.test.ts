@@ -19,7 +19,8 @@ const baseConnection = (overrides: Partial<CreateInput> = {}): CreateInput => ({
   userId: 'user-1',
   slug: 'linear',
   displayName: 'Linear',
-  url: 'https://mcp.linear.app/mcp',
+  urlEnc: 'enc:url',
+  displayUrl: 'https://mcp.linear.app/mcp',
   urlHost: 'mcp.linear.app',
   transport: 'auto',
   auth: {
@@ -45,7 +46,8 @@ const baseConnection = (overrides: Partial<CreateInput> = {}): CreateInput => ({
 const apiKeyConnection = (overrides: Partial<CreateInput> = {}): CreateInput =>
   baseConnection({
     slug: 'airtable',
-    url: 'https://mcp.airtable.com/mcp',
+    urlEnc: 'enc:url-airtable',
+    displayUrl: 'https://mcp.airtable.com/mcp',
     urlHost: 'mcp.airtable.com',
     auth: {
       kind: 'api_key',
@@ -183,6 +185,7 @@ describe('McpConnectionModel', () => {
     it('returns every secret from the credential read', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.urlEnc).toBe('enc:url');
       expect(withCreds?.auth.oauth).toMatchObject({
         accessTokenEnc: 'enc:access',
         refreshTokenEnc: 'enc:refresh',
@@ -200,6 +203,8 @@ describe('McpConnectionModel', () => {
       const view = toMcpConnectionPublic(withCreds!);
 
       expect(JSON.stringify(view)).not.toMatch(/enc:/);
+      expect(view).not.toHaveProperty('urlEnc');
+      expect(view.displayUrl).toBe('https://mcp.linear.app/mcp');
       expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true });
       expect(view).not.toHaveProperty('refreshLease');
     });

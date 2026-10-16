@@ -135,8 +135,14 @@ export interface IMcpConnection {
   presetId?: IntegrationId;
   slug: string;
   displayName: string;
-  /** Normalized: lowercased host, no fragment, no userinfo. */
-  url: string;
+  /**
+   * Ciphertext of the normalized URL (lowercased host, no fragment, no userinfo), because servers
+   * often carry a key in the query or path. The caller encrypts with `encryptToken` and decrypts
+   * after a `*WithCredentials` read, like every other `*Enc` field.
+   */
+  urlEnc: string;
+  /** Safe to show: see {@link toMcpDisplayUrl}. */
+  displayUrl: string;
   /**
    * Lowercased hostname without the port (`URL.hostname`); what host patterns and the blocklist
    * match, so they apply to every port on the host.
@@ -173,7 +179,24 @@ export const MCP_CONNECTION_CREDENTIAL_PATHS = [
  * Dotted paths of every secret on a connection. Single source for the schema's `select: false`,
  * the `+path` opt-in on credential reads, and the projection test.
  */
-export const MCP_CONNECTION_SECRET_PATHS = [...MCP_CONNECTION_CREDENTIAL_PATHS] as const;
+export const MCP_CONNECTION_SECRET_PATHS = [...MCP_CONNECTION_CREDENTIAL_PATHS, 'urlEnc'] as const;
+
+/** Path segments this long or longer are treated as possible secrets and masked in the display URL. */
+export const MCP_DISPLAY_URL_MASK_MIN_SEGMENT = 20;
+
+/**
+ * Origin plus path with the query dropped and every long path segment masked to `...` plus its last
+ * 4 characters. The origin keeps a non-default port. Throws on an unparseable URL; callers pass the
+ * already-validated normalized URL.
+ */
+export function toMcpDisplayUrl(url: string): string {
+  const parsed = new URL(url);
+  const path = parsed.pathname
+    .split('/')
+    .map(segment => (segment.length >= MCP_DISPLAY_URL_MASK_MIN_SEGMENT ? `...${segment.slice(-4)}` : segment))
+    .join('/');
+  return `${parsed.origin}${path}`;
+}
 
 /**
  * Why the owner fields are inconsistent, or null. `user`: `ownerKey === userId`. `org`: an
@@ -200,7 +223,7 @@ export function mcpConnectionOwnerProblem(
   return credential ? `An org definition cannot carry ${credential}` : null;
 }
 
-/** Client-safe view: no ciphertext, no lease. Token presence is reported as booleans only. */
+/** Client-safe view: no ciphertext (the URL included), no lease. Token presence is reported as booleans only. */
 export interface IMcpConnectionPublic {
   id: string;
   ownerType: McpConnectionOwnerType;
@@ -210,7 +233,7 @@ export interface IMcpConnectionPublic {
   presetId?: IntegrationId;
   slug: string;
   displayName: string;
-  url: string;
+  displayUrl: string;
   urlHost: string;
   transport: McpConnectionTransport;
   detectedTransport?: McpConnectionDetectedTransport;
@@ -255,7 +278,7 @@ export function toMcpConnectionPublic(doc: IMcpConnectionDocument): IMcpConnecti
     presetId: doc.presetId,
     slug: doc.slug,
     displayName: doc.displayName,
-    url: doc.url,
+    displayUrl: doc.displayUrl,
     urlHost: doc.urlHost,
     transport: doc.transport,
     detectedTransport: doc.detectedTransport,

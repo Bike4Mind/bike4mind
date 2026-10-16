@@ -65,7 +65,8 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     presetId: { type: String },
     slug: { type: String, required: true, match: MCP_CONNECTION_SLUG_PATTERN },
     displayName: { type: String, required: true },
-    url: { type: String, required: true },
+    urlEnc: { type: String, required: true, select: false },
+    displayUrl: { type: String, required: true },
     urlHost: { type: String, required: true },
     transport: { type: String, enum: MCP_CONNECTION_TRANSPORTS, default: 'auto' },
     detectedTransport: { type: String, enum: ['streamable-http', 'sse'] },
@@ -160,14 +161,12 @@ const WITH_CREDENTIALS = MCP_CONNECTION_SECRET_PATHS.map(path => `+${path}`).joi
 
 /** `create` returns the inserted values, which include any secrets the caller just wrote. */
 function stripSecrets<T extends IMcpConnectionDocument>(doc: T): T {
-  const oauth = doc.auth?.oauth;
-  if (oauth) {
-    delete oauth.manualClientIdEnc;
-    delete oauth.manualClientSecretEnc;
-    delete oauth.accessTokenEnc;
-    delete oauth.refreshTokenEnc;
+  for (const path of MCP_CONNECTION_SECRET_PATHS) {
+    const keys = path.split('.');
+    const leaf = keys.pop()!;
+    const parent = keys.reduce<unknown>((node, key) => (node as Record<string, unknown> | undefined)?.[key], doc);
+    if (parent && typeof parent === 'object') delete (parent as Record<string, unknown>)[leaf];
   }
-  if (doc.auth?.apiKey) delete (doc.auth.apiKey as { valueEnc?: string }).valueEnc;
   return doc;
 }
 
