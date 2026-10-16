@@ -62,6 +62,25 @@ describe('OpenAIBackend Responses stream without a terminal event', () => {
     );
   });
 
+  it('keeps a mid-stream iterator failure as its original error', async () => {
+    const backend = buildBackend([delta], () => {
+      throw new Error('stream timeout');
+    });
+
+    const err = await complete(backend).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ResponsesStreamTruncatedError);
+    expect(err.message).toBe('stream timeout');
+  });
+
+  it('keeps a response.failed event as its own error, not a truncation', async () => {
+    const backend = buildBackend([delta, { type: 'response.failed', response: { error: { message: 'boom' } } }]);
+
+    const err = await complete(backend).catch(e => e);
+    expect(err).not.toBeInstanceOf(ResponsesStreamTruncatedError);
+    expect(err.message).toContain('boom');
+  });
+
   it('still resolves when the terminal event arrives', async () => {
     const backend = buildBackend([delta, { type: 'response.completed', response: terminal }]);
 

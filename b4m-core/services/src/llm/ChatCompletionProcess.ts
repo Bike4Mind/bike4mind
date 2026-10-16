@@ -4911,7 +4911,7 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError)) {
+            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
