@@ -103,6 +103,7 @@ export enum AdminTab {
   ReleaseNotes = 62,
   OAuthClients = 63,
   GrowthPricing = 64,
+  IntegrationDemand = 65,
 }
 
 /**
@@ -264,6 +265,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         tab: AdminTab.IntegrationHealth,
         label: 'Integration Health',
         testid: 'admin-integration-health-btn',
+      },
+      {
+        Icon: TrendingUpIcon,
+        tab: AdminTab.IntegrationDemand,
+        label: 'Integration Demand',
+        testid: 'admin-integration-demand-btn',
       },
       { Icon: WebhookIcon, tab: AdminTab.WebhookAuditLogs, label: 'Webhook Logs' },
       { Icon: QueryStatsIcon, tab: AdminTab.SlackMetrics, label: 'Slack Metrics' },

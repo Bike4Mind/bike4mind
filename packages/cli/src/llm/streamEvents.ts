@@ -90,6 +90,9 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('error'),
     message: z.string().optional(),
+    // The server's classifier (CompletionSseErrorEventSchema in @bike4mind/common); kept open so a new code still parses.
+    code: z.string().optional(),
+    requestId: z.string().optional(),
   }),
 ]);
 export type StreamEvent = z.infer<typeof streamEventSchema>;

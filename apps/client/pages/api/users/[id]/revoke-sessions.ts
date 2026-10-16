@@ -1,6 +1,11 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository, authSessionRepository, trustedDeviceRepository } from '@bike4mind/database';
+import {
+  userRepository,
+  authSessionRepository,
+  trustedDeviceRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 
@@ -15,7 +20,14 @@ const handler = baseApi().post(
     const tokenVersion = await userService.adminRevokeUserSessions(
       req.user.id,
       { id: targetId },
-      { db: { users: userRepository, authSessions: authSessionRepository }, logger: req.logger }
+      {
+        db: {
+          users: userRepository,
+          authSessions: authSessionRepository,
+          realtimeConnections: realtimeConnectionRepository,
+        },
+        logger: req.logger,
+      }
     );
     // Trusted devices are deliberately NOT keyed on tokenVersion (see trustedDevice.ts), so a
     // session revoke does not drop them on its own. A force-logout is the compromised-account

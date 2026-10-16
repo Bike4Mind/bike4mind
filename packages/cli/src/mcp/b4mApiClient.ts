@@ -84,8 +84,8 @@ export interface QuestResponse {
   // billing failures that have one and its absence never means success.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
-  // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
-  // server has no CDN configured).
+  // Generated-file basenames, and `files` resolves each to a short-lived presigned URL (valid for
+  // about an hour).
   images?: string[];
   files?: GeneratedFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).

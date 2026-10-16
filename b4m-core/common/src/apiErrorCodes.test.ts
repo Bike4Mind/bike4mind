@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   AGENT_LIMIT_REACHED_ERROR_CODE,
   API_ERROR_CODES,
   API_KEY_USER_CAP_ERROR_CODE,
@@ -50,11 +51,13 @@ describe('API_ERROR_CODES', () => {
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
     // UNKNOWN_MODEL_ERROR_CODE likewise; proven by b4m-core/services/src/cliCompletions.modelAlias.test.ts.
+    // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
       API_KEY_USER_CAP_ERROR_CODE,
       AGENT_LIMIT_REACHED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

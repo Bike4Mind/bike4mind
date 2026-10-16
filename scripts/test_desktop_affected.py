@@ -140,7 +140,7 @@ class DesktopAffectedTest(unittest.TestCase):
         releases = [{'tag_name': 'desktop-v0.1.1', 'prerelease': False}]
         self.commit('feat(shared)!: unrelated', 'b4m-core/unrelated/src/index.ts')
         self.assertEqual(version_tests.select_version(releases, '0.1.0')[:2], ('0.1.1', False))
-        notes = version_tests.release_notes('0.1.1', 'desktop-v0.1.1', 'example/repo')
+        notes = version_tests.release_notes('0.1.1', 'desktop-v0.1.1', 'example/repo', 'example/dist')
         self.assertNotIn('feat(shared)!', notes)
 
 

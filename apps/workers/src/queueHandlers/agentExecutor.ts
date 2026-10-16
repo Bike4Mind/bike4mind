@@ -1895,6 +1895,7 @@ async function processExecution(
       musicConfig: await buildAgentMusicToolConfig(
         {
           userId: execution.userId,
+          organizationId: execution.organizationId,
           apiKeyId: execution.apiKeyId,
           questId: runQuestId,
           toolEnabled: profileEnabledTools.includes('music_generation'),
@@ -3642,8 +3643,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
-      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
-      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
+      // No videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
+      // below), and the per-run caps live in agentExecutor.generationJobCap.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

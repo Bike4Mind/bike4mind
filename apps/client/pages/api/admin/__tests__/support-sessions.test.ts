@@ -335,6 +335,26 @@ describe('GET /api/admin/sessions/[id]/quests - conversation read', () => {
     });
   });
 
+  it('reports the model that answered a redirected turn, not the one requested', async () => {
+    mockFindPageBySessionId.mockResolvedValue({
+      data: [
+        {
+          id: 'q-2',
+          type: 'message',
+          prompt: 'hello',
+          reply: 'hi',
+          promptMeta: { model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } },
+        },
+      ],
+      hasMore: false,
+    });
+
+    const { res, run } = call(questsHandler, { isAdmin: true });
+    await run();
+
+    expect(res._getJSONData().quests[0].model).toBe('gemini-3.5-flash');
+  });
+
   it('serves the conversation-derived session fields here, under the content-read action', async () => {
     const { res, run } = call(questsHandler, { isAdmin: true });
     await run();

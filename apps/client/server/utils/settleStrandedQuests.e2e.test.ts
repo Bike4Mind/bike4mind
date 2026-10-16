@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { agentExecutionRepository, questRepository, Quest, type AgentExecutionStatus } from '@bike4mind/database';
 import { settleStrandedQuests } from './settleStrandedQuests';
 import { RUN_ABANDONED_FINISH_REASON } from '@bike4mind/common';
-import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 /**
  * The one test that spans the seam this whole path is built on: a real execution

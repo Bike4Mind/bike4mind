@@ -9,7 +9,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
@@ -28,8 +28,8 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
     origin: resolveSessionOrigin(req),
   });
 
-  // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.
-  const effectiveOrgId = await resolveBillingOrgId(req, body.organizationId);
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const effectiveOrgId = await resolveMediaBillingOrgId(req, body.organizationId);
 
   const quest = await getImageEdit().invoke({
     userId: req.user.id,

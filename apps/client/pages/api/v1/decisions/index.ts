@@ -108,14 +108,6 @@ const handler = nextRouteForContract(createDecisionContract, {
   const source = resolveRequestUsageSource(req);
   const apiKeyId = req.apiKeyInfo?.keyId;
   const startedAt = Date.now();
-  // A refund that throws must not replace the error the caller is owed.
-  const releaseHold = async () => {
-    try {
-      await reservation.refund();
-    } catch (err) {
-      req.logger.error('Failed to refund decision credit hold', { decisionId, err });
-    }
-  };
   const recordUsage = (
     status: 'ok' | 'error',
     usage: { model: string; inputTokens: number; outputTokens: number; costUsd: number; creditsCharged: number }
@@ -148,7 +140,7 @@ const handler = nextRouteForContract(createDecisionContract, {
   try {
     input = await resolveDecisionInput(req, validation.request.input, caps);
   } catch (error) {
-    await releaseHold();
+    await reservation.refund();
     if (sendDecisionError(res, error)) return;
     throw error;
   }
@@ -170,7 +162,7 @@ const handler = nextRouteForContract(createDecisionContract, {
     });
     answers = normalizeDecisionAnswers(validation.request.questions, outcome.decision.answers);
   } catch (error) {
-    await releaseHold();
+    await reservation.refund();
     recordUsage('error', { model, inputTokens: 0, outputTokens: 0, costUsd: 0, creditsCharged: 0 });
     req.logger.warn('Decision call failed', { decisionId, model, provider: caps.provider, ...describeFailure(error) });
     if (sendDecisionError(res, error)) return;

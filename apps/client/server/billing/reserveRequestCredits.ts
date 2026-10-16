@@ -15,7 +15,11 @@ export type CreditReservation = {
   reservedCredits: number;
   /** The serializable hold, for settling in a later request (see settleHeldCredits); null when nothing was reserved. */
   hold: CreditHoldRecord | null;
-  /** Return the whole reservation - the provider call failed and incurred no cost. */
+  /**
+   * Return the whole reservation - the provider call failed and incurred no cost. Never throws: the route
+   * is already answering with the provider failure, so a failed refund is logged (with the owner, for a
+   * manual credit) rather than replacing that answer with a 500.
+   */
   refund(): Promise<void>;
   /**
    * Keep `chargedCredits` (at most the reservation), refund the rest, and write the ledger row.
@@ -90,6 +94,7 @@ export async function reserveRequestCredits({
       organizationId: billingOrganizationId ?? null,
       requiredCredits,
       featureLabel,
+      logger: req.logger,
       // Re-checked against the roster holdCredits just fetched - no extra query.
       assertBillable: (billingUser, billingOrg) =>
         assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
@@ -102,7 +107,18 @@ export async function reserveRequestCredits({
     ownerType: hold.ownerType,
     reservedCredits: hold.reservedCredits,
     hold,
-    refund: () => creditService.releaseCreditHold(hold, holdAdapters),
+    refund: async () => {
+      try {
+        await creditService.releaseCreditHold(hold, holdAdapters);
+      } catch (err) {
+        req.logger.error(`${featureLabel} refund failed - caller charged for a failed request`, {
+          ownerId: hold.ownerId,
+          ownerType: hold.ownerType,
+          reservedCredits: hold.reservedCredits,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    },
     settle: (chargedCredits, entry) =>
       creditService.settleCreditHold(hold, chargedCredits, entry, { featureLabel, logger: req.logger }, holdAdapters),
   };

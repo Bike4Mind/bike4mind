@@ -31,7 +31,7 @@ vi.mock('./ledgerMemoryStore', () => ({
   appendMemoryEvent: (...a: unknown[]) => appendMemoryEventMock(...a),
   createLedgerMemoryStore: () => ({ readProfile: (...a: unknown[]) => readProfileMock(...a) }),
 }));
-vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 
 const { createLedgerAppendSession, writeFactToLedger } = await import('./mementoLedgerMirror');
 const { figureScopedSubject, resolveSubject } = await import('@bike4mind/memory');

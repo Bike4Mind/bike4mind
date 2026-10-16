@@ -1,24 +1,11 @@
 import { logger } from '../utils/Logger';
 import { StreamAccumulator } from './streamAccumulator';
-import type { CompletionCallback, CompletionRequest, RetryPolicy, StreamTransport } from './streamTransport';
-
-/** Default base backoff between retry attempts (ms); overridable via RetryPolicy.backoffMs. */
-const DEFAULT_BACKOFF_MS = 500;
+import { isConnectionDrop } from './modelCallError';
+import { decideRetry, EmptyCompletionError, type RetryDecider } from './retryDecision';
+import type { CompletionCallback, CompletionRequest, StreamTransport } from './streamTransport';
 
 /** Minimum gap between streamed text deltas (ms): coalesces token-sized frames so the TUI re-renders ~20x/s, not per token. */
 const TEXT_FLUSH_INTERVAL_MS = 50;
-
-/**
- * Thrown when an attempt's stream ended without producing any content (no text,
- * no tools). Treated as retryable inside {@link runCompletion}; if every attempt
- * comes back empty it surfaces to the caller rather than delivering a blank turn.
- */
-export class EmptyCompletionError extends Error {
-  constructor() {
-    super('Stream ended without producing any content.');
-    this.name = 'EmptyCompletionError';
-  }
-}
 
 /**
  * Thrown when a stream finished normally (it carried a stop reason) but produced no reply,
@@ -54,7 +41,19 @@ function abortError(): Error {
   return error;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+/** Wait `ms`, or less if `signal` aborts first; never rejects. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
 
 /**
  * The shared completion lifecycle for BOTH CLI transports. Given a
@@ -66,7 +65,8 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  *   text to the callback as deltas, at most every {@link TEXT_FLUSH_INTERVAL_MS};
  * - finalize the turn EXACTLY ONCE with the remaining text, tools and usage
  *   (deliver-once, no double-bill);
- * - retry a delivered-nothing attempt on a transient wire failure, with backoff;
+ * - retry a delivered-nothing attempt when `decide` says so (by default
+ *   {@link decideRetry}: typed transient failures, backoff with jitter, Retry-After);
  * - treat an empty completion as a retryable failure, never a silent blank turn
  *   (this is the WebSocket parity fix - its old path resolved empty without
  *   erroring or retrying);
@@ -90,21 +90,16 @@ export async function runCompletion(
   transport: StreamTransport,
   req: CompletionRequest,
   callback: CompletionCallback,
-  policy: RetryPolicy,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  decide: RetryDecider = decideRetry
 ): Promise<void> {
   // Abort before start: settle without invoking the callback.
   if (signal?.aborted) return;
 
-  const backoffMs = policy.backoffMs ?? DEFAULT_BACKOFF_MS;
   const streamText = req.options.streamText === true;
-  let lastError: Error | undefined;
 
-  for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
-    if (attempt > 0) {
-      logger.warn(`[runCompletion] Retrying stream (attempt ${attempt + 1}/${policy.maxRetries + 1})...`);
-    }
-
+  for (let attempt = 0; ; attempt++) {
+    let failure: Error;
     const accumulator = new StreamAccumulator();
     try {
       let lastFlushAt = 0;
@@ -133,11 +128,11 @@ export async function runCompletion(
       // Empty but finished normally: retrying would repeat (and re-bill) the same outcome.
       if (accumulator.finalStopReason) throw new NoReplyCompletionError(accumulator.finalStopReason);
 
-      // Empty with no terminal metadata: fall through to backoff + retry (do NOT deliver a blank turn).
-      lastError = new EmptyCompletionError();
+      // Empty with no terminal metadata: retryable (do NOT deliver a blank turn).
+      failure = new EmptyCompletionError();
       logger.warn('[runCompletion] Stream produced no content; treating as retryable.');
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      failure = error instanceof Error ? error : new Error(String(error));
 
       // User cancel mid-attempt: settle without surfacing an error or retrying.
       if (signal?.aborted) {
@@ -146,28 +141,27 @@ export async function runCompletion(
       }
 
       if (accumulator.hasDeliveredText) {
-        if (!policy.isRetryable(lastError)) throw lastError;
-        logger.error('[runCompletion] Stream dropped after text was streamed; not retrying', lastError);
+        if (!isConnectionDrop(failure)) throw failure;
+        logger.error('[runCompletion] Stream dropped after text was streamed; not retrying', failure);
         throw new Error(DROPPED_AFTER_STREAMING_MESSAGE);
       }
-
-      if (lastError instanceof NoReplyCompletionError || !policy.isRetryable(lastError)) throw lastError;
-
-      logger.warn(`[runCompletion] Transient stream failure (attempt ${attempt + 1}): ${lastError.message}`);
     }
 
-    // Linear backoff so we don't immediately re-hit a flapping connection.
-    // Shared by both the empty and retryable-error paths; skipped after the last.
-    if (attempt < policy.maxRetries && backoffMs > 0) {
-      await sleep(backoffMs * (attempt + 1));
+    const decision = decide(failure, attempt);
+    if (!decision.retry) {
+      // Give a connection drop that outlasted its retries a clear, actionable message
+      // instead of the bare socket error; anything else surfaces as-is.
+      if (attempt > 0 && isConnectionDrop(failure)) {
+        logger.error('[runCompletion] Stream failed after all retries due to a network drop', failure);
+        throw new Error(TRANSIENT_EXHAUSTED_MESSAGE);
+      }
+      throw failure;
     }
-  }
 
-  // Retries exhausted. Give a transient network drop a clear, actionable message
-  // instead of the bare socket error; an empty completion surfaces as-is.
-  if (lastError && policy.isRetryable(lastError) && !signal?.aborted) {
-    logger.error('[runCompletion] Stream failed after all retries due to a network drop', lastError);
-    throw new Error(TRANSIENT_EXHAUSTED_MESSAGE);
+    logger.warn(
+      `[runCompletion] Attempt ${attempt + 1} failed (${failure.message}); retrying in ${decision.delayMs}ms`
+    );
+    await sleep(decision.delayMs, signal);
+    if (signal?.aborted) return;
   }
-  throw lastError ?? new Error('Stream failed after all retry attempts');
 }

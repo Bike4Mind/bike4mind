@@ -1,6 +1,7 @@
-import { IFabFileRepository, IUserRepository } from '@bike4mind/common';
+import { ConflictError, IFabFileRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { reconcileUserStorage, UserStorageReconciliation } from './reconcileUserStorage';
 
 const recalculateUserStorageSchema = z.object({
   /**
@@ -18,16 +19,23 @@ interface RecalculateUserStorageAdapters {
   };
 }
 
+export const RECALCULATE_STORAGE_MAX_ATTEMPTS = 3;
+
+/**
+ * Admin repair for one user. Shares reconcileUserStorage's compare-and-set with the scheduled
+ * reconciliation (apps/workers/src/cron/storageReconciliation.ts), retrying on a concurrent
+ * adjustment instead of overwriting it. Repairs immediately, without the cron's stability check.
+ */
 export const recalculateUserStorage = async (
   parameters: RecalculateUserStorageParameters,
   { db }: RecalculateUserStorageAdapters
-) => {
+): Promise<UserStorageReconciliation> => {
   const { userId } = secureParameters(parameters, recalculateUserStorageSchema);
 
-  const user = await db.users.findById(userId);
-  if (!user) throw new NotFoundError(`User ${userId} not found`);
-
-  const totalSize = await db.fabFiles.sumFileSizeByUserId(userId);
-
-  await db.users.update({ id: user.id, currentStorageSize: totalSize });
+  for (let attempt = 0; attempt < RECALCULATE_STORAGE_MAX_ATTEMPTS; attempt++) {
+    const result = await reconcileUserStorage({ userId, repair: true }, { db });
+    if (!result) throw new NotFoundError(`User ${userId} not found`);
+    if (!result.conflict) return result;
+  }
+  throw new ConflictError(`Storage for user ${userId} kept changing during recalculation; try again`);
 };

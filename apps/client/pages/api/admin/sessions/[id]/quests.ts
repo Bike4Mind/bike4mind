@@ -65,7 +65,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
     replies: quest.replies,
     fabFileIds: quest.fabFileIds,
     images: quest.images,
-    model: quest.promptMeta?.model?.name,
+    model: quest.promptMeta?.model?.answeredBy ?? quest.promptMeta?.model?.name,
     creditsUsed: quest.creditsUsed,
   }));
 

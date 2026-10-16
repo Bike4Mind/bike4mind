@@ -125,7 +125,7 @@ async function attemptDelivery(
 
   // Same redaction the poll applies: the full promptMeta only if the key's owner owns the session.
   const session = await sessionRepository.findById(quest.sessionId);
-  const body = JSON.stringify(toQuestPollBody(quest, { isOwner: session?.userId === signing.userId }));
+  const body = JSON.stringify(await toQuestPollBody(quest, { isOwner: session?.userId === signing.userId }));
   const headers = buildSignedWebhookHeaders({
     secret: signing.secret,
     body,

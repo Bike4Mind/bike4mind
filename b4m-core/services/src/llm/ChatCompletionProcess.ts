@@ -2307,6 +2307,12 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
+      // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
+      // turn is not credited to the model it replaced.
+      if (modelInfo.id !== model && quest.promptMeta?.model) {
+        quest.promptMeta.model.answeredBy = modelInfo.id;
+      }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
           Date.now() - modelSetupStartTime
@@ -4593,6 +4599,7 @@ export class ChatCompletionProcess {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
+              if (quest.promptMeta!.model!.answeredBy) quest.promptMeta!.model!.answeredBy = currentModel.id;
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
@@ -5041,6 +5048,7 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
+                  requireTools: !!options.tools?.length,
                 }
               );
 
@@ -6385,6 +6393,9 @@ export class ChatCompletionProcess {
       quest.status = 'done';
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
+      // Same rule for the redirect record: the successor ran but produced no reply, so the chip must
+      // not credit it as the answering model.
+      if (quest.promptMeta?.model) quest.promptMeta.model.answeredBy = undefined;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.

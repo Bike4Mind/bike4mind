@@ -48,7 +48,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { settleStrandedQuests } from './settleStrandedQuests';
-import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 const logger = { warn: vi.fn(), error: vi.fn() };
 

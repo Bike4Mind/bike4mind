@@ -14,6 +14,7 @@ import {
   ICreditTransactionRepository,
   ICreditTransactionDocument,
   IAuthSessionRepository,
+  IRealtimeConnectionRepository,
   IAuthSessionDocument,
   ISessionAgentConfigRepository,
   ISessionAgentConfigDocument,
@@ -175,6 +176,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByUserId: vi.fn(),
   listOwnedBeforeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
+  summarizeChargedStorageByUserId: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({
@@ -245,6 +247,11 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     revokeAllByUserId: vi.fn(),
   });
 
+export const createMockRealtimeConnectionRepository = (): MockedObject<IRealtimeConnectionRepository> =>
+  vi.mocked({
+    endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }),
+  });
+
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
@@ -269,6 +276,9 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    setCurrentStorageIfUnchanged: vi.fn(),
+    findCurrentStorageSize: vi.fn(),
+    listUserIdsAfter: vi.fn(),
     incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),

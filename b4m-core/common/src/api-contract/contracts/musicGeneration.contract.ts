@@ -1,8 +1,17 @@
 import { defineEndpoint } from '../defineEndpoint';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, ScopeForbiddenErrorSchema, StorageLimitErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  BillingOrganizationForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  StorageLimitErrorSchema,
+} from '../../schemas/chat';
 import {
   CreateMusicGenerationBodySchema,
   ListMusicGenerationsQuerySchema,
@@ -84,7 +93,8 @@ export const createMusicGenerationContract = defineEndpoint({
     '`idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. ' +
     'Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; ' +
     'omitted, the job bills your home organization (or your personal credits if you have none). Keys are ' +
-    'scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.',
+    'scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. ' +
+    'An organization-billed API key always bills its own organization (see `organization_id`).',
   tags: ['Music'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -101,14 +111,13 @@ export const createMusicGenerationContract = defineEndpoint({
         'Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). ' +
         'The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; ' +
         '`requested_bytes` here is the most the song can take at the requested length, not its final size. This ' +
-        'endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here.',
+        'endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. ' +
+        BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: StorageLimitErrorSchema,
     },
     403: {
-      description:
-        'The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not ' +
-        'belong to (or is not a valid id).',
-      schema: ScopeForbiddenErrorSchema,
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
@@ -182,10 +191,11 @@ export const cancelMusicGenerationContract = defineEndpoint({
   operationId: 'cancelMusicGeneration',
   summary: 'Cancel a music generation',
   description:
-    'Requests cancellation and returns the job. A job still waiting to start (or to retry) moves to `cancelled` ' +
-    'shortly after and its reserved credits are returned. The provider renders a song in one call that cannot ' +
-    'be interrupted, so a cancel that arrives while the song is rendering does not stop it: the job finishes ' +
-    'and is charged. A finished job is returned unchanged.',
+    'Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to ' +
+    '`cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call ' +
+    'that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the ' +
+    'request is refused with a 409 (`not_cancellable`), and the job runs to its end, charged if the song is ' +
+    'produced. A finished job is returned unchanged.',
   tags: ['Music'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -194,6 +204,10 @@ export const cancelMusicGenerationContract = defineEndpoint({
     200: { description: 'The job after the cancel request.', schema: MusicGenerationSchema, example: exampleJob },
     403: scopeForbidden,
     404: notFound,
+    409: {
+      description: 'The song is already rendering (`running`); `errorCode` is `not_cancellable`.',
+      schema: MusicGenerationErrorResponseSchema,
+    },
     429: rateLimited,
   },
   emitsRateLimitHeaders: true,

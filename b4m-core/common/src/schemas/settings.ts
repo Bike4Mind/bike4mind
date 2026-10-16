@@ -573,6 +573,7 @@ export const SettingKeySchema = z.enum([
 
   // MUSIC GENERATION
   'musicGeneration',
+  'agentMusicTracksPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -640,6 +641,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // to expose.
     'image_generation',
     'edit_image',
+    // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
     'audio_generation',
     'excel_generation',
@@ -3181,6 +3183,8 @@ export const settingsMap = {
     category: 'Calendar',
     group: API_SERVICE_GROUPS.CALENDAR.id,
     order: 1,
+    // The Integrations page derives the Google Calendar card's status from it.
+    userReadable: true,
   }),
   googleCalendarServiceAccountEmail: makeStringSetting({
     key: 'googleCalendarServiceAccountEmail',
@@ -3621,6 +3625,8 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 1,
+    // The Integrations page derives the agent-tool capabilities' status from it.
+    userReadable: true,
   }),
   githubMcpClientId: makeStringSetting({
     key: 'githubMcpClientId',
@@ -4482,6 +4488,8 @@ export const settingsMap = {
     description: 'Enable AI-powered analysis of ingested emails (summary, entities, sentiment, action items).',
     category: 'AI',
     order: 200,
+    // The Integrations page derives the inbound-email analysis capability's status from it.
+    userReadable: true,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
@@ -4816,16 +4824,13 @@ export const settingsMap = {
     // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
     max: 100_000,
     description:
-      'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
-      'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
-      'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
-      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
-      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
-      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
+      'Runaway brake on a single eligible hybrid compute job run on real external compute hardware ' +
+      '(see EnableHardwareCompute): a run whose reserved worst-case cost exceeds this is rejected before ' +
+      'submission, independent of the live device roster. It exists to stop a looping run or a client ' +
+      'retry bug, not to set a spending budget. The default suits a deployment that pays for hardware ' +
+      'out of its own funds; where hardware spend is funded and metered separately, size it so the ' +
+      'largest planned run fits under it (up to $100k, no deploy needed). A run above the per-user daily ' +
+      'cap is still rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -4854,13 +4859,12 @@ export const settingsMap = {
     min: 1,
     max: 100_000,
     description:
-      "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
+      "Rolling 24h per-user ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
-      'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
-      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
-      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
-      'patterns emerge.',
+      'hardware (see EnableHardwareCompute). A cumulative runaway brake alongside the per-run cost ceiling ' +
+      'and the concurrent-run cap, not a spending budget. The default suits a deployment that pays for ' +
+      'hardware out of its own funds; where hardware spend is funded and metered separately, size it to a ' +
+      'heavy day of planned runs. Raise it here without a deploy.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
@@ -5047,6 +5051,19 @@ export const settingsMap = {
     category: 'AI',
     order: 147,
     schema: MusicGenerationSettingsSchema,
+  }),
+  agentMusicTracksPerRun: makeNumberSetting({
+    key: 'agentMusicTracksPerRun',
+    name: 'Agent Music Tracks Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most music_generation songs one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each song still holds and settles its own credits.',
+    category: 'AI',
+    order: 148,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

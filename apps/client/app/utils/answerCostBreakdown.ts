@@ -1,4 +1,6 @@
 import type { IChatHistoryItem } from '@bike4mind/common';
+import { formatAnswerCostAmount } from './formatCredits';
+import { answeringModelId } from './answeringModel';
 
 export interface AnswerCostPart {
   label: string;
@@ -30,14 +32,13 @@ export function answerCostBreakdown(
 
   const chatCredits = promptMeta?.tokenUsage?.creditsUsed;
   const chat: AnswerCostPart[] =
-    typeof chatCredits === 'number' ? [{ label: 'Chat', credits: chatCredits, model: promptMeta?.model?.name }] : [];
+    typeof chatCredits === 'number'
+      ? [{ label: 'Chat', credits: chatCredits, model: answeringModelId(promptMeta) }]
+      : [];
   return [...chat, ...tools.values()];
 }
 
-const partAmount = (credits: number) =>
-  credits > 0 && credits < 1 ? '<1' : Math.max(0, Math.round(credits)).toLocaleString('en-US');
-
 /** "Chat 64 + Image Generation 120", the split shown next to the answer's total. */
 export function formatCostParts(parts: AnswerCostPart[]): string {
-  return parts.map(part => `${part.label} ${partAmount(part.credits)}`).join(' + ');
+  return parts.map(part => `${part.label} ${formatAnswerCostAmount(part.credits)}`).join(' + ');
 }

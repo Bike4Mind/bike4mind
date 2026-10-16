@@ -61,7 +61,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 
-vi.mock('@server/security/resolveStage', () => ({
+vi.mock('@bike4mind/server-utils/security/resolveStage', () => ({
   resolveStage: vi.fn(() => 'dev'),
 }));
 

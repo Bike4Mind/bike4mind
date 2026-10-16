@@ -12,3 +12,4 @@ export * from './OrgFeedbackSummaryJobModel';
 export * from './OverwatchSocialConnectionModel';
 export * from './OverwatchAmplifyPostModel';
 export * from './QuerySubscriptionModel';
+export * from './realtimeConnectionRepository';

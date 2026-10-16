@@ -247,6 +247,17 @@ describe('buildContextBreakdown', () => {
     expect(serialized).not.toContain('SECRET-HASH');
   });
 
+  it('names the model that answered a redirected turn, not the requested one', () => {
+    const redirected = fullPromptMeta();
+    redirected.model!.answeredBy = 'claude-sonnet-5';
+
+    expect(buildContextBreakdown(redirected, { questId: 'quest-1' }).model.id).toBe('claude-sonnet-5');
+  });
+
+  it('falls back to name when the turn recorded no answering model', () => {
+    expect(buildContextBreakdown(fullPromptMeta(), { questId: 'quest-1' }).model.id).toBe('claude-opus-4-8');
+  });
+
   it('returns a zeroed but complete breakdown for a quest recorded before any of this existed', () => {
     const breakdown = buildContextBreakdown(undefined, { questId: 'quest-old' });
 

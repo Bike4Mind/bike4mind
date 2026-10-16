@@ -37,6 +37,7 @@ import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveDeprecatedModelId,
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
@@ -585,6 +586,69 @@ describe('ChatCompletionProcess', () => {
     mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
+
+  describe('a deprecated-model redirect', () => {
+    const successor = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT-4.1',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+
+    it('reply metadata names the model that answered and keeps the requested model', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      // Assert on what the turn persisted, not only on the in-memory quest object.
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+    });
+
+    it('leaves answeredBy unset when no redirect happened', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+    });
+
+    it('clears answeredBy when the successor fails and nothing answers the turn', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      // No fallback (shouldTriggerFallback stays false): the redirect is the only swap, and the
+      // successor then fails, so no model produced a reply.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('gated model')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      // The terminal error rethrows after the error save; swallow it to inspect what was persisted.
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.answeredBy).toBeUndefined();
+    });
+  });
 
   describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
@@ -3958,6 +4022,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+      // No redirect here: the turn switched models only by falling back, so answeredBy stays unset
+      // and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.model.answeredBy).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call
@@ -4296,6 +4363,128 @@ describe('ChatCompletionProcess', () => {
       // Same-provider degradation on the earlier hops; the cross-provider guarantee only on the last.
       expect(optsSeen.slice(0, 4).every(o => o.preferUntriedBackend === false)).toBe(true);
       expect(optsSeen[4].preferUntriedBackend).toBe(true);
+    });
+
+    it('a redirected turn that falls back over several hops credits the reply to the final hop', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      });
+
+      // Hop 1 fails too; hop 2 answers.
+      let hopN = 0;
+      mockedGetLlmWithFallback.mockImplementation(async () => {
+        hopN++;
+        const id = `hop-model-${hopN}`;
+        const answers = hopN >= 2;
+        return {
+          model: {
+            id,
+            type: 'text',
+            name: `Hop ${hopN}`,
+            backend: ModelBackend.Anthropic,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi
+              .fn()
+              .mockImplementation(
+                async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                  if (!answers) throw new Error('ServiceUnavailableException: hop outage');
+                  await cb(['Hi!']);
+                }
+              ),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: id,
+          },
+          attempt: 1,
+        } as any;
+      });
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4_1,
+          type: 'text',
+          name: 'GPT-4.1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(hopN).toBe(2);
+      expect(mockQuest.promptMeta.model).toMatchObject({ name: 'hop-model-2', answeredBy: 'hop-model-2' });
+    });
+
+    // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop
+    // can land on a model that rejects function calling.
+    it.each([
+      { label: 'with tools', tools: [{ toolSchema: { name: 'math_evaluate' }, toolFn: vi.fn() }], expected: true },
+      { label: 'without tools', tools: [], expected: false },
+    ])('passes requireTools=$expected to getLlmWithFallback $label', async ({ tools, expected }) => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('authentication failed')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const optsSeen: Array<{ requireTools?: boolean }> = [];
+      mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+        optsSeen.push(callArgs[5] ?? {});
+        return null;
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+          supportsTools: true,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+      buildToolsSpy.mockRestore();
+
+      expect(optsSeen.length).toBe(1);
+      expect(optsSeen[0].requireTools).toBe(expected);
     });
 
     // Wiring test: with the E2E gate on and the marker present, the affordance simulates a

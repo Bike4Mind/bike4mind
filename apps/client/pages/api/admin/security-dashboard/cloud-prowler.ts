@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';

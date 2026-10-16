@@ -32,6 +32,7 @@ vi.mock('@bike4mind/common', () => ({
 
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...args: any[]) => mockTryIncrement(...args),
   },
@@ -89,6 +90,7 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 // Real consent gate (pure) - exercises the actual invariant, not a stub.
 
 import handler from '../../../pages/api/oauth/ai-token';
+import { realtimeConnectionRepository } from '@bike4mind/database';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { BadRequestError } from '@bike4mind/common';
 import { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
@@ -376,6 +378,13 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect.objectContaining({ keyId: 'old-key' }),
       expect.anything()
     );
+    // Identity, not equality: a shallow copy of the repository must fail.
+    const [, , adapters] = mockRevokeUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
     // revoke happens before mint
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateUserApiKey.mock.invocationCallOrder[0]

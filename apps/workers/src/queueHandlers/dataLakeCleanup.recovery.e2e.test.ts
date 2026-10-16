@@ -39,7 +39,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: async () => null,
 }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: async () => {} }));
-vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 import { dispatch } from './dataLakeCleanup';
 
 describe('cleanup handler recovery with real replica-set Mongo', () => {

@@ -161,6 +161,10 @@ const handler = baseApi({ auth: false }).post(
           await withTransaction(async session => {
             const user = await User.findById(metadata.userId).session(session);
             if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, session))) {
+              // Match the hosted path: record the measured bytes the charge used, so a later refund
+              // and the counter's truth both agree with the counter.
+              metadata.fileSize = size;
+              await FabFile.updateOne({ _id: metadata._id }, { $set: { fileSize: size } }, { session });
               await user.save({ session });
             }
           });

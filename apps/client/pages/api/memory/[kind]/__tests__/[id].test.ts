@@ -79,7 +79,7 @@ vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipa
 vi.mock('@server/memory/deepAgentMemoryStore', () => ({ createDeepAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/personaAgentMemoryStore', () => ({ createPersonaAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/userMementoMemoryStore', () => ({ createUserMementoMemoryStore: vi.fn(() => ({})) }));
-vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: vi.fn(() => ({})) }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: vi.fn(() => ({ readProfile: vi.fn() })),
   purgeUserMemory: h.purgeUserMemory,

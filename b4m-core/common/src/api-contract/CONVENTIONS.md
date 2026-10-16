@@ -161,6 +161,9 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
+| Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
@@ -321,6 +324,11 @@ for the whole window. Removing an alias is a major-version change.
   window was possible. Its create body is strict so a stale field such as `callbackUrl`
   fails with a 422 rather than being dropped. A future in-place change needs a comparable
   reason; "the new shape is nicer" is not one.
+- Second precedent: `files[].url` on `GET /api/v1/quests/{id}` (and the generation-callback
+  body) went from a permanent public URL to a presigned one that expires in about an hour.
+  The shape is unchanged; only the lifetime is. Keeping the permanent URL would have kept
+  generated media readable by anyone holding the link, so no sunset window was offered. It
+  shipped as a breaking (`!`) release so SDK consumers that store the URL get a signal.
 
 ---
 
