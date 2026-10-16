@@ -989,6 +989,22 @@ describe('runModelDiscovery', () => {
         ]);
       });
 
+      it('withholds a lone aggregator sunset of a static model that has no catalog row yet', async () => {
+        const gpt4o: DiscoveredModel = { ...gpt6, modelId: 'gpt-4o', patch: { ...gpt6.patch, id: 'gpt-4o' } };
+        const fresh = harness([
+          openaiSource([gpt4o]),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [{ modelId: 'gpt-4o', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+          }),
+        ]);
+
+        await runModelDiscovery(fresh.adapters, fresh.options);
+
+        expect(fresh.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+      });
+
       it('writes an aggregator sunset both aggregators agree on', async () => {
         const result = await secondRun(bench, [
           openaiSource([gpt6]),
