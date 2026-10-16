@@ -5122,6 +5122,20 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
       expect(quest.promptMeta!.warnings).toBeUndefined();
     });
 
+    it('withdraws the chips when another message was delivered but the passages were not', async () => {
+      // Delivery is per message, not "did anything reach the model": the source can keep one
+      // message while the passages block behind it is the one shed by the budget.
+      const { feature, quest } = await retrievedTurn();
+      const keptMessage = { role: 'system' as const, content: 'lake operating instructions' };
+
+      feature.onContextDropped(quest, new Set<IMessage>([keptMessage]));
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
     it('withdraws only its own chips in indexed style, leaving the other surface unnumbered', async () => {
       const feature = new KnowledgeRetrievalFeature(
         makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
