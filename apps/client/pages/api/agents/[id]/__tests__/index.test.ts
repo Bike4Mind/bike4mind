@@ -52,6 +52,14 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 const AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
+const OWNER_ONLY_FIELDS = {
+  systemPrompt: 'secret prompt',
+  currentCredits: 500,
+  memoryJournal: [{ id: 'm1' }],
+  worldMemory: [{ id: 'w1' }],
+  pendingMessages: [{ id: 'p1' }],
+  tavernSessionId: 's1',
+};
 
 function invoke(method: 'GET' | 'PUT' | 'DELETE', userId: string, extra: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method, query: { id: 'a1' }, body: { name: 'renamed' } });
@@ -90,11 +98,14 @@ describe('/api/agents/[id] access levels', () => {
       expect(res._getJSONData()).toMatchObject({ id: 'a1' });
     });
 
-    it('does not see the owner-only tavernSessionId', async () => {
-      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, tavernSessionId: 's1' });
+    it('sees only the viewer allowlist, not owner-only fields or the share list', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, name: 'Ada', ...OWNER_ONLY_FIELDS });
       const { res, run } = invoke('GET', 'u1');
       await run();
-      expect(res._getJSONData()).not.toHaveProperty('tavernSessionId');
+      const body = res._getJSONData();
+      expect(body).toMatchObject({ id: 'a1', name: 'Ada' });
+      for (const field of [...Object.keys(OWNER_ONLY_FIELDS), 'users', 'userId'])
+        expect(body).not.toHaveProperty(field);
     });
 
     it.each(['PUT', 'DELETE'] as const)('is refused %s with ForbiddenError and nothing is mutated', async method => {
@@ -122,11 +133,11 @@ describe('/api/agents/[id] access levels', () => {
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
     });
 
-    it('reads its own tavernSessionId', async () => {
-      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, tavernSessionId: 's1' });
+    it('reads its whole agent, owner-only fields included', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, ...OWNER_ONLY_FIELDS });
       const { res, run } = invoke('GET', 'owner');
       await run();
-      expect(res._getJSONData()).toMatchObject({ tavernSessionId: 's1' });
+      expect(res._getJSONData()).toEqual({ ...AGENT, ...OWNER_ONLY_FIELDS });
     });
 
     // tavernSessionId must name the owner's own session; only the server-side bridge sets it.

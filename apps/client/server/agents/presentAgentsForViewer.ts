@@ -2,22 +2,77 @@ import { IAgent } from '@bike4mind/common';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 
 /**
- * The shape the user-agent read routes return to `viewerId`: fresh avatar URLs, and owner-only
- * fields removed for anyone but the owner. Shared by GET /api/agents, GET /api/agents/:id and
- * GET /api/sessions/:id/agents so the redaction cannot drift between them. The v1 API uses its own
- * allowlist (`toPublicAgent`).
+ * What a viewer who does not own an agent may read. An allowlist, so a field added to `IAgent`
+ * stays owner-only until it is named here. It covers what the agent UI renders for someone else's
+ * agent (list cards, the view page, session chips, @mention autocomplete) and what dispatching a
+ * mentioned or session agent reads client-side (model config, tool lists, iteration limits).
  *
- * `tavernSessionId` is owner-only: it names the owner's own session, which a shared viewer has no
- * access to. The PUT schema in `pages/api/agents/[id]/index.ts` does not accept it either -- only
- * the server-side session bridge sets it.
+ * Left out on purpose: the system prompt (the owner's authored IP; `toPublicAgent` nulls it for
+ * sharees too), the credit balance, memory, pending inter-agent messages, heartbeat and tavern
+ * state, the share list, and the owner's session pointer.
  */
-export async function presentAgentsForViewer(agents: IAgent[], viewerId: string): Promise<IAgent[]> {
+export type ViewerAgent = Pick<
+  IAgent,
+  | 'id'
+  | 'name'
+  | 'description'
+  | 'type'
+  | 'isPublic'
+  | 'triggerWords'
+  | 'capabilities'
+  | 'projectId'
+  | 'useOwnCredits'
+  | 'preferredModel'
+  | 'preferredImageModel'
+  | 'temperature'
+  | 'maxTokens'
+  | 'allowedTools'
+  | 'deniedTools'
+  | 'maxIterations'
+  | 'defaultThoroughness'
+  | 'personality'
+  | 'identity'
+  | 'createdAt'
+  | 'updatedAt'
+> & { visual: Pick<IAgent['visual'], 'portraitUrl' | 'style'> };
+
+export type PresentedAgent = IAgent | ViewerAgent;
+
+/**
+ * The shape the agent read routes return to `viewerId`: fresh avatar URLs, the full agent for its
+ * owner, and the `ViewerAgent` allowlist for everyone else. Shared by GET /api/agents,
+ * GET /api/agents/:id, GET /api/sessions/:id/agents and GET /api/voice/v2/agents so the
+ * projection cannot drift between them. The v1 API uses its own allowlist (`toPublicAgent`).
+ */
+export async function presentAgentsForViewer(agents: IAgent[], viewerId: string): Promise<PresentedAgent[]> {
   const refreshed = await refreshAgentAvatarUrls(agents, viewerId);
-  return refreshed.map(agent => redactOwnerOnlyFields(agent, viewerId));
+  return refreshed.map(agent => (agent.userId === viewerId ? agent : toViewerAgent(agent)));
 }
 
-function redactOwnerOnlyFields(agent: IAgent, viewerId: string): IAgent {
-  if (agent.userId === viewerId) return agent;
-  const { tavernSessionId: _ownerOnly, ...visible } = agent;
-  return visible;
+// Built field by field, never by spreading the document, so nothing unlisted can ride along.
+function toViewerAgent(agent: IAgent): ViewerAgent {
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    type: agent.type,
+    isPublic: agent.isPublic,
+    triggerWords: agent.triggerWords ?? [],
+    capabilities: agent.capabilities,
+    projectId: agent.projectId,
+    useOwnCredits: agent.useOwnCredits,
+    preferredModel: agent.preferredModel,
+    preferredImageModel: agent.preferredImageModel,
+    temperature: agent.temperature,
+    maxTokens: agent.maxTokens,
+    allowedTools: agent.allowedTools,
+    deniedTools: agent.deniedTools,
+    maxIterations: agent.maxIterations,
+    defaultThoroughness: agent.defaultThoroughness,
+    personality: agent.personality,
+    identity: agent.identity,
+    visual: { portraitUrl: agent.visual?.portraitUrl ?? '', style: agent.visual?.style ?? '' },
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+  };
 }

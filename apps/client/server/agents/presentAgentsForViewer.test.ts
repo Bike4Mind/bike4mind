@@ -6,7 +6,53 @@ vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls 
 
 import { presentAgentsForViewer } from './presentAgentsForViewer';
 
-const agent = (userId: string) => ({ id: `agent-${userId}`, userId, tavernSessionId: `session-${userId}` }) as IAgent;
+const createdAt = new Date('2026-01-01T00:00:00Z');
+const updatedAt = new Date('2026-02-01T00:00:00Z');
+
+const agent = (userId: string) =>
+  ({
+    id: `agent-${userId}`,
+    userId,
+    name: 'Ada',
+    description: 'helper',
+    type: 'persona',
+    isPublic: false,
+    triggerWords: ['@ada'],
+    capabilities: ['research'],
+    projectId: 'project-1',
+    useOwnCredits: true,
+    preferredModel: 'model-a',
+    preferredImageModel: 'image-a',
+    temperature: 0.4,
+    maxTokens: 900,
+    allowedTools: ['web_search'],
+    deniedTools: ['shell'],
+    maxIterations: { quick: 1, medium: 2, very_thorough: 3 },
+    defaultThoroughness: 'medium',
+    personality: { majorMotivation: 'm', minorMotivation: 'n', flaw: 'f', quirk: 'q', description: 'd' },
+    identity: { gender: 'other', pronouns: { subject: 'they' } },
+    visual: { portraitUrl: 'https://img/p.png', style: 'ink', generationPrompt: 'owner prompt' },
+    createdAt,
+    updatedAt,
+    // Owner-only below.
+    systemPrompt: 'secret prompt',
+    currentCredits: 500,
+    lastCreditsPurchasedAt: updatedAt,
+    memoryJournal: [{ id: 'm1', content: 'private memory' }],
+    worldMemory: [{ id: 'w1', description: 'built a room' }],
+    pendingMessages: [{ id: 'p1', text: 'hi' }],
+    conversationCooldowns: [{ otherAgentId: 'x' }],
+    heartbeatConfig: { enabled: true, intervalMinutes: 5 },
+    memoryConfig: { maxEntries: 10, summarizeThreshold: 5 },
+    tavernStats: { xp: 1 },
+    tavernSessionId: `session-${userId}`,
+    currentFloorId: 'surface',
+    users: [{ userId: 'viewer', permissions: ['read'] }],
+    defaultVariables: { k: 'v' },
+    exclusiveMcpServers: ['mcp'],
+    fallbackModels: ['model-b'],
+    elevenLabsAgentId: 'el-1',
+  }) as unknown as IAgent;
 
 describe('presentAgentsForViewer', () => {
   beforeEach(() => {
@@ -14,23 +60,57 @@ describe('presentAgentsForViewer', () => {
     refreshAgentAvatarUrls.mockImplementation(async (agents: IAgent[]) => agents);
   });
 
-  it('keeps tavernSessionId on agents the viewer owns and strips it from the rest', async () => {
-    const presented = await presentAgentsForViewer([agent('viewer'), agent('other')], 'viewer');
+  it('returns the owner their agent unchanged', async () => {
+    const own = agent('viewer');
+    const [presented] = await presentAgentsForViewer([own], 'viewer');
 
-    expect(presented[0]).toMatchObject({ id: 'agent-viewer', tavernSessionId: 'session-viewer' });
-    expect(presented[1]).toMatchObject({ id: 'agent-other' });
-    expect(presented[1]).not.toHaveProperty('tavernSessionId');
+    expect(presented).toBe(own);
   });
 
-  it('redacts the avatar-refreshed agents, not the originals', async () => {
+  it('returns a non-owner only the allowlisted fields', async () => {
+    const [presented] = await presentAgentsForViewer([agent('other')], 'viewer');
+
+    expect(presented).toEqual({
+      id: 'agent-other',
+      name: 'Ada',
+      description: 'helper',
+      type: 'persona',
+      isPublic: false,
+      triggerWords: ['@ada'],
+      capabilities: ['research'],
+      projectId: 'project-1',
+      useOwnCredits: true,
+      preferredModel: 'model-a',
+      preferredImageModel: 'image-a',
+      temperature: 0.4,
+      maxTokens: 900,
+      allowedTools: ['web_search'],
+      deniedTools: ['shell'],
+      maxIterations: { quick: 1, medium: 2, very_thorough: 3 },
+      defaultThoroughness: 'medium',
+      personality: { majorMotivation: 'm', minorMotivation: 'n', flaw: 'f', quirk: 'q', description: 'd' },
+      identity: { gender: 'other', pronouns: { subject: 'they' } },
+      visual: { portraitUrl: 'https://img/p.png', style: 'ink' },
+      createdAt,
+      updatedAt,
+    });
+  });
+
+  it('defaults triggerWords for a non-owner, since the mention UI iterates it unguarded', async () => {
+    const legacy = { ...agent('other'), triggerWords: undefined } as unknown as IAgent;
+    const [presented] = await presentAgentsForViewer([legacy], 'viewer');
+
+    expect(presented.triggerWords).toEqual([]);
+  });
+
+  it('projects the avatar-refreshed agents, not the originals', async () => {
     refreshAgentAvatarUrls.mockImplementation(async (agents: IAgent[]) =>
-      agents.map(a => ({ ...a, visual: { portraitUrl: 'fresh' } }))
+      agents.map(a => ({ ...a, visual: { ...a.visual, portraitUrl: 'fresh' } }))
     );
 
     const [presented] = await presentAgentsForViewer([agent('other')], 'viewer');
 
-    expect(presented).toMatchObject({ visual: { portraitUrl: 'fresh' } });
-    expect(presented).not.toHaveProperty('tavernSessionId');
+    expect(presented.visual).toEqual({ portraitUrl: 'fresh', style: 'ink' });
     expect(refreshAgentAvatarUrls).toHaveBeenCalledWith([agent('other')], 'viewer');
   });
 });
