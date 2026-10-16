@@ -73,7 +73,7 @@ describe('agentExecutor toolDeps wiring', () => {
     );
     expect(source).toMatch(/nodeDefaults: \{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
     expect(source).toMatch(
-      /sessionDisabledTools: \[\.\.\.\(session\.disabledTools \?\? \[\]\), \.\.\.\(child\.scopeDeniedTools \?\? \[\]\)\]/
+      /sessionDisabledTools: \[\.\.\.sessionDeniedTools\(session\), \.\.\.\(child\.scopeDeniedTools \?\? \[\]\)\]/
     );
   });
 
