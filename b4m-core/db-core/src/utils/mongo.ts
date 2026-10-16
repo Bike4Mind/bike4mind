@@ -203,7 +203,7 @@ export const getDB = () => {
  * Database writes are rolled back on failure, but external side effects (e.g., API calls) are not.
  *
  * Retry behavior:
- * - Only retries on TransientTransactionError (e.g., WriteConflict)
+ * - Retries on TransientTransactionError (e.g., WriteConflict)
  * - Uses exponential backoff with 25% jitter to prevent thundering herd
  * - Conservative retry count (2) since MongoDB driver already retries internally
  * - With `retryOnConnectionLoss`, also retries a lost connection (see `isConnectionLostError`) after
@@ -219,34 +219,36 @@ export const withTransaction = async <T>(
   fn: (session: mongoose.mongo.ClientSession) => Promise<T>,
   options?: Partial<mongoose.mongo.TransactionOptions> & {
     logger?: Logger;
-    /** Maximum retry attempts for transient errors (default: 2) */
+    /** Maximum retry attempts for transient errors and, with `retryOnConnectionLoss`, a lost connection (default: 2) */
     maxRetries?: number;
     /** Also retry when the connection was lost (default: false) */
     retryOnConnectionLoss?: boolean;
   }
 ): Promise<T> => {
-  const maxRetries = options?.maxRetries ?? 2;
+  // The wrapper options sit alongside the driver's own, so peel them off before handing the rest to
+  // `transaction` - the driver has no use for a logger or a retry budget.
+  const { logger, maxRetries = 2, retryOnConnectionLoss = false, ...transactionOptions } = options ?? {};
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await mongoose.connection.transaction(async session => {
-        options?.logger?.debug('Starting transaction...', { attempt: attempt + 1 });
+        logger?.debug('Starting transaction...', { attempt: attempt + 1 });
         const result = await fn(session);
-        options?.logger?.debug('Transaction completed');
+        logger?.debug('Transaction completed');
         return result;
-      }, options);
+      }, transactionOptions);
     } catch (error) {
       lastError = error;
 
-      const connectionLost = options?.retryOnConnectionLoss === true && isConnectionLostError(error);
+      const connectionLost = retryOnConnectionLoss && isConnectionLostError(error);
       if (!connectionLost && !isTransientTransactionError(error)) {
         throw error;
       }
 
       // Don't retry if we've exhausted attempts
       if (attempt >= maxRetries) {
-        options?.logger?.warn(`Transaction failed after ${maxRetries + 1} attempts`, {
+        logger?.warn(`Transaction failed after ${maxRetries + 1} attempts`, {
           error: error instanceof Error ? error.message : String(error),
           code: (error as { code?: number })?.code,
           errorLabels: (error as { errorLabels?: string[] })?.errorLabels,
@@ -255,12 +257,12 @@ export const withTransaction = async <T>(
       }
 
       if (connectionLost) {
-        options?.logger?.warn('Database connection lost, retrying transaction', {
+        logger?.warn('Database connection lost, retrying transaction', {
           attempt: attempt + 1,
           maxRetries,
           error: error instanceof Error ? error.message : String(error),
         });
-        await reselectServer(options?.logger);
+        await reselectServer(logger);
         continue;
       }
 
@@ -269,7 +271,7 @@ export const withTransaction = async <T>(
       const jitter = baseDelay * 0.25 * Math.random();
       const delayMs = Math.round(baseDelay + jitter);
 
-      options?.logger?.info(`TransientTransactionError, retrying in ${delayMs}ms`, {
+      logger?.info(`TransientTransactionError, retrying in ${delayMs}ms`, {
         attempt: attempt + 1,
         maxRetries,
         code: (error as { code?: number })?.code,
