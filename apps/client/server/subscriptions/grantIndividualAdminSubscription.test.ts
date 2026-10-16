@@ -91,17 +91,43 @@ describe('grantIndividualAdminSubscription', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
-  it('reports the post-grant balance and forwards creditTransactionId as the addCredits transactionId', async () => {
-    const result = await grantIndividualAdminSubscription({ ...params, creditTransactionId: 'txn-1' });
+  it('reports the post-grant balance', async () => {
+    const result = await grantIndividualAdminSubscription(params);
 
     expect(result).toMatchObject({ status: 'granted', currentCredits: 500 });
-    expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ transactionId: 'txn-1' }), expect.anything());
   });
 
-  it('sends no transactionId when none is given', async () => {
-    await grantIndividualAdminSubscription(params);
+  it('uses the given subscriptionId on the row and sends no transactionId to addCredits', async () => {
+    const result = await grantIndividualAdminSubscription({ ...params, subscriptionId: 'partner_grant_rule-1_user-1' });
 
+    expect(result).toMatchObject({ status: 'granted', subscriptionId: 'partner_grant_rule-1_user-1' });
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: 'partner_grant_rule-1_user-1' }));
     expect(mockAddCredits.mock.calls[0][0]).not.toHaveProperty('transactionId');
+  });
+
+  it('reports already_active without adding credits when the given subscriptionId is a duplicate', async () => {
+    mockCreate.mockRejectedValue({ code: 11000 });
+
+    expect(
+      await grantIndividualAdminSubscription({ ...params, subscriptionId: 'partner_grant_rule-1_user-1' })
+    ).toEqual({
+      status: 'already_active',
+    });
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a duplicate-key error when no subscriptionId was given', async () => {
+    mockCreate.mockRejectedValue({ code: 11000 });
+
+    await expect(grantIndividualAdminSubscription(params)).rejects.toMatchObject({ code: 11000 });
+  });
+
+  it('rethrows a non-duplicate error even when a subscriptionId was given', async () => {
+    mockCreate.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      grantIndividualAdminSubscription({ ...params, subscriptionId: 'partner_grant_rule-1_user-1' })
+    ).rejects.toThrow('db down');
   });
 
   it('ignores other active plans by default (the admin route keeps its per-price check)', async () => {

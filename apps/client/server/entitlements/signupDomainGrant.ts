@@ -61,7 +61,8 @@ const NO_GRANT: SignupDomainGrantResult = {
  * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
  * transactionId), the membership write and the tag merge ($addToSet) are all idempotent, so a
  * re-run from another path or a retry cannot double-apply. The subscription grant skips when the
- * user already has any active individual subscription, and its credits carry a stable transactionId.
+ * user already has any non-terminal individual subscription, and its deterministic row id makes a
+ * repeat or concurrent grant a no-op.
  */
 export async function applySignupDomainGrant(params: {
   userId: string;
@@ -207,7 +208,8 @@ async function applyPartnerSubscription(
       grantedBy: `partner-rule:${ruleId}`,
       grantedReason: `partner signup rule ${domain}`,
       skipIfAnyActiveIndividual: true,
-      creditTransactionId: `partner-rule-subscription:${userId}:${priceId}`,
+      // One grant per rule per user, ever: a re-verify after the plan lapses must not re-grant it.
+      subscriptionId: `partner_grant_${ruleId}_${userId}`,
     });
     if (grant.status === 'granted') {
       logger.info(

@@ -315,7 +315,7 @@ describe('applySignupDomainGrant', () => {
         grantedBy: 'partner-rule:rule-1',
         grantedReason: 'partner signup rule partner.example',
         skipIfAnyActiveIndividual: true,
-        creditTransactionId: 'partner-rule-subscription:user-1:price_pro',
+        subscriptionId: 'partner_grant_rule-1_user-1',
       });
       expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
       expect(mockPushSubscriptionsInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
