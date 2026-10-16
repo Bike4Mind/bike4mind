@@ -167,6 +167,12 @@ describe('resolveUserRateLimitPerMin', () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
   });
 
+  it('falls back to the free floor when the org subscription read throws', async () => {
+    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwnersMock.mockRejectedValue(new Error('mongo unavailable'));
+    expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
+  });
+
   it('fails closed to the Free-tier floor when subscription resolution throws (no 500)', async () => {
     findActiveUserSubscriptionsMock.mockRejectedValue(new Error('mongo unavailable'));
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);

@@ -224,6 +224,8 @@ describe('userHasEntitlement', () => {
 describe('getRequestEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    findMembershipOrgIds.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([]);
   });
 
   it('resolves and memoizes the list on req.entitlements (one subscription query per request)', async () => {
@@ -236,6 +238,32 @@ describe('getRequestEntitlements', () => {
     expect(first).toEqual(expect.arrayContaining(['sometag', 'someproduct:pro']));
     expect(second).toBe(first); // same array reference — memoized
     expect(findActive).toHaveBeenCalledTimes(1);
+    // The membership read fills the request memo for later gates (data-lake scope), and is
+    // paid once across both calls.
+    expect((req as unknown as { membershipOrgIds?: string[] }).membershipOrgIds).toEqual([]);
+    expect(findMembershipOrgIds).toHaveBeenCalledTimes(1);
+  });
+
+  // A membership-read failure must propagate, not silently drop to the caller's own rows:
+  // swallowing it would resolve a seat member as free on every gated route and `/me`.
+  it('propagates a membership-read failure without memoizing a partial list', async () => {
+    findActive.mockResolvedValue([]);
+    findMembershipOrgIds.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).rejects.toThrow('mongo unavailable');
+    expect((req as unknown as { entitlements?: unknown }).entitlements).toBeUndefined();
+  });
+
+  // Same for the org-subscription read: a "best-effort" catch here would silently drop seats.
+  it('propagates an org-subscription read failure without memoizing a partial list', async () => {
+    findActive.mockResolvedValue([]);
+    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findActiveByOwners.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).rejects.toThrow('mongo unavailable');
+    expect((req as unknown as { entitlements?: unknown }).entitlements).toBeUndefined();
   });
 
   it('memoizes an empty list (??= does not re-query on a valid empty result)', async () => {

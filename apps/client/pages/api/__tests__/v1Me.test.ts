@@ -189,6 +189,7 @@ describe('GET /api/v1/me', () => {
     await run(req, res);
 
     expect(mockFindActive).toHaveBeenCalledWith('u1', { membershipOrgIds: ['org1'] });
+    expect(mockMembership).toHaveBeenCalledWith(req);
     expect(mockEntitlements).toHaveBeenCalledWith(expect.anything(), seatRows);
     const body = res._getJSONData();
     expect(MeResponseSchema.safeParse(body).success).toBe(true);
@@ -201,6 +202,23 @@ describe('GET /api/v1/me', () => {
         current_period_ends_at: '2026-11-01T00:00:00.000Z',
       },
     });
+  });
+
+  // The route adds two reads that were not here before (membership, org subscriptions). A
+  // "best-effort" catch that swallowed either would report a seat member as free with no
+  // error; the real `baseApi` `onError` turns the rejection below into the 500 envelope.
+  it('propagates a failed membership read instead of reporting a tier', async () => {
+    mockMembership.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = get();
+
+    await expect(run(req, res)).rejects.toThrow('mongo unavailable');
+  });
+
+  it('propagates a failed subscription read instead of reporting a tier', async () => {
+    mockFindActive.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = get();
+
+    await expect(run(req, res)).rejects.toThrow('mongo unavailable');
   });
 
   it('gates the route on me:read, so an under-scoped key never reaches the handler', async () => {
