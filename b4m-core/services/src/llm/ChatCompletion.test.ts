@@ -1869,6 +1869,31 @@ describe('ChatCompletionProcess', () => {
 
         expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
       });
+
+      it('refunds a real reservation when the caller aborts the turn', async () => {
+        vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
+          (key: string) => key === 'enforceCredits'
+        );
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 550 }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        external.abort();
+        await run;
+
+        // Held before the turn, returned when the caller cut it off - no charge for an aborted turn.
+        expect(incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -50);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', 50);
+      });
     });
 
     describe('releaseReservedCredits', () => {
