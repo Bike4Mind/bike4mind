@@ -185,8 +185,15 @@ export function shouldOfferDelegation(input: {
   sessionAgentIds: readonly string[] | undefined;
   message: string;
   delegatableAgentNames: readonly string[];
+  /**
+   * The turn's resolved denials (session, profile, API-key scope or a contributed surface table).
+   * The final tool pass removes the tool for any of them, so offering it here would only tell the
+   * model about a tool it cannot call.
+   */
+  deniedTools?: readonly string[];
 }): boolean {
   if (input.disableUserIntegrations) return false;
+  if (input.deniedTools?.includes('delegate_to_agent')) return false;
   if ((input.allowedAgents?.length ?? 0) > 0) return true;
   if ((input.sessionAgentIds?.length ?? 0) > 0) return true;
   return mentionsDelegatableAgent(input.message, input.delegatableAgentNames);
