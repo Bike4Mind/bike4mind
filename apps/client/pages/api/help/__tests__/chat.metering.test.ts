@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   complete: vi.fn(),
   search: vi.fn(),
   recordOperationalUsage: vi.fn(),
+  findOrg: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
   creditTransactionRepository: {},
-  organizationRepository: {},
+  organizationRepository: { findById: m.findOrg },
   userRepository: {},
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -90,9 +91,13 @@ vi.mock('@server/help/retrieval', () => ({ searchHelpContext: m.search }));
 
 const { default: handler } = await import('@pages/api/help/chat');
 
-async function call() {
+async function call(extra: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'POST', body: { question: 'How do I share a notebook?' } });
-  Object.assign(req, { user: { id: 'u1' }, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() } });
+  Object.assign(req, {
+    user: { id: 'u1' },
+    ...extra,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() },
+  });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -176,6 +181,46 @@ describe('POST /api/help/chat metering', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('caps the response with the maxTokens option the adapters read', async () => {
+    await call();
+    expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 1000 });
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('max_tokens');
+  });
+
+  describe('embedding charge owner', () => {
+    beforeEach(() => {
+      m.search.mockResolvedValue({
+        context: '## Docs',
+        relevantArticles: [],
+        method: 'vector',
+        embedding: { model: 'text-embedding-3-small', provider: 'openai', inputTokens: 7 },
+      });
+    });
+
+    it('bills the org that holds the reservation', async () => {
+      const org = { id: 'o1' };
+      m.findOrg.mockResolvedValue(org);
+      m.hold.mockResolvedValue({ ownerId: 'o1', ownerType: 'Organization', reservedCredits: 50 });
+
+      await call({ user: { id: 'u1', organizationId: 'o1' } });
+
+      expect(m.findOrg).toHaveBeenCalledWith('o1');
+      expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBe(org);
+    });
+
+    it('bills the user, not their org seat, for a user-billed API key', async () => {
+      m.enforce = false;
+
+      await call({
+        user: { id: 'u1', organizationId: 'o1' },
+        apiKeyInfo: { billingOwnerType: 'User', organizationId: 'o1' },
+      });
+
+      expect(m.findOrg).not.toHaveBeenCalled();
+      expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBeNull();
+    });
   });
 
   it('records no embedding when retrieval did not embed', async () => {

@@ -13,6 +13,7 @@ import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  CreditHolderType,
   ForbiddenError,
   UnprocessableEntityError,
   getEmbeddingModelCost,
@@ -189,9 +190,11 @@ const handler = baseApi()
         relevantArticles = helpResult.relevantArticles;
         if (helpResult.embedding) {
           const { model, provider, inputTokens } = helpResult.embedding;
-          const organization = req.user.organizationId
-            ? await organizationRepository.findById(String(req.user.organizationId))
-            : null;
+          // Same owner as the hold (reserveRequestCredits applies the API-key billing-owner rule).
+          const organization =
+            reservation.ownerType === CreditHolderType.Organization
+              ? await organizationRepository.findById(reservation.ownerId)
+              : null;
           await recordOperationalUsage(
             {
               requestId: userId,
@@ -227,7 +230,7 @@ const handler = baseApi()
 
         // Generate completion (non-streaming for simplicity)
         const options = {
-          max_tokens: MAX_RESPONSE_TOKENS,
+          maxTokens: MAX_RESPONSE_TOKENS,
           temperature: 0.7,
           stream: false,
         };
