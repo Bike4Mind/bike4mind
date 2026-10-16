@@ -60,8 +60,8 @@ work around the gate. A download-complete notification is not a pause API.
 
 ## Evidence boundaries
 
-The handoff reports a disposable packaged Electron proof of concept on macOS
-arm64 27.0.1 with Electron 44.4.5 and Sparkle 2.10.0:
+A prior disposable packaged Electron proof of concept on macOS arm64 27.0.1 with
+Electron 44.4.5 and Sparkle 2.10.0 reported:
 
 - A correctly signed archive replaced version 1.0.0 and relaunched version 1.0.1.
 - Tampered archives and a wrong Ed25519 key were rejected, leaving 1.0.0 installed.
@@ -69,10 +69,8 @@ arm64 27.0.1 with Electron 44.4.5 and Sparkle 2.10.0:
 - Explicit Skip cancellation followed by ordinary quit left 1.0.0 installed.
 
 Those are prior reported observations, not tests rerun for this document. Forced
-termination, crash, and OS shutdown were not tested in that proof of concept.
-This investigation inspected the pinned upstream source and local integration
-points only. Its combined download/build command was refused by the tool before
-execution. No native build, packaged install, or signature test ran here.
+termination, crash, and OS shutdown were not tested in that proof of concept. No
+native build, packaged install, or signature test has been run against this gate.
 
 `showDownloadDidStartExtractingUpdate` is not proof that extraction succeeded:
 the notification precedes archive validation failure too.
