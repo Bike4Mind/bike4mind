@@ -93,7 +93,7 @@ describe('music_generation tool', () => {
     const prompts = [
       'a track in the style of Motown',
       'sounds like Latin jazz with congas',
-      'a ballad like Spanish guitar',
+      'sounds like Spanish guitar',
       'in the vein of Celtic folk, fiddle and whistle',
       'Like a lullaby, inspired by Delta blues',
       'a track in the style of Motown.',
