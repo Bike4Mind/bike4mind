@@ -25,4 +25,12 @@ describe('effectiveDisabledTools', () => {
   it('ignores a surface the table does not name', () => {
     expect(effectiveDisabledTools({ surface: 'elsewhere', disabledTools: ['web_search'] })).toEqual(['web_search']);
   });
+
+  // Render-stability: a fresh array every render would recompute the downstream `new Set` memos.
+  it('returns the stored denylist by reference when the surface denies nothing', () => {
+    const disabledTools = ['web_search'];
+
+    expect(effectiveDisabledTools({ disabledTools })).toBe(disabledTools);
+    expect(effectiveDisabledTools({ surface: 'elsewhere', disabledTools })).toBe(disabledTools);
+  });
 });
