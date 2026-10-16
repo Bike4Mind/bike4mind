@@ -74,9 +74,9 @@ describe('shouldReuseVoiceHold past the hold window', () => {
   const startedAt = new Date(now.getTime() - 6 * 60 * 1000);
 
   it('refuses to reuse an ElevenLabs hold older than MAX_SESSION_SECONDS', () => {
-    expect(shouldReuseVoiceHold(true, { voiceReservedCredits: 100, voiceSessionStartedAt: startedAt }, false, now)).toBe(
-      false
-    );
+    expect(
+      shouldReuseVoiceHold(true, { voiceReservedCredits: 100, voiceSessionStartedAt: startedAt }, false, now)
+    ).toBe(false);
   });
 
   it('refuses to reuse a realtime hold older than REALTIME_VOICE_HOLD_SECONDS', () => {

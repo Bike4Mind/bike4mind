@@ -87,7 +87,11 @@ const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.floor((to.getT
  * An ElevenLabs hold is billed connected time, from voiceConnectedAt to `endedAt`, capped at the
  * hold; a call that never connected costs nothing. A realtime hold (billed per response) keeps at
  * least what its responses drew from it and never less than the hold's own rate over the time it
- * was open by the server's clock.
+ * was open by the server's clock, up to `now` (capped at the hold's window): a realtime client
+ * drives its own activity markers, so a silent one must not settle at its last frame for free.
+ *
+ * Refunds and the ledger row go to the user who paid the hold's reserve (voiceHoldUserId), falling
+ * back to `hold.userId` for a hold opened before that was recorded.
  *
  * The claim, the refund and the ledger row commit in one transaction. The claim matches the hold's
  * start, so of concurrent or repeated settlers exactly one moves credits and the others get
@@ -96,7 +100,8 @@ const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.floor((to.getT
 export async function settleVoiceHold(
   hold: VoiceHold,
   endedAt: Date,
-  source: VoiceHoldSettlementSource
+  source: VoiceHoldSettlementSource,
+  now: Date = new Date()
 ): Promise<VoiceHoldSettlement> {
   const reserved = hold.voiceReservedCredits;
   let settlement: VoiceHoldSettlement;
@@ -106,12 +111,13 @@ export async function settleVoiceHold(
       if (!claimed) return { settled: false };
 
       const { billedCredits } = claimed;
+      const payerId = claimed.payerId ?? hold.userId;
       let chargedCredits: number;
       let connected: boolean;
       if (billedCredits !== null) {
         chargedCredits = Math.max(
           Math.min(billedCredits, reserved),
-          realtimeCreditsFloor(reserved, secondsBetween(hold.voiceSessionStartedAt, endedAt))
+          realtimeCreditsFloor(reserved, secondsBetween(hold.voiceSessionStartedAt, now))
         );
         connected = chargedCredits > 0;
       } else {
@@ -124,13 +130,13 @@ export async function settleVoiceHold(
       // Responses billed past the hold already left the balance, so a settlement only ever refunds.
       const refundedCredits = Math.max(0, reserved - chargedCredits);
       if (refundedCredits > 0) {
-        await userRepository.incrementCredits(hold.userId, refundedCredits);
+        await userRepository.incrementCredits(payerId, refundedCredits);
       }
       // Each realtime response wrote its own row, so only the charge they did not cover is new usage.
       const unrecorded = Math.max(0, chargedCredits - (billedCredits ?? 0));
       if (unrecorded > 0) {
         await recordVoiceUsage({
-          userId: hold.userId,
+          userId: payerId,
           sessionId: hold.id,
           model: billedCredits !== null ? 'openai-realtime' : 'elevenlabs',
           credits: unrecorded,
@@ -182,6 +188,7 @@ export async function reserveVoiceHold(args: {
       voiceReservedCredits: args.reservedCredits,
       voiceSessionStartedAt: args.startedAt,
       realtime: args.realtime,
+      payerId: args.userId,
     });
     if (!opened) return false;
     if (args.reservedCredits) {

@@ -32,12 +32,7 @@ import {
   VOICE_HOLD_STALE_AFTER_MS,
   VOICE_HOLD_SWEEP_LIMIT,
 } from './voiceHoldSweep';
-import {
-  creditsForElapsed,
-  MAX_SESSION_SECONDS,
-  REALTIME_VOICE_HOLD_SECONDS,
-  realtimeCreditsFloor,
-} from '@server/voice/voiceSessionLimits';
+import { creditsForElapsed, MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@server/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);
@@ -136,35 +131,34 @@ describe('voiceHoldSweep', () => {
     expect(result).toMatchObject({ settled: 1, failed: 1 });
   });
 
-  it('charges an abandoned realtime hold the open-time floor up to the last frame the server saw', async () => {
-    // No closing frame ever settled it; frames kept arriving for 20 minutes.
-    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(20 * 60), true)]);
-    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
-
-    await runVoiceHoldSweep(NOW);
-
-    const floor = realtimeCreditsFloor(RESERVED, 20 * 60);
-    expect(floor).toBeGreaterThan(0);
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - floor);
-  });
-
-  it('keeps what an abandoned realtime hold billed when that is more than its floor', async () => {
-    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(60), true)]);
-    claimVoiceHold.mockResolvedValue({ billedCredits: 300 });
-
-    await runVoiceHoldSweep(NOW);
-
-    expect(realtimeCreditsFloor(RESERVED, 60)).toBeLessThan(300);
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - 300);
-  });
-
-  it('refunds a realtime hold the server never saw a frame for', async () => {
+  // A realtime client drives its own activity markers, so a silent one (or one that stops sending
+  // them) must not be refunded down to its last frame: the floor runs to the sweep.
+  it('charges a silent realtime hold its open-time floor up to the sweep, not its last client frame', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a', null, null, true)]);
     claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
+    const sweptAt = new Date(STARTED.getTime() + REALTIME_VOICE_HOLD_STALE_AFTER_MS + 60_000);
 
-    await runVoiceHoldSweep(NOW);
+    await runVoiceHoldSweep(sweptAt);
 
-    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ ownerId: 'user-a', credits: -RESERVED })
+    );
+  });
+
+  it('charges a realtime hold whose client stopped reporting early the same as a silent one', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a', at(3), at(60), true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 300 });
+    const sweptAt = new Date(STARTED.getTime() + REALTIME_VOICE_HOLD_STALE_AFTER_MS + 60_000);
+
+    await runVoiceHoldSweep(sweptAt);
+
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ credits: -(RESERVED - 300) })
+    );
   });
 
   it('counts a hold whose refund failed as failed, for the next run to retry', async () => {

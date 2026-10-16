@@ -620,7 +620,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const available = { $max: [{ $ifNull: ['$currentCredits', 0] }, 0] };
     const before = await this.model.findOneAndUpdate(
       { _id: userId },
-      [{ $set: { currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] } } }],
+      [
+        {
+          $set: {
+            currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] },
+          },
+        },
+      ],
       { new: false, projection: { currentCredits: 1 } }
     );
     if (!before) return 0;

@@ -62,7 +62,7 @@ describe('sessionRepository realtime voice billing', () => {
       sessionRepository.claimVoiceHold(id, startedAt),
     ]);
 
-    expect(results.filter(Boolean)).toEqual([{ billedCredits: 40 }]);
+    expect(results.filter(Boolean)).toEqual([{ billedCredits: 40, payerId: null }]);
     const after = await Session.findById(id).lean();
     expect(after).toMatchObject({ voiceReservedCredits: null, voiceSessionStartedAt: null });
     expect(after?.voiceBilledCredits).toBeUndefined();

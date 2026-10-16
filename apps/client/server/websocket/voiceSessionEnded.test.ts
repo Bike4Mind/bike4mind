@@ -9,6 +9,7 @@ interface FakeSession {
   voiceSessionStartedAt: Date | null;
   voiceBilledCredits?: number;
   voiceLastActivityAt?: Date | null;
+  voiceHoldUserId?: string | null;
 }
 const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
@@ -55,6 +56,12 @@ vi.mock('@bike4mind/database', () => ({
       if (state.failIncrement) throw new Error('mongo blip');
       state.balance += delta;
     },
+    decrementCreditsFloored: async (_id: string, credits: number) => {
+      if (state.failIncrement) throw new Error('mongo blip');
+      const debited = Math.min(credits, Math.max(state.balance, 0));
+      state.balance -= debited;
+      return debited;
+    },
   },
   // Rolls the fake session, balance and ledger back on a throw, as a real transaction would.
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -95,13 +102,14 @@ vi.mock('@bike4mind/database', () => ({
       if (state.session.voiceSessionStartedAt?.getTime() !== startedAt.getTime()) return null;
       if (options?.realtimeOnly && state.session.voiceBilledCredits === undefined) return null;
       const billedCredits = state.session.voiceBilledCredits ?? null;
+      const payerId = state.session.voiceHoldUserId ?? null;
       state.session = {
         id: state.session.id,
         userId: state.session.userId,
         voiceReservedCredits: null,
         voiceSessionStartedAt: null,
       };
-      return { billedCredits };
+      return { billedCredits, payerId };
     },
   },
 }));
@@ -391,6 +399,45 @@ describe('voiceSessionEnded realtime billing', () => {
 
   it("ignores frames from a user the notebook is shared with, so the owner's hold is never theirs", async () => {
     state.session.userId = 'owner';
+
+    await send(0);
+    await send(30, 'resp-1');
+
+    expect(state.session.voiceSessionStartedAt).not.toBeNull();
+    expect(state.session.voiceBilledCredits).toBe(0);
+    expect(state.balance).toBe(STARTING_BALANCE - HOLD);
+    expect(state.transactions).toHaveLength(0);
+  });
+
+  it('never takes the balance below zero when usage outruns it, and ends the call', async () => {
+    state.balance = 10;
+
+    await send(HOLD + 50, 'resp-1');
+
+    expect(state.balance).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not cover'),
+      expect.objectContaining({ shortfall: 40 })
+    );
+    expect(sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.any(String),
+      expect.objectContaining({ action: 'voice_credits_exhausted' })
+    );
+  });
+
+  it('never takes the balance below zero when a close settles past it', async () => {
+    // Responses already drew the whole hold; the closing frame's usage comes from the balance.
+    await send(HOLD, 'resp-1');
+    state.balance = 5;
+
+    await send(30);
+
+    expect(state.balance).toBe(0);
+  });
+
+  it('ignores frames from a user who did not pay the open hold', async () => {
+    state.session.voiceHoldUserId = 'payer';
 
     await send(0);
     await send(30, 'resp-1');

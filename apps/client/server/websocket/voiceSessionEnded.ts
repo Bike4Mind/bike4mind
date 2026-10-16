@@ -77,6 +77,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     logger.warn(`voiceSessionEnded: user ${user.id} does not own session ${sessionId} - rejecting`);
     return { statusCode: 200 };
   }
+  // The open hold is billed to whoever paid its reserve; only that user's frames may move it.
+  if (session.voiceHoldUserId && session.voiceHoldUserId !== user.id) {
+    logger.warn(`voiceSessionEnded: user ${user.id} did not pay the voice hold on ${sessionId} - rejecting`);
+    return { statusCode: 200 };
+  }
 
   // Rates come from the versioned price catalog (reprices reach voice as data
   // rows); the adapter literal is the fail-safe when the catalog is unreachable.
@@ -93,6 +98,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   let actualCredits: number = usdToCreditsStochastic(totalUsd);
   // Credits still reserved for this call after this frame: an open hold is not exhaustion.
   let holdLeft = 0;
+  // Usage the balance could not cover: debits are floored at zero, so this is logged, not charged.
+  let shortfall = 0;
 
   // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
   const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
@@ -106,6 +113,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     let billedBefore: number | null;
     try {
       billedBefore = await withTransaction(async () => {
+        shortfall = 0;
         await recordVoiceUsage({
           userId: user.id,
           sessionId,
@@ -123,7 +131,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             ? actualCredits
             : Math.max(0, before + actualCredits - reserved) - Math.max(0, before - reserved);
         if (fromBalance > 0) {
-          await userRepository.incrementCredits(user.id, -fromBalance);
+          shortfall = fromBalance - (await userRepository.decrementCreditsFloored(user.id, fromBalance));
         }
         return before;
       }, transactionOptions);
@@ -163,6 +171,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     const elapsedSeconds = Math.floor(elapsedMs / 1000);
     try {
       closed = await withTransaction(async (): Promise<CloseSettlement | null> => {
+        shortfall = 0;
         const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
         if (!claimed) return null;
         const billed = claimed.billedCredits ?? 0;
@@ -188,12 +197,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
         // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
         const delta = Math.max(0, reserved - billed) - credits;
-        if (delta !== 0) {
-          await userRepository.incrementCredits(user.id, delta);
+        const payerId = claimed.payerId ?? user.id;
+        if (delta > 0) {
+          await userRepository.incrementCredits(payerId, delta);
+        } else if (delta < 0) {
+          shortfall = -delta - (await userRepository.decrementCreditsFloored(payerId, -delta));
         }
         if (credits > 0) {
           await recordVoiceUsage({
-            userId: user.id,
+            userId: payerId,
             sessionId,
             model,
             credits,
@@ -224,6 +236,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       });
     }
     actualCredits = closed.credits;
+  }
+
+  if (shortfall > 0) {
+    // The balance is now zero, so the exhausted notice below ends the call.
+    logger.warn('voiceSessionEnded: balance could not cover voice usage - debited to zero', {
+      sessionId,
+      responseId,
+      shortfall,
+    });
   }
 
   // Dual-write usage event: analytics only, never billing.

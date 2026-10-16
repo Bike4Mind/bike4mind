@@ -145,7 +145,7 @@ describe('voiceSessionEnded on a real replica set', () => {
 
   it('a failed response debit leaves the ledger, billed total and balance unchanged, so a retry bills it once', async () => {
     const call = await seedCall();
-    vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('balance write failed'));
+    vi.spyOn(userRepository, 'decrementCreditsFloored').mockRejectedValueOnce(new Error('balance write failed'));
 
     await expect(send(call, 130, 'resp-1')).rejects.toThrow('balance write failed');
     expect(await ledger(call.sessionId)).toHaveLength(0);
@@ -154,6 +154,16 @@ describe('voiceSessionEnded on a real replica set', () => {
 
     await send(call, 130, 'resp-1');
     expect(await charged(call.userId)).toBe(130);
+    expect(await ledger(call.sessionId)).toHaveLength(1);
+  });
+
+  it('never takes the balance below zero inside the transaction when usage outruns it', async () => {
+    const call = await seedCall();
+    await User.updateOne({ _id: call.userId }, { $set: { currentCredits: 10 } });
+
+    await send(call, HOLD + 50, 'resp-1');
+
+    expect((await User.findById(call.userId).lean())?.currentCredits).toBe(0);
     expect(await ledger(call.sessionId)).toHaveLength(1);
   });
 

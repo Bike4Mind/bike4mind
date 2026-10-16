@@ -66,10 +66,10 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
-async function callRoute(body: Record<string, unknown> = {}) {
+async function callRoute(body: Record<string, unknown> = {}, currentCredits = 1_000_000) {
   const { req, res } = createMocks({ method: 'POST', body });
   const logger = { warn: vi.fn(), error: vi.fn() };
-  (req as any).user = { id: 'user-1', currentCredits: 1_000_000 };
+  (req as any).user = { id: 'user-1', currentCredits };
   (req as any).logger = logger;
   try {
     await (voiceSessionsHandler as any)(req, res);
@@ -201,7 +201,8 @@ describe('POST /api/ai/voice-sessions on an existing notebook', () => {
 });
 
 describe('POST /api/ai/voice-sessions over an open hold', () => {
-  const priorStartedAt = new Date('2026-01-01T00:00:00Z');
+  // A minute in: inside the realtime hold's window, so a reconnect may still reuse it.
+  const priorStartedAt = new Date(Date.now() - 60_000);
   const openHoldSession = {
     id: 'session-1',
     userId: 'user-1',
@@ -231,6 +232,28 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockClaimVoiceHold).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('reserves afresh, and never reuses, a hold past its window', async () => {
+    const expired = new Date(Date.now() - 2 * 60 * 60_000);
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: expired });
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: 30 });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).toHaveBeenCalledWith('session-1', expired);
+    expect(mockOpenVoiceHold).toHaveBeenCalledWith('session-1', expired, expect.objectContaining({ realtime: true }));
+  });
+
+  it('refuses a reconnect with no live hold that cannot afford a fresh one, before OpenAI mints a key', async () => {
+    mockGetSession.mockResolvedValueOnce({ id: 'session-1', userId: 'user-1' });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true }, 1);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
   });
 
   it('settles an ElevenLabs hold and reserves afresh on a reconnect, never reusing it', async () => {

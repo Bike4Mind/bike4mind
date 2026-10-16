@@ -98,13 +98,6 @@ const handler = baseApi().post(async (req, res) => {
   // Pre-reserve credits for max session duration (60 min x ~$0.77/hr audio)
   // Reservation prevents unbounded post-facto billing for long sessions.
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
-  if (enforceCredits && !isReconnect) {
-    const currentCredits = req.user?.currentCredits ?? 0;
-    if (currentCredits < reservedCredits) {
-      throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
-    }
-    // The reserve is taken below, with the hold, only once OpenAI has issued the call's key.
-  }
 
   const realtimeModel = 'gpt-realtime-1.5';
 
@@ -170,6 +163,13 @@ const handler = baseApi().post(async (req, res) => {
   // refunded. Guarded by an explicit live hold so a stray flag can't skip a real charge.
   // Realtime: only a hold carrying the realtime marker.
   const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
+
+  // Gated on the hold actually being reused, not on the client's reconnect flag: a reconnect with no
+  // live hold reserves a fresh one, so it must afford it before OpenAI issues the call's key. The
+  // reserve itself is taken below, with the hold, once that key exists.
+  if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
+    throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+  }
 
   // Build voice instructions with conversation history context
   const brand = process.env.APP_NAME || '';

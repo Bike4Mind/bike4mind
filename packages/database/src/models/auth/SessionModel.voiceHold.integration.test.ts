@@ -80,7 +80,7 @@ describe('sessionRepository voice holds', () => {
       sessionRepository.claimVoiceHold(id, startedAt),
     ]);
 
-    expect(results.filter(Boolean)).toEqual([{ billedCredits: null }]);
+    expect(results.filter(Boolean)).toEqual([{ billedCredits: null, payerId: null }]);
     const after = await Session.findById(id).lean();
     expect(after).toMatchObject({ voiceReservedCredits: null, voiceSessionStartedAt: null });
   });
@@ -98,6 +98,7 @@ describe('sessionRepository voice holds', () => {
 
     expect(await sessionRepository.claimVoiceHold(realtime, startedAt, { realtimeOnly: true })).toEqual({
       billedCredits: 30,
+      payerId: null,
     });
     expect(await Session.findById(realtime).lean()).toMatchObject({
       voiceReservedCredits: null,
@@ -115,11 +116,13 @@ describe('sessionRepository voice holds', () => {
         voiceReservedCredits: 100,
         voiceSessionStartedAt: first,
         realtime: false,
+        payerId: 'u1',
       }),
       sessionRepository.openVoiceHold(id, null, {
         voiceReservedCredits: 100,
         voiceSessionStartedAt: second,
         realtime: false,
+        payerId: 'u1',
       }),
     ]);
 
@@ -137,6 +140,7 @@ describe('sessionRepository voice holds', () => {
         voiceReservedCredits: 100,
         voiceSessionStartedAt: minutesAgo(0),
         realtime: false,
+        payerId: 'u1',
       })
     ).toBe(false);
     const after = await Session.findById(id).lean();
@@ -153,6 +157,7 @@ describe('sessionRepository voice holds', () => {
         voiceReservedCredits: 100,
         voiceSessionStartedAt: startedAt,
         realtime: false,
+        payerId: 'u1',
       })
     ).toBe(true);
     const after = await Session.findById(id).lean();
@@ -172,6 +177,7 @@ describe('sessionRepository voice holds', () => {
         voiceReservedCredits: 100,
         voiceSessionStartedAt: new Date(),
         realtime: true,
+        payerId: 'u1',
       })
     ).toBe(false);
     await Session.updateOne({ _id: id }, { $set: { voiceSessionStartedAt: null } });
@@ -180,6 +186,7 @@ describe('sessionRepository voice holds', () => {
         voiceReservedCredits: 50,
         voiceSessionStartedAt: new Date(),
         realtime: true,
+        payerId: 'u1',
       })
     ).toBe(true);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 50, voiceBilledCredits: 0 });
@@ -192,28 +199,20 @@ describe('sessionRepository voice holds', () => {
     expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
   });
 
-  it('restores a claimed hold, but never over a newer call', async () => {
-    const startedAt = minutesAgo(60);
-    const id = await seed('call', 100, startedAt, 40);
-    const claimed = await sessionRepository.claimVoiceHold(id, startedAt);
+  it('records who paid a hold when it opens, and hands it to the one claim that settles it', async () => {
+    const id = await seed('call', null, null);
+    const startedAt = minutesAgo(0);
 
-    const connectedAt = minutesAgo(59);
-    expect(
-      await sessionRepository.restoreVoiceHold(id, 100, startedAt, {
-        voiceConnectedAt: connectedAt,
-        voiceBilledCredits: claimed!.billedCredits,
-      })
-    ).toBe(true);
-    expect(await Session.findById(id).lean()).toMatchObject({
+    await sessionRepository.openVoiceHold(id, null, {
       voiceReservedCredits: 100,
       voiceSessionStartedAt: startedAt,
-      voiceConnectedAt: connectedAt,
-      voiceBilledCredits: 40,
+      realtime: false,
+      payerId: 'payer-1',
     });
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceHoldUserId: 'payer-1' });
 
-    // The hold is live again, so a second restore (standing in for a newer call's hold) must not overwrite it.
-    expect(await sessionRepository.restoreVoiceHold(id, 999, minutesAgo(1))).toBe(false);
-    expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 100 });
+    expect(await sessionRepository.claimVoiceHold(id, startedAt)).toEqual({ billedCredits: null, payerId: 'payer-1' });
+    expect(await Session.findById(id).lean()).not.toHaveProperty('voiceHoldUserId');
   });
 
   it('marks a hold connected once and keeps its latest activity', async () => {

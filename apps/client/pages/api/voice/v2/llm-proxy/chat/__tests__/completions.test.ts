@@ -102,6 +102,7 @@ vi.mock('@bike4mind/voice', () => ({
 }));
 
 import handler from '../completions';
+import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@server/voice/voiceSessionLimits';
 
 // Minimal SSE-response double: only setHeader/write/end/on are ever touched by the
 // success path this test drives.
@@ -128,6 +129,9 @@ function makeReq() {
   };
 }
 
+// A hold opened a minute ago: inside the window its token may be served for.
+const recentHold = () => new Date(Date.now() - 60_000).toISOString();
+
 function primeSuccessfulTurn() {
   vi.clearAllMocks();
   mockVerifyVoiceSessionToken.mockReturnValue({
@@ -136,6 +140,7 @@ function primeSuccessfulTurn() {
     organizationId: undefined,
     reasoningModelId: 'test-model',
     authOrigin: 'session',
+    voiceHoldStartedAt: recentHold(),
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
   mockRecordVoiceActivity.mockResolvedValue(true);
@@ -188,6 +193,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
       reasoningModelId: 'test-model',
       authOrigin: 'apiKey',
       apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
     });
 
     await handler(makeReq() as never, makeRes() as never);
@@ -216,11 +222,11 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
   it("marks the token's session connected and alive on every verified turn", async () => {
     await handler(makeReq() as never, makeRes() as never);
 
-    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), null);
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), expect.any(Date));
   });
 
   it('marks only the hold its token names', async () => {
-    const holdStartedAt = '2026-10-12T12:00:00.000Z';
+    const holdStartedAt = recentHold();
     mockVerifyVoiceSessionToken.mockReturnValue({
       userId: 'user-1',
       sessionId: 'session-1',
@@ -251,7 +257,7 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
       sessionId: 'session-1',
       organizationId: '',
       reasoningModelId: 'test-model',
-      voiceHoldStartedAt: '2026-10-12T12:00:00.000Z',
+      voiceHoldStartedAt: recentHold(),
     });
     // POST /end claimed the hold, so the activity write matches nothing.
     mockRecordVoiceActivity.mockResolvedValue(false);
@@ -267,19 +273,47 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     expect(mockProcess).not.toHaveBeenCalled();
   });
 
-  it('serves a legacy token without a hold claim even when no hold matched', async () => {
-    mockRecordVoiceActivity.mockResolvedValue(false);
+  function expect402(status: ReturnType<typeof vi.fn>) {
+    expect(status).toHaveBeenCalledWith(402);
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  }
 
-    await handler(makeReq() as never, makeRes() as never);
+  it('refuses a legacy token that names no hold', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
 
-    expect(mockInvoke).toHaveBeenCalled();
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
   });
 
-  it('still answers the turn when recording the activity fails', async () => {
+  it('refuses a turn when recording the activity fails, rather than serving it unbilled', async () => {
     mockRecordVoiceActivity.mockRejectedValue(new Error('db blip'));
+    const status = vi.fn(() => ({ json: vi.fn() }));
 
-    await handler(makeReq() as never, makeRes() as never);
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
 
-    expect(mockInvoke).toHaveBeenCalled();
+    expect402(status);
+  });
+
+  it("refuses a turn past the hold's window even while the hold is still open", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: new Date(Date.now() - (VOICE_SESSION_TOKEN_TTL_SECONDS + 1) * 1000).toISOString(),
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
+
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
   });
 });

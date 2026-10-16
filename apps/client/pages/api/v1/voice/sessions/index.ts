@@ -35,14 +35,15 @@ import {
 import { isValidObjectId } from '@server/utils/objectId';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
-import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import {
+  MAX_SESSION_SECONDS,
+  VOICE_SESSION_TOKEN_TTL_SECONDS,
+  shouldReuseVoiceHold,
+} from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
-// The session token must stay valid for the whole call (ElevenLabs replays it on
-// every turn), plus headroom for clock skew and a slightly over-running call.
-const SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
 // open unbounded parallel calls, each holding a credit reservation.
 const MAX_CONCURRENT_VOICE_SESSIONS = 2;
@@ -177,7 +178,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       ...requestTurnAuth(req),
       voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
-    SESSION_TOKEN_TTL_SECONDS
+    // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every
+    // turn, and a reconnect onto the same hold must not extend the call the reserve covers.
+    Math.max(1, Math.ceil((holdStartedAt.getTime() + VOICE_SESSION_TOKEN_TTL_SECONDS * 1000 - Date.now()) / 1000))
   );
 
   const transport = createElevenLabsConversationalTransport({
