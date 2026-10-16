@@ -50,12 +50,17 @@ import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatus
 import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
-import { isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
+import { REBUILD_PENDING_STALE_MS, isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
+
+// The rebuild door re-offers a stranded file after this window (findConvergencePausedFilesByScope's
+// stale-pending arm), so the rebuilding chip derives its copy from the constant rather than a
+// literal that would quietly promise the wrong window if the value changed.
+const REBUILD_PENDING_HOURS = REBUILD_PENDING_STALE_MS / (60 * 60_000);
 
 export function LakeInfoPanel({
   lake,
@@ -714,7 +719,7 @@ export function LakeInfoPanel({
               working one in this count. */}
           {(lake.canRebuild || lake.canManage) && rebuildingCount > 0 && (
             <Tooltip
-              title="These files were reset for a rebuild that has not finished yet, so they are not searchable. If a rebuild never finishes, they are offered as 'to rebuild' again within a couple of hours."
+              title={`These files were reset for a rebuild that has not finished yet, so they are not searchable. If a rebuild never finishes, they are offered as 'to rebuild' again within ${REBUILD_PENDING_HOURS} hours.`}
               size="sm"
             >
               <Chip
