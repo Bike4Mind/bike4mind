@@ -67,9 +67,12 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
 
   it('fails closed when the enforcement read fails', async () => {
     enforcement.readFails = true;
-    const { reached, status } = await call('GET', '/api/quests', existingSession());
+    const { reached, status, body } = await call('GET', '/api/quests', existingSession());
     expect(reached).toBe(false);
-    expect(status).not.toBe(200);
+    // A settings outage must surface as a server error, not as an enrollment demand: only the
+    // gate's own 403 carries mfaEnrollmentRequired.
+    expect(status).toBe(500);
+    expect(body?.mfaEnrollmentRequired).toBeUndefined();
   });
 
   it('serves an unenrolled session while enforcement is off, then blocks it once enforcement turns on', async () => {
@@ -104,6 +107,10 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
     ['GET', '/api/auth/step-up/options'],
     ['POST', '/api/auth/step-up/email/send'],
     ['GET', '/api/users/u1'],
+    // The allowlist strips the query string before matching; a regression there would 403 every
+    // allowlisted call the client makes with params and deadlock enrollment.
+    ['GET', '/api/auth/mfa/status?t=1'],
+    ['GET', '/api/users/u1?x=1'],
   ] as const)('still lets the owing session reach %s %s to enroll', async (method, url) => {
     enforcement.enforced = true;
     expect((await call(method, url, existingSession())).reached).toBe(true);
@@ -115,6 +122,8 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
     ['POST', '/api/users/u1/update'],
     ['POST', '/api/auth/mfa/disable'],
     ['GET', '/api/websocket/ticket'],
+    // Only the pathname is compared, so an allowlisted path hidden in a query string does not admit.
+    ['GET', '/api/quests?x=/api/logout'],
   ] as const)('blocks the owing session from %s %s', async (method, url) => {
     enforcement.enforced = true;
     const { reached, status } = await call(method, url, existingSession());
