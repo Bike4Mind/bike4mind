@@ -58,4 +58,18 @@ describe('GET /api/agents', () => {
       { by: 'updatedAt', direction: 'desc' }
     );
   });
+
+  // An allowed field must still reach the repository, so the allow-list cannot quietly ignore a caller's sort.
+  it.each(['createdAt', 'name'])('passes an allowed orderBy %s through to the sort', async orderBy => {
+    const json = vi.fn();
+    await h.handler!({ user: { id: 'viewer' }, query: { orderBy, orderDirection: 'asc' } }, { json });
+
+    expect(h.searchAccessible).toHaveBeenCalledWith(
+      'viewer',
+      '',
+      {},
+      { page: 1, limit: 10 },
+      { by: orderBy, direction: 'asc' }
+    );
+  });
 });
