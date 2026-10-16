@@ -34,12 +34,19 @@ export default $config({
     const docsDomain = process.env.DOCS_DOMAIN || `docs.${baseDomain}`;
     const docsUrl = `https://${docsDomain}`;
 
+    // The deployer builds and scans build/ first, then sets DOCS_PREBUILT so exactly that directory is uploaded.
+    const prebuilt = process.env.DOCS_PREBUILT === '1';
+
     const docs = new sst.aws.StaticSite('Docs', {
-      path: './',
-      build: {
-        output: 'build',
-        command: `pnpm install --frozen-lockfile && DOCS_URL='${docsUrl}' pnpm build`,
-      },
+      path: prebuilt ? './build' : './',
+      ...(prebuilt
+        ? {}
+        : {
+            build: {
+              output: 'build',
+              command: `pnpm install --frozen-lockfile && DOCS_URL='${docsUrl}' pnpm build`,
+            },
+          }),
       dev: {
         command: 'pnpm start',
         url: 'http://localhost:3010',
