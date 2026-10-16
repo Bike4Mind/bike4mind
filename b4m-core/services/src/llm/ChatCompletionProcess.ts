@@ -1722,6 +1722,30 @@ export class ChatCompletionProcess {
    */
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
+  /**
+   * Refunds the credit reservation this run still holds, if any. The amount is claimed
+   * synchronously before the await, so a caller giving up on a stuck run and the run's own
+   * error rollback cannot both refund it. A run that later reconciles bills the full actual.
+   */
+  public async releaseReservedCredits(questId: string, logger: Logger): Promise<void> {
+    const amount = this.reservedCredits;
+    const ownerId = this.reservedCreditsOwnerId;
+    if (amount <= 0 || !ownerId) return;
+    this.reservedCredits = 0;
+    this.reservedCreditHolder = null;
+    try {
+      const rollbackMethod =
+        this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
+      await rollbackMethod.incrementCredits(ownerId, amount);
+      logger.info(`Rolled back ${amount} reserved credits for quest ${questId}`);
+    } catch (rollbackError) {
+      logger.error(
+        `CRITICAL: Failed to rollback ${amount} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
+        rollbackError
+      );
+    }
+  }
+
   public async process({
     body,
     logger,
@@ -1731,6 +1755,7 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1747,6 +1772,11 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
+     * way the cancel watcher does, so the error path rolls back reserved credits and settles it.
+     */
+    abortSignal?: AbortSignal;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -4377,6 +4407,9 @@ export class ChatCompletionProcess {
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
+      // Plain abort(), not abort(reason): a custom reason would surface as a non-abort error.
+      if (abortSignal?.aborted) abortController.abort();
+      else abortSignal?.addEventListener('abort', () => abortController.abort(), { once: true });
 
       // Store reference to the AbortController in a map using questId as key
       // This is used for actual request cancellation when a quest is stopped
@@ -6344,21 +6377,7 @@ export class ChatCompletionProcess {
       const totalResponseTime = Date.now() - processStartTime;
 
       // Rollback reserved credits if we never completed reconciliation
-      if (this.reservedCredits > 0 && this.reservedCreditsOwnerId) {
-        try {
-          const rollbackMethod =
-            this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
-          await rollbackMethod.incrementCredits(this.reservedCreditsOwnerId, this.reservedCredits);
-          logger.info(`💰 Rolled back ${this.reservedCredits} reserved credits for quest ${questId} due to error`);
-          this.reservedCredits = 0;
-          this.reservedCreditHolder = null;
-        } catch (rollbackError) {
-          logger.error(
-            `🚨 CRITICAL: Failed to rollback ${this.reservedCredits} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
-            rollbackError
-          );
-        }
-      }
+      await this.releaseReservedCredits(questId, logger);
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();

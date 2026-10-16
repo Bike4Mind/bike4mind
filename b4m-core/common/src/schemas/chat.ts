@@ -5,6 +5,7 @@ import {
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
+import { REQUEST_TIMEOUT_ERROR_CODE } from '../apiErrorCodes';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
@@ -329,6 +330,15 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   // QUEST_ERROR_CODES is itself typed against apiErrorCodes.ts, so a rename there breaks this
   // rather than silently publishing a dead code.
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+});
+
+/**
+ * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll.
+ */
+export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
 });
 
 /**

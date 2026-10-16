@@ -19,7 +19,7 @@
  * return a quest. The `session resolution` block below drops the explicit
  * sessionId to exercise that resolution directly.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
@@ -39,6 +39,9 @@ const {
   mockCreateSession,
   mockFindByIdAndUpdate,
   mockDeleteSession,
+  mockSettleIfUnfinished,
+  mockReleaseReservedCredits,
+  waitTurnLimits,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -61,6 +64,21 @@ const {
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
+  // The wait=true deadline's settle and credit-refund edges (see the over-budget describe).
+  mockSettleIfUnfinished: vi.fn(),
+  mockReleaseReservedCredits: vi.fn(),
+  // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
+  waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
+}));
+
+vi.mock('@server/utils/waitTurnDeadline', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  get WAIT_TURN_BUDGET_MS() {
+    return waitTurnLimits.budgetMs;
+  },
+  get WAIT_TURN_WIND_DOWN_MS() {
+    return waitTurnLimits.windDownMs;
+  },
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -140,6 +158,7 @@ vi.mock('@bike4mind/services/llm', async orig => {
       return mockSystemPromptText.value;
     }
     process = (...a: unknown[]) => mockProcess(...a);
+    releaseReservedCredits = (...a: unknown[]) => mockReleaseReservedCredits(...a);
   }
   return {
     ...actual,
@@ -191,6 +210,10 @@ vi.mock('@bike4mind/database', async orig => {
     sessionRepository: {
       ...(actual.sessionRepository as object),
       delete: (...a: unknown[]) => mockDeleteSession(...a),
+    },
+    questRepository: {
+      ...(actual.questRepository as object),
+      settleIfUnfinished: (...a: unknown[]) => mockSettleIfUnfinished(...a),
     },
   };
 });
@@ -1249,6 +1272,76 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       // (see the quests/[id] integration suite) - a caller uses one branch for both surfaces.
       expect(body.type).toBe('message');
       expect(body).not.toHaveProperty('errorCode');
+    });
+  });
+
+  describe('over the wait=true deadline', () => {
+    type ProcessArgs = { prefetchedQuest: Record<string, unknown>; abortSignal: AbortSignal };
+
+    beforeEach(() => {
+      waitTurnLimits.budgetMs = 0;
+      waitTurnLimits.windDownMs = 20;
+      mockSettleIfUnfinished.mockResolvedValue(true);
+      mockReleaseReservedCredits.mockResolvedValue(undefined);
+      // A turn still mid-flight when the deadline fires: nothing streamed yet.
+      mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+    });
+    afterEach(() => {
+      waitTurnLimits.budgetMs = 45_000;
+      waitTurnLimits.windDownMs = 7_000;
+    });
+
+    const expectTimeoutResponse = (res: { _getStatusCode(): number; _getJSONData(): Record<string, unknown> }) => {
+      expect(res._getStatusCode()).toBe(504);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'request_timeout', quest_id: 'quest-2' });
+      expect(res._getJSONData().error).toEqual(expect.any(String));
+    };
+
+    it('aborts a turn that honours the signal, leaves the refund to it, and answers 504 with the quest id', async () => {
+      // Models process()'s own abort path: it rolls back its reservation and settles the quest.
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            abortSignal.addEventListener('abort', () => {
+              prefetchedQuest.status = 'done';
+              prefetchedQuest.type = 'error';
+              resolve();
+            });
+          })
+      );
+      mockSettleIfUnfinished.mockResolvedValue(false);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
+      // Still attempted: a no-op when process() already settled, the backstop when it did not.
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith('quest-2', expect.objectContaining({ status: 'done' }));
+    });
+
+    it('settles a turn that ignores the abort as timed out and refunds its reservation itself', async () => {
+      mockProcess.mockImplementation(() => new Promise<never>(() => {}));
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockReleaseReservedCredits).toHaveBeenCalledWith('quest-2', expect.anything());
+      // TIMED_OUT_RUN on an empty quest: terminal error, so questTimeoutSweep has nothing to recover.
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
+      );
+    });
+
+    it('leaves a turn that finishes inside the budget untouched', async () => {
+      waitTurnLimits.budgetMs = 45_000;
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: ProcessArgs) => {
+        prefetchedQuest.status = 'done';
+        prefetchedQuest.reply = 'hi';
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockSettleIfUnfinished).not.toHaveBeenCalled();
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
     });
   });
 });
