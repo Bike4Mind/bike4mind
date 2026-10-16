@@ -84,6 +84,13 @@ class DistributionTest(unittest.TestCase):
                         self.assertNotIn('blockMapSize', file)
             assemble(root, '0.2.2', 'owner/dist', 'owner/source')
             self.assertEqual((root / 'SHA256SUMS.txt').read_text(), original)
+            assemble(root, '0.2.2', 'owner/dist', 'owner/source', 'adhoc')
+            self.assertFalse((root / 'latest-mac.yml').exists())
+            self.assertTrue((root / 'latest-linux.yml').exists())
+            self.assertNotIn('latest-mac.yml', (root / 'SHA256SUMS.txt').read_text())
+            self.assertTrue((root / 'Bike4Mind-0.2.2-arm64.dmg').exists())
+            with self.assertRaises(ValueError):
+                assemble(root, '0.2.2', 'owner/dist', 'owner/source', '')
             (root / 'Bike4Mind-0.2.2-arm64.zip').write_bytes(b'')
             with self.assertRaises(ValueError):
                 assemble(root, '0.2.2', 'owner/dist', 'owner/source')
