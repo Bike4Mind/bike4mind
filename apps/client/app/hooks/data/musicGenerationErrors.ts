@@ -20,15 +20,14 @@ const MESSAGES: Record<MusicGenerationApiErrorCode, string> = {
   insufficient_credits: 'You do not have enough credits for this song.',
   idempotency_key_reused: 'This request was already sent with different settings. Try again.',
   invalid_idempotency_key: 'The request could not be sent. Try again.',
+  // Sent only by the cancel route, for a song the provider is already composing (billed whatever happens).
+  not_cancellable: "This song is already being composed and can't be cancelled.",
 };
 
 // Storage is checked before the provider is paid; the route answers with the shared StorageLimitError (a 400).
 const STORAGE_FULL_MESSAGE = 'Your file storage is full. Free up space in Files, then try again.';
 
-// The cancel route's answer for a song the provider is already composing, which is billed whatever happens. Only that
-// route sends the code, so it is matched here instead of joining MUSIC_GENERATION_API_ERROR_CODES.
-const NOT_CANCELLABLE_MESSAGE = "This song is already being composed and can't be cancelled.";
-
+// The cancel hook uses this to refetch the card; the toast text comes from MESSAGES like any other code.
 export const isMusicNotCancellableError = (error: unknown): boolean => {
   if (!isAxiosError(error) || error.response?.status !== 409) return false;
   const data: unknown = error.response.data;
@@ -36,7 +35,6 @@ export const isMusicNotCancellableError = (error: unknown): boolean => {
 };
 
 export function describeMusicCancelError(error: unknown): string {
-  if (isMusicNotCancellableError(error)) return NOT_CANCELLABLE_MESSAGE;
   return describeMusicGenerationError(error, 'Could not cancel the song. Try again.');
 }
 
