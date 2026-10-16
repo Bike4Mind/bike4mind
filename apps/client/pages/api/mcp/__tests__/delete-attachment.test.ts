@@ -204,4 +204,26 @@ describe('POST /api/mcp/delete-attachment', () => {
       { $pull: { 'attachmentList.attachments': { id: 'att-1' } } }
     );
   });
+
+  it('still reports success and cleans the page when pruning the stored list fails', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: {
+        source: 'confluence',
+        pageId: '555',
+        attachments: [{ id: 'att-1', filename: 'stored.png' }],
+      },
+    } as never);
+    vi.mocked(Quest.updateOne).mockRejectedValueOnce(new Error('mongo unavailable'));
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      { _id: 'quest-1' },
+      { $pull: { 'attachmentList.attachments': { id: 'att-1' } } }
+    );
+    expect(cleanupConfluencePageContent).toHaveBeenCalled();
+  });
 });
