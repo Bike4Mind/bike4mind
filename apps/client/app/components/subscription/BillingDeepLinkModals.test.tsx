@@ -24,17 +24,13 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => mocks.creditsEnabled }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : _key) }),
-}));
-vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [] }) }));
-vi.mock('@client/app/components/subscription/CreditsModal', () => ({
-  CreditsModalContent: ({ onClose }: { onClose: () => void }) => (
-    <button data-testid="credits-modal-close-btn" onClick={onClose} />
-  ),
-}));
-vi.mock('@client/app/components/subscription/SubscriptionModal', () => ({
-  SubscriptionModalContent: () => <div data-testid="plans-panel" />,
+vi.mock('@client/app/components/subscription/BillingModal', () => ({
+  default: ({ open, focus, onClose }: { open: boolean; focus: string; onClose: () => void }) =>
+    open ? (
+      <div data-testid="billing-modal" data-focus={focus}>
+        <button data-testid="billing-modal-close" onClick={onClose} />
+      </div>
+    ) : null,
 }));
 
 describe('BillingDeepLinkModals', () => {
@@ -46,59 +42,32 @@ describe('BillingDeepLinkModals', () => {
 
   it('opens nothing without the billing param', () => {
     render(<BillingDeepLinkModals />);
-    expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
   });
 
-  it('opens the credits modal for ?billing=credits', () => {
-    setLocation('?billing=credits');
+  it.each(['credits', 'plans'])('opens the one Billing view focused on %s for ?billing=%s', view => {
+    setLocation(`?billing=${view}`);
     render(<BillingDeepLinkModals />);
-    expect(screen.getByTestId('credits-modal-close-btn')).toBeInTheDocument();
-    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
-  });
-
-  it('opens the plans tab for ?billing=plans', () => {
-    setLocation('?billing=plans');
-    render(<BillingDeepLinkModals />);
-    expect(screen.getByTestId('plans-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('billing-tab-plans')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
-  });
-
-  it('selects the credits tab for ?billing=credits', () => {
-    setLocation('?billing=credits');
-    render(<BillingDeepLinkModals />);
-    expect(screen.getByTestId('billing-tab-credits')).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('renders both tabs and switching replaces the billing param, keeping the rest of the URL', () => {
-    setLocation('?projectId=p1&billing=credits', 'top');
-    render(<BillingDeepLinkModals />);
-    expect(screen.getByTestId('billing-tab-credits')).toBeInTheDocument();
-    expect(screen.getByTestId('billing-tab-plans')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('billing-tab-plans'));
-    expect(mocks.replace).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=plans#top');
-    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.getByTestId('billing-modal')).toHaveAttribute('data-focus', view);
   });
 
   it('ignores an unknown view', () => {
     setLocation('?billing=bogus');
     render(<BillingDeepLinkModals />);
-    expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
   });
 
   it('stays closed when credits are not enforced', () => {
     mocks.creditsEnabled = false;
     setLocation('?billing=plans');
     render(<BillingDeepLinkModals />);
-    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
   });
 
   it('closing strips only the billing param, keeping the rest of the URL', () => {
     setLocation('?projectId=p1&billing=credits', 'top');
     render(<BillingDeepLinkModals />);
-    fireEvent.click(screen.getByTestId('credits-modal-close-btn'));
+    fireEvent.click(screen.getByTestId('billing-modal-close'));
     expect(mocks.replace).toHaveBeenCalledWith('/notebooks/n1?projectId=p1#top');
     expect(mocks.push).not.toHaveBeenCalled();
   });

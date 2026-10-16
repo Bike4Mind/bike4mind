@@ -1,8 +1,12 @@
-import { Box, Typography, Divider } from '@mui/joy';
+import { Box, Chip, Sheet, Typography } from '@mui/joy';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import { blackAlpha } from '@client/app/utils/themes/colors';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { formatPlanPrice } from './billingFormat';
+
+// Plan intervals are stored as adjectives ('monthly'); the price reads "$30 / month".
+const INTERVAL_UNIT: Record<string, string> = { monthly: 'month', yearly: 'year' };
 
 interface PlanCardProps {
   name: string;
@@ -14,6 +18,8 @@ interface PlanCardProps {
   interval?: string;
   features: string[];
   isPopular?: boolean;
+  /** Accent outline for the plan the modal leads with; layout emphasis only, no badge text. */
+  isFeatured?: boolean;
   isCurrentPlan?: boolean;
   /** True when the current plan's billing is stuck (past_due/unpaid/incomplete). */
   hasPaymentIssue?: boolean;
@@ -34,6 +40,7 @@ const PlanCard = ({
   interval,
   features,
   isPopular,
+  isFeatured,
   isCurrentPlan,
   hasPaymentIssue,
   currentPlanDetails,
@@ -42,145 +49,131 @@ const PlanCard = ({
   const { t } = useTranslation();
 
   return (
-    <Box
-      sx={theme => ({
-        maxWidth: '448px',
-        border: '1px solid',
-        borderColor: isPopular ? theme.palette.creditsModal.border : theme.palette.subscriptionModal.border,
-        background: isPopular ? theme.palette.creditsModal.gradient : theme.palette.primary.softBg,
-        borderRadius: '10px',
-        p: '32px 24px 24px',
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        height: '100%',
-        position: 'relative',
-        transition: 'all 0.2s ease-in-out',
-        '&:hover': {
-          transform: 'translateY(-4px)',
-          boxShadow: `0 6px 20px ${blackAlpha[0][20]}`,
-          borderColor: isPopular ? theme.palette.creditsModal.gradient : 'neutral.600',
-        },
-        ...(isPopular
-          ? {
-              borderColor: 'primary.500',
-              boxShadow: '0 0 0 1px var(--joy-palette-primary-500)',
-            }
-          : {}),
-      })}
+    <Sheet
+      variant="outlined"
+      data-testid="plan-card"
+      sx={{
+        borderRadius: 'lg',
+        p: { xs: 2.5, sm: 3 },
+        bgcolor: 'background.surface',
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1.15fr) minmax(0, 1fr)' },
+        gap: { xs: 2.5, sm: 4 },
+        ...(isFeatured && {
+          borderColor: 'primary.500',
+          boxShadow: '0 0 0 1px var(--joy-palette-primary-500)',
+        }),
+      }}
     >
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          top: 12,
-          right: 12,
-          position: 'absolute',
-        }}
-      >
-        {isPopular && (
-          <Box
-            data-testid="plan-card-popular-badge"
-            sx={{
-              bgcolor: 'primary.500',
-              color: 'white',
-              px: 1.5,
-              py: 0.5,
-              borderRadius: 'lg',
-              fontSize: 'sm',
-              fontWeight: '500',
-              lineHeight: '14px',
-              height: 'fit-content',
-            }}
-          >
-            {t('subscription_modal.most_popular')}
-          </Box>
-        )}
-        {isCurrentPlan && (
-          <Box
-            sx={{
-              border: '1px solid',
-              borderColor: 'primary.500',
-              color: 'primary.500',
-              px: '10px',
-              py: '8px',
-              borderRadius: '60px',
-              fontSize: '14px',
-              lineHeight: '14px',
-            }}
-          >
-            {t('subscription_modal.current')}
-          </Box>
-        )}
-      </Box>
-      <Typography sx={{ mb: '20px', fontSize: '24px', lineHeight: '24px' }}>{name}</Typography>
-      {credits && (
-        <Typography level="body-md" sx={{ mb: answersEstimate ? '8px' : '32px', color: 'neutral.500' }}>
-          {t('subscription_modal.credits_per_month', { credits: formatCreditAmount(credits) })}
-        </Typography>
-      )}
-      {credits && answersEstimate && (
-        <Typography level="body-sm" data-testid="plan-card-answers-estimate" sx={{ mb: '32px', color: 'neutral.500' }}>
-          {answersEstimate}
-        </Typography>
-      )}
-      <Typography level="body-md" sx={{ mb: '24px', color: 'neutral.400' }}>
-        {description}
-      </Typography>
-      {price && interval && (
-        <Typography sx={{ fontWeight: '600', fontSize: '32px', lineHeight: '32px', mb: '32px', color: 'primary.500' }}>
-          ${price.toFixed(2)}{' '}
-          <Typography level="body-sm" component="span" sx={{ color: 'primary.500' }}>
-            / {interval}
+      <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
+          <Typography level="title-lg" sx={{ fontWeight: 600 }}>
+            {name}
           </Typography>
+          {isCurrentPlan && (
+            <Chip size="sm" variant="soft" color={hasPaymentIssue ? 'danger' : 'neutral'}>
+              {t('subscription_modal.current')}
+            </Chip>
+          )}
+          {isPopular && (
+            <Chip size="sm" variant="soft" color="primary" data-testid="plan-card-popular-badge">
+              {t('subscription_modal.most_popular')}
+            </Chip>
+          )}
+        </Box>
+        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          {description}
         </Typography>
-      )}
 
-      {isCurrentPlan && currentPlanDetails && !currentPlanDetails.canceledAt && (
-        <Box sx={{ mb: '16px' }}>
-          <Box
-            sx={{
-              fontSize: '14px',
-              border: '1px solid',
-              borderColor: hasPaymentIssue ? 'danger.500' : 'neutral.700',
-              borderRadius: '10px',
-              width: '100%',
-              py: '14px',
-            }}
-          >
+        {price && interval ? (
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mt: 2.5 }}>
             <Typography
+              component="span"
               sx={{
-                color: hasPaymentIssue ? 'danger.500' : 'neutral.500',
-                textAlign: 'center',
-                fontSize: '14px',
-                lineHeight: '14px',
+                fontSize: '2.5rem',
+                lineHeight: 1,
+                fontWeight: 600,
+                letterSpacing: '-0.02em',
+                fontVariantNumeric: 'tabular-nums',
+                color: 'text.primary',
               }}
             >
-              {/* A delinquent plan still renews on paper, so saying so would read as
-                  healthy - the user needs the reason their card was declined. */}
-              {hasPaymentIssue
-                ? t('subscriptions.payment_issue')
-                : t('subscription_modal.subscription_renewal', {
-                    date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
-                  })}
+              {formatPlanPrice(price)}
+            </Typography>
+            <Typography component="span" level="body-sm" sx={{ color: 'text.tertiary' }}>
+              / {INTERVAL_UNIT[interval] ?? interval}
             </Typography>
           </Box>
-        </Box>
-      )}
+        ) : null}
 
-      {actionButton}
-      <Divider sx={{ my: '20px' }} />
+        {credits ? (
+          <Typography level="body-sm" sx={{ mt: 1.5, fontWeight: 500, color: 'text.primary' }}>
+            {t('subscription_modal.credits_per_month', { credits: formatCreditAmount(credits) })}
+          </Typography>
+        ) : null}
+        {credits && answersEstimate ? (
+          <Typography level="body-xs" data-testid="plan-card-answers-estimate" sx={{ mt: 0.5, color: 'text.tertiary' }}>
+            {answersEstimate}
+          </Typography>
+        ) : null}
 
-      <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {features?.map((feature, i) => (
-          <Box key={i} sx={{ display: 'flex', alignItems: 'center' }}>
-            <Box sx={{ width: '8px', height: '8px', borderRadius: '50%', mr: '12px', bgcolor: 'primary.500' }} />
-            <Typography sx={{ lineHeight: '19px', fontSize: '14px' }}>{feature}</Typography>
-          </Box>
-        ))}
+        {isCurrentPlan && currentPlanDetails && !currentPlanDetails.canceledAt && (
+          <Typography
+            level="body-sm"
+            sx={{
+              mt: 2,
+              px: 1.5,
+              py: 1,
+              borderRadius: 'sm',
+              bgcolor: hasPaymentIssue ? 'danger.softBg' : 'background.level1',
+              color: hasPaymentIssue ? 'danger.softColor' : 'text.secondary',
+            }}
+          >
+            {/* A delinquent plan still renews on paper, so saying so would read as
+                healthy - the user needs the reason their card was declined. */}
+            {hasPaymentIssue
+              ? t('subscriptions.payment_issue')
+              : t('subscription_modal.subscription_renewal', {
+                  date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
+                })}
+          </Typography>
+        )}
+
+        <Box sx={{ mt: 'auto', pt: 2.5 }}>{actionButton}</Box>
       </Box>
-    </Box>
+
+      <Box
+        sx={{
+          minWidth: 0,
+          pt: { xs: 2.5, sm: 0 },
+          pl: { xs: 0, sm: 4 },
+          // Longhands, so the breakpoint rule cannot reset the colour the way a `border` shorthand would.
+          borderStyle: 'solid',
+          borderColor: 'neutral.outlinedBorder',
+          borderWidth: { xs: '1px 0 0 0', sm: '0 0 0 1px' },
+        }}
+      >
+        <Typography
+          level="body-xs"
+          sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, color: 'text.tertiary', mb: 1.5 }}
+        >
+          {t('subscription_modal.includes', 'Includes')}
+        </Typography>
+        <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+          {features?.map((feature, i) => (
+            <Box component="li" key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+              <CheckRoundedIcon
+                aria-hidden
+                sx={{ fontSize: 18, mt: '1px', color: 'primary.plainColor', flexShrink: 0 }}
+              />
+              <Typography level="body-sm" sx={{ color: 'text.primary' }}>
+                {feature}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    </Sheet>
   );
 };
 

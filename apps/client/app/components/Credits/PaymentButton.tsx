@@ -7,7 +7,7 @@ import { PaymentPayload, TransactionType } from '@client/lib/credits/types';
 import { Button } from '@mui/joy';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
 import { isAxiosError } from 'axios';
-import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FC, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import PaymentModal from './PaymentModal';
 import type { ConfirmResult } from './CheckoutForm';
@@ -16,8 +16,11 @@ import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 interface IPaymentButtonProps {
   onPayment: () => void;
-  /** Accessible name naming what this buys; the visible label is a bare "Purchase". */
+  /** Accessible name naming what this buys; the visible label defaults to a bare "Purchase". */
   ariaLabel?: string;
+  /** Visible label; presentation only, the checkout is driven by the payload. */
+  label?: ReactNode;
+  size?: 'sm' | 'md' | 'lg';
 }
 
 /*
@@ -28,7 +31,7 @@ interface IPaymentButtonProps {
  * Each step is recorded as a CreditPurchaseEvents analytics event keyed by the payment intent id,
  * so a "paid and got nothing" claim can be traced through to the webhook's grant.
  */
-const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ariaLabel, ...rest }) => {
+const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ariaLabel, label, size, ...rest }) => {
   const [wantOpen, setWantOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
@@ -150,10 +153,11 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
         className="credits-modal-payment-button"
         data-testid="credits-purchase-btn"
         aria-label={ariaLabel}
+        size={size}
         onClick={handleStart}
         disabled={wantOpen || open || isPricePerCreditSettingRequired}
       >
-        Purchase
+        {label ?? 'Purchase'}
       </Button>
 
       {stripePromise && clientSecret && (

@@ -29,29 +29,20 @@ export function useBillingView() {
 
   const openView = useCallback((next: BillingView) => router.history.push(hrefFor(next)), [router, hrefFor]);
   const closeView = useCallback(() => router.history.replace(hrefFor(undefined)), [router, hrefFor]);
-  // Tab switches replace the entry so Back leaves the modal rather than stepping through tabs.
-  const switchView = useCallback((next: BillingView) => router.history.replace(hrefFor(next)), [router, hrefFor]);
 
-  return { view, openView, closeView, switchView };
+  return { view, openView, closeView };
 }
 
 /**
- * App-shell host for the tabbed billing modal, opened by `?billing=credits|plans`. Mounted
+ * App-shell host for the billing modal, opened by `?billing=credits|plans` (the section it lands on). Mounted
  * once in the layout route (router.tsx); the profile menu opens it by writing the same param,
  * so every open state has a URL.
  */
 const BillingDeepLinkModals = () => {
-  const { view, closeView, switchView } = useBillingView();
+  const { view, closeView } = useBillingView();
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
-  return (
-    <BillingModal
-      open={isCreditsEnabled && !!view}
-      view={view ?? 'credits'}
-      onViewChange={switchView}
-      onClose={closeView}
-    />
-  );
+  return <BillingModal open={isCreditsEnabled && !!view} focus={view ?? 'credits'} onClose={closeView} />;
 };
 
 export default BillingDeepLinkModals;
