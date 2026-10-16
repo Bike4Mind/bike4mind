@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: vi.fn(),
+  assertOwnerCanAfford: vi.fn(),
+}));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/services', async () => ({
   taskSchedulerService: await import('../../../../b4m-core/services/src/taskSchedulerService/process'),
