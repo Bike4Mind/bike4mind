@@ -537,7 +537,12 @@ export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'se
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
   });
-  registerSidebarIpc(ipcMain, sidebarSections);
+  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+    store.get(sessionId).then(
+      session => session !== null,
+      () => false
+    )
+  );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );

@@ -6,7 +6,7 @@ import type { SidebarSectionStore } from './SidebarSectionStore';
 
 const current = { sections: [{ id: 's1', name: 'Work' }], assignments: {} };
 
-function setup() {
+function setup(known: (sessionId: string) => boolean = () => true) {
   const store = {
     read: vi.fn(() => Promise.resolve(current)),
     create: vi.fn(() => Promise.resolve(current)),
@@ -16,8 +16,12 @@ function setup() {
   };
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   registerSidebarIpc(
-    { handle: (channel: string, listener: (...args: never[]) => unknown) => void handlers.set(channel, listener as never) },
-    store as unknown as SidebarSectionStore
+    {
+      handle: (channel: string, listener: (...args: never[]) => unknown) =>
+        void handlers.set(channel, listener as never),
+    },
+    store as unknown as SidebarSectionStore,
+    sessionId => Promise.resolve(known(sessionId))
   );
   const call = (channel: string, ...args: unknown[]) => handlers.get(channel)?.({}, ...args);
   return { store, call };
@@ -63,5 +67,19 @@ describe('sidebar IPC handlers', () => {
 
     expect(store.move).not.toHaveBeenCalled();
     expect(store.create).toHaveBeenCalledWith('Work', undefined);
+  });
+  it('assigns only sessions that exist, but still lets any id leave its section', async () => {
+    const { store, call } = setup(sessionId => sessionId === 'real');
+
+    expect(await call(IPC_CHANNELS.sidebarMoveSession, 'made-up', 's1')).toBe(current);
+    await call(IPC_CHANNELS.sidebarCreateSection, 'Work', 'made-up');
+    await call(IPC_CHANNELS.sidebarMoveSession, 'made-up', null);
+    await call(IPC_CHANNELS.sidebarMoveSession, 'real', 's1');
+
+    expect(store.create).toHaveBeenCalledWith('Work', undefined);
+    expect(store.move.mock.calls).toEqual([
+      ['made-up', null],
+      ['real', 's1'],
+    ]);
   });
 });
