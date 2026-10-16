@@ -335,6 +335,7 @@ jobs:
           else
             printf '\nmacOS Developer ID signing and notarization enabled.\n' >> notes/desktop-release-notes.md
           fi
+          python3 apps/desktop/scripts/distribution.py prune installers
           (cd installers && sha256sum --check SHA256SUMS.txt)
           bash apps/desktop/scripts/publish-release.sh installers notes/desktop-release-notes.md
           printf 'Desktop release: https://github.com/%s/releases/tag/desktop-v%s\n' "$GH_REPO" "$DESKTOP_VERSION" >> "$GITHUB_STEP_SUMMARY"

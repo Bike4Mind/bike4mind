@@ -32,6 +32,7 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('private-key: ${{ secrets.DESKTOP_RELEASE_APP_PRIVATE_KEY }}', publish)
         self.assertNotIn('GH_TOKEN: ${{ github.token }}', publish)
         self.assertLess(publish.index('if [ -z "$GH_TOKEN" ]; then'), publish.index('publish-release.sh'))
+        self.assertLess(publish.index('distribution.py prune installers'), publish.index('sha256sum --check'))
         self.assertNotIn('create-github-app-token', WORKFLOW.split('\n  publish:\n', 1)[0])
 
     def test_signing_default_denies_distribution(self):

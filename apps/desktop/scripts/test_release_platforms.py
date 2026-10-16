@@ -10,7 +10,7 @@ WORKFLOW = (Path(__file__).resolve().parents[3] / '.github/workflows/desktop-rel
 
 
 class ReleasePlatformsTest(unittest.TestCase):
-    def validate(self, missing=None, extra=None):
+    def validate(self, missing=None, extra=None, mode='signed'):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             names = {'Bike4Mind-0.1.1-arm64.dmg', 'Bike4Mind-0.1.1-arm64.zip',
@@ -21,7 +21,7 @@ class ReleasePlatformsTest(unittest.TestCase):
             for name in names:
                 (root / name).write_bytes(appimage() if name.endswith('.AppImage') else b'installer')
             try:
-                assemble(root, '0.1.1', 'example/dist', 'example/source')
+                assemble(root, '0.1.1', 'example/dist', 'example/source', mode)
                 return 0
             except ValueError:
                 return 1
@@ -35,6 +35,7 @@ class ReleasePlatformsTest(unittest.TestCase):
     def test_missing_zip_or_blockmap_fails(self):
         for name in ('Bike4Mind-0.1.1-arm64.zip', 'Bike4Mind-0.1.1-arm64.zip.blockmap'):
             self.assertNotEqual(self.validate(missing=name), 0)
+            self.assertEqual(self.validate(missing=name, mode='adhoc'), 0)
 
     def test_unexpected_intel_installer_fails(self):
         self.assertNotEqual(self.validate(extra='Bike4Mind-0.1.1-x64.dmg'), 0)
