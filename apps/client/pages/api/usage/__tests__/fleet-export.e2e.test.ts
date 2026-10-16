@@ -13,7 +13,7 @@ import { FLEET_USAGE_MAX_ROWS, resolveApiCompletionSource } from '@bike4mind/com
 import handler, { __resetMisconfiguredWarning } from '../fleet-export';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused', STAGE: 'test' } }));
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   connectDB: vi.fn(),

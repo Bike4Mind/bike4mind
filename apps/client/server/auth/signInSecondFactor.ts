@@ -5,10 +5,10 @@ import { passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4
 import { mfaService } from '@bike4mind/services';
 import { readEnforceMfa } from '@server/auth/mfaEnforcement';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Re-exported so existing importers (mfa/status, mfa/disable) keep one import site.
 export { readEnforceMfa };

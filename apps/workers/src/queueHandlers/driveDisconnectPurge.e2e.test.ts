@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 
 // Only the app-layer edges are mocked: Google (the revoke), crypto, the object store, the memory
 // ledger and SQS. The repositories, markDisconnecting and release run against a real mongod.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: 'test-client-id', GOOGLE_CLIENT_SECRET: 'test-client-secret' },
 }));
 vi.mock('@server/security/tokenEncryption', () => ({
@@ -33,9 +33,9 @@ vi.mock('@googleapis/drive', async importOriginal => ({
     },
   },
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.storageDelete }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: h.storageDelete }) }));
 vi.mock('@server/dataLakes/shredMemoryForLakeTags', () => ({ shredMemoryForLakeTags: vi.fn() }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { driveDisconnectPurgeQueue: { url: 'purge-queue-url' } } }));
 
 import {

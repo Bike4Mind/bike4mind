@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (s: string) => s,
   decryptSecret: (s: string) => s,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 
 import '@pages/api/organizations/[id]/webhooks/github';
 

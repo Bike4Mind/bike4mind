@@ -7,17 +7,17 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockSendBatch = vi.fn();
-vi.mock('@server/utils/sqs', () => ({ sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args) }));
 
 const mockEmitMetric = vi.fn().mockResolvedValue(undefined);
 const mockEmitMetrics = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
   emitMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
 }));
 
 const mockGetSourceQueueUrl = vi.fn().mockReturnValue('https://sqs.us-east-2.amazonaws.com/123/overwatch');
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (...args: unknown[]) => mockGetSourceQueueUrl(...args),
 }));
 
@@ -26,13 +26,13 @@ vi.mock('@bike4mind/common', async () => {
   return { ...actual };
 });
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { OVERWATCH_INGEST_ENABLED: 'true' },
 }));
 
 import handler from '../events';
 import { ApiKeyScope } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 function nowIso() {
   return new Date().toISOString();

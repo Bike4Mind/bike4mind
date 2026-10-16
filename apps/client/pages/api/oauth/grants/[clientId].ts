@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { oauthGrantRepository } from '@bike4mind/database';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Revoke one OAuth client grant. The repository scopes the update to req.user.id,

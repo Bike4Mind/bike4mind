@@ -7,7 +7,7 @@
 import { createTranscriptionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { BadGatewayError } from '@server/utils/errors';
+import { BadGatewayError } from '@bike4mind/server-utils/utils/errors';
 import { transcribeUpload } from '@server/transcribe/transcribe';
 import { toPublicTranscribeError } from '@server/transcribe/toPublicTranscribeError';
 

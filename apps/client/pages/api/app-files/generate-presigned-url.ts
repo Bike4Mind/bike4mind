@@ -13,7 +13,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';

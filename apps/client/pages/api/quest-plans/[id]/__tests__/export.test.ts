@@ -20,8 +20,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: vi.fn() }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ questMasterPlanRepository: { findById: h.findById } }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.send }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'http://queue/questExport' }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.send }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'http://queue/questExport' }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn() } }));
 import '../export';
 const invoke = async () => {

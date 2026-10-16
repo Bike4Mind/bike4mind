@@ -116,7 +116,7 @@ import {
   inheritedArtifactFields,
   resolveAgentArtifactEmissionPrompt,
   resolveAgentArtifactGate,
-} from '@server/utils/artifactGate';
+} from '@bike4mind/server-utils/utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,
@@ -162,7 +162,7 @@ import {
   runHasAttachments,
   sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
-import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
+import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
 // spend fold, #630) lives in its own side-effect-free module so the guard and the
@@ -205,15 +205,15 @@ import {
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
-import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/utils/markAgentToolEchoes';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
-import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
+import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
+import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';

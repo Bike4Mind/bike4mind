@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, userRepository } from '@bike4mind/database';
 import { usdToCredits } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const VIEWS = ['model-day', 'user', 'provider-month', 'settlement'] as const;
 // A year of reconciliation history; keeps the dashboard's provider-month list finite.

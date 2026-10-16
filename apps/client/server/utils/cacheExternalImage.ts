@@ -3,7 +3,7 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
-import { validateTargetUrl } from './ssrfProtection';
+import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 const s3Client = createS3Client();
 

@@ -13,7 +13,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: h.sign }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: h.sign }) }));
 import handler from '../files';
 
 it.each([undefined, '', '   ', 'https://objects.example.invalid'])(

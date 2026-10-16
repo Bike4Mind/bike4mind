@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     updateMetadata() {}

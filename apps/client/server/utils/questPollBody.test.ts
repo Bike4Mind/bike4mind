@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { formatChoicesBlock, type IChatHistoryItemDocument } from '@bike4mind/common';
 import { toQuestPollBody } from './questPollBody';
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
 }));
 

@@ -50,7 +50,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@server/transcribe/transcribe', async () => {
-  const { BadRequestError } = await import('@server/utils/errors');
+  const { BadRequestError } = await import('@bike4mind/server-utils/utils/errors');
   class TranscribeRequestError extends BadRequestError {
     constructor(
       public kind: string,

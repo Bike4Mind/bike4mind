@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { ApiKeyScope, updatePartnerSignupRuleSchema } from '@bike4mind/common';

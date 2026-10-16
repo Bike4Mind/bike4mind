@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   signDraftUploadToken,
   verifyDraftUploadToken,

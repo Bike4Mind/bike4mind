@@ -20,7 +20,7 @@ vi.mock('@server/utils/mcpEnv', () => ({
   buildMcpEnvVariables: vi.fn(async () => []),
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const filesStorage = {
     download: vi.fn(async () => Buffer.from('')),
     getSignedUrl: vi.fn(async () => 'https://example.com/presigned'),

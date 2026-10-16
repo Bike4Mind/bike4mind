@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { agentExecutionRepository, questRepository, Quest, type AgentExecutionStatus } from '@bike4mind/database';
-import { settleStrandedQuests } from './settleStrandedQuests';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { RUN_ABANDONED_FINISH_REASON } from '@bike4mind/common';
 import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 

@@ -76,7 +76,7 @@ vi.mock('sst', () => ({
     },
   },
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 // Only the filters are stubbed; buildChunkRescueMessage stays real so the payload shape this
 // sweep sends is asserted against the shared producer, not a local copy of it. Spreading the actual
 // module also keeps the cutoff constants real, which the cutoff assertions below depend on.

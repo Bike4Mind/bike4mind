@@ -46,7 +46,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
 
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files/search';

@@ -4,8 +4,8 @@ import { integrationRequestRepository, organizationRepository, userRepository } 
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
-import { ForbiddenError, UnprocessableEntityError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /**
  * GET /api/admin/integrations/demand/{integrationId}/requesters?limit&cursor - who requested one

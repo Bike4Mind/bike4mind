@@ -1,7 +1,7 @@
 import { isImageServeable } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { SignOutputUrl } from './signedOutput';
 
 // Only these statuses can still turn 'clean'; 'blocked' (or a missing status) never will.

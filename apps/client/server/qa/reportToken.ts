@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 /** Distinct audience so a login JWT (same secret) can never open a report. */
 const AUDIENCE = 'qa-report';

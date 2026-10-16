@@ -4,7 +4,7 @@ import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * GET /api/agents/[id]/embed-keys - the embed keys bound to an agent, for the

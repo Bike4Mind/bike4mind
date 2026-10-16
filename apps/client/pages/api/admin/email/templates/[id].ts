@@ -1,7 +1,7 @@
 import { emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // The spread below reaches `BaseRepository.update`, which builds a `$set` -- so these cast

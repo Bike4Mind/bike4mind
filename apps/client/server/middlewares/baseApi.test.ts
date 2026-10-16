@@ -30,7 +30,7 @@ vi.mock('./baseApi', () => ({
 import { secretCache } from '../security/secretCache';
 import { connectDB } from '@bike4mind/database';
 import jwt from 'jsonwebtoken';
-import { UnauthorizedError } from '../utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 describe('Secret caching in API handlers', () => {
   const mockHandler = vi.fn();

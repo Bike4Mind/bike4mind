@@ -35,9 +35,9 @@ vi.mock('@server/queueHandlers/utils', () => ({
   MARK_PAUSED_MAX_ATTEMPTS: 3,
   MARK_PAUSED_RETRY_DELAY_MS: 0,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => ({ url: 'https://queue.test', managementEndpoint: 'wss://ws.test' }) }),
 }));
@@ -52,7 +52,7 @@ import {
 } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 
 const DEPLOYMENT_DEFAULT = 'text-embedding-3-small';
 const COMMITTED_SPACE = 'voyage-3';

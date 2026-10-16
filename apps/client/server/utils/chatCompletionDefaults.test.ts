@@ -56,7 +56,7 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
@@ -66,7 +66,7 @@ vi.mock('@server/utils/storage', () => ({
 // log with import-time noise. That's a separate, pre-existing eager-Resource concern
 // outside this PR's scope. Mocking here isolates the assertion to chatCompletionDefaults'
 // own factory body.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
     get: (_, key) => `mock-config-${String(key)}`,
   }),

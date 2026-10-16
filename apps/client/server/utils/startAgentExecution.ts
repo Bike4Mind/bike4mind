@@ -31,8 +31,8 @@ import {
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
 } from '@server/utils/dispatchAgentExecution';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
 import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
 

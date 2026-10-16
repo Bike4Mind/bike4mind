@@ -3,7 +3,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyEvents } from '@bike4mind/common';
 
 const handler = baseApi().delete(

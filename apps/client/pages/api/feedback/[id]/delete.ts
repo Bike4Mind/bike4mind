@@ -3,9 +3,9 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {

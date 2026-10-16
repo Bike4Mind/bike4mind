@@ -6,7 +6,7 @@ const { dispatch, renew, attributes, deleteMessage } = vi.hoisted(() => ({
   attributes: vi.fn(),
   deleteMessage: vi.fn(),
 }));
-vi.mock('@server/utils/sqs', () => ({ deleteFromQueue: deleteMessage }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ deleteFromQueue: deleteMessage }));
 vi.mock('@workers/queueHandlers/questExport', () => ({ dispatch }));
 vi.mock('@aws-sdk/client-sqs', () => ({
   SQSClient: class {

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Request, Response } from 'express';
 import { CounterLog } from '@bike4mind/database';
 import { dayjs } from '@bike4mind/common';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 interface AggregateQueryParams {
   startDate?: string;

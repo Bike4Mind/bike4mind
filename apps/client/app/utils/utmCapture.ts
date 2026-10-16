@@ -1,5 +1,5 @@
 import { resolveConsent } from './consentRegion';
-import { ACQUISITION_COOKIES } from '@client/lib/subscriptions/acquisition';
+import { ACQUISITION_COOKIES } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 
 const UTM_COOKIE_NAME = ACQUISITION_COOKIES.session;
 // 30-minute window: long enough for a landing session, short enough to not persist stale campaigns.

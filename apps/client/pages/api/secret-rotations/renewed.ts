@@ -3,7 +3,7 @@ import { SecretRotation, secretRotationRepository } from '@bike4mind/database/in
 import { ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { encryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 

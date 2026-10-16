@@ -9,7 +9,7 @@ import { artifactContentRepository, artifactVersionRepository } from '@bike4mind
 import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
 import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
 

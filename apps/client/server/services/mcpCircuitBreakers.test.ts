@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // Mock CloudWatch to avoid real AWS calls
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
   recordCircuitBreakerRejection: vi.fn().mockResolvedValue(undefined),
 }));

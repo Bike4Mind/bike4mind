@@ -61,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: h.record },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
 
 import handler from '../articles';
 

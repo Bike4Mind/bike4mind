@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'server-held-jwt-secret' },
 }));
 

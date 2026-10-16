@@ -12,8 +12,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
-import { isValidObjectId } from '@server/utils/objectId';
-import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   withTransaction,
   userRepository,

@@ -9,11 +9,11 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, HTTPError, NotFoundError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { BadRequestError, HTTPError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
-import { TEXT_EDIT_BACKUP_PREFIX } from '@server/utils/textEditBackupPrefix';
+import { TEXT_EDIT_BACKUP_PREFIX } from '@bike4mind/server-utils/utils/textEditBackupPrefix';
 import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 

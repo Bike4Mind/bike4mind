@@ -17,7 +17,7 @@ vi.mock('@workers/services/secopsTriageService', () => ({
   }),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 

@@ -17,8 +17,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 

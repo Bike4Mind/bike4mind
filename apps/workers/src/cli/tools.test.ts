@@ -5,7 +5,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 // header constants run for real - this is an integration test of the handler's
 // request-ID plumbing and header/body parity, not a unit test.
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test/%STAGE%', STAGE: 'test' },
 }));
 

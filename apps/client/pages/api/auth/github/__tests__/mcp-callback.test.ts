@@ -6,7 +6,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ get: (fn: any) => fn }),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 vi.mock('@bike4mind/database', () => ({
   mcpServerRepository: { findOne: vi.fn(), update: vi.fn(), create: vi.fn() },

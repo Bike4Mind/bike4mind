@@ -9,14 +9,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockConsent, mockUserUpdate } = vi.hoisted(() => ({ mockConsent: vi.fn(), mockUserUpdate: vi.fn() }));
 vi.mock('@client/app/utils/consentRegion', () => ({ resolveConsent: mockConsent }));
 vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: vi.fn() }));
-vi.mock('@server/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue('') },
   userRepository: { update: mockUserUpdate },
   User: { updateOne: vi.fn() },
 }));
 
-import { APP_DECISION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { captureUtmParams, clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 import { recordSignupAcquisition } from './funnel';
 

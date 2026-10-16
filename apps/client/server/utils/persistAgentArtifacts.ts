@@ -20,7 +20,7 @@
 import type { ArtifactType } from '@bike4mind/common';
 import type { artifactService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
 // callers use). Only this one exports `generateCompleteArtifactId`, and its exact
 // `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what
@@ -41,7 +41,7 @@ import {
 // `resolveArtifactsEnabled`, so the dynamic imports below no longer keep that barrel off this path.
 // They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
 // nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
-import { resolveAgentArtifactGate } from './artifactGate';
+import { resolveAgentArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
 import { createLazyArtifactSourceRefsGuard } from './artifactSourceRefsGuards';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */

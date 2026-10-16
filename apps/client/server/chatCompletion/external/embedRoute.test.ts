@@ -78,7 +78,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({})),
   getGeneratedImageStorage: vi.fn(() => ({})),
 }));
@@ -139,7 +139,7 @@ vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLim
 const mockHydrate = vi.hoisted(() => vi.fn());
 vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));

@@ -7,12 +7,12 @@ import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {

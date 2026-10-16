@@ -123,11 +123,11 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 vi.mock('@server/utils/embedSessionRateLimit', () => ({
   checkEmbedSessionRateLimit: vi.fn(async () => ({ allowed: true })),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({})),
   getGeneratedImageStorage: vi.fn(() => ({})),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' } }));
 
 // Test helpers are not exported from the package barrel / dist; deep-import the source.
 import {

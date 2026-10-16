@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findOne: h.findOne, update: h.update } }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }) }));
 // Keep the rest of common (IAgent, etc.); only force the serveability gate true so the test
 // exercises the access/owner gate, not isImageServeable's internals.
 vi.mock('@bike4mind/common', async importOriginal => {

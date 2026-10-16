@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { trustedDeviceRepository } from '@bike4mind/database';
 import { clearTrustedDeviceCookie, identifyTrustedDevice } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Revoke one "remember this device" grant. The repository scopes the delete to

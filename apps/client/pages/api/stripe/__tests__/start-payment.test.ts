@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
@@ -63,7 +63,7 @@ vi.mock('@client/lib/credits/utils', () => ({
   handlePackageTransaction: (...args: unknown[]) => mockHandlePackage(...args),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', STRIPE_PUBLISHABLE_KEY: 'pk_test_123' },
 }));
 

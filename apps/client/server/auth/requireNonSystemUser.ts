@@ -1,5 +1,5 @@
 import { IUser } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Throws ForbiddenError if the user is a system account.

@@ -26,7 +26,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes, grantingLakes }));
 vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2') }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2') }));
 
 import { loadAccessibleFabFile } from './loadAccessibleFabFile';
 

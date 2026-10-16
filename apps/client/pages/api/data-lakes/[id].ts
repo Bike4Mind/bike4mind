@@ -20,7 +20,7 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 

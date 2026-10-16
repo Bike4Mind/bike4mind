@@ -34,7 +34,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: storageDelete }),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({

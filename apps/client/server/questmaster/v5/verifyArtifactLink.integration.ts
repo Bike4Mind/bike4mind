@@ -18,7 +18,7 @@
  */
 
 import { connectDB, Artifact, QuestGraph, QuestNode, questNodeRepository } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { linkNodeArtifacts } from './linkNodeArtifacts';
 import type { NodeRunSummary } from './reconcileQuestNodes';
 import mongoose from 'mongoose';

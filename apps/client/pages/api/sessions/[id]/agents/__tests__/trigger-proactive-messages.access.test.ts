@@ -41,8 +41,8 @@ vi.mock('@bike4mind/database', () => ({
   sessionAgentConfigRepository: { findBySessionId: (...args: unknown[]) => mockRefs.findBySessionId(...args) },
 }));
 
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args) }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args) }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
 
 // Import after mocks so the chain captures the handler; exercises the real assertSessionAccess.
 import '../trigger-proactive-messages';

@@ -64,7 +64,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/config', () => ({ isE2EEnabled: () => true }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => true }));
 vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: { value: 'right-secret' } } }));
 
 let mongod: MongoMemoryServer;

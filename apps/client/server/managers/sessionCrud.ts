@@ -11,8 +11,8 @@ import {
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
-import { NotFoundError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   Permission,
   ISessionDocument,

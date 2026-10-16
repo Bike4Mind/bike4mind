@@ -58,7 +58,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
 }));
 vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));
 vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
 import {
   dispatch,

@@ -18,7 +18,7 @@ vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: vi.fn(async () => []),
   isFileInAccessibleLake: vi.fn(),
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2') }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2') }));
 
 let handler: (req: unknown, res: unknown) => Promise<void>;
 

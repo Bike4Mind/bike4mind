@@ -11,7 +11,7 @@ import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';

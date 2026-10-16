@@ -5,8 +5,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
-import { ForbiddenError } from '@server/utils/errors';
+import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 

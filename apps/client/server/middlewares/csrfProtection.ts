@@ -1,5 +1,5 @@
 import { RequestHandler } from 'express';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { isLocalAppUrl } from '@server/utils/validators';
 

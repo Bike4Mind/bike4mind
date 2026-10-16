@@ -51,7 +51,7 @@ vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
 vi.mock('@server/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: h.assertAccountStateUsable,
 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 

@@ -10,8 +10,8 @@ import {
   isEligibleForFreeCredits,
   releaseVerifiedPendingFreeCredits,
 } from '@server/auth/emailVerifiedGrants';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { ForbiddenError } from '@server/utils/errors';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';

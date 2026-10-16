@@ -29,7 +29,7 @@ import {
 } from '@bike4mind/server-utils/integrations/github/types';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';
-import { emitWebhookDeliveryMetric, WebhookMetrics } from '@server/utils/cloudwatch';
+import { emitWebhookDeliveryMetric, WebhookMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 /**

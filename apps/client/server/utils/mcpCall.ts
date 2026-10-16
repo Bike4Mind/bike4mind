@@ -1,6 +1,6 @@
 import { MCPClient } from '@bike4mind/mcp';
 import { Resource } from 'sst';
-import { resolveMcpTenantKey } from './mcpTenantKey';
+import { resolveMcpTenantKey } from '@bike4mind/server-utils/utils/mcpTenantKey';
 
 const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
   return Promise.race([

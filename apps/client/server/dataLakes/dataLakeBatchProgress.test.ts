@@ -37,11 +37,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { recomputeLakeStats: h.recomputeLakeStats, recordLakeUploadBatch: h.recordLakeUploadBatch },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordBatchCompletion: (...a: unknown[]) => h.recordBatchCompletion(...a),
   recordTaxonomyDailyCapExceeded: (...a: unknown[]) => h.recordTaxonomyDailyCapExceeded(...a),
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('sst', () => ({
   Resource: {

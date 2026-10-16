@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE } from '@bike4mind/database';
 import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin surface over the versioned model price catalog. Prices here are

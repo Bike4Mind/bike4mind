@@ -64,7 +64,7 @@ vi.mock('@bike4mind/observability', () => {
     }),
   };
 });
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' } }));
 vi.mock('sst', () => ({
   Resource: {
     App: { stage: 'dev' },
@@ -76,7 +76,7 @@ vi.mock('sst', () => ({
     },
   },
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@workers/s3/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
 }));
@@ -89,7 +89,7 @@ vi.mock('@workers/s3/chunkScan', async importActual => ({
   ...(await importActual<typeof import('@workers/s3/chunkScan')>()),
   buildStrandedVectorizeScanFilter: (...a: unknown[]) => h.buildStrandedFilter(...(a as [Date, Date])),
 }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
   recordStuckBatchGauge: (...a: unknown[]) => h.recordGauge(...a),
   recordReconcileRun: (...a: unknown[]) => h.recordRun(...a),

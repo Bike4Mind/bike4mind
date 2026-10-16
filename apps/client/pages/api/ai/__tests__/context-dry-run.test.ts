@@ -44,7 +44,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getFileContent: (...a: unknown[]) => mockGetFileContent(...a),
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://x') }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://x') }) }));
 
 // Captures the options so the scope gate is asserted rather than silently stripped by the mock.
 const baseApiOptions: unknown[] = [];

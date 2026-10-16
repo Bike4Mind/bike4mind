@@ -31,8 +31,8 @@ import {
   ForbiddenError,
   HTTPError,
   NotFoundError,
-} from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+} from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
