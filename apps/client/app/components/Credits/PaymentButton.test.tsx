@@ -143,3 +143,51 @@ describe('PaymentButton funnel events', () => {
     expect(loggedTypes()).not.toContain(CreditPurchaseEvents.PAYMENT_FORM_OPENED);
   });
 });
+
+describe('PaymentButton start-payment requests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('posts start-payment once per click even when the parent re-renders while it is pending', async () => {
+    let resolveStart: (value: unknown) => void = () => {};
+    apiPost.mockReturnValue(new Promise(resolve => (resolveStart = resolve)));
+    const ui = () => (
+      <TestWrapper>
+        <PaymentButton transactionType={TransactionType.Package} packageId={CreditPackageId.A} onPayment={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(ui());
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    // Each rerender hands PaymentButton a fresh props object, which used to re-run the start effect.
+    rerender(ui());
+    rerender(ui());
+    rerender(ui());
+    expect(apiPost).toHaveBeenCalledTimes(1);
+
+    resolveStart({ data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' } });
+    await screen.findByTestId('payment-modal-confirm-btn');
+    rerender(ui());
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(logEvent).toHaveBeenCalledWith({
+      type: CreditPurchaseEvents.PAYMENT_FORM_OPENED,
+      metadata: { paymentIntentId: 'pi_1' },
+    });
+  });
+
+  it('starts a fresh request on the next click after the form is closed', async () => {
+    apiPost.mockResolvedValue({
+      data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' },
+    });
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await userEvent.click(await screen.findByTestId('payment-modal-close-btn'));
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    await screen.findByTestId('payment-modal-confirm-btn');
+
+    expect(apiPost).toHaveBeenCalledTimes(2);
+  });
+});

@@ -42,6 +42,16 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
   const pricePerCredit = useGetSettingsValue('pricePerCredit');
   const hasPricePerCredit = typeof pricePerCredit === 'number';
   const isPricePerCreditSettingRequired = rest.transactionType === TransactionType.PerCredit && !hasPricePerCredit;
+  // `rest` is a new object every render, so the start effect keys on these primitives and rebuilds
+  // the payload from them; depending on `rest` re-ran it on any re-render (the CHECKOUT_REQUESTED
+  // mutation causes several) and posted start-payment once per pass.
+  const { transactionType } = rest;
+  const packageId = rest.transactionType === TransactionType.Package ? rest.packageId : undefined;
+  const perCredits = rest.transactionType === TransactionType.PerCredit ? rest.credits : undefined;
+  // One request per Buy click: `inFlightRef` blocks re-entry while a start is pending, and a response
+  // whose attempt id is no longer current (the form was closed, or a later attempt began) is ignored.
+  const inFlightRef = useRef(false);
+  const attemptRef = useRef(0);
 
   const productName = useMemo(() => {
     switch (rest.transactionType) {
@@ -95,6 +105,8 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
     }
     paymentIntentIdRef.current = null;
     lastOutcomeRef.current = undefined;
+    attemptRef.current += 1;
+    inFlightRef.current = false;
     setWantOpen(false);
     setOpen(false);
     setStripePromise(null);
@@ -104,10 +116,19 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
   // On button open, start the payment process by fetching the client secret
   useEffect(() => {
     if (wantOpen && !open) {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      const attempt = ++attemptRef.current;
+      const payload: PaymentPayload =
+        transactionType === TransactionType.Package
+          ? { transactionType, packageId: packageId as NonNullable<typeof packageId> }
+          : { transactionType, credits: perCredits as number };
       // Collect PaymentIntent.clientSecret from the backend
       api
-        .post('/api/stripe/start-payment', rest, { withCredentials: true })
+        .post('/api/stripe/start-payment', payload, { withCredentials: true })
         .then(response => {
+          if (attempt !== attemptRef.current) return;
+          inFlightRef.current = false;
           if (response.data.publishableKey && !stripePromise) {
             setStripePromise(loadStripe(response.data.publishableKey));
           }
@@ -125,11 +146,13 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
           }
         })
         .catch(error => {
+          if (attempt !== attemptRef.current) return;
+          inFlightRef.current = false;
           console.error('Failed to start payment', error);
           logEvent({
             type: CreditPurchaseEvents.CHECKOUT_START_FAILED,
             metadata: {
-              transactionType: rest.transactionType,
+              transactionType: payload.transactionType,
               ...(isAxiosError(error) && error.response && { httpStatus: error.response.status }),
             },
           });
@@ -141,7 +164,8 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
       setClientSecret(null);
       setOpen(false);
     }
-  }, [wantOpen, open, rest, stripePromise, logEvent]);
+    // packageId/perCredits are deliberate deps: a changed purchase is a new checkout once idle.
+  }, [wantOpen, open, transactionType, packageId, perCredits, stripePromise, logEvent]);
 
   if (isPricePerCreditSettingRequired) {
     return <>Missing pricePerCredit Admin Setting!</>;
