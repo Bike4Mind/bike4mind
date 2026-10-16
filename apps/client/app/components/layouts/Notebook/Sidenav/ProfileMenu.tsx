@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
-import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Typography } from '@mui/joy';
+import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Tooltip, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -462,16 +462,26 @@ const ProfileMenu = () => {
               navigateFromMenu('/skills', () => navigate({ to: '/skills' }));
             }}
           />
-          <MenuRow
-            testId="profile-menu-integrations"
-            icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
-            label={t('integrations.title', 'Integrations')}
-            onClick={() => {
-              navigateFromMenu('/integrations', () =>
-                navigate({ to: '/integrations', search: { source: 'profile_menu' } })
-              );
-            }}
-          />
+          <Tooltip
+            placement="right"
+            title={t(
+              'connections.menuTooltip',
+              'Integrations like Google Drive and Slack, plus API keys for your own code'
+            )}
+          >
+            <Box>
+              <MenuRow
+                testId="profile-menu-connections"
+                icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
+                label={t('connections.title', 'Connections')}
+                onClick={() => {
+                  navigateFromMenu('/integrations', () =>
+                    navigate({ to: '/integrations', search: { source: 'profile_menu' } })
+                  );
+                }}
+              />
+            </Box>
+          </Tooltip>
           <MenuRow
             testId="profile-menu-feedback-rollup"
             icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
@@ -482,14 +492,6 @@ const ProfileMenu = () => {
               navigateFromMenu('/feedback/rollup', () =>
                 navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() })
               );
-            }}
-          />
-          <MenuRow
-            testId="profile-menu-api-keys"
-            icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
-            label={t('apiKeys.title', 'API Keys')}
-            onClick={() => {
-              navigateFromMenu('/profile', () => navigate({ to: '/profile', search: { tab: 'api-keys' } }));
             }}
           />
           <MenuRow
@@ -729,6 +731,16 @@ const ProfileMenu = () => {
                     }}
                   />
                 ))}
+                <MenuRow
+                  testId="profile-more-api-keys"
+                  icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
+                  label={t('apiKeys.title', 'API Keys')}
+                  onClick={() => {
+                    navigateFromMenu('/integrations', () =>
+                      navigate({ to: '/integrations', search: { tab: 'api-keys', source: 'profile_menu' } })
+                    );
+                  }}
+                />
                 <MenuRow
                   testId="profile-more-api-docs"
                   icon={<ApiIcon sx={{ fontSize: '18px' }} />}
