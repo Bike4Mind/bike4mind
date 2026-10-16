@@ -22,6 +22,13 @@ const FLUSH_CHARS = 256 * 1024;
  */
 export const REPLAY_CHARS = 512 * 1024;
 
+/**
+ * Output below this is appended to the previous replay chunk rather than kept as its own: a shell
+ * echoing keystrokes or a spinner writes a few bytes at a time, and trimming a buffer of
+ * thousands of tiny chunks would shift the whole array on every write (chars).
+ */
+const REPLAY_COALESCE_CHARS = 4 * 1024;
+
 /** Between hanging up on the shells at quit and killing what ignored it (ms). */
 const SHUTDOWN_GRACE_MS = 2_000;
 
@@ -85,6 +92,8 @@ interface Live {
   size: { cols: number; rows: number };
   exited: Promise<void>;
   markExited: () => void;
+  /** Bumped by every `end`; a start that sees it change while it awaited does not spawn. */
+  epoch: number;
 }
 
 /**
@@ -148,6 +157,10 @@ async function isDirectory(path: string): Promise<boolean> {
  */
 export class TerminalManager {
   private readonly terminals = new Map<string, Live>();
+  /** Creates still awaiting their spawn, per session, so overlapping ones respect the cap. */
+  private readonly starting = new Map<string, number>();
+  /** Bumped per session by `killSession`, so a create in flight knows its session went. */
+  private readonly sessionEpochs = new Map<string, number>();
   private spawnFn: PtySpawn | null = null;
 
   constructor(private readonly deps: TerminalManagerDeps) {}
@@ -157,9 +170,11 @@ export class TerminalManager {
   }
 
   async create(sessionId: string, cols: unknown, rows: unknown): Promise<TerminalCreateResult> {
-    if (this.list(sessionId).length >= MAX_TERMINALS_PER_SESSION) {
+    const inFlight = this.starting.get(sessionId) ?? 0;
+    if (this.list(sessionId).length + inFlight >= MAX_TERMINALS_PER_SESSION) {
       return { ok: false, error: `A conversation can have at most ${MAX_TERMINALS_PER_SESSION} terminals open.` };
     }
+    const sessionEpoch = this.sessionEpochs.get(sessionId) ?? 0;
     const size = { cols: dimension(cols, 80), rows: dimension(rows, 24) };
     const id = randomUUID();
     const live: Live = {
@@ -175,11 +190,21 @@ export class TerminalManager {
       size,
       exited: Promise.resolve(),
       markExited: () => undefined,
+      epoch: 0,
     };
+    this.starting.set(sessionId, inFlight + 1);
     try {
       await this.start(live);
     } catch (err) {
       return { ok: false, error: `Could not start a shell: ${err instanceof Error ? err.message : String(err)}` };
+    } finally {
+      const left = (this.starting.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.starting.set(sessionId, left);
+      else this.starting.delete(sessionId);
+    }
+    if ((this.sessionEpochs.get(sessionId) ?? 0) !== sessionEpoch) {
+      this.end(live);
+      return { ok: false, error: 'The conversation was closed.' };
     }
     this.terminals.set(id, live);
     this.announce(sessionId);
@@ -240,12 +265,17 @@ export class TerminalManager {
     live.trimmed = false;
     live.pending = '';
     live.info = { ...live.info, generation: live.info.generation + 1, exit: null };
+    const epoch = live.epoch;
     try {
       await this.start(live);
     } catch (err) {
-      live.info = { ...live.info, exit: { code: -1, signal: null } };
-      this.record(live, `\r\nCould not start a shell: ${err instanceof Error ? err.message : String(err)}\r\n`);
+      if (live.epoch === epoch) {
+        live.info = { ...live.info, exit: { code: -1, signal: null } };
+        this.record(live, `\r\nCould not start a shell: ${err instanceof Error ? err.message : String(err)}\r\n`);
+      }
     }
+    // Closed meanwhile: its start stood down, and there is no tab left to announce.
+    if (!this.terminals.has(terminalId)) return null;
     this.announce(live.info.sessionId);
     return live.info;
   }
@@ -260,6 +290,7 @@ export class TerminalManager {
 
   /** Every terminal of a conversation that was archived or deleted. */
   killSession(sessionId: string): void {
+    this.sessionEpochs.set(sessionId, (this.sessionEpochs.get(sessionId) ?? 0) + 1);
     const owned = [...this.terminals.values()].filter(live => live.info.sessionId === sessionId);
     if (owned.length === 0) return;
     for (const live of owned) {
@@ -296,7 +327,9 @@ export class TerminalManager {
     for (const live of this.terminals.values()) if (live.pty) this.signal(live, 'SIGHUP');
   }
 
+  /** Throws when superseded: `end` ran (a restart, a close) while this was awaiting. */
   private async start(live: Live): Promise<void> {
+    const epoch = live.epoch;
     this.spawnFn ??= await this.deps.loadSpawn();
     const wanted = await this.deps.workingDirectory(live.info.sessionId);
     // A worktree removed since, or a folder unmounted: the shell still opens, at home.
@@ -304,6 +337,7 @@ export class TerminalManager {
     const env = terminalEnv(this.deps.baseEnv, await this.deps.userPath(), this.deps.locale);
     // A Finder launch has no SHELL, and tools run from the terminal read it to pick a shell.
     if (this.deps.platform !== 'win32') env.SHELL ||= this.deps.shell.file;
+    if (live.epoch !== epoch) throw new Error('superseded');
     const pty = this.spawnFn(this.deps.shell.file, this.deps.shell.args, {
       name: 'xterm-256color',
       cols: live.size.cols,
@@ -329,7 +363,9 @@ export class TerminalManager {
   }
 
   private record(live: Live, data: string): void {
-    live.replay.push(data);
+    const last = live.replay.length - 1;
+    if (last >= 0 && live.replay[last].length < REPLAY_COALESCE_CHARS) live.replay[last] += data;
+    else live.replay.push(data);
     live.replayChars += data.length;
     while (live.replayChars > REPLAY_CHARS && live.replay.length > 1) {
       live.replayChars -= live.replay.shift()!.length;
@@ -372,6 +408,7 @@ export class TerminalManager {
     live.pty = null;
     this.dispose(live);
     if (pty) this.signalPty(pty, 'SIGHUP');
+    live.epoch++;
     live.markExited();
   }
 

@@ -185,49 +185,50 @@ export function TerminalPanel({
         }
       />
       <Box
-        sx={{ position: 'relative', flex: 1, minHeight: 0, bgcolor: 'background.surface' }}
+        sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, bgcolor: 'background.surface' }}
         data-testid="terminal-panel-body"
       >
-        {active ? (
-          <Suspense fallback={null}>
-            <TerminalView
-              key={`${active.id}:${active.generation}`}
-              terminalId={active.id}
-              focusKey={focusRequest + localFocus}
-              onOpenLink={onOpenLink}
-            />
-          </Suspense>
-        ) : (
-          <Stack spacing={1} alignItems="center" justifyContent="center" sx={{ height: '100%', px: 3 }}>
-            <Typography
-              level="body-sm"
-              textColor={error ? 'danger.plainColor' : 'text.tertiary'}
-              data-testid="terminal-panel-status"
-            >
-              {error ?? 'Starting a shell...'}
-            </Typography>
-            {error && (
-              <Button
-                size="sm"
-                variant="soft"
-                onClick={() => void newTerminal()}
-                data-testid="terminal-panel-retry-btn"
+        {/* The exit bar is BELOW the screen rather than over it, so the screen refits around it
+            and the shell's last lines - usually why it exited - stay readable. */}
+        <Box sx={{ position: 'relative', flex: 1, minHeight: 0 }}>
+          {active ? (
+            <Suspense fallback={null}>
+              <TerminalView
+                key={`${active.id}:${active.generation}`}
+                terminalId={active.id}
+                focusKey={focusRequest + localFocus}
+                onOpenLink={onOpenLink}
+              />
+            </Suspense>
+          ) : (
+            <Stack spacing={1} alignItems="center" justifyContent="center" sx={{ height: '100%', px: 3 }}>
+              <Typography
+                level="body-sm"
+                textColor={error ? 'danger.plainColor' : 'text.tertiary'}
+                data-testid="terminal-panel-status"
               >
-                Try again
-              </Button>
-            )}
-          </Stack>
-        )}
+                {error ?? 'Starting a shell...'}
+              </Typography>
+              {error && (
+                <Button
+                  size="sm"
+                  variant="soft"
+                  onClick={() => void newTerminal()}
+                  data-testid="terminal-panel-retry-btn"
+                >
+                  Try again
+                </Button>
+              )}
+            </Stack>
+          )}
+        </Box>
         {active?.exit && (
           <Stack
             direction="row"
             spacing={1}
             alignItems="center"
             sx={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
+              flexShrink: 0,
               px: 1.5,
               py: 0.75,
               borderTop: '1px solid',

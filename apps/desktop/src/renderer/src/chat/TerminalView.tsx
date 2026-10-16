@@ -50,7 +50,6 @@ export default function TerminalView({
       fontSize: 12,
       lineHeight: 1.2,
       cursorBlink: true,
-      macOptionIsMeta: true,
       theme: xtermTheme(element, initialMode.current),
     });
     const fit = new FitAddon();

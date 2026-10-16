@@ -343,6 +343,77 @@ describe('lifecycle', () => {
   });
 });
 
+describe('races with a start in flight', () => {
+  /** A login-PATH lookup held open, so a start is parked between its checks and its spawn. */
+  function heldPath() {
+    const waiting: (() => void)[] = [];
+    let released = false;
+    return {
+      userPath: () =>
+        released ? Promise.resolve('/bin') : new Promise<string>(resolve => waiting.push(() => resolve('/bin'))),
+      release: async () => {
+        released = true;
+        for (const resolve of waiting.splice(0)) resolve();
+        await new Promise(resolve => setTimeout(resolve, 0));
+      },
+    };
+  }
+
+  const running = () => ptys.filter(pty => pty.signals.length === 0);
+
+  it('does not leave a shell behind for a session closed while it was starting', async () => {
+    const path = heldPath();
+    const terminals = manager({ userPath: path.userPath });
+    const created = terminals.create('s1', 80, 24);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    terminals.killSession('s1');
+    await path.release();
+    expect((await created).ok).toBe(false);
+    expect(terminals.list('s1')).toEqual([]);
+    expect(running()).toEqual([]);
+  });
+
+  it('keeps one shell when restart is pressed twice before the first one starts', async () => {
+    const terminals = manager();
+    const { info } = await open(terminals);
+    const path = heldPath();
+    // Swap in the held lookup for the restarts only.
+    (terminals as unknown as { deps: { userPath: () => Promise<string> } }).deps.userPath = path.userPath;
+    const first = terminals.restart(info.id);
+    const second = terminals.restart(info.id);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await path.release();
+    await Promise.all([first, second]);
+    expect(running()).toHaveLength(1);
+    expect(terminals.list('s1')[0].exit).toBeNull();
+  });
+
+  it('does not start a shell for a tab closed while it was restarting', async () => {
+    const terminals = manager();
+    const { info } = await open(terminals);
+    const path = heldPath();
+    (terminals as unknown as { deps: { userPath: () => Promise<string> } }).deps.userPath = path.userPath;
+    const restarting = terminals.restart(info.id);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    terminals.close(info.id);
+    await path.release();
+    await restarting;
+    expect(running()).toEqual([]);
+    expect(terminals.list('s1')).toEqual([]);
+  });
+
+  it('holds the per-session cap against creates that overlap', async () => {
+    const path = heldPath();
+    const terminals = manager({ userPath: path.userPath });
+    const all = Array.from({ length: MAX_TERMINALS_PER_SESSION + 2 }, () => terminals.create('s1', 80, 24));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await path.release();
+    const results = await Promise.all(all);
+    expect(results.filter(result => result.ok)).toHaveLength(MAX_TERMINALS_PER_SESSION);
+    expect(running()).toHaveLength(MAX_TERMINALS_PER_SESSION);
+  });
+});
+
 describe('defaults', () => {
   it('uses $SHELL as a login shell, then the account shell, then zsh', () => {
     expect(defaultShell('darwin', { SHELL: '/opt/fish' }, '/bin/bash')).toEqual({ file: '/opt/fish', args: ['-l'] });
