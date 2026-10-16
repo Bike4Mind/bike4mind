@@ -102,6 +102,7 @@ describe('POST /api/transforms/batch metering', () => {
       expect.objectContaining({
         creditHold: m.hold,
         apiKeyId: 'k1',
+        usageSource: 'api',
         customIdMap: [
           { customId: 'req_0', clientRef: 'a', model: 'claude-opus-4-6' },
           { customId: 'req_1', clientRef: 'b', model: 'claude-opus-4-6' },
@@ -118,10 +119,18 @@ describe('POST /api/transforms/batch metering', () => {
     expect(m.create).not.toHaveBeenCalled();
   });
 
-  it('400s duplicate client_refs before reserving or submitting', async () => {
-    await expect(submit([item('a'), item('a')])).rejects.toMatchObject({ statusCode: 400 });
-    expect(m.reserve).not.toHaveBeenCalled();
-    expect(m.submitBatch).not.toHaveBeenCalled();
+  it('accepts duplicate client_refs and persists each under its own customId', async () => {
+    const res = await submit([item('a'), item('a')]);
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(m.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customIdMap: [
+          { customId: 'req_0', clientRef: 'a', model: 'claude-opus-4-6' },
+          { customId: 'req_1', clientRef: 'a', model: 'claude-opus-4-6' },
+        ],
+      })
+    );
   });
 
   it('refunds the hold when persisting the batch fails after a successful submit', async () => {

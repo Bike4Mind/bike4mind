@@ -34,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { findByAnthropicBatchId: async () => m.batch, claimCompletion: m.claim },
 }));
 const usage = (input: number, output: number) => ({ inputTokens: input, outputTokens: output });
+const batchResults = vi.hoisted(() => ({ items: [] as Record<string, unknown>[] }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: m.catalog,
   AnthropicBatchService: {
@@ -41,11 +42,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
       getBatchResults: async () => ({
         processingStatus: 'ended',
         counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
-        results: [
-          { clientRef: 'a', status: 'done', reply: 'x', tokenUsage: usage(100, 50) },
-          { clientRef: 'b', status: 'done', reply: 'y', tokenUsage: usage(10, 5) },
-          { clientRef: 'c', status: 'failed', error: 'overloaded', tokenUsage: usage(999, 999) },
-        ],
+        results: batchResults.items,
       }),
     }),
   },
@@ -64,12 +61,18 @@ async function poll() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  batchResults.items = [
+    { customId: 'req_0', clientRef: 'a', status: 'done', reply: 'x', tokenUsage: usage(100, 50) },
+    { customId: 'req_1', clientRef: 'b', status: 'done', reply: 'y', tokenUsage: usage(10, 5) },
+    { customId: 'req_2', clientRef: 'c', status: 'failed', error: 'overloaded', tokenUsage: usage(999, 999) },
+  ];
   m.catalog.mockResolvedValue([{ id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } }]);
   m.batch = {
     id: 'row1',
     ownerUserId: 'u1',
     status: 'in_progress',
     apiKeyId: 'k1',
+    usageSource: 'api',
     creditHold: hold,
     customIdMap: ['a', 'b', 'c'].map((ref, i) => ({ customId: `req_${i}`, clientRef: ref, model: 'm1' })),
   };
@@ -96,6 +99,49 @@ describe('GET /api/transforms/batch/:id settlement', () => {
         outputTokens: 55,
       },
       expect.objectContaining({ featureLabel: 'batch transforms' })
+    );
+  });
+
+  it('prices items sharing a client_ref by their own customId model', async () => {
+    m.catalog.mockResolvedValue([
+      { id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } },
+      { id: 'm2', pricing: { 200_000: { input: 4e-3, output: 8e-3 } } },
+    ]);
+    batchResults.items = [
+      { customId: 'req_0', clientRef: 'dup', status: 'done', reply: 'x', tokenUsage: usage(100, 50) },
+      { customId: 'req_1', clientRef: 'dup', status: 'done', reply: 'y', tokenUsage: usage(10, 5) },
+    ];
+    m.batch = {
+      ...m.batch,
+      customIdMap: [
+        { customId: 'req_0', clientRef: 'dup', model: 'm1' },
+        { customId: 'req_1', clientRef: 'dup', model: 'm2' },
+      ],
+    };
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    // m1: 100 * 1e-3 + 50 * 2e-3 = $0.2; m2: 10 * 4e-3 + 5 * 8e-3 = $0.08.
+    expect(m.settle).toHaveBeenCalledWith(
+      hold,
+      280,
+      expect.objectContaining({ model: 'm1,m2', inputTokens: 110, outputTokens: 55 }),
+      expect.anything()
+    );
+  });
+
+  it('keeps the source stored at submit when a JWT user polls an API-key batch', async () => {
+    m.batch = { ...m.batch, usageSource: 'cli' };
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    expect(m.settle).toHaveBeenCalledWith(
+      hold,
+      expect.any(Number),
+      expect.objectContaining({ source: 'cli' }),
+      expect.anything()
     );
   });
 

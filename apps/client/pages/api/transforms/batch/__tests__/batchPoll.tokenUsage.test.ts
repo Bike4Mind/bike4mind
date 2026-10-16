@@ -56,6 +56,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
         counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
         results: [
           {
+            customId: 'req_0',
             clientRef: 'art-1',
             status: 'done',
             reply: '{}',

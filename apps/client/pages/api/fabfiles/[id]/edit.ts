@@ -311,6 +311,8 @@ Return only the edited content without any markdown code blocks or explanations.
 
         // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
         const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+        if (!reported)
+          req.logger.warn(`[Edit API] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
         await settleCompletion(reservation, req, {
           model: modelInfo.id,
           provider: modelInfo.backend,

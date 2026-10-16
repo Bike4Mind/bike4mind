@@ -123,7 +123,7 @@ export async function settleCompletion(
     sessionId: requestId,
     model: charge.model,
     apiKeyId: req.apiKeyInfo?.keyId,
-    // Web JWT calls keep the ledger default; resolveRequestUsageSource would label them 'api'.
+    // Web JWT calls keep the ledger's 'web' default; resolveRequestUsageSource would label them 'api'.
     source,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,

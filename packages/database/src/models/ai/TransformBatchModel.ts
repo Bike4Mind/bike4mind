@@ -40,6 +40,7 @@ const TransformBatchSchema = new Schema<ITransformBatch, ITransformBatchModel, I
     results: { type: Schema.Types.Mixed, required: false },
     creditHold: { type: Schema.Types.Mixed, default: null },
     apiKeyId: { type: String },
+    usageSource: { type: String },
   },
   {
     timestamps: true,

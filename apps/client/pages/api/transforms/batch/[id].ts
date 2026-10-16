@@ -5,7 +5,6 @@ import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getTextModelCost } from '@bike4mind/common';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).
@@ -82,29 +81,29 @@ const handler = baseApi().get(async (req, res) => {
   });
   if (claimed?.creditHold) {
     // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
-    const modelByRef = new Map(claimed.customIdMap.map(m => [m.clientRef, m.model]));
+    const modelByCustomId = new Map(claimed.customIdMap.map(m => [m.customId, m.model]));
     let usd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     const models = new Set<string>();
-    for (const r of results) {
-      const modelInfo = catalog.find(m => m.id === modelByRef.get(r.client_ref));
+    for (const r of status.results ?? []) {
+      const modelInfo = catalog.find(m => m.id === modelByCustomId.get(r.customId));
       if (r.status === 'done' && r.tokenUsage && !modelInfo) {
         req.logger.error(
-          `[transforms/batch] Unbilled item in batch ${anthropicBatchId}: model ${modelByRef.get(r.client_ref)} missing from catalog`
+          `[transforms/batch] Unbilled item in batch ${anthropicBatchId}: model ${modelByCustomId.get(r.customId)} missing from catalog`
         );
       }
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += getTextModelCost(
         modelInfo,
-        u.actualInputTokens,
-        u.actualOutputTokens,
+        u.inputTokens,
+        u.outputTokens,
         u.cacheReadInputTokens ?? 0,
         u.cacheCreationInputTokens ?? 0
       );
-      inputTokens += u.actualInputTokens;
-      outputTokens += u.actualOutputTokens;
+      inputTokens += u.inputTokens;
+      outputTokens += u.outputTokens;
       models.add(modelInfo.id);
     }
     await settleHeldCredits(
@@ -115,7 +114,7 @@ const handler = baseApi().get(async (req, res) => {
         sessionId: anthropicBatchId,
         model: [...models].join(',') || 'unknown',
         apiKeyId: claimed.apiKeyId,
-        source: resolveRequestUsageSource(req),
+        source: claimed.usageSource,
         inputTokens,
         outputTokens,
       },

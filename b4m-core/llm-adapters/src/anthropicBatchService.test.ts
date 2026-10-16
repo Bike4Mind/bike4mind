@@ -136,6 +136,7 @@ describe('AnthropicBatchService', () => {
       const byRef = Object.fromEntries((out.results ?? []).map(r => [r.clientRef, r]));
 
       expect(byRef['article-A']).toEqual({
+        customId: 'req_0',
         clientRef: 'article-A',
         status: 'done',
         reply: 'Hello world',
