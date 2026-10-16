@@ -63,11 +63,14 @@ export async function cleanupConfluencePageContent(
     return;
   }
 
+  // A page whose whole body was the macro would otherwise be written empty, which Confluence rejects.
+  const content = cleanedContent.trim() === '' ? '<p></p>' : cleanedContent;
+
   // expectedVersion makes Confluence reject the write if the page was edited since the read above.
   await confluence.updatePage({
     pageId,
     title: page.title,
-    content: cleanedContent,
+    content,
     expectedVersion: page.version,
   });
 

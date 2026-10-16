@@ -59,6 +59,19 @@ describe('cleanupConfluencePageContent', () => {
 
     expect(confluenceApi.updatePage).not.toHaveBeenCalled();
   });
+
+  it('writes an empty paragraph when the macro was the whole page body', async () => {
+    confluenceApi.getPageStorage.mockResolvedValue({ title: 'Page', version: 3, storage: IMAGE_MACRO });
+
+    await cleanupConfluencePageContent(env, '123', 'pic.png', logger);
+
+    expect(confluenceApi.updatePage).toHaveBeenCalledWith({
+      pageId: '123',
+      title: 'Page',
+      content: '<p></p>',
+      expectedVersion: 3,
+    });
+  });
 });
 
 describe('removeAttachmentMacros', () => {
