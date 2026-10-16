@@ -32,16 +32,18 @@ export interface LakeOrderScope {
   key: string;
   datalakeTag?: string;
   /**
-   * Content-tag prefix arm, for a lake reached by prefix alone (a dynamic lake's membership arm, or
-   * a registry prefix no resolved lake owns) - see attributeAccessedLakes, which reverses
-   * attribution the same two ways. Tested in scope order alongside the meta-tag arms.
+   * Content-tag prefix arm for files carrying the prefix with no meta-tag of this lake: a dynamic
+   * lake's membership arm, or a registry prefix no resolved lake owns. A scope built from a
+   * membership with both `datalakeTag` and `fileTagPrefix` carries both (see `lakeOrderScopes`).
+   * Tested in scope order alongside the meta-tag arms; see attributeAccessedLakes for the reverse.
    */
   fileTagPrefix?: string;
   /**
    * A registry lake's open prefix, paired onto the scope that carries its `datalakeTag` (see
    * `lakeOrderScopes`) so its prefix-only files share the meta-tagged files' bucket. Tested only
-   * after every other arm of every scope, matching where the unpaired open prefix always ranked:
-   * a file also meta-tagged into another lake stays charged to that lake.
+   * after every other arm of every scope, so a file also meta-tagged into another lake stays
+   * charged to that lake. Among registry prefixes, scope order decides (the caller's `dataLakeTags`
+   * order, not `dataLakeTagPrefixes` order).
    */
   registryPrefix?: string;
 }
@@ -56,9 +58,9 @@ export interface LakeOrderScopeSources {
   dataLakeTagPrefixes: string[];
   lakeMemberships: { datalakeTag?: string | null; fileTagPrefix?: string | null }[];
   /**
-   * The resolved lakes, used only to pair an open registry prefix with its lake's meta-tag. A
-   * registry lake reaches the caller as a tag in `dataLakeTags` AND a prefix in
-   * `dataLakeTagPrefixes`; without the pairing those are two buckets and one lake draws two shares.
+   * The resolved lakes, used only to pair an open registry prefix with its lake's meta-tag (see
+   * `semanticDataLakeSearch.ts` `lakes` for the rationale). A prefix carried by more than one lake
+   * is ambiguous and stays unpaired.
    */
   lakes?: { datalakeTag: string; fileTagPrefix?: string }[];
 }
@@ -92,7 +94,8 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
     upsert(key, { datalakeTag, fileTagPrefix });
   }
   for (const prefix of sources.dataLakeTagPrefixes) {
-    const lake = sources.lakes?.find(l => l.fileTagPrefix === prefix);
+    const owners = sources.lakes?.filter(l => l.fileTagPrefix === prefix) ?? [];
+    const lake = owners.length === 1 ? owners[0] : undefined;
     // Paired: key on the lake's meta-tag so it merges with its dataLakeTags bucket. Unpaired:
     // namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
     if (lake) upsert(lake.datalakeTag, { datalakeTag: lake.datalakeTag, registryPrefix: prefix });
@@ -107,10 +110,9 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
 export const UNATTRIBUTED_LAKE_KEY = '';
 
 /**
- * The lake bucket a file is charged to. A file carrying several lakes' tags is charged to its
- * FIRST matching scope (scope order, which is the caller's own lake order; registry open prefixes
- * only after every other arm) so it is counted and emitted exactly once - double-emitting it would both duplicate a chunk query and inflate the
- * lake it appears under twice.
+ * The lake bucket a file is charged to: its FIRST matching scope in scope order (the caller's own
+ * lake order), with paired registry prefixes tested last. Charging once means it is counted and
+ * emitted exactly once; double-emitting would duplicate a chunk query and inflate a lake.
  */
 function bucketFor(fileTags: string[], scopes: LakeOrderScope[]): string {
   const metaTags = new Set(datalakeTagsFrom(fileTags));

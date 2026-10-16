@@ -208,9 +208,10 @@ export interface SemanticSearchScanAccounting {
    */
   annModelsQueried: number;
   /**
-   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (or `prefix:<p>` for a
-   * registry lake that stamps none); the empty-string key holds files attributable to no lake -
-   * the caller's own and shared files, which `collectScopedFiles` admits via `includeShared`.
+   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (also for a registry
+   * lake paired through `lakes`; `prefix:<p>` for an unpaired registry prefix); the empty-string key
+   * holds files attributable to no lake - the caller's own and shared files, which
+   * `collectScopedFiles` admits via `includeShared`.
    *
    * This is what makes "which lakes were searched" checkable rather than assumed: the caller's
    * `dataLakeTags` says which lakes were REQUESTED, and a lake missing here (or present with 0)
