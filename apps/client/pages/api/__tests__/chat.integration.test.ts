@@ -40,6 +40,7 @@ const {
   mockFindByIdAndUpdate,
   mockDeleteSession,
   mockSettleIfUnfinished,
+  mockQuestFindById,
   mockReleaseReservedCredits,
   waitTurnLimits,
 } = vi.hoisted(() => ({
@@ -66,6 +67,9 @@ const {
   mockSystemPromptText: { value: undefined as unknown },
   // The wait=true deadline's settle and credit-refund edges (see the over-budget describe).
   mockSettleIfUnfinished: vi.fn(),
+  // The persisted row the deadline path decides the recovery from; null falls back to the
+  // in-memory quest (the row the handler already holds).
+  mockQuestFindById: vi.fn(),
   mockReleaseReservedCredits: vi.fn(),
   // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
   waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
@@ -213,6 +217,7 @@ vi.mock('@bike4mind/database', async orig => {
     },
     questRepository: {
       ...(actual.questRepository as object),
+      findById: (...a: unknown[]) => mockQuestFindById(...a),
       settleIfUnfinished: (...a: unknown[]) => mockSettleIfUnfinished(...a),
     },
   };
@@ -1282,6 +1287,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       waitTurnLimits.budgetMs = 0;
       waitTurnLimits.windDownMs = 20;
       mockSettleIfUnfinished.mockResolvedValue(true);
+      // No readable persisted row by default: the deadline path falls back to the in-memory quest.
+      mockQuestFindById.mockResolvedValue(null);
       mockReleaseReservedCredits.mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
       mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
@@ -1346,6 +1353,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(res._getStatusCode()).toBe(200);
       expect(mockSettleIfUnfinished).not.toHaveBeenCalled();
       expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
+    });
+
+    it('settles from the persisted row, so memory-only content cannot leave a done row with nothing to show', async () => {
+      // A tool result landed in the in-memory quest after the last save, and the abort fenced every
+      // later save, so the row the user will actually read has none of it.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.toolResults = [{ content: 'tool output' }];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
+      );
     });
   });
 });

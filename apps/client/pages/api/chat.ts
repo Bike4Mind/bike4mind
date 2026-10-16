@@ -267,7 +267,15 @@ const handler = nextRouteForContract(chatContract, {
       // terminal state is settled here from what streamed. An aborted turn already refunded or
       // reconciled its own reservation; a stuck one never reached that code, so it is refunded here.
       if (turn.outcome === 'stuck') await processService.releaseReservedCredits(quest.id, req.logger);
-      const settled = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, TIMED_OUT_RUN));
+      // Decide the recovery from the persisted row, not the in-memory quest: once aborted, saves are
+      // fenced, so content a tool added to memory after the last save is never written - judging from
+      // memory would skip the timeout error and leave a `done` row with nothing to render. Falls back
+      // to the in-memory quest when the row cannot be read.
+      const persistedQuest = await questRepository.findById(quest.id).catch(() => null);
+      const settled = await questRepository.settleIfUnfinished(
+        quest.id,
+        terminalRecoveryFor(persistedQuest ?? quest, TIMED_OUT_RUN)
+      );
       req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} ran past its deadline`, {
         outcome: turn.outcome,
         settled,
