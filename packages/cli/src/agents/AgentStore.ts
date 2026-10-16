@@ -153,7 +153,8 @@ export const MODEL_ALIASES: Record<string, string> = {
 
 /**
  * Aliases whose target is still served but carries a catalog deprecationDate.
- * Each resolves until `retiresOn`, then reports as retired and names `successor`
+ * An entry's `model` id resolves and retires on the same date as its key. Each
+ * resolves until `retiresOn`, then reports as retired and names `successor`
  * instead of pinning a dead id. AgentStore.test.ts keeps every `retiresOn` equal
  * to the catalog deprecationDate and every `successor` a live MODEL_ALIASES key.
  */
@@ -233,8 +234,7 @@ export function resolveModelAlias(
     return { model: alias, resolved: true };
   }
 
-  // Match the alias key or the full id it points at, so the dated id of a
-  // sunsetting model retires on the same date as its alias.
+  // Match the alias key or the catalog id it points at.
   const sunsetting =
     ownEntry(SUNSETTING_MODEL_ALIASES, normalizedInput) ??
     Object.values(SUNSETTING_MODEL_ALIASES).find(entry => entry.model === normalizedInput);
