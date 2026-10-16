@@ -594,6 +594,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Per-request breakdown of the same totals, from adapters that report it; prices each request on
   // its own long-context tier. Same assign-not-add contract.
   let finalTurnUsage: TurnUsage[] | undefined;
+  // Informational subset of finalOutputTokens, never billed. Undefined until a provider
+  // reports a count, and checked against undefined (not truthiness) so a reported 0 survives.
+  let finalReasoningTokens: number | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
@@ -618,6 +621,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
     if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    // Latched only alongside outputTokens so the pair always comes from the same frame.
+    if (info?.outputTokens && info.reasoningTokens !== undefined) finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
@@ -732,6 +737,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     await onChunk([], {
       inputTokens: finalInputTokens,
       outputTokens: finalOutputTokens,
+      ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
       cacheReadInputTokens: finalCacheReadTokens || undefined,
       cacheCreationInputTokens: finalCacheCreationTokens || undefined,
       creditsUsed: finalCredits,

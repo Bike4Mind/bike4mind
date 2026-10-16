@@ -319,6 +319,29 @@ describe('POST /api/ai/v1/completions - stream', () => {
     expect(afterReady).toBe(1);
   });
 
+  it('carries reasoningTokens on the usage frame as a contract-valid subset of outputTokens', async () => {
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'hello'], { inputTokens: 10, outputTokens: 40, reasoningTokens: 32 });
+    });
+    const text = await (await post()).text();
+    const usageFrames = frames(text).filter(f => f.usage);
+    expect(usageFrames).toHaveLength(1);
+    const parsed = CompletionStreamEventSchema.parse(usageFrames[0]) as { usage?: Record<string, unknown> };
+    expect(parsed.usage).toMatchObject({ inputTokens: 10, outputTokens: 40, reasoningTokens: 32 });
+  });
+
+  it('omits reasoningTokens from the usage frame when the provider reported none', async () => {
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'hello'], { inputTokens: 10, outputTokens: 5 });
+    });
+    const text = await (await post()).text();
+    const usage = frames(text).find(f => f.usage)?.usage as Record<string, unknown>;
+    expect(usage).toMatchObject({ outputTokens: 5 });
+    expect(usage).not.toHaveProperty('reasoningTokens');
+  });
+
   it('passes the per-request usage from the final frame to analytics, so each request is priced on its own tier', async () => {
     const turnUsage = [
       { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },

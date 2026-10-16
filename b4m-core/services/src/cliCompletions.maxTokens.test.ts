@@ -23,6 +23,8 @@ let capturedOptions: Record<string, any> | undefined;
 let availableModels: Array<Record<string, unknown>> = [];
 /** Stop reason the stubbed backend reports on its terminal chunk; undefined = reports none. */
 let backendStopReason: string | undefined;
+/** Reasoning count the stubbed backend reports on its chunk; undefined = reports none. */
+let backendReasoningTokens: number | undefined;
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
@@ -35,7 +37,10 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
         inputTokens: 100,
         outputTokens: 50,
         ...(backendStopReason ? { stopReason: backendStopReason } : {}),
+        ...(backendReasoningTokens !== undefined ? { reasoningTokens: backendReasoningTokens } : {}),
       });
+      // A later frame without usage must not erase the latched count.
+      await onChunk([''], {});
     }),
   })),
 }));
@@ -112,6 +117,7 @@ describe('executeCompletion - output budget', () => {
     vi.clearAllMocks();
     capturedOptions = undefined;
     backendStopReason = undefined;
+    backendReasoningTokens = undefined;
     // clearAllMocks keeps implementations, so restore the flat cost stubs that the
     // org-member-cap test below swaps for proportional ones.
     vi.mocked(getTextModelCost).mockReturnValue(0.001);
@@ -348,5 +354,38 @@ describe('executeCompletion - output budget', () => {
 
     // Absence must stay absence - a fabricated reason would read as truncation downstream.
     expect(onChunk.mock.calls.at(-1)?.[1]?.stopReason).toBeUndefined();
+  });
+
+  it('re-emits the reasoning count on the terminal settlement event without billing it', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    backendReasoningTokens = 40;
+    const { db } = buildDb();
+    const onChunk = vi.fn().mockResolvedValue(undefined);
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, onChunk });
+
+    expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ outputTokens: 50, reasoningTokens: 40 });
+    expect(vi.mocked(getTextModelCost).mock.calls.at(-1)?.[2]).toBe(50);
+  });
+
+  it('keeps a reported zero reasoning count', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    backendReasoningTokens = 0;
+    const { db } = buildDb();
+    const onChunk = vi.fn().mockResolvedValue(undefined);
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, onChunk });
+
+    expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ reasoningTokens: 0 });
+  });
+
+  it('omits the reasoning count when the backend reports none', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+    const onChunk = vi.fn().mockResolvedValue(undefined);
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, onChunk });
+
+    expect(onChunk.mock.calls.at(-1)?.[1]).not.toHaveProperty('reasoningTokens');
   });
 });
