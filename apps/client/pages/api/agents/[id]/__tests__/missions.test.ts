@@ -34,7 +34,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: userFindById },
 }));
 const assertOwnerCanAfford = vi.hoisted(() => vi.fn());
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford }));
+vi.mock('@server/deepAgent/wakeMetering', () => ({
+  assertOwnerCanFundWake: assertOwnerCanAfford,
+  isInsufficientCredits: () => false,
+}));
 
 const enrollMissionForAgent = vi.hoisted(() => vi.fn());
 const listMissionsForAgent = vi.hoisted(() => vi.fn());
@@ -202,7 +205,7 @@ describe('POST /api/agents/[id]/missions', () => {
     assertOwnerCanAfford.mockRejectedValueOnce(Object.assign(new Error('Insufficient credits'), { statusCode: 422 }));
     const { run } = invoke('POST', { id: 'admin', isAdmin: true });
     await expect(run()).rejects.toMatchObject({ statusCode: 422 });
-    expect(assertOwnerCanAfford).toHaveBeenCalledWith({ id: 'owner' });
+    expect(assertOwnerCanAfford).toHaveBeenCalledWith({ id: 'owner' }, expect.anything());
     expect(enrollMissionForAgent).not.toHaveBeenCalled();
     expect(runMissionFirstWake).not.toHaveBeenCalled();
   });

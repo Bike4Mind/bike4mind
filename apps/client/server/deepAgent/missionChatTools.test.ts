@@ -15,7 +15,7 @@ vi.mock('./missions', () => ({
 }));
 vi.mock('./store', () => ({ MongoDeepAgentStore: class {} }));
 vi.mock('./firstWake', () => ({ runMissionFirstWake: m.runMissionFirstWake }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: m.assertOwnerCanAfford }));
+vi.mock('./wakeMetering', () => ({ assertOwnerCanFundWake: m.assertOwnerCanAfford }));
 
 import { insufficientCreditsError } from '@bike4mind/common';
 import { missionChatTools } from './missionChatTools';

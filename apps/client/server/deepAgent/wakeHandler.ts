@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
-import { ForbiddenError } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   createReActRunAct,
@@ -22,6 +21,7 @@ import {
   isInsufficientCredits,
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
+  MissionModelRefusedError,
   missionWakeMeter,
   pauseMission,
 } from './wakeMetering';
@@ -120,7 +120,7 @@ export async function processWake(
     // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
     const blocker = isInsufficientCredits(err)
       ? MISSION_NEEDS_CREDITS_BLOCKER
-      : err instanceof ForbiddenError
+      : err instanceof MissionModelRefusedError
         ? MISSION_MODEL_REFUSED_BLOCKER
         : null;
     if (!blocker) throw err;

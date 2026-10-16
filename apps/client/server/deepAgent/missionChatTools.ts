@@ -1,11 +1,11 @@
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { getQuestErrorCode } from '@bike4mind/common';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 import { enrollMissionForAgent, findAgentsByName, formatMissionStatusReport, listMissionsForAgent } from './missions';
 import { canCreateMissions } from './missionAccess';
 import { MongoDeepAgentStore } from './store';
 import { runMissionFirstWake } from './firstWake';
+import { assertOwnerCanFundWake } from './wakeMetering';
 
 /**
  * Chat-native missions - injected as externalTools into the agent executor so
@@ -71,7 +71,7 @@ export const missionChatTools: Record<string, ToolDefinition> = {
         if ('error' in resolved) return resolved.error;
         const { agent } = resolved;
         try {
-          await assertOwnerCanAfford(context.user);
+          await assertOwnerCanFundWake(context.user, logger);
         } catch (error) {
           if (getQuestErrorCode(error) === 'insufficient_credits')
             return 'You are out of credits, so the mission was not started.';

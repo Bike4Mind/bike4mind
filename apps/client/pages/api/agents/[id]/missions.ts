@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { agentRepository, userRepository } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
+import { assertOwnerCanFundWake, isInsufficientCredits } from '@server/deepAgent/wakeMetering';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -103,9 +103,9 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
 
     // Refuse before enrolling: a first wake refused for credits would leave an orphan charter behind.
     const owner = agent!.userId && agent!.userId !== userId ? await userRepository.findById(agent!.userId) : req.user!;
-    if (owner) await assertOwnerCanAfford(owner as IUserDocument);
-
     const logger = new Logger({ metadata: { component: 'agent-missions', b4mAgentId } });
+    if (owner) await assertOwnerCanFundWake(owner as IUserDocument, logger);
+
     const t0 = Date.now();
 
     try {
@@ -151,6 +151,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
       // Backstop for a delete/ownership race between the pre-check and enrollMissionForAgent; also wraps runMissionFirstWake.
       const message = (error as Error).message;
       if (/not your agent|no agent /.test(message)) return res.status(404).json({ error: AGENT_NOT_FOUND_MESSAGE });
+      if (isInsufficientCredits(error)) return res.status(422).json({ error: message });
       logger.error('mission create failed', error as Error);
       return res.status(500).json({ error: message });
     }
