@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   releaseFailure: vi.fn(),
   claimCancel: vi.fn(),
   releaseCancel: vi.fn(),
+  emitMetric: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -20,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/integrations/stripe/stripe', () => ({
   stripe: { invoices: { retrieve: mocks.retrieveInvoice } },
 }));
+vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
@@ -51,7 +53,7 @@ const orgSub = {
   subscriptionId: 'sub_org',
 } as ISubscription;
 
-const invoice = { id: 'in_1', next_payment_attempt: null };
+const invoice = { id: 'in_1', next_payment_attempt: null, billing_reason: 'subscription_cycle' as const };
 
 const invoiceWithPayments = (payments: Array<{ created: number; message?: string }>) => ({
   payments: {
@@ -132,28 +134,68 @@ describe('notifyPaymentFailed', () => {
     expect(mocks.publish.mock.calls[0][0].to).toBe('user_1@example.com');
   });
 
-  it('sends nothing when the invoice was already claimed', async () => {
+  it.each(['subscription_update', 'subscription_create', 'manual'] as const)(
+    'sends nothing for a %s invoice, which is not a renewal',
+    async billingReason => {
+      await notifyPaymentFailed(userSub, { ...invoice, billing_reason: billingReason }, logger);
+
+      expect(mocks.claimFailure).not.toHaveBeenCalled();
+      expect(mocks.publish).not.toHaveBeenCalled();
+    }
+  );
+
+  it('stops at the claim for an invoice already emailed, before any lookup', async () => {
     mocks.claimFailure.mockResolvedValue(false);
 
     await notifyPaymentFailed(userSub, invoice, logger);
 
+    expect(mocks.findUser).not.toHaveBeenCalled();
+    expect(mocks.retrieveInvoice).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
-  it('releases the claim and rethrows when publishing fails, so a redelivery can send it', async () => {
+  it('never throws when publishing fails, and releases the claim for the next retry', async () => {
     mocks.publish.mockRejectedValue(new Error('event bus down'));
 
-    await expect(notifyPaymentFailed(userSub, invoice, logger)).rejects.toThrow('event bus down');
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    expect(mocks.releaseFailure).toHaveBeenCalledWith('sub_1', 'in_1');
+    expect(mocks.emitMetric).toHaveBeenCalledWith('Lumina5/Billing', 'BillingNoticeFailed', 1, {
+      kind: 'payment_failed',
+    });
+  });
+
+  it('never throws when APP_URL is unset', async () => {
+    delete process.env.APP_URL;
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    expect(mocks.publish).not.toHaveBeenCalled();
     expect(mocks.releaseFailure).toHaveBeenCalledWith('sub_1', 'in_1');
   });
 
-  it('takes no claim when there is no one to email', async () => {
+  it('keeps the original failure logged when the release also fails', async () => {
+    mocks.publish.mockRejectedValue(new Error('event bus down'));
+    mocks.releaseFailure.mockRejectedValue(new Error('mongo blip'));
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to send'), {
+      error: expect.objectContaining({ message: 'event bus down' }),
+    });
+  });
+
+  it('never throws and releases nothing when the claim itself fails', async () => {
+    mocks.claimFailure.mockRejectedValue(new Error('mongo down'));
+
+    await expect(notifyPaymentFailed(userSub, invoice, logger)).resolves.toBeUndefined();
+    expect(mocks.releaseFailure).not.toHaveBeenCalled();
+  });
+
+  it('keeps the claim when there is no one to email', async () => {
     mocks.findUser.mockResolvedValue(null);
 
     await notifyPaymentFailed(userSub, invoice, logger);
 
-    expect(mocks.claimFailure).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.releaseFailure).not.toHaveBeenCalled();
   });
 });
 
@@ -172,5 +214,12 @@ describe('notifyCanceledForNonPayment', () => {
     await notifyCanceledForNonPayment(orgSub, logger);
 
     expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it('never throws when publishing fails', async () => {
+    mocks.publish.mockRejectedValue(new Error('event bus down'));
+
+    await expect(notifyCanceledForNonPayment(orgSub, logger)).resolves.toBeUndefined();
+    expect(mocks.releaseCancel).toHaveBeenCalledWith('sub_org');
   });
 });

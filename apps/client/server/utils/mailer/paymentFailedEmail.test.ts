@@ -58,6 +58,12 @@ describe('buildPaymentFailedEmail', () => {
 
     expect(body).toContain('the R&amp;D &lt;Team&gt; subscription');
   });
+
+  it("names the organization in the subject, not the owner's own subscription", () => {
+    const { subject } = buildPaymentFailedEmail({ billingUrl: BILLING_URL, organizationName: 'Team\r\nBcc: x' });
+
+    expect(subject).toBe('Action needed: the Team Bcc: x subscription payment failed');
+  });
 });
 
 describe('buildCanceledForNonPaymentEmail', () => {
@@ -66,5 +72,11 @@ describe('buildCanceledForNonPaymentEmail', () => {
 
     expect(subject).toContain('has been cancelled');
     expect(body).toContain(`href="${BILLING_URL}"`);
+  });
+
+  it('names the organization in the subject for an org subscription', () => {
+    const { subject } = buildCanceledForNonPaymentEmail({ billingUrl: BILLING_URL, organizationName: 'Team' });
+
+    expect(subject).toBe('The Team subscription has been cancelled');
   });
 });

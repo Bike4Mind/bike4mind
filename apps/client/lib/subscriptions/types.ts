@@ -156,10 +156,11 @@ export interface ISubscription {
    */
   customCreditsPerCycle?: number;
   /**
-   * The Stripe invoice the owner was last emailed about a failed renewal for. Stripe fires
-   * `invoice.payment_failed` on every retry, so this is the once-per-invoice claim.
+   * The Stripe invoices the owner has been emailed a failed-renewal notice for, newest last and
+   * capped. Stripe fires `invoice.payment_failed` on every retry, so this is the once-per-invoice
+   * claim; a list rather than the last id, so two failing invoices cannot re-arm each other.
    */
-  paymentFailureNotifiedInvoiceId?: string;
+  paymentFailureNotifiedInvoiceIds?: string[];
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
 }
@@ -253,6 +254,13 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   findChangeableUserSubscription(userId: string): Promise<ISubscription | null>;
 
   updateByStripeSubscriptionId(subscriptionId: string, data: Partial<ISubscription>): Promise<ISubscription | null>;
+
+  /**
+   * Set a non-terminal row to `past_due`. Null when there is no row, or the row is already
+   * terminal: Stripe does not order webhook deliveries, so a late `invoice.payment_failed` must
+   * not revive a subscription that `customer.subscription.deleted` already closed.
+   */
+  markPastDue(subscriptionId: string): Promise<ISubscription | null>;
 
   /**
    * Atomically claim the right to email the owner about `invoiceId` failing. True for exactly

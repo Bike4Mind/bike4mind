@@ -24,10 +24,15 @@ export interface EmailContent {
 const formatDate = (date: Date): string =>
   date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 
+/** "the Acme subscription" / "your Brand subscription", unescaped; escape it for HTML. */
 const planNoun = (brand: string, organizationName?: string | null): string =>
-  organizationName
-    ? `the ${escapeHtml(organizationName)} subscription`
-    : `your ${brand ? `${escapeHtml(brand)} ` : ''}subscription`;
+  organizationName ? `the ${organizationName} subscription` : `your ${brand ? `${brand} ` : ''}subscription`;
+
+const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+// A subject is plain text, not HTML; line breaks are dropped so an org name cannot spill into
+// further header lines (same rule as inviteNotificationEmail.ts).
+const toSubject = (text: string): string => text.replace(/[\r\n]+/g, ' ');
 
 const layout = (brand: string, heading: string, content: string): string => `
     <!DOCTYPE html>
@@ -104,7 +109,7 @@ const layout = (brand: string, heading: string, content: string): string => `
  */
 export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailContent => {
   const brand = process.env.APP_NAME || '';
-  const plan = planNoun(brand, input.organizationName);
+  const plan = escapeHtml(planNoun(brand, input.organizationName));
 
   const reason = input.failureReason
     ? `<div class="reason"><strong>Reason from the card issuer:</strong> ${escapeHtml(input.failureReason)}</div>`
@@ -125,7 +130,7 @@ export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailCo
   `;
 
   return {
-    subject: `Action needed: your ${brand ? `${brand} ` : ''}subscription payment failed`,
+    subject: toSubject(`Action needed: ${planNoun(brand, input.organizationName)} payment failed`),
     body: layout(brand, 'Your payment did not go through', content),
   };
 };
@@ -133,7 +138,7 @@ export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailCo
 /** The final notice, sent once when Stripe's retry schedule ends by cancelling the subscription. */
 export const buildCanceledForNonPaymentEmail = (input: CanceledForNonPaymentEmailInput): EmailContent => {
   const brand = process.env.APP_NAME || '';
-  const plan = planNoun(brand, input.organizationName);
+  const plan = escapeHtml(planNoun(brand, input.organizationName));
 
   const content = `
           <p>Hello,</p>
@@ -145,7 +150,7 @@ export const buildCanceledForNonPaymentEmail = (input: CanceledForNonPaymentEmai
   `;
 
   return {
-    subject: `Your ${brand ? `${brand} ` : ''}subscription has been cancelled`,
+    subject: toSubject(`${capitalize(planNoun(brand, input.organizationName))} has been cancelled`),
     body: layout(brand, 'Your subscription was cancelled', content),
   };
 };

@@ -86,9 +86,9 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
       type: Number,
       required: false,
     },
-    paymentFailureNotifiedInvoiceId: {
-      type: String,
-      required: false,
+    paymentFailureNotifiedInvoiceIds: {
+      type: [String],
+      default: undefined,
     },
     nonPaymentCancelNotifiedAt: {
       type: Date,
@@ -123,6 +123,10 @@ SubscriptionSchema.index({ priceId: 1, ownerType: 1, ownerId: 1, status: 1 }); /
 SubscriptionSchema.index({ periodEndsAt: 1, status: 1 }); // For subscription expiry queries
 // Admin grants listing in /api/admin/organizations/grants - small cardinality query
 SubscriptionSchema.index({ ownerType: 1, source: 1, status: 1 });
+
+// Invoices remembered per row for the payment-failed claim. Only invoices still inside Stripe's
+// retry window can fire again, so a short history is enough and keeps the row bounded.
+const PAYMENT_FAILURE_NOTICE_HISTORY = 12;
 
 export const Subscription =
   mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', SubscriptionSchema);
@@ -209,22 +213,30 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  markPastDue(subscriptionId: string): Promise<ISubscription | null> {
+    if (!subscriptionId) return Promise.resolve(null);
+    return this.model
+      .findOneAndUpdate(
+        { subscriptionId, status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } },
+        { status: 'past_due' },
+        { new: true }
+      )
+      .lean({ virtuals: true });
+  }
+
   async claimPaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<boolean> {
     if (!subscriptionId) return false;
-    // `$ne` also matches a row that has never had the field, i.e. the first failure.
+    // On an array, `$ne` matches only when no element equals invoiceId, including an unset field.
     const { modifiedCount } = await this.model.updateOne(
-      { subscriptionId, paymentFailureNotifiedInvoiceId: { $ne: invoiceId } },
-      { $set: { paymentFailureNotifiedInvoiceId: invoiceId } }
+      { subscriptionId, paymentFailureNotifiedInvoiceIds: { $ne: invoiceId } },
+      { $push: { paymentFailureNotifiedInvoiceIds: { $each: [invoiceId], $slice: -PAYMENT_FAILURE_NOTICE_HISTORY } } }
     );
     return modifiedCount === 1;
   }
 
   async releasePaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<void> {
     if (!subscriptionId) return;
-    await this.model.updateOne(
-      { subscriptionId, paymentFailureNotifiedInvoiceId: invoiceId },
-      { $unset: { paymentFailureNotifiedInvoiceId: '' } }
-    );
+    await this.model.updateOne({ subscriptionId }, { $pull: { paymentFailureNotifiedInvoiceIds: invoiceId } });
   }
 
   async claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean> {

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   constructEvent: vi.fn(),
   updateByStripeSubscriptionId: vi.fn(),
+  markPastDue: vi.fn(),
   notifyPaymentFailed: vi.fn(),
   notifyCanceledForNonPayment: vi.fn(),
   sendToClient: vi.fn(),
@@ -37,7 +38,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ creditService: {}, userService: {} }));
 vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { updateByStripeSubscriptionId: mocks.updateByStripeSubscriptionId },
+  subscriptionRepository: {
+    updateByStripeSubscriptionId: mocks.updateByStripeSubscriptionId,
+    markPastDue: mocks.markPastDue,
+  },
 }));
 vi.mock('@server/utils/config', () => ({
   Config: { STRIPE_WEBHOOK_SECRET: 'whsec_test' },
@@ -107,6 +111,7 @@ const failedInvoice = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.updateByStripeSubscriptionId.mockResolvedValue(userRow);
+  mocks.markPastDue.mockResolvedValue(userRow);
   mocks.voidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
 });
 
@@ -115,7 +120,7 @@ describe('invoice.payment_failed', () => {
     const res = await deliver(failedInvoice());
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_1', { status: 'past_due' });
+    expect(mocks.markPastDue).toHaveBeenCalledWith('sub_1');
     expect(mocks.notifyPaymentFailed).toHaveBeenCalledWith(userRow, expect.objectContaining({ id: 'in_1' }), logger);
   });
 
@@ -126,7 +131,7 @@ describe('invoice.payment_failed', () => {
   });
 
   it('does not refresh a client for an org-owned subscription', async () => {
-    mocks.updateByStripeSubscriptionId.mockResolvedValue({
+    mocks.markPastDue.mockResolvedValue({
       ...userRow,
       ownerType: SubscriptionOwnerType.Organization,
       ownerId: 'org_1',
@@ -138,8 +143,10 @@ describe('invoice.payment_failed', () => {
     expect(mocks.notifyPaymentFailed).toHaveBeenCalled();
   });
 
-  it('stays silent in a stage with no row for the subscription', async () => {
-    mocks.updateByStripeSubscriptionId.mockResolvedValue(null);
+  // markPastDue is null both for no row in this stage and for a row already closed (a late
+  // delivery after customer.subscription.deleted); Subscription.e2e.test.ts pins the latter.
+  it('stays silent when markPastDue finds no open row', async () => {
+    mocks.markPastDue.mockResolvedValue(null);
 
     const res = await deliver(failedInvoice());
 
@@ -151,14 +158,8 @@ describe('invoice.payment_failed', () => {
   it('ignores an invoice with no subscription', async () => {
     await deliver(failedInvoice({ parent: null }));
 
-    expect(mocks.updateByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(mocks.markPastDue).not.toHaveBeenCalled();
     expect(mocks.notifyPaymentFailed).not.toHaveBeenCalled();
-  });
-
-  it('fails the delivery when the email cannot be published, so Stripe retries it', async () => {
-    mocks.notifyPaymentFailed.mockRejectedValue(new Error('event bus down'));
-
-    await expect(deliver(failedInvoice())).rejects.toThrow('event bus down');
   });
 });
 

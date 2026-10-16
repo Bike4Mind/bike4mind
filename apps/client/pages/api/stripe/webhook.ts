@@ -574,14 +574,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
-        status: 'past_due',
-      });
+      const updated = await subscriptionRepository.markPastDue(subscriptionId);
 
       // Same ownership guard as customer.subscription.deleted: a stage with no row for this
-      // subscription does not own it, and must not email its owner.
+      // subscription does not own it, and must not email its owner. Also null for a row already
+      // closed, since a late delivery of this event can arrive after the deletion.
       if (!updated) {
-        req.logger.warn(`Ignoring payment failure on subscription ${subscriptionId}: no matching row in this stage`);
+        req.logger.warn(
+          `Ignoring payment failure on subscription ${subscriptionId}: no row in this stage, or it is already closed`
+        );
         break;
       }
 
@@ -600,7 +601,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       );
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
 
-      // Last, so its throw-to-retry (see notifyPaymentFailed) cannot skip the steps above.
       await notifyPaymentFailed(updated, invoice, req.logger);
 
       break;

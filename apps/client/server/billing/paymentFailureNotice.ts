@@ -5,6 +5,7 @@ import { organizationRepository, userRepository } from '@bike4mind/database';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
+import { emitMetric } from '@server/utils/cloudwatch';
 import { EmailEvents } from '@server/utils/eventBus';
 import {
   buildCanceledForNonPaymentEmail,
@@ -72,58 +73,86 @@ export async function getInvoiceFailureReason(invoiceId: string, logger: Logger)
   }
 }
 
+type NoticeKind = 'payment_failed' | 'canceled_for_non_payment';
+
 /**
- * Publish one email under a claim. The claim is taken only once there is someone to send to, and
- * released when the publish fails so the rethrown error's Stripe redelivery can send it.
+ * Send one notice under a claim, best effort: nothing here throws. The webhook must not answer
+ * 500 for an email, because Stripe would then redeliver the whole event and repeat its Slack post
+ * and invoice cleanup. The claim is taken before any lookup, so a retry of an already-sent notice
+ * costs one write; a failure releases it, so the next `invoice.payment_failed` for the same
+ * invoice (Stripe's next retry) can still send it.
  */
-async function sendClaimed(
-  email: string,
-  content: EmailContent,
+async function sendOnce(
+  kind: NoticeKind,
+  subscriptionId: string,
   claim: () => Promise<boolean>,
-  release: () => Promise<void>
-): Promise<boolean> {
-  if (!(await claim())) return false;
+  release: () => Promise<void>,
+  build: () => Promise<(EmailContent & { to: string }) | null>,
+  logger: Logger
+): Promise<void> {
+  let claimed = false;
   try {
-    await EmailEvents.Send.publish({ to: email, subject: content.subject, body: content.body });
+    claimed = await claim();
+    if (!claimed) {
+      logger.info(`Billing notice ${kind} for ${subscriptionId} already sent, skipping`);
+      return;
+    }
+    const email = await build();
+    if (!email) {
+      // The claim is kept: a retry would find no one to send to either.
+      logger.warn(`No owner email for subscription ${subscriptionId}; billing notice ${kind} not sent`);
+      return;
+    }
+    await EmailEvents.Send.publish({ to: email.to, subject: email.subject, body: email.body });
+    logger.info(`Sent billing notice ${kind} to the owner of ${subscriptionId}`);
   } catch (error) {
-    await release();
-    throw error;
+    logger.error(`Failed to send billing notice ${kind} for ${subscriptionId}`, { error });
+    await emitMetric('Lumina5/Billing', 'BillingNoticeFailed', 1, { kind });
+    if (!claimed) return;
+    try {
+      await release();
+    } catch (releaseError) {
+      logger.warn(`Could not release the ${kind} claim for ${subscriptionId}; the notice will not retry`, {
+        error: releaseError,
+      });
+    }
   }
-  return true;
 }
 
-/** Email the owner that a renewal charge failed, once per invoice. */
+/**
+ * Email the owner that a renewal charge failed, once per invoice. Renewals only: a declined
+ * proration (an org adding seats) or a one-off invoice is not "your renewal failed", and the
+ * first invoice fails inside checkout, where the user already sees the error.
+ */
 export async function notifyPaymentFailed(
   subscription: ISubscription,
-  invoice: Pick<Stripe.Invoice, 'id' | 'next_payment_attempt'>,
+  invoice: Pick<Stripe.Invoice, 'id' | 'next_payment_attempt' | 'billing_reason'>,
   logger: Logger
 ): Promise<void> {
   const subscriptionId = subscription.subscriptionId;
   if (!subscriptionId) return;
-
-  const recipient = await resolveOwnerRecipient(subscription);
-  if (!recipient) {
-    logger.warn(`No owner email for subscription ${subscriptionId}; payment-failed email not sent`);
+  if (invoice.billing_reason !== 'subscription_cycle') {
+    logger.debug(`Invoice ${invoice.id} is ${invoice.billing_reason}, not a renewal; no payment-failed email`);
     return;
   }
 
-  const content = buildPaymentFailedEmail({
-    billingUrl: recipient.billingUrl,
-    failureReason: await getInvoiceFailureReason(invoice.id, logger),
-    nextAttemptAt: invoice.next_payment_attempt ? new Date(invoice.next_payment_attempt * 1000) : null,
-    organizationName: recipient.organizationName,
-  });
-
-  const sent = await sendClaimed(
-    recipient.email,
-    content,
+  await sendOnce(
+    'payment_failed',
+    subscriptionId,
     () => subscriptionRepository.claimPaymentFailureNotice(subscriptionId, invoice.id),
-    () => subscriptionRepository.releasePaymentFailureNotice(subscriptionId, invoice.id)
-  );
-  logger.info(
-    sent
-      ? `Sent payment-failed email for invoice ${invoice.id} to the owner of ${subscriptionId}`
-      : `Payment-failed email for invoice ${invoice.id} already sent, skipping`
+    () => subscriptionRepository.releasePaymentFailureNotice(subscriptionId, invoice.id),
+    async () => {
+      const recipient = await resolveOwnerRecipient(subscription);
+      if (!recipient) return null;
+      const content = buildPaymentFailedEmail({
+        billingUrl: recipient.billingUrl,
+        failureReason: await getInvoiceFailureReason(invoice.id, logger),
+        nextAttemptAt: invoice.next_payment_attempt ? new Date(invoice.next_payment_attempt * 1000) : null,
+        organizationName: recipient.organizationName,
+      });
+      return { to: recipient.email, ...content };
+    },
+    logger
   );
 }
 
@@ -132,24 +161,20 @@ export async function notifyCanceledForNonPayment(subscription: ISubscription, l
   const subscriptionId = subscription.subscriptionId;
   if (!subscriptionId) return;
 
-  const recipient = await resolveOwnerRecipient(subscription);
-  if (!recipient) {
-    logger.warn(`No owner email for subscription ${subscriptionId}; cancellation email not sent`);
-    return;
-  }
-
-  const sent = await sendClaimed(
-    recipient.email,
-    buildCanceledForNonPaymentEmail({
-      billingUrl: recipient.billingUrl,
-      organizationName: recipient.organizationName,
-    }),
+  await sendOnce(
+    'canceled_for_non_payment',
+    subscriptionId,
     () => subscriptionRepository.claimNonPaymentCancelNotice(subscriptionId),
-    () => subscriptionRepository.releaseNonPaymentCancelNotice(subscriptionId)
-  );
-  logger.info(
-    sent
-      ? `Sent cancelled-for-non-payment email to the owner of ${subscriptionId}`
-      : `Cancelled-for-non-payment email for ${subscriptionId} already sent, skipping`
+    () => subscriptionRepository.releaseNonPaymentCancelNotice(subscriptionId),
+    async () => {
+      const recipient = await resolveOwnerRecipient(subscription);
+      if (!recipient) return null;
+      const content = buildCanceledForNonPaymentEmail({
+        billingUrl: recipient.billingUrl,
+        organizationName: recipient.organizationName,
+      });
+      return { to: recipient.email, ...content };
+    },
+    logger
   );
 }
