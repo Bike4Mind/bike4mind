@@ -238,15 +238,17 @@ describe('/api/models cache identity', () => {
   it('caches an authenticated caller under its own user id', async () => {
     await callRoute('user-1');
 
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1' });
-    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:user-1' }));
+    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1:credits-off' });
+    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'model-list:user-1:credits-off' })
+    );
   });
 
   it('passes null down for an unauthenticated caller and keys it away from "system"', async () => {
     await callRoute();
 
     expect(mockGetEffectiveLLMApiKeys).toHaveBeenCalledWith(null, expect.anything());
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous' });
+    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous:credits-off' });
     expect(mockCacheCreateOrUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:system' }));
   });
 
