@@ -17,6 +17,7 @@ import {
   createReleaseNotesCompleter,
   triageReleaseNotes,
   writeReleaseNotes,
+  type ReleaseNoteDraft,
   type TokenUsage,
 } from './releaseNotes/generate';
 import { finalizeReleaseNote } from './releaseNotes/finalize';
@@ -121,7 +122,9 @@ async function postToSlack(
 
 /**
  * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
- * one editorial rewrite; triage is not repeated. Only a denylist hit can still fail after the rewrite.
+ * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the first draft did
+ * not have, in which case the first draft is finalized instead (with its generic headline replaced). Only a
+ * denylist hit that is present in both drafts can still fail.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
@@ -134,19 +137,25 @@ async function generateAndStore(
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
+  let previousDraft: ReleaseNoteDraft | undefined;
   for (let attempt = 0; attempt < MAX_EDITORIAL_ATTEMPTS; attempt++) {
     const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback);
     usage.inputTokens += generated.usage.inputTokens;
     usage.outputTokens += generated.usage.outputTokens;
 
-    const result = finalizeReleaseNote(generated.draft, payload, config, logger, {
-      lastAttempt: attempt === MAX_EDITORIAL_ATTEMPTS - 1,
-    });
+    const lastAttempt = attempt === MAX_EDITORIAL_ATTEMPTS - 1;
+    let result = finalizeReleaseNote(generated.draft, payload, config, logger, { lastAttempt });
+    // The rewrite can hit the denylist even though the earlier draft did not. Keep the earlier draft
+    // (finalized with the generic-headline fallback) rather than losing the note it could have produced.
+    if (result.kind === 'repair' && lastAttempt && previousDraft) {
+      result = finalizeReleaseNote(previousDraft, payload, config, logger, { lastAttempt: true });
+    }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
       return { note: preserved ? note : result.note, preserved, usage, modelId };
     }
     feedback = result.reasons;
+    previousDraft = generated.draft;
   }
   throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
 }

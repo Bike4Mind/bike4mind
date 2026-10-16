@@ -207,6 +207,19 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).not.toContain('Failure');
   });
 
+  it('keeps the earlier generic draft when the rewrite introduces a denylist hit', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes
+      .mockResolvedValueOnce(draft('Exciting New Features and Fixes in Your AI Workspace'))
+      .mockResolvedValueOnce(draft('Built for Acme'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', status: 'scheduled' })
+    );
+    expect(metricNames()).not.toContain('Failure');
+  });
+
   it('escapes Slack control characters in generated copy', async () => {
     setConfig(enabledConfig);
     // In an item, because a "!" in the headline is rejected as generic copy before Slack sees it.
@@ -217,6 +230,15 @@ describe('releaseNotes queue handler', () => {
     const { text } = JSON.parse(slackPosts()[0][1].body);
     expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');
     expect(text).not.toContain('<!channel>');
+  });
+
+  it('escapes Slack control characters in the headline', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes.mockResolvedValue(draft('Search for <@U1> & <https://evil.example|x>'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('*Search for &lt;@U1&gt; &amp; &lt;https://evil.example|x&gt;*');
+    expect(text).not.toContain('<@U1>');
   });
 
   it('leaves the headline and summary out of the Slack post for a hidden note', async () => {
