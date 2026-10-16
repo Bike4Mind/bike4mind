@@ -8252,6 +8252,57 @@ describe('ChatCompletionProcess', () => {
       expect(callCount).toBe(2);
     });
   });
+
+  // Follow-up retrieval reads the earlier user turns off `priorUserPrompts`, so this assignment is the
+  // only thing that turns that behavior on in production. The feature tests inject `priorUserPrompts`
+  // straight into the feature context, so they would stay green with the assignment deleted; pin the
+  // hand-off from the fetched history here instead.
+  describe('follow-up context from quest history', () => {
+    const run = async (history: IMessage[]) => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([history, history.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      return service.priorUserPrompts;
+    };
+
+    it('collects the user text turns, oldest first, and nothing else', async () => {
+      const priorUserPrompts = await run([
+        { role: 'user', content: 'Tell me about Alder.' },
+        { role: 'assistant', content: 'Alder is a vendor.' },
+        // A tool-result turn is an array content, not a question to borrow a subject from.
+        { role: 'user', content: [{ type: 'tool_result', content: 'ignored' }] as any },
+        { role: 'user', content: 'What about their pricing?' },
+      ]);
+
+      expect(priorUserPrompts).toEqual(['Tell me about Alder.', 'What about their pricing?']);
+    });
+  });
 });
 
 describe('addPairedTool', () => {

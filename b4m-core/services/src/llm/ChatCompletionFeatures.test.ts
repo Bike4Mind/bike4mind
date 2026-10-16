@@ -5366,3 +5366,180 @@ describe('mergeLakeFirstListing', () => {
     expect(merged.hasMore).toBe(false);
   });
 });
+
+describe('KnowledgeRetrievalFeature follow-up questions', () => {
+  // Bag-of-words embedding over three axes: the two subjects and the pricing topic.
+  const embed = (text: string) => [
+    (text.match(/alder/gi) ?? []).length,
+    (text.match(/birchway/gi) ?? []).length,
+    (text.match(/pricing|price|cost/gi) ?? []).length,
+  ];
+  const passages = [
+    { id: 'c-alder', fabFileId: 'f-alder', text: 'ALDER_PRICING Alder pricing: seats are billed monthly.' },
+    { id: 'c-birch', fabFileId: 'f-birch', text: 'BIRCHWAY_PRICING Birchway pricing: the price is set per seat.' },
+  ];
+  const platform: Record<string, string> = {
+    forcedRetrievalMinSimilarityPct: '20',
+    forcedRetrievalRelativeFloorPct: '90',
+  };
+
+  const run = async (opts: {
+    priorUserPrompts?: string[];
+    message: string;
+    failContextEmbedding?: boolean;
+    embed?: (text: string) => number[];
+    minSimilarityPct?: string;
+  }) => {
+    const embedText = opts.embed ?? embed;
+    const generateEmbedding = vi.fn(async (text: string) => {
+      if (opts.failContextEmbedding && text !== opts.message) throw new Error('embedding outage');
+      return embedText(text);
+    });
+    const warn = vi.fn();
+    const settings: Record<string, string> = {
+      ...platform,
+      ...(opts.minSimilarityPct !== undefined ? { forcedRetrievalMinSimilarityPct: opts.minSimilarityPct } : {}),
+    };
+    const ctx = {
+      logger: { log: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
+      priorUserPrompts: opts.priorUserPrompts,
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'f-alder', fileName: 'alder.md', tags: [] },
+              { id: 'f-birch', fileName: 'birchway.md', tags: [] },
+            ],
+            hasMore: false,
+            total: 2,
+          }),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(passages.map(p => ({ ...p, vector: embedText(p.text) })))
+          ),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (key: string) => settings[key]),
+          findBySettingNames: vi.fn(async (names: string[]) =>
+            names
+              .filter(name => settings[name] != null)
+              .map(name => ({ settingName: name, settingValue: settings[name] }))
+          ),
+          findAll: vi.fn(async () =>
+            Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
+        },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const embeddingFactory = {
+      createEmbeddingService: () => ({ generateEmbedding }),
+      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    };
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      opts.message
+    );
+    const content = messages.map(m => m.content).join('\n');
+    return {
+      injected: ['ALDER_PRICING', 'BIRCHWAY_PRICING'].filter(marker => content.includes(marker)),
+      embeddedTexts: generateEmbedding.mock.calls.map(([text]) => text),
+      warn,
+    };
+  };
+
+  beforeEach(() => {
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('retrieves the wrong subject when the follow-up is embedded on its own', async () => {
+    const { injected } = await run({ message: 'What about their pricing?' });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('retrieves the subject of the earlier turn for a follow-up', async () => {
+    const { injected, embeddedTexts } = await run({
+      priorUserPrompts: ['Tell me about Alder.', 'What about their pricing?'],
+      message: 'What about their pricing?',
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+  });
+
+  it('follows an explicit switch to another subject', async () => {
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What does Birchway offer?',
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('makes one embedding call for a self-contained message', async () => {
+    const message = 'Summarize the Birchway pricing model for a new enterprise customer during the first month';
+    const { embeddedTexts } = await run({ priorUserPrompts: ['Tell me about Alder.'], message });
+    expect(embeddedTexts).toEqual([message]);
+  });
+
+  it('falls back to the message alone when the earlier turns cannot be embedded', async () => {
+    const { injected, embeddedTexts, warn } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      failContextEmbedding: true,
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+    // The context call is attempted even though it throws; a gate that skipped it silently would still
+    // return the message-alone result above, so assert the attempt and the warning, not only the output.
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('follow-up context embedding failed'), expect.anything());
+  });
+
+  it('keeps a passage the bare question alone cleared when the blend pulls it under the floor', async () => {
+    // Bare message to the Alder passage is 0.60; blended with the earlier turn it drops to 0.561, so a
+    // 58% absolute floor sits between the two readings - the shape of a topic switch after an earlier
+    // turn. The floor is on either reading, so the passage must still be injected rather than the turn
+    // abstaining. BIRCHWAY scores below the floor both ways and stays out.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0.2, 0.9798, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, 0.0318, 0.7994];
+      return [0, 0, 1];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+  });
+
+  it('keeps the best admitted passage when the highest blended score was rejected', async () => {
+    // The BIRCHWAY chunk scores highest by the blended query (0.570) but clears no floor, while the
+    // Alder chunk is admitted only by its bare reading (0.60) at a blended 0.403. Measuring the
+    // relative cutoff from that rejected top score (0.90 * 0.570 = 0.513) would cut the one admitted
+    // passage and abstain; it has to measure from the best ADMITTED passage instead.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0, 1, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, -0.3, 0.7416];
+      return [0.2, 0.875, 0.4407];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+  });
+});
