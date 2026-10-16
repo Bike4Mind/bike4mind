@@ -21,6 +21,12 @@ vi.mock('@server/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
 
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
 import { auth } from './auth';
 
 async function requestAsMfaPending(url: string, user: Record<string, unknown> = { aupAcceptedVersion: 'v1' }) {

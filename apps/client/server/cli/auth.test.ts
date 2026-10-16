@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
@@ -370,6 +376,14 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
       await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
     });
+  });
+
+  // enforceMFA turned on after this session was minted: the token is still valid, but the
+  // CLI/WS/LLM surfaces must refuse it until the user enrolls, as REST does.
+  it('rejects a valid session JWT once the user owes MFA enrollment', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
+    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('MFA enrollment required.');
   });
 });
 

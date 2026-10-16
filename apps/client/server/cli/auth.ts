@@ -13,6 +13,7 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -126,6 +127,11 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
     // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
     assertAccountStateUsable(user);
+
+    // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
+    if (await isMfaEnrollmentOwed(user)) {
+      throw new Error(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
+    }
 
     return {
       id: user.id,

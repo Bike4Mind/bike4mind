@@ -1,14 +1,17 @@
 import type { Request } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthEvents, type AuthSessionCreatedVia, type AuthStrategy, type IUserDocument } from '@bike4mind/common';
-import { adminSettingsRepository, passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
+import { passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { readEnforceMfa } from '@server/auth/mfaEnforcement';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { Config } from '@server/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@server/utils/ip';
+
+// Re-exported so existing importers (mfa/status, mfa/disable) keep one import site.
+export { readEnforceMfa };
 
 const MFA_PENDING_TOKEN_TTL = '10m';
 
@@ -33,19 +36,6 @@ export type SecondFactorOutcome =
   | { kind: 'satisfied'; trustedDevice: ITrustedDeviceDocument | null }
   | { kind: 'challenge'; mfaToken: string; passkeyAvailable: boolean }
   | { kind: 'enroll'; mfaToken: string };
-
-/**
- * Schema-aware read: the stored value may be a boolean or a legacy string. Uncached, like
- * trustedDevicesAllowed: turning enforcement on must bind every instance at once, not after
- * the settings cache expires (MFA disable reads this too).
- */
-export async function readEnforceMfa(): Promise<boolean> {
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { skipCache: true, names: ['enforceMFA'] }
-  );
-  return getSettingsValue('enforceMFA', settings) === true;
-}
 
 /**
  * Decides the second factor for a sign-in whose first factor the caller has already verified.

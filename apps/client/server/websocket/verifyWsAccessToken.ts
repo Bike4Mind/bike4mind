@@ -5,14 +5,16 @@ import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGra
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
 
 /**
  * Rotation-aware access-token verification for the data subscribe/unsubscribe WS actions.
  *
- * Applies six gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
- * refusal, the `mfaPending` refusal, the tokenVersion kill switch, and assertAccountStateUsable.
+ * Applies seven gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
+ * refusal, the `mfaPending` refusal, the tokenVersion kill switch, assertAccountStateUsable, and
+ * the enforceMFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
  * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
  * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
  * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate
@@ -66,6 +68,8 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
     throw new UnauthorizedError('Session expired');
   }
   assertAccountStateUsable(user);
+  // enforceMFA binds sessions minted before it applied, as on REST (auth.ts).
+  if (await isMfaEnrollmentOwed(user)) throw new UnauthorizedError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
 
   return {
     user,

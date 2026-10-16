@@ -35,6 +35,12 @@ vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
 import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
@@ -138,6 +144,25 @@ describe('verifyWsAccessToken', () => {
     } finally {
       configureSecretsAtRest(undefined);
     }
+  });
+});
+
+describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
+  beforeEach(() => {
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access' });
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0 });
+  });
+
+  it('refuses a valid session token once the user owes MFA enrollment', async () => {
+    mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('MFA enrollment required.');
+  });
+
+  it('accepts the same token while no enrollment is owed', async () => {
+    await expect(verifyWsAccessToken('token')).resolves.toMatchObject({ id: 'user-1' });
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
   });
 });
 
