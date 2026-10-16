@@ -168,6 +168,29 @@ describe('FabFileRepository.findFilesOutsideEmbeddingSpaceByScope', () => {
   });
 });
 
+describe('FabFileRepository.hasVectorizedFileInEmbeddingSpace', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  const MODEL = 'text-embedding-3-small';
+
+  it('ignores files that are deleted, unembedded, or labelled with another model', async () => {
+    await FabFile.create([
+      makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3, deletedAt: new Date() }),
+      makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 0 }),
+      makeFile({ embeddingModel: 'text-embedding-ada-002', vectorizedChunkCount: 3 }),
+    ]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(false);
+  });
+
+  it('finds a live file with vectors in that model, whatever lake it belongs to', async () => {
+    await FabFile.create([makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3, tags: [] })]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(true);
+  });
+});
+
 describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
   setupMongoTest();
   beforeEach(async () => {

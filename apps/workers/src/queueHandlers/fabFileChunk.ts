@@ -492,11 +492,11 @@ async function readCommittedEmbeddingSpace(fabFileId: string): Promise<Committed
  * protection reaches. The vectorize handler re-resolves the model it is sent through
  * `resolveEmbeddingWithKeylessFallback` (fabFileVectorize.ts) and substitutes keyless Bedrock when
  * the requested provider has no credential on a keyless stage - then stamps the chunk with what it
- * actually embedded with. So a credential lapsing mid-file still splits it, whatever is asked for
- * here. That is a different mechanism from the one this guards (the model SETTING moving, or an id
- * leaving the enum), it predates this, and `resolveFileLabel` reports it at completion rather than
- * preventing it. Closing it means teaching the substitution about a file's existing vectors, which
- * belongs in that handler, not this one.
+ * actually embedded with. A credential lapsing mid-file can therefore still split it, whatever is
+ * asked for here. That is a different mechanism from the one this guards (the model SETTING moving,
+ * or an id leaving the enum), and `resolveFileLabel` reports it at completion rather than preventing
+ * it. The handler refuses the substitution only when other files already hold vectors in the
+ * requested space; a file's own existing vectors are not consulted.
  */
 function resolveResumeEmbeddingModel(params: {
   fabFileId: string;

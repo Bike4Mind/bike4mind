@@ -2741,6 +2741,16 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  // Unindexed on embeddingModel; callers reach it only when a keyless substitution fires.
+  async hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean> {
+    const hit = await this.fabFileModel.exists({
+      embeddingModel,
+      vectorizedChunkCount: { $gt: 0 },
+      deletedAt: null,
+    });
+    return hit !== null;
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
