@@ -50,13 +50,13 @@ const SectionHeader: React.FC<{ icon: React.ReactNode; title: string; caption: s
 
 /**
  * Shared audio-generation configuration controls, backed by useAudioGenSettings.
- * Reused by the AI Settings modal (as the settings home) and the in-app
- * GenerateAudioModal, so tweaks made in either surface persist to one store.
+ * Reused by the AI Settings modal (as the settings home) and Studio's Speech and
+ * Sound effects tabs, so tweaks made in either surface persist to one store.
  *
  * `mode` scopes the visible controls to one generation mode; omit it to show
  * both. Without a mode (the settings-modal view) each mode is boxed into its own
  * labeled section; with a mode set the controls render bare, since the caller
- * (the generate dialog) already frames and labels the active mode.
+ * (Studio's tab) already frames and labels the active mode.
  */
 export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mode }) => {
   const {
@@ -81,6 +81,10 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
 
   const handleProviderChange = (next: VoiceGenerationVendor) => {
     setTtsProvider(next);
+    // A voice id belongs to one provider ("Use these settings" on a saved ElevenLabs file restores
+    // its id), and the ElevenLabs branch offers no picker to clear it, so it would reach OpenAI and
+    // be rejected there. Empty means "my preferred voice / the provider default".
+    setVoice('');
     // Reset a now-unsupported format back to the universally-supported mp3.
     if (!VOICE_VENDOR_SUPPORTED_FORMATS[next].includes(format)) setFormat('mp3');
   };
