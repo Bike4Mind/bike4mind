@@ -34,6 +34,25 @@ describe('PartnerSignupRuleModel', () => {
     expect(found?.signupCredits).toBe(150_000);
   });
 
+  it('defaults tags to an empty list and stores them case-preserved', async () => {
+    const untagged = await partnerSignupRuleRepository.create({
+      domain: 'untagged.com',
+      entitlements: [],
+      signupCredits: 0,
+      enabled: true,
+    });
+    const tagged = await partnerSignupRuleRepository.create({
+      domain: 'tagged.com',
+      entitlements: [],
+      signupCredits: 0,
+      tags: ['Partner', 'cohort-a'],
+      enabled: true,
+    });
+
+    expect(untagged.tags).toEqual([]);
+    expect(tagged.tags).toEqual(['Partner', 'cohort-a']);
+  });
+
   it('enforces a unique domain', async () => {
     await partnerSignupRuleRepository.create({
       domain: 'partner.com',

@@ -15,6 +15,21 @@ describe('createPartnerSignupRuleSchema', () => {
     expect(parsed.entitlements).toEqual(['optihashi:pro']);
   });
 
+  it('trims tags, keeps their case, and drops duplicates', () => {
+    const parsed = createPartnerSignupRuleSchema.parse({ ...base, tags: [' Partner ', 'Partner', 'cohort-a'] });
+    expect(parsed.tags).toEqual(['Partner', 'cohort-a']);
+  });
+
+  it('leaves tags undefined when omitted', () => {
+    expect(createPartnerSignupRuleSchema.parse(base).tags).toBeUndefined();
+  });
+
+  it('rejects an empty tag and more than 20 tags', () => {
+    expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: ['  '] })).toThrow();
+    const tooMany = Array.from({ length: 21 }, (_, i) => `tag-${i}`);
+    expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: tooMany })).toThrow();
+  });
+
   it('normalizes domain and entitlement keys to lowercase', () => {
     const parsed = createPartnerSignupRuleSchema.parse({
       ...base,

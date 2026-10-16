@@ -64,6 +64,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     // Stored as a plain string id (like createdBy) so toJSON yields a string matching
     // IPartnerSignupRule.organizationId; existence is validated in the admin route, not here.
     organizationId: { type: String, default: null },
+    tags: { type: [String], default: [] },
     enabled: { type: Boolean, default: true },
     label: { type: String, default: null },
     notes: { type: String, default: null },

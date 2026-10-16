@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { creditLotRepository } = vi.hoisted(() => ({ creditLotRepository: { id: 'lots' } }));
+const { creditLotRepository, mockAddTagsToUser } = vi.hoisted(() => ({
+  creditLotRepository: { id: 'lots' },
+  mockAddTagsToUser: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository,
   creditTransactionRepository: {},
   organizationRepository: {},
-  userRepository: {},
+  userRepository: { addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a) },
 }));
 
 const mockAddCredits = vi.fn();
@@ -61,7 +64,9 @@ describe('applySignupDomainGrant', () => {
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 1000,
       organizationId: 'org-1',
+      tags: ['Partner', 'cohort-a'],
     });
+    mockAddTagsToUser.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue({ currentCredits: 1100 });
     mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
     mockEntitlementsForEmail.mockReturnValue(new Set());
@@ -90,6 +95,7 @@ describe('applySignupDomainGrant', () => {
       entitlements: new Set(),
       signupCredits: 0,
       organizationId: null,
+      tags: [],
     });
     mockEntitlementsForEmail.mockReturnValue(new Set(['optihashi:pro']));
     mockSignupCreditsForKeys.mockReturnValue(250);
@@ -98,6 +104,59 @@ describe('applySignupDomainGrant', () => {
 
     expect(result).toEqual({ creditsGranted: 250, currentCredits: 1100, joinedOrganizationId: null });
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+    expect(mockAddTagsToUser).not.toHaveBeenCalled();
+  });
+
+  it('merges the matched rule tags into the user', async () => {
+    await run();
+
+    expect(mockAddTagsToUser).toHaveBeenCalledWith('user-1', ['Partner', 'cohort-a']);
+  });
+
+  it('skips the tag write when the matched rule has no tags', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      organizationId: null,
+      tags: [],
+    });
+
+    await run();
+
+    expect(mockAddTagsToUser).not.toHaveBeenCalled();
+  });
+
+  it('wakes the entitlement cache when only tags were applied', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: ['Partner'],
+    });
+
+    await run();
+
+    expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+  });
+
+  it('re-applies the same tags on a second run (the repository merge keeps it idempotent)', async () => {
+    await run();
+    await run();
+
+    expect(mockAddTagsToUser).toHaveBeenCalledTimes(2);
+    expect(mockAddTagsToUser).toHaveBeenNthCalledWith(2, 'user-1', ['Partner', 'cohort-a']);
+  });
+
+  it('logs and still applies credits and membership when the tag write fails', async () => {
+    mockAddTagsToUser.mockRejectedValue(new Error('user store down'));
+    const logger = makeLogger();
+
+    const result = await run(logger);
+
+    expect(result).toEqual({ creditsGranted: 1000, currentCredits: 1100, joinedOrganizationId: 'org-1' });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
 
   it('honours a matched rule with 0 credits without falling through to the env amount', async () => {
@@ -106,6 +165,7 @@ describe('applySignupDomainGrant', () => {
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 0,
       organizationId: null,
+      tags: [],
     });
 
     const result = await run();
@@ -171,6 +231,7 @@ describe('applySignupDomainGrant', () => {
 
     expect(result).toEqual({ creditsGranted: 0, currentCredits: null, joinedOrganizationId: null });
     expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockAddTagsToUser).not.toHaveBeenCalled();
     expect(mockPushInvalidation).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });

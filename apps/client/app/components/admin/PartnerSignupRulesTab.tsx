@@ -57,6 +57,7 @@ type FormState = {
   domain: string;
   label: string;
   entitlements: string[];
+  tags: string[];
   signupCredits: string;
   notes: string;
   enabled: boolean;
@@ -70,6 +71,7 @@ const emptyForm: FormState = {
   domain: '',
   label: '',
   entitlements: [],
+  tags: [],
   signupCredits: '0',
   notes: '',
   enabled: true,
@@ -81,6 +83,7 @@ const ruleToForm = (rule: IPartnerSignupRuleDocument): FormState => ({
   domain: rule.domain,
   label: rule.label ?? '',
   entitlements: rule.entitlements ?? [],
+  tags: rule.tags ?? [],
   signupCredits: String(rule.signupCredits ?? 0),
   notes: rule.notes ?? '',
   enabled: rule.enabled,
@@ -116,6 +119,7 @@ export default function PartnerSignupRulesTab() {
       // cleared field un-clearable (the old value would persist on update).
       const payload = {
         entitlements: form.entitlements,
+        tags: form.tags,
         signupCredits: Number(form.signupCredits),
         label: form.label.trim(),
         notes: form.notes.trim(),
@@ -294,6 +298,7 @@ export default function PartnerSignupRulesTab() {
                 <th>Domain</th>
                 <th>Label</th>
                 <th>Entitlements</th>
+                <th>Tags</th>
                 <th style={{ width: 140, textAlign: 'right' }}>Signup credits</th>
                 <th style={{ width: 90, textAlign: 'center' }}>Org</th>
                 <th style={{ width: 90, textAlign: 'center' }}>Enabled</th>
@@ -327,6 +332,27 @@ export default function PartnerSignupRulesTab() {
                           {rule.entitlements.map(key => (
                             <Chip key={key} size="sm" variant="soft" color="primary">
                               {key}
+                            </Chip>
+                          ))}
+                        </Stack>
+                      ) : (
+                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                          none
+                        </Typography>
+                      )}
+                    </td>
+                    <td>
+                      {rule.tags?.length ? (
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          flexWrap="wrap"
+                          useFlexGap
+                          data-testid={`partner-rule-tags-${rule.domain}`}
+                        >
+                          {rule.tags.map(tag => (
+                            <Chip key={tag} size="sm" variant="soft" color="neutral">
+                              {tag}
                             </Chip>
                           ))}
                         </Stack>
@@ -496,6 +522,23 @@ export default function PartnerSignupRulesTab() {
                   <code>datalake:&lt;slug&gt;</code> and press Enter. A new product key must be added to the entitlement
                   registry before it appears in the list.
                 </span>
+              </FormHelperText>
+            </FormControl>
+
+            <FormControl>
+              <FormLabel>User tags</FormLabel>
+              <Autocomplete
+                multiple
+                freeSolo
+                options={[]}
+                value={form.tags}
+                onChange={(_event, value) => setForm(f => ({ ...f, tags: value }))}
+                placeholder={form.tags.length ? '' : 'Type a tag and press Enter'}
+                data-testid="partner-rule-tags-input"
+              />
+              <FormHelperText>
+                Added to the user&apos;s tags at email verification. Tags stay on the user if the rule is later disabled
+                or deleted.
               </FormHelperText>
             </FormControl>
 

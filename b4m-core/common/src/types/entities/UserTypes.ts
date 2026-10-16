@@ -689,6 +689,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   clearOrganizationPointer: (organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
+  /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
+  addTagsToUser: (userId: string, tags: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
   /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */

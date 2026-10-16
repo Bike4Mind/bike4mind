@@ -30,8 +30,8 @@ const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: n
 
 /**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
- * partner-rule org membership (with the seat-ceiling / at-capacity alerts), and the entitlement
- * cache wake-up. Shared by every path that proves email ownership: the new-account branches of
+ * partner-rule org membership (with the seat-ceiling / at-capacity alerts), partner-rule user tags,
+ * and the entitlement cache wake-up. Shared by every path that proves email ownership: the new-account branches of
  * /api/otc/verify, server/utils/auth/verifyCallback.ts and pages/api/auth/okta/callback.ts, and
  * every path that verifies an EXISTING account via server/auth/emailVerifiedGrants.ts.
  *
@@ -40,8 +40,8 @@ const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: n
  * grant access with 0 bonus credits without falling through to the env amount.
  *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
- * verification or signup is never failed. Both the credit grant (stable
- * `domain-grant-credits:${userId}` transactionId) and the membership write are idempotent, so a
+ * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
+ * transactionId), the membership write and the tag merge ($addToSet) are all idempotent, so a
  * re-run from another path or a retry cannot double-apply.
  */
 export async function applySignupDomainGrant(params: {
@@ -56,16 +56,19 @@ export async function applySignupDomainGrant(params: {
   let signupCredits: number;
   // Only a DB rule can confer org membership; the env registry has no org concept.
   let partnerOrganizationId: string | null;
+  let partnerTags: string[];
   try {
     const partnerGrant = await partnerSignupGrantForEmail(email, true);
     if (partnerGrant.matched) {
       domainGrantKeys = partnerGrant.entitlements;
       signupCredits = partnerGrant.signupCredits;
       partnerOrganizationId = partnerGrant.organizationId;
+      partnerTags = partnerGrant.tags;
     } else {
       domainGrantKeys = entitlementsForEmail(email, true);
       signupCredits = signupCreditsForKeys(domainGrantKeys);
       partnerOrganizationId = null;
+      partnerTags = [];
     }
   } catch (resolveError) {
     logger.error(`Signup domain grant could not be resolved for user ${userId} (${trigger})`, resolveError);
@@ -106,11 +109,34 @@ export async function applySignupDomainGrant(params: {
     result.joinedOrganizationId = await applyPartnerMembership(userId, partnerOrganizationId, trigger, logger);
   }
 
-  if (domainGrantKeys.size > 0) {
+  const tagsApplied = partnerTags.length > 0 && (await applyPartnerTags(userId, partnerTags, trigger, logger));
+
+  // A tag can itself be an entitlement key (getUserEntitlements reads user.tags), so new tags wake the cache too.
+  if (domainGrantKeys.size > 0 || tagsApplied) {
     await pushEntitlementInvalidation(userId, logger);
   }
 
   return result;
+}
+
+/** Merges a partner rule's tags into the user's tags. Returns whether the write succeeded. */
+async function applyPartnerTags(
+  userId: string,
+  tags: string[],
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<boolean> {
+  try {
+    await userRepository.addTagsToUser(userId, tags);
+    logger.info(`Partner-rule tags: applied [${tags.join(', ')}] to user ${userId} (${trigger})`);
+    return true;
+  } catch (tagError) {
+    logger.error(
+      `Partner-rule tag stamp failed for user ${userId} (${trigger}); the $addToSet merge makes a retry safe`,
+      tagError
+    );
+    return false;
+  }
 }
 
 /**

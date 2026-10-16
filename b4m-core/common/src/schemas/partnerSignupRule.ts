@@ -60,6 +60,13 @@ const entitlementKeySchema = z
 // the update path inheriting create's defaults.
 const entitlementsSchema = z.array(entitlementKeySchema).max(20, 'Too many entitlements');
 const signupCreditsSchema = z.number().int('Credits must be a whole number').min(0, 'Credits cannot be negative');
+// Case-preserving: some tag checks are case-sensitive (see DEVELOPER_USER_TAGS in ./user).
+const userTagSchema = z.string().trim().min(1, 'Tag cannot be empty').max(128, 'Tag is too long');
+// Duplicates are dropped rather than rejected; the grant merges with $addToSet regardless.
+const tagsSchema = z
+  .array(userTagSchema)
+  .max(20, 'Too many tags')
+  .transform(tags => [...new Set(tags)]);
 const labelSchema = z.string().trim().max(120);
 const notesSchema = z.string().trim().max(2000);
 
@@ -84,6 +91,7 @@ export const createPartnerSignupRuleSchema = z.object({
   entitlements: entitlementsSchema,
   signupCredits: signupCreditsSchema,
   organizationId: organizationIdSchema.optional(),
+  tags: tagsSchema.optional(),
   enabled: z.boolean().default(true),
   label: labelSchema.optional(),
   notes: notesSchema.optional(),
@@ -99,6 +107,7 @@ export const updatePartnerSignupRuleSchema = z
     entitlements: entitlementsSchema.optional(),
     signupCredits: signupCreditsSchema.optional(),
     organizationId: organizationIdSchema.optional(),
+    tags: tagsSchema.optional(),
     enabled: z.boolean().optional(),
     label: labelSchema.optional(),
     notes: notesSchema.optional(),

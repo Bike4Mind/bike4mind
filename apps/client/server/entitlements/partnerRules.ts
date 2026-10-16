@@ -26,6 +26,8 @@ type ResolvedRule = {
   signupCredits: number;
   /** Org a verified signup on this domain is auto-added to, or null. */
   organizationId: string | null;
+  /** User tags stamped at signup; case preserved (see IPartnerSignupRule.tags). */
+  tags: string[];
 };
 
 /** How long a loaded rule set is trusted before a refresh (ms). */
@@ -50,6 +52,7 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
       entitlements: rule.entitlements.map(normalizeTag).filter(Boolean),
       signupCredits: rule.signupCredits ?? 0,
       organizationId: rule.organizationId ?? null,
+      tags: rule.tags ?? [],
     });
   }
   cache = { rules: map, loadedAt: Date.now() };
@@ -146,13 +149,15 @@ export async function partnerSignupGrantForEmail(
   entitlements: Set<EntitlementKey>;
   signupCredits: number;
   organizationId: string | null;
+  tags: string[];
 }> {
   const rule = await ruleForEmail(email, emailVerified);
-  if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0, organizationId: null };
+  if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0, organizationId: null, tags: [] };
   return {
     matched: true,
     entitlements: new Set(rule.entitlements),
     signupCredits: rule.signupCredits,
     organizationId: rule.organizationId,
+    tags: [...rule.tags],
   };
 }

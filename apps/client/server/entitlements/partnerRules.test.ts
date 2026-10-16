@@ -65,6 +65,29 @@ describe('partnerRules resolver', () => {
     expect((await partnerSignupGrantForEmail('a@partner.com', true)).organizationId).toBeNull();
   });
 
+  it('signup grant carries the matched rule tags, and none when the rule has no tags', async () => {
+    mockFindActiveRules.mockResolvedValue([{ ...RULE, tags: ['Partner', 'cohort-a'] }]);
+    expect((await partnerSignupGrantForEmail('a@partner.com', true)).tags).toEqual(['Partner', 'cohort-a']);
+
+    invalidatePartnerRuleCache();
+    mockFindActiveRules.mockResolvedValue([RULE]);
+    expect((await partnerSignupGrantForEmail('a@partner.com', true)).tags).toEqual([]);
+  });
+
+  it('signup grant carries no tags for a non-matching domain', async () => {
+    mockFindActiveRules.mockResolvedValue([{ ...RULE, tags: ['Partner'] }]);
+    expect((await partnerSignupGrantForEmail('a@other.com', true)).tags).toEqual([]);
+  });
+
+  it('signup grant carries no tags once the rule is disabled (absent from the active set)', async () => {
+    // findActiveRules filters `enabled: true` (covered in PartnerSignupRuleModel.test.ts), so a
+    // disabled rule never reaches the resolver.
+    mockFindActiveRules.mockResolvedValue([]);
+    const grant = await partnerSignupGrantForEmail('a@partner.com', true);
+    expect(grant.matched).toBe(false);
+    expect(grant.tags).toEqual([]);
+  });
+
   it('caches the rule set so repeated resolutions hit the DB once', async () => {
     await partnerEntitlementsForEmail('a@partner.com', true);
     await partnerEntitlementsForEmail('b@partner.com', true);

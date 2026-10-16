@@ -26,6 +26,12 @@ export interface IPartnerSignupRule {
    * deleting the rule stops future auto-adds but never evicts existing members.
    */
   organizationId?: string | null;
+  /**
+   * User tags stamped onto a verified signup on this domain, merged into the user's existing
+   * tags. Unlike `entitlements` (derived on read, so disabling the rule revokes them), tags are
+   * written once and stay on the user after the rule is disabled or deleted.
+   */
+  tags?: string[];
   /** Soft on/off without deleting the row. Disabled rules confer nothing. */
   enabled: boolean;
   /** Admin-facing display name (e.g. the partner's name). */
