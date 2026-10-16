@@ -24,7 +24,7 @@ import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -95,11 +95,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
-  // email-domain grantees) sees OptiHashi without flipping the feature flag.
-  const hasOptiAccess = useOptiAccess();
-  // Visibility rides purely on product access (tag/entitlement); the legacy
-  // experimental toggle was retired with the open-core carve.
-  const isOptiEnabled = hasOptiAccess;
+  // email-domain grantees) sees OptiHashi without flipping the feature flag, unless the user hid
+  // the workspace in Settings (display only; /opti itself stays reachable).
+  const isOptiEnabled = useOptiVisible();
   // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
   // with product access, so an open-core build has no row and no dead-end.
   const isMeetingsEnabled = useMeetingsAccess();

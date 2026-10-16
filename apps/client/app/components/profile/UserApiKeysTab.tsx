@@ -192,7 +192,7 @@ interface NewKeyModalProps {
 }
 
 function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
-  const genericScopes = useGenericApiKeyScopes();
+  const genericScopes = useGenericApiKeyScopes({ respectHiddenSurfaces: true });
   const scopeModel = useMemo(() => buildScopeModel(genericScopes), [genericScopes]);
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
     name: '',
@@ -938,7 +938,7 @@ ai_response = response.json()`,
   // Docs tab shows only generic-flow scopes; dedicated-flow scopes (embed:chat) are
   // hidden until their mint flow ships (epic #41 Phase E) so we don't advertise a
   // scope/endpoint a user cannot use yet. Premium scopes need Opti access.
-  const scopeDescriptions = useGenericApiKeyScopes();
+  const scopeDescriptions = useGenericApiKeyScopes({ respectHiddenSurfaces: true });
 
   const copyCode = (code: string) => {
     handleCopyToClipboard(code);

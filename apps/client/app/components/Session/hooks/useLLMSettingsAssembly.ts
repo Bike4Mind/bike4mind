@@ -2,8 +2,9 @@ import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
-import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS } from '@bike4mind/common';
+import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS, isToolHiddenBySurface } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
 import type { LLMSettings } from '@client/app/components/commands/LLMCommand';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 
@@ -29,6 +30,11 @@ export interface ResolveToolsParams {
    * silently adding its own.
    */
   skipAutoOffers?: boolean;
+  /**
+   * Surface of the session this send goes to. Tools of a workspace the user hid are dropped from
+   * the send (and never auto-recommended) unless this is that workspace (`isToolHiddenBySurface`).
+   */
+  activeSurface?: string | null;
 }
 
 export interface ResolveToolsResult {
@@ -60,6 +66,7 @@ export function useLLMSettingsAssembly(): {
   const [temperature, top_p, n, toolMode, tools] = useLLM(
     useShallow(s => [s.temperature, s.top_p, s.n, s.toolMode, s.tools])
   );
+  const hiddenSurfaces = useHiddenSurfaceIds();
 
   const assembleSettings = useCallback(
     ({ stream, safeMaxTokens }: AssembleSettingsParams): LLMSettings => ({
@@ -77,7 +84,14 @@ export function useLLMSettingsAssembly(): {
   );
 
   const resolveTools = useCallback(
-    ({ prompt, supportsTools, toolsOverride, skipAutoOffers }: ResolveToolsParams): ResolveToolsResult => {
+    ({
+      prompt,
+      supportsTools,
+      toolsOverride,
+      skipAutoOffers,
+      activeSurface,
+    }: ResolveToolsParams): ResolveToolsResult => {
+      const visible = (tool: string) => !isToolHiddenBySurface(tool, hiddenSurfaces, activeSurface);
       // Briefcase per-message tools override: a one-click prompt declares exactly
       // the tools its send must run with, for THIS message only - without mutating
       // the user's sticky tool selection. It short-circuits the Smart/Fast ladder
@@ -89,7 +103,9 @@ export function useLLMSettingsAssembly(): {
         // Defense-in-depth: re-strip integration-gated tools at dispatch. The
         // authoring API already rejects them, but a seeded/DB-written system prompt
         // could carry one - never let it ride into a send via the override.
-        const safeOverride = toolsOverride.filter(t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t));
+        const safeOverride = toolsOverride.filter(
+          t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t) && visible(t)
+        );
         if (!supportsTools) {
           // Omit the parenthetical when stripping left no runnable tools, so the
           // message never degrades to "requires tools () that the current model can't run".
@@ -111,22 +127,22 @@ export function useLLMSettingsAssembly(): {
         // "Only tools I pick" means only: skip the recommender entirely rather than
         // merge and toast for a tool the user asked not to have auto-added.
         if (skipAutoOffers) {
-          return { effectiveTools: tools, refused: false };
+          return { effectiveTools: tools.filter(visible), refused: false };
         }
-        const recommendations = recommendTools(prompt);
+        const recommendations = recommendTools(prompt).filter(r => visible(r.tool));
         const autoSelected = recommendations.filter(r => !tools.includes(r.tool));
         if (autoSelected.length > 0) {
           const names = autoSelected.map(r => r.reason).join(', ');
           toast.info(`Smart tools: ${names}`);
         }
-        return { effectiveTools: mergeTools(recommendations, tools), refused: false };
+        return { effectiveTools: mergeTools(recommendations, tools).filter(visible), refused: false };
       }
       if (toolMode === 'fast') {
         return { effectiveTools: [], refused: false };
       }
-      return { effectiveTools: tools, refused: false };
+      return { effectiveTools: tools.filter(visible), refused: false };
     },
-    [tools, toolMode]
+    [tools, toolMode, hiddenSurfaces]
   );
 
   return { assembleSettings, resolveTools };

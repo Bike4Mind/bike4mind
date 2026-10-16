@@ -5,9 +5,14 @@ import { useOptiNavigation } from './useOptiNavigation';
 
 const mockNavigate = vi.fn();
 
+const h = vi.hoisted(() => ({ pathname: '/notebooks/abc', hiddenSurfaces: [] as string[] }));
+
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
+  useLocation: ({ select }: { select: (l: { pathname: string }) => unknown }) => select({ pathname: h.pathname }),
 }));
+
+vi.mock('./useHiddenSurfaces', () => ({ useHiddenSurfaceIds: () => h.hiddenSurfaces }));
 
 vi.mock('@client/app/components/admin/useAdminModal', () => ({
   useAdminModal: (selector: (s: unknown) => unknown) => selector({ setActiveTab: vi.fn() }),
@@ -31,6 +36,42 @@ describe('useNavigationExecutor', () => {
     vi.clearAllMocks();
     useOptiNavigation.getState().clearPending();
     useOptiNavigation.getState().setHostHandlesFamilyInPlace(false);
+    h.pathname = '/notebooks/abc';
+    h.hiddenSurfaces = [];
+  });
+
+  describe('with the workspace hidden', () => {
+    beforeEach(() => {
+      h.hiddenSurfaces = ['opti'];
+    });
+
+    it('skips a suggested navigation into the hidden workspace', () => {
+      const { result } = renderHook(() => useNavigationExecutor());
+      result.current(optiIntent('scheduling'));
+      result.current({ navigationType: 'route', target: '/opti?mode=canvas' } as Parameters<
+        ReturnType<typeof useNavigationExecutor>
+      >[0]);
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(useOptiNavigation.getState().pendingFamily).toBeNull();
+    });
+
+    it('still navigates elsewhere', () => {
+      const { result } = renderHook(() => useNavigationExecutor());
+      result.current({ navigationType: 'route', target: '/notebooks' } as Parameters<
+        ReturnType<typeof useNavigationExecutor>
+      >[0]);
+
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/notebooks' });
+    });
+
+    it('still navigates within the workspace when the user is already in it', () => {
+      h.pathname = '/opti';
+      const { result } = renderHook(() => useNavigationExecutor());
+      result.current(optiIntent('scheduling'));
+
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('marks an Opti click as user-initiated so the surface does not drop it as a replay', () => {

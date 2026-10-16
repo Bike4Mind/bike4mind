@@ -39,6 +39,7 @@ const {
   mockCreateSession,
   mockFindByIdAndUpdate,
   mockDeleteSession,
+  mockSessionFindById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -58,6 +59,8 @@ const {
   mockFindByIdAndUpdate: vi.fn(),
   // Cleanup of a notebook this request opened when invoke rejects the turn (unknown model).
   mockDeleteSession: vi.fn(),
+  // The session's surface, read only when the caller has hidden a workspace.
+  mockSessionFindById: vi.fn(),
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
@@ -191,6 +194,7 @@ vi.mock('@bike4mind/database', async orig => {
     sessionRepository: {
       ...(actual.sessionRepository as object),
       delete: (...a: unknown[]) => mockDeleteSession(...a),
+      findById: (...a: unknown[]) => mockSessionFindById(...a),
     },
   };
 });
@@ -812,6 +816,62 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   // The caller-supplied systemPrompt field (POST /api/chat). Asserted here specifically on the
   // ASYNC (wait: false, default) dispatch path via mockInvoke - a test that only covered wait:true
   // would pass even if the default path silently dropped the field.
+  // A workspace the user hid from their UI keeps its tools out of turns in other sessions; inside
+  // the workspace's own sessions they stay available.
+  describe('tools of a hidden workspace', () => {
+    const OPTI_TOOL = 'optihashi_schedule';
+    type InvokedBody = { tools?: string[]; deniedTools?: string[] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: InvokedBody }).body;
+    const userWithHidden = (hiddenSurfaces: string[]) =>
+      mockFindById.mockReturnValue(
+        Promise.resolve({
+          id: 'user-1',
+          _id: 'user-1',
+          isBanned: false,
+          disputePending: false,
+          organizationId: undefined,
+          preferences: { hiddenSurfaces },
+        })
+      );
+    const fireWithTools = () =>
+      fire({ body: { message: 'hi', sessionId: 'sess-1', tools: [OPTI_TOOL, 'web_search'] } });
+
+    beforeEach(() => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    });
+
+    it('drops and denies the hidden workspace tools in a main-list session', async () => {
+      userWithHidden(['opti']);
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', surface: null });
+      const { req, res } = fireWithTools();
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().tools).toEqual(['web_search']);
+      expect(invokedBody().deniedTools).toContain(OPTI_TOOL);
+      expect(invokedBody().deniedTools).not.toContain('web_search');
+    });
+
+    it('keeps the tools for a session inside the hidden workspace', async () => {
+      userWithHidden(['opti']);
+      mockSessionFindById.mockResolvedValue({ id: 'sess-1', surface: 'opti' });
+      const { req, res } = fireWithTools();
+      await handler(req, res);
+
+      expect(invokedBody().tools).toEqual([OPTI_TOOL, 'web_search']);
+      expect(invokedBody().deniedTools).toBeUndefined();
+    });
+
+    it('changes nothing, and reads no session, when no workspace is hidden', async () => {
+      userWithHidden([]);
+      const { req, res } = fireWithTools();
+      await handler(req, res);
+
+      expect(invokedBody().tools).toEqual([OPTI_TOOL, 'web_search']);
+      expect(mockSessionFindById).not.toHaveBeenCalled();
+    });
+  });
+
   describe('systemPrompt (caller-supplied)', () => {
     const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: { systemPrompt?: string } }).body;
 

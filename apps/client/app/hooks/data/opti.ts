@@ -1,6 +1,8 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { userIsDeveloper } from '@client/app/utils/user';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
+import { isSurfaceHidden, OPTI_SURFACE } from '@bike4mind/common';
 import { useEntitlements } from './entitlements';
 
 // Builds without the OptiHashi overlay (open core) have no /opti route at all;
@@ -43,4 +45,15 @@ export function useOptiAccess(): boolean {
   if (!optiRouteExists) return false;
   if (syncGranted) return true;
   return (entitlements ?? []).includes('optihashi:pro');
+}
+
+/**
+ * Whether Opti launch points (sidenav row, logo target, self-service key scopes) should show: access
+ * per `useOptiAccess`, minus the user's own hidden-surfaces display preference. Access checks must
+ * keep using `useOptiAccess`; hiding never revokes the route or existing sessions.
+ */
+export function useOptiVisible(): boolean {
+  const hasAccess = useOptiAccess();
+  const hidden = isSurfaceHidden(useHiddenSurfaceIds(), OPTI_SURFACE);
+  return hasAccess && !hidden;
 }

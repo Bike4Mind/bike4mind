@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 
-import OrchestrationSection from './OrchestrationSection';
+import OrchestrationSection, { pickableToolsFor } from './OrchestrationSection';
 import type { AgentOrchestration } from '../../types/agentForm';
 import { DEFAULT_MAX_ITERATIONS } from '../../constants/agentForm';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
@@ -31,6 +31,7 @@ import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 // up in a unit test. The model picker isn't under test here - we just need it
 // to render without throwing. Mock path must match the importer's relative
 // path (vitest's mock resolution is path-literal-equal, not alias-aware).
+vi.mock('../../hooks/useHiddenSurfaces', () => ({ useHiddenSurfaceIds: () => [] }));
 vi.mock('../../hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({ accessibleTextModels: [] }),
 }));
@@ -234,5 +235,22 @@ describe('OrchestrationSection', () => {
     const next = onChange.mock.calls.at(-1)![0] as AgentOrchestration;
     // Below-min input gets clamped to the lower bound (1), not accepted as 0.
     expect(next.maxIterations.quick).toBe(1);
+  });
+});
+
+describe('pickableToolsFor', () => {
+  const OPTI_TOOL = 'optihashi_schedule';
+
+  it('omits a hidden workspace tool from the picker', () => {
+    expect(pickableToolsFor(['opti'], [])).not.toContain(OPTI_TOOL);
+    expect(pickableToolsFor(['opti'], [])).toContain('web_search');
+  });
+
+  it('keeps a hidden workspace tool already saved on the agent', () => {
+    expect(pickableToolsFor(['opti'], [OPTI_TOOL])).toContain(OPTI_TOOL);
+  });
+
+  it('shows the tool again when the workspace is unhidden', () => {
+    expect(pickableToolsFor([], [])).toContain(OPTI_TOOL);
   });
 });

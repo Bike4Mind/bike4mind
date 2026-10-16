@@ -149,6 +149,9 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+// Overlay tool implementations are irrelevant here; the core list already names the hidden-surface tools.
+vi.mock('@server/premium-generated/premiumLlmTools.generated', () => ({ premiumLlmTools: {} }));
+
 import handler from '../llm';
 import { ApiKeyScope } from '@bike4mind/common';
 
@@ -292,6 +295,45 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
 
     it('denies nothing to a JWT/browser caller', async () => {
       const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(invokedDenied()).toBeUndefined();
+    });
+  });
+
+  // A workspace the user hid from their UI keeps its tools out of turns in other sessions.
+  describe('tools of a hidden workspace', () => {
+    const OPTI_TOOL = 'optihashi_schedule';
+    const invokedDenied = () => (mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools;
+    const sessionIn = (surface: string | null) =>
+      mockGetOrCreateSession.mockResolvedValue({
+        sessionId: 'sess-1',
+        asyncPromises: [],
+        session: { id: 'sess-1', name: 'Test Session', surface },
+      });
+
+    beforeEach(() => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+      mockUserFindById.mockResolvedValue({
+        id: 'user-1',
+        _id: 'user-1',
+        isBanned: false,
+        disputePending: false,
+        preferences: { hiddenSurfaces: ['opti'] },
+      });
+    });
+
+    it('denies the hidden workspace tools in a session outside that workspace', async () => {
+      sessionIn(null);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedDenied()).toContain(OPTI_TOOL);
+      expect(invokedDenied()).not.toContain('web_search');
+    });
+
+    it('denies nothing for a session inside the hidden workspace', async () => {
+      sessionIn('opti');
+      const { req, res } = fire();
       await handler(req, res);
       expect(invokedDenied()).toBeUndefined();
     });

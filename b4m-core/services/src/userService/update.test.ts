@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { updateUser, applyBaseUserUpdates, type UpdateUserParameters } from './update';
+import { updateUser, applyBaseUserUpdates, updateUserSchema, type UpdateUserParameters } from './update';
 import { IUserDocument } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 
@@ -632,5 +632,26 @@ describe('updateUser', () => {
     expect(persisted.preferences?.showSplashCards).toBe(true);
     expect(persisted.preferences?.showFunTools).toBe(false);
     expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
+  });
+});
+
+describe('updateUserSchema - preferences.hiddenSurfaces', () => {
+  const parse = (hiddenSurfaces: unknown) => updateUserSchema.safeParse({ preferences: { hiddenSurfaces } });
+
+  it('accepts a list of surface ids, including an empty one that shows everything again', () => {
+    expect(parse(['opti']).success).toBe(true);
+    expect(parse([]).success).toBe(true);
+  });
+
+  it('rejects an oversized id or list', () => {
+    expect(parse(['x'.repeat(65)]).success).toBe(false);
+    expect(parse(Array.from({ length: 33 }, (_, i) => `s${i}`)).success).toBe(false);
+  });
+
+  it('replaces the stored list wholesale on write', () => {
+    const user = { id: 'u', preferences: { hiddenSurfaces: ['opti'], language: 'en' } } as unknown as IUserDocument;
+    const result = applyBaseUserUpdates(user, { preferences: { hiddenSurfaces: [] } });
+    expect(result.preferences?.hiddenSurfaces).toEqual([]);
+    expect(result.preferences?.language).toBe('en');
   });
 });

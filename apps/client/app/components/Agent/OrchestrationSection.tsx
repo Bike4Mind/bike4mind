@@ -33,13 +33,14 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import { B4MLLMToolsList } from '@bike4mind/common';
+import { B4MLLMToolsList, isToolHiddenBySurface } from '@bike4mind/common';
 
 import { AgentOrchestration, ThoroughnessLevel } from '../../types/agentForm';
 import { THOROUGHNESS_OPTIONS, TOOLS_REQUIRING_APPROVAL } from '../../constants/agentForm';
 import { isOrchestrationConfigured } from '../../utils/agentFormUtils';
 import { TOOL_MAPPING } from '../../utils/toolMapping';
 import { useAccessibleModels } from '../../hooks/useAccessibleModels';
+import { useHiddenSurfaceIds } from '../../hooks/useHiddenSurfaces';
 
 interface OrchestrationSectionProps {
   value: AgentOrchestration;
@@ -63,6 +64,14 @@ interface OrchestrationSectionProps {
  * filter intentionally limits surface area to user-safe tools.
  */
 const PICKABLE_TOOLS: string[] = B4MLLMToolsList.filter(t => t in TOOL_MAPPING).sort();
+
+/**
+ * `PICKABLE_TOOLS` minus tools of a workspace the user hid (agents run outside any one workspace).
+ * A tool already saved in `selected` stays listed, so hiding never strips it from an agent.
+ */
+export function pickableToolsFor(hiddenSurfaces: readonly string[], selected: readonly string[]): string[] {
+  return PICKABLE_TOOLS.filter(tool => selected.includes(tool) || !isToolHiddenBySurface(tool, hiddenSurfaces, null));
+}
 
 const ITERATION_BOUNDS = { min: 1, max: 100 } as const;
 
@@ -396,7 +405,7 @@ interface ToolMultiSelectProps {
 /**
  * Tool multi-select with chip rendering. Used for both Allowed and Denied tool
  * lists - the only differences are the chip color (soft vs danger) and whether
- * we surface `needs approval` badges on the options. Sourced from `PICKABLE_TOOLS`,
+ * we surface `needs approval` badges on the options. Sourced from `pickableToolsFor`,
  * displayed via `TOOL_MAPPING`.
  */
 const ToolMultiSelect: React.FC<ToolMultiSelectProps> = ({
@@ -411,6 +420,8 @@ const ToolMultiSelect: React.FC<ToolMultiSelectProps> = ({
   showApprovalBadges,
 }) => {
   const chipColor = intent === 'deny' ? 'danger' : undefined;
+  const hiddenSurfaces = useHiddenSurfaceIds();
+  const options = pickableToolsFor(hiddenSurfaces, value);
   return (
     <FormControl size="sm">
       <FormLabel sx={{ fontWeight: 400, color: 'text.primary50' }}>{label}</FormLabel>
@@ -440,7 +451,7 @@ const ToolMultiSelect: React.FC<ToolMultiSelectProps> = ({
         }}
         data-testid={testId}
       >
-        {PICKABLE_TOOLS.map(tool => (
+        {options.map(tool => (
           <Option key={tool} value={tool}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
               <span>{TOOL_MAPPING[tool as keyof typeof TOOL_MAPPING]?.displayName ?? tool}</span>

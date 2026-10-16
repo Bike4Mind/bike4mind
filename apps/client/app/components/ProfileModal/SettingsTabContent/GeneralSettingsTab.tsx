@@ -45,6 +45,7 @@ import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
+import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from '@client/app/hooks/data/mfa';
@@ -695,6 +696,8 @@ const GeneralSettingsTab = () => {
           </Grid>
         </Grid>
       </SectionContainer>
+
+      <WorkspaceVisibilitySection />
 
       {/* Files Section */}
       <SectionContainer title="Files">

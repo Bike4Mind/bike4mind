@@ -75,6 +75,12 @@ Connect with other Bike4Mind users.
 | **Help Interface** | Show/hide help tooltips |
 | **Voice** | Text-to-speech preferences |
 
+### Workspaces
+
+If your account has access to an additional workspace (for example OptiHashi), the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your own UI: its sidebar entry, the logo shortcut, move and copy targets, automatic tool suggestions, the agent tool picker, and its scopes in the New API Key dialog. Its tools are also left out of chats in your other notebooks.
+
+Hiding is a display preference only. Your access does not change: a direct link to the workspace still opens it, notebooks already in that workspace keep working (including its tools), and turning the switch back on restores everything. The card does not appear if you have no workspace you can hide.
+
 ### Experimental Features
 
 Bike4Mind offers several cutting-edge features that are opt-in. **You must enable each feature here before it appears in your sidebar or UI.** For example, if you don't see "Agents" in your left navigation, it's because the Agents toggle hasn't been turned on yet.
@@ -92,7 +98,6 @@ Bike4Mind offers several cutting-edge features that are opt-in. **You must enabl
 | **[Private Model Hub](./private-model-hub.md)** | Access privately hosted cutting-edge models including DeepSeek, Qwen, and other frontier models | Additional models in model selector |
 | **[Research Engine](./research-engine.md)** | Search the web for information during AI conversations | Web search and deep research tools in chat |
 | **[B4M Pi](./b4m-pi.md)** | Repository analysis, task scheduling, Gantt charts, and team activity dashboards | **B4M Pi in the sidebar**, full project intelligence dashboard |
-| **OptiHashi** | AI-driven optimization across advanced solvers | **OptiHashi in the sidebar**, optimization dashboard and chat tools |
 | **[Lattice](./lattice.md)** | Create and manipulate financial pro-forma models using natural language | Lattice model artifacts in notebooks |
 
 ### Data Management

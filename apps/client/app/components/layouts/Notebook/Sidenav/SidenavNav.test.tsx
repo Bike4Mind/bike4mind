@@ -13,20 +13,26 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navItems, entitlements } = vi.hoisted(() => ({
-  useFeatureEnabledMock: vi.fn(),
-  useGearsNavSignalMock: vi.fn(),
-  useVideoModelsMock: vi.fn(),
-  // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-  navItems: [] as Array<{
-    path: string;
-    label: string;
-    icon?: ComponentType;
-    requireEntitlement?: string;
-    sidebar?: boolean;
-  }>,
-  entitlements: [] as string[],
-}));
+const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navItems, entitlements, userState } =
+  vi.hoisted(() => ({
+    useFeatureEnabledMock: vi.fn(),
+    useGearsNavSignalMock: vi.fn(),
+    useVideoModelsMock: vi.fn(),
+    // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
+    navItems: [] as Array<{
+      path: string;
+      label: string;
+      icon?: ComponentType;
+      requireEntitlement?: string;
+      sidebar?: boolean;
+    }>,
+    entitlements: [] as string[],
+    // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
+    userState: {
+      isAdmin: false,
+      currentUser: undefined as { preferences?: { hiddenSurfaces?: string[] } } | undefined,
+    },
+  }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
@@ -37,8 +43,9 @@ vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useV
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => undefined }));
-vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => false }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: typeof userState) => unknown) => selector(userState),
+}));
 // SidenavNav gates the Bob row on entitlements via useEntitlements (react-query useQuery).
 // This suite renders SidenavNav without a QueryClientProvider, so stub the hook like the
 // others rather than mount a client; the Bob row tests set what the user holds.
@@ -50,7 +57,8 @@ vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
-vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
+// Only /opti is mounted, so the Opti row is the one premium row that access can reveal here.
+vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [{ path: '/opti' }] }));
 vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({ premiumNavItems: navItems }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
@@ -87,6 +95,45 @@ beforeEach(() => {
   useVideoModelsMock.mockReturnValue({ data: [] });
   navItems.length = 0;
   entitlements.length = 0;
+  userState.isAdmin = false;
+  userState.currentUser = undefined;
+});
+
+describe('SidenavNav Opti row', () => {
+  const optiRow = () => screen.queryByTestId('sidenav-nav-opti');
+
+  it('hides without access', () => {
+    renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+  });
+
+  it('shows with access when the workspace is not hidden', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    renderNav();
+    expect(optiRow()).toBeInTheDocument();
+  });
+
+  it('hides with access when the user hid the workspace', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
+    renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+  });
+
+  it('shows the workspace again when unhidden', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
+    const { rerender } = renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <SidenavNav />
+      </CssVarsProvider>
+    );
+    expect(optiRow()).toBeInTheDocument();
+  });
 });
 
 describe('SidenavNav feature rows', () => {

@@ -720,6 +720,7 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
+      activeSurface: sessionToSend?.surface,
     });
     if (refused) {
       setSubmitting(false);

@@ -7,7 +7,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 import ApiReferenceTab from './ApiReferenceTab';
 
 const h = vi.hoisted(() => ({ hasOptiAccess: false }));
-vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+// useOptiVisible answers false so a regression to the display-filtered gate would fail here.
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess, useOptiVisible: () => false }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,

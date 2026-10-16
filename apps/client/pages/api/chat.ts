@@ -48,6 +48,7 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { hiddenSurfaceToolNames } from '@server/utils/hiddenSurfaceTools';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -142,15 +143,23 @@ const handler = nextRouteForContract(chatContract, {
   apiTimer.phase('session');
   const { sessionId, createdNotebook } = await resolveChatSessionId(req, simplifiedRequest);
 
+  // Tools of a workspace the user hid from their UI are withheld outside that workspace. They are
+  // dropped from what this layer offers AND denied, so a session-forced copy cannot ride back in.
+  const hiddenSurfaceTools = await resolveHiddenSurfaceTools(
+    req.user.preferences?.hiddenSurfaces,
+    createdNotebook ? null : sessionId
+  );
+  const offeredRecommendations = recommendations.filter(r => !hiddenSurfaceTools.has(r.tool));
+
   // Transform to internal format. The resolved organizationId (already a validated hex string,
   // or undefined for personal) also scopes team-wide system prompts downstream.
   const internalRequest = transformToInternalFormat(
     { ...simplifiedRequest, model, sessionId },
     req.user.id,
     organizationId,
-    recommendations,
-    requestedTools,
-    dataLakeToolsDeniedFor(req)
+    offeredRecommendations,
+    requestedTools.filter(tool => !hiddenSurfaceTools.has(tool)),
+    [...dataLakeToolsDeniedFor(req), ...hiddenSurfaceTools]
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
@@ -158,7 +167,7 @@ const handler = nextRouteForContract(chatContract, {
   const toolMeta = buildToolMeta({
     toolMode: simplifiedRequest.toolMode,
     effectiveTools: internalRequest.tools,
-    autoSelectedTools: recommendations.map(r => r.tool),
+    autoSelectedTools: offeredRecommendations.map(r => r.tool),
     unrecognizedTools,
   });
 
@@ -420,6 +429,19 @@ async function resolveChatSessionId(
   }
 
   throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
+}
+
+/**
+ * `hiddenSurfaceToolNames` for this turn's session. Reads the session only when the user has hidden
+ * something; a notebook this request just created is in the main list.
+ */
+async function resolveHiddenSurfaceTools(
+  hiddenSurfaces: readonly string[] | undefined,
+  existingSessionId: string | null
+): Promise<Set<string>> {
+  if (!hiddenSurfaces?.length) return new Set();
+  const session = existingSessionId ? await sessionRepository.findById(existingSessionId) : null;
+  return hiddenSurfaceToolNames(hiddenSurfaces, session?.surface);
 }
 
 /**

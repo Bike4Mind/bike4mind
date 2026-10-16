@@ -122,6 +122,7 @@ const UserPreferencesSchema = new Schema(
     language: { type: String },
     favoriteTags: { type: [String] },
     favoriteModelIds: { type: [String], default: [] },
+    hiddenSurfaces: { type: [String], default: [] },
     fileBrowserViewMode: { type: String, enum: ['home', 'list', 'grid', 'tags'] },
     optiSessionId: { type: String, default: null },
     lastUsedTextModel: { type: String, default: null },

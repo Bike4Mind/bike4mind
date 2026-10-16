@@ -3,6 +3,8 @@ import {
   canUseSurface,
   checkSurfaceTransition,
   getWorkspaceSurface,
+  isSurfaceHidden,
+  isToolHiddenBySurface,
   normalizeSurfaceId,
   OPTI_SURFACE,
   WORKSPACE_SURFACES,
@@ -81,5 +83,47 @@ describe('checkSurfaceTransition', () => {
       ok: false,
       status: 400,
     });
+  });
+});
+
+describe('isSurfaceHidden', () => {
+  it('hides a hideable surface the preference lists', () => {
+    expect(isSurfaceHidden([OPTI_SURFACE], OPTI_SURFACE)).toBe(true);
+  });
+
+  it('shows the surface again when the preference no longer lists it', () => {
+    expect(isSurfaceHidden([], OPTI_SURFACE)).toBe(false);
+    expect(isSurfaceHidden(undefined, OPTI_SURFACE)).toBe(false);
+  });
+
+  it('never hides the main list, even when the preference names it', () => {
+    expect(getWorkspaceSurface(null)?.hideable).toBe(false);
+    expect(isSurfaceHidden(['', 'null'], null)).toBe(false);
+  });
+
+  it('ignores ids this repo does not register', () => {
+    expect(isSurfaceHidden(['some-private-surface'], 'some-private-surface')).toBe(false);
+  });
+});
+
+describe('isToolHiddenBySurface', () => {
+  const optiTool = `${getWorkspaceSurface(OPTI_SURFACE)?.toolNamePrefix}schedule`;
+
+  it('hides a hidden surface tool outside that surface', () => {
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], null)).toBe(true);
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], undefined)).toBe(true);
+  });
+
+  it('keeps the tool available inside the surface it belongs to', () => {
+    expect(isToolHiddenBySurface(optiTool, [OPTI_SURFACE], OPTI_SURFACE)).toBe(false);
+  });
+
+  it('keeps the tool when the surface is not hidden', () => {
+    expect(isToolHiddenBySurface(optiTool, [], null)).toBe(false);
+    expect(isToolHiddenBySurface(optiTool, undefined, null)).toBe(false);
+  });
+
+  it('never hides a tool that no surface contributes', () => {
+    expect(isToolHiddenBySurface('web_search', [OPTI_SURFACE], null)).toBe(false);
   });
 });
