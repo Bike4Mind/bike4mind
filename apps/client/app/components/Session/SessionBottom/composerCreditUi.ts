@@ -11,8 +11,9 @@ export interface ComposerCreditUi {
  * What the composer shows for the credit balance. The single gate for the out-of-credits
  * block, the low-credits notice and the toolbar, so they can never disagree.
  *
- * Without models there is nothing to send with, and NoModelsWarning covers the box, so
- * neither credit notice is shown then - but the toolbar still blocks an exhausted balance.
+ * Without models there is nothing to send with, and the composer's placeholder says so
+ * (noModelsPlaceholder), so neither credit notice is shown then - but the toolbar still blocks
+ * an exhausted balance.
  */
 export function getComposerCreditUi(params: {
   enforceCredits: boolean;

@@ -572,7 +572,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             if (!accessible) throw new Error('Image is not available');
           } else {
             const allowed =
-              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser.id) : false;
+              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser) : false;
             if (!allowed) throw new Error('Image is not available');
           }
 

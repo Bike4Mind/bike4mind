@@ -43,6 +43,17 @@ export class B4mApiError extends Error {
 }
 
 /**
+ * A completions stream that closed without `[DONE]` and without an `error` event: the connection was cut
+ * mid-response, so nothing about the request itself failed. Safe to retry when no output was used yet.
+ */
+export class B4mStreamEndedError extends Error {
+  constructor() {
+    super('completion stream ended before [DONE]');
+    this.name = 'B4mStreamEndedError';
+  }
+}
+
+/**
  * A polled quest (chat turn, image generation or edit) that did not succeed: it carries `type: "error"`
  * (`reason: 'error'`), ended `stopped` (`'stopped'`), or was still running when the poll's `timeoutMs` ran out
  * (`'timeout'`). `quest` is the last state seen; its `reply` carries the server's explanation.

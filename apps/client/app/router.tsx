@@ -34,6 +34,7 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -42,6 +43,7 @@ const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
+const IntegrationsPage = lazy(() => import('./routes/integrations/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
@@ -360,6 +362,21 @@ const gearsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <GearsPage />
+    </Suspense>
+  ),
+});
+
+// Integrations - the directory of every integration and model provider, with roadmap requests.
+// Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const integrationsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/integrations',
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource } => ({
+    source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+  }),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <IntegrationsPage />
     </Suspense>
   ),
 });
@@ -1208,6 +1225,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
+    integrationsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,

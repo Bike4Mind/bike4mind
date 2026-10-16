@@ -1290,6 +1290,13 @@ export interface ToolAccessState {
   roots: string[];
 }
 
+/** A folder a Code session was recently grounded in, for the folder chip's Recent list. */
+export interface RecentFolder {
+  /** Absolute and resolved; also what tells two folders with the same `name` apart. */
+  path: string;
+  name: string;
+}
+
 /**
  * What the app learned about a directory the user picked for a project.
  *

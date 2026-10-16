@@ -50,7 +50,9 @@ body {
 }
 
 .lexical-chat-input {
-  padding: 7px 16px 9px 8px;
+  /* Adds to the composer box's 12px (SessionBottom): text sits 16px from the top and the sides.
+     No bottom padding - the editor wrapper owns the 20px gap down to the toolbar. */
+  padding: 4px 4px 0;
   font-family: 'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 16px;
   font-weight: 400;
@@ -66,8 +68,8 @@ body {
 
 .lexical-placeholder {
   position: absolute;
-  top: 7px;
-  left: 8px;
+  top: 4px;
+  left: 4px;
   color: var(--joy-palette-chatbox-messageInputColor);
   /* 0.6 measured 3.6:1 in light mode; 0.75 clears 4.5:1 in both modes. */
   opacity: 0.75;
@@ -78,6 +80,18 @@ body {
   pointer-events: none;
   user-select: none;
   z-index: 0;  /* Ensure it stays behind content */
+}
+
+/* Custom placeholder content (e.g. NoModelsPlaceholder) brings its own colours and sizes. */
+.lexical-placeholder--custom {
+  opacity: 1;
+}
+
+/* The placeholder is absolute, so the editor would stay one line tall and the two-line
+   NoModelsPlaceholder (13px + 12px at line-height 1.4 = 35px, plus the 4px top padding) would spill
+   into the gap above the toolbar. Keep in sync with NoModelsPlaceholder in SessionWarnings. */
+.lexical-chat-input--custom-placeholder {
+  min-height: 39px;
 }
 
 /* Inline code styling - matches chat history */

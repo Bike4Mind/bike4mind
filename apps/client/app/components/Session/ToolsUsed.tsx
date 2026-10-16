@@ -1,6 +1,6 @@
 import { Chip, Tooltip, Box, Stack, Typography, Modal, ModalDialog, ModalClose, IconButton } from '@mui/joy';
 import { messageMetaChipSx } from './messageMetaChipSx';
-import { Construction as ConstructionIcon, Info as InfoIcon } from '@mui/icons-material';
+import { HandymanOutlined as HandymanIcon, Info as InfoIcon } from '@mui/icons-material';
 import { memo, useMemo, useState } from 'react';
 import { getToolInfo, getToolDisplayName, PublicTools } from '@client/app/utils/toolMapping';
 
@@ -96,7 +96,7 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
               color: theme.vars.palette.text.primary,
             },
           })}
-          startDecorator={<ConstructionIcon sx={{ fontSize: 14 }} />}
+          startDecorator={<HandymanIcon sx={{ fontSize: 14 }} />}
         >
           {uniqueTools.length}
         </Chip>

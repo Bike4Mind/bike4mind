@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES } from '../generation/types';
 import { MAX_MUSIC_LYRICS_CHARS, MUSIC_OUTPUT_FORMATS } from '../music/types';
@@ -84,16 +85,7 @@ export const CreateMusicGenerationBodySchema = z.strictObject({
     .positive()
     .optional()
     .describe("Whole seconds. Defaults to the model's default; see the model's `duration` for how it is honoured."),
-  organization_id: z
-    .string()
-    .trim()
-    .min(1)
-    .nullable()
-    .optional()
-    .describe(
-      'The organization to bill: one you belong to, or null for your personal credits. Omitted bills your ' +
-        'home organization, or your personal credits if you have none.'
-    ),
+  organization_id: BillingOrganizationIdSchema,
 });
 export type CreateMusicGenerationBody = z.infer<typeof CreateMusicGenerationBodySchema>;
 

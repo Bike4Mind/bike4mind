@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
@@ -103,9 +103,7 @@ const handler = baseApi().post(async (req, res) => {
     if (currentCredits < reservedCredits) {
       throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
     }
-    // Credit deduction happens below, immediately before the OpenAI API call.
-    // Deferring it until after API key fetch and session creation ensures any pre-flight
-    // error (missing key, session not found) cannot strand reserved credits.
+    // The reserve is taken below, with the hold, only once OpenAI has issued the call's key.
   }
 
   const realtimeModel = 'gpt-realtime-1.5';
@@ -372,13 +370,6 @@ When you get the tool result back, summarize it conversationally for voice.`;
     await settlePriorVoiceHold(session);
   }
 
-  // Deduct credits immediately before the API call - all pre-flight checks have passed.
-  // Deferral from the original position ensures no pre-flight throw can strand credits.
-  // A reconnect reuses the original hold (reuseHold), so it must not deduct again.
-  if (enforceCredits && !reuseHold) {
-    await userRepository.incrementCredits(req.user.id, -reservedCredits);
-  }
-
   let result;
   try {
     result = await axios.post('https://api.openai.com/v1/realtime/client_secrets', requestBody, {
@@ -388,10 +379,6 @@ When you get the tool result back, summarize it conversationally for voice.`;
       },
     });
   } catch (error: unknown) {
-    // Refund reservation on any API failure - credits were pre-deducted and no session started
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     if (axios.isAxiosError(error)) {
       const responseData = error.response?.data;
       const status = error.response?.status;
@@ -404,32 +391,25 @@ When you get the tool result back, summarize it conversationally for voice.`;
   }
 
   if (!session) {
-    // Refund reservation if session creation failed
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     return res.status(500).json({ error: 'Failed to create or retrieve session' });
   }
 
-  // Record reservation and start time on session for reconciliation at session end.
-  // A reconnect leaves the original reservation record untouched so end-reconciliation
-  // measures the full call duration, not just the post-reconnect segment.
+  // The reserve and the hold that records it commit together, after the provider call, so a
+  // failure anywhere before this point has nothing to refund. A reconnect keeps the original hold
+  // so end-reconciliation measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt: new Date(),
+    const opened = await reserveVoiceHold({
+      userId: req.user.id,
+      sessionId: session.id,
+      priorStartedAt: priorHoldStartedAt,
+      reservedCredits: enforceCredits ? reservedCredits : null,
+      startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
+      unaffordable: () =>
+        new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
-      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
-      if (enforceCredits) {
-        await refundLostVoiceHoldReserve(req.logger, {
-          userId: req.user.id,
-          sessionId: String(session.id),
-          refund: reservedCredits,
-        });
-      }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }
   }

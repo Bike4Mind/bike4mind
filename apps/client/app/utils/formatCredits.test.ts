@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { formatAnswerCost, formatCreditAmount, formatCreditBalance, purchaseCreditsAriaLabel } from './formatCredits';
+import {
+  answerCostUnit,
+  formatAnswerCost,
+  formatAnswerCostAmount,
+  formatCreditAmount,
+  formatCreditBalance,
+  purchaseCreditsAriaLabel,
+} from './formatCredits';
 
 describe('purchaseCreditsAriaLabel', () => {
   it('names the pack by its grouped credit count and dollar price', () => {
@@ -29,18 +36,21 @@ describe('formatCreditBalance', () => {
     expect(formatCreditBalance(0)).toBe('0 credits');
     expect(formatCreditBalance(-12)).toBe('0 credits');
   });
+});
 
-  it('keeps every digit when compact below 100,000, so a small spend stays visible', () => {
-    expect(formatCreditBalance(9_903, true)).toBe('9,903 credits');
-    expect(formatCreditBalance(12_400, true)).toBe('12,400 credits');
-    expect(formatCreditBalance(99_999.9, true)).toBe('99,999 credits');
-    expect(formatCreditBalance(950, true)).toBe('950 credits');
+describe('formatAnswerCostAmount', () => {
+  it('is the bare number, with "<1" for a fractional cost', () => {
+    expect(formatAnswerCostAmount(1234.4)).toBe('1,234');
+    expect(formatAnswerCostAmount(0.04)).toBe('<1');
+    expect(formatAnswerCostAmount(0)).toBe('0');
+    expect(formatAnswerCostAmount(-3)).toBe('0');
   });
 
-  it('abbreviates when compact from 100,000 up', () => {
-    expect(formatCreditBalance(100_000, true)).toBe('100K credits');
-    expect(formatCreditBalance(124_500, true)).toBe('124.5K credits');
-    expect(formatCreditBalance(2_300_000, true)).toBe('2.3M credits');
+  it('pairs with a singular unit for "<1" and 1', () => {
+    expect(answerCostUnit(0.4)).toBe('credit');
+    expect(answerCostUnit(1.2)).toBe('credit');
+    expect(answerCostUnit(2)).toBe('credits');
+    expect(answerCostUnit(0)).toBe('credits');
   });
 });
 

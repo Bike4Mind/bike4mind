@@ -1,8 +1,9 @@
 import { afterEach, describe, it, expect, vi, type Mock } from 'vitest';
-import { runCompletion, EmptyCompletionError, NoReplyCompletionError } from './runCompletion';
+import { runCompletion, NoReplyCompletionError } from './runCompletion';
 import { InMemoryStreamTransport, type ScriptedStep } from './InMemoryStreamTransport';
-import { createTransientRetryPolicy } from './retryPolicy';
-import type { CompletionRequest, RetryPolicy } from './streamTransport';
+import { ModelCallError } from './modelCallError';
+import { decideRetry, EmptyCompletionError, type RetryDecider } from './retryDecision';
+import type { CompletionRequest } from './streamTransport';
 import type { StreamEvent } from './streamEvents';
 
 vi.mock('../utils/Logger', () => ({
@@ -15,23 +16,25 @@ const req: CompletionRequest = { model: 'test-model', messages: [], options: { s
 const content = (text: string): StreamEvent => ({ type: 'content', text });
 const toolUse = (name: string): StreamEvent => ({ type: 'tool_use', tools: [{ name, arguments: '{}', id: 't1' }] });
 
-// Only 'boom' errors are retryable; instant retries so tests don't wait on backoff.
-const policy = (maxRetries: number): RetryPolicy => ({
-  maxRetries,
-  isRetryable: e => e instanceof Error && e.message.includes('boom'),
-  backoffMs: 0,
-});
+/** A dropped connection: retryable under the real decision. */
+const drop = () => new ModelCallError('network', 'boom');
+
+/** The real classification, capped at `maxRetries` and with no wait, so tests don't sit through backoff. */
+const retryUpTo =
+  (maxRetries: number): RetryDecider =>
+  (error, attempt) =>
+    attempt < maxRetries && decideRetry(error, 0).retry ? { retry: true, delayMs: 0 } : { retry: false };
 
 const run = (
   scripts: ScriptedStep[][],
-  p: RetryPolicy,
+  decide: RetryDecider,
   signal?: AbortSignal,
   controller?: AbortController,
   request: CompletionRequest = req
 ) => {
   const transport = new InMemoryStreamTransport(scripts, controller);
   const callback = vi.fn().mockResolvedValue(undefined);
-  return { transport, callback, promise: runCompletion(transport, request, callback, p, signal) };
+  return { transport, callback, promise: runCompletion(transport, request, callback, signal, decide) };
 };
 
 /** All text the callback received, in order: what the agent concatenates into its reply. */
@@ -45,7 +48,7 @@ describe('runCompletion', () => {
   });
 
   it('streams the first text immediately, then finalizes the rest exactly once', async () => {
-    const { callback, promise } = run([[{ emit: content('hello ') }, { emit: content('world') }]], policy(2));
+    const { callback, promise } = run([[{ emit: content('hello ') }, { emit: content('world') }]], retryUpTo(2));
     await promise;
     // Trailing whitespace is held until more text follows; the second frame lands
     // inside the throttle window, so it rides the final frame.
@@ -55,8 +58,8 @@ describe('runCompletion', () => {
 
   it('buffers the whole turn and keeps retrying when the caller did not ask for live text', async () => {
     const { transport, callback, promise } = run(
-      [[{ emit: content('partial') }, { fail: new Error('boom') }], [{ emit: content('full answer') }]],
-      policy(2),
+      [[{ emit: content('partial') }, { fail: drop() }], [{ emit: content('full answer') }]],
+      retryUpTo(2),
       undefined,
       undefined,
       { ...req, options: {} }
@@ -71,7 +74,7 @@ describe('runCompletion', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => (now += 30));
     const { callback, promise } = run(
       [[{ emit: content('a') }, { emit: content('b') }, { emit: content('c') }, { emit: content('d') }]],
-      policy(2)
+      retryUpTo(2)
     );
     await promise;
     // 30 ms between frames: 'a' flushes at once, 'b' is 30 ms later (held), 'c' is
@@ -83,14 +86,14 @@ describe('runCompletion', () => {
   it('strips thinking blocks from streamed text', async () => {
     const { callback, promise } = run(
       [[{ emit: content('<think>plan') }, { emit: content('</think>Answer') }]],
-      policy(2)
+      retryUpTo(2)
     );
     await promise;
     expect(deliveredText(callback)).toBe('Answer');
   });
 
   it('accumulates a tool-use stream and finalizes once with the tool info', async () => {
-    const { callback, promise } = run([[{ emit: toolUse('search') }]], policy(2));
+    const { callback, promise } = run([[{ emit: toolUse('search') }]], retryUpTo(2));
     await promise;
     expect(callback).toHaveBeenCalledTimes(1);
     const [, info] = callback.mock.calls[0];
@@ -99,8 +102,8 @@ describe('runCompletion', () => {
 
   it('retries a failure that struck before any text was delivered (no double-append)', async () => {
     const { transport, callback, promise } = run(
-      [[{ emit: toolUse('search') }, { fail: new Error('boom') }], [{ emit: content('full answer') }]],
-      policy(2)
+      [[{ emit: toolUse('search') }, { fail: drop() }], [{ emit: content('full answer') }]],
+      retryUpTo(2)
     );
     await promise;
     expect(transport.attempts).toBe(2);
@@ -112,8 +115,8 @@ describe('runCompletion', () => {
 
   it('does not retry once text was streamed, and says how to resume', async () => {
     const { transport, callback, promise } = run(
-      [[{ emit: content('partial') }, { fail: new Error('boom') }], [{ emit: content('replayed') }]],
-      policy(2)
+      [[{ emit: content('partial') }, { fail: drop() }], [{ emit: content('replayed') }]],
+      retryUpTo(2)
     );
     await expect(promise).rejects.toThrow(/could not be retried automatically - type "continue" to resume/);
     expect(transport.attempts).toBe(1);
@@ -124,28 +127,28 @@ describe('runCompletion', () => {
   it('propagates a non-retryable error after streamed text unchanged', async () => {
     const { callback, promise } = run(
       [[{ emit: content('partial') }, { fail: new Error('Authentication failed') }]],
-      policy(2)
+      retryUpTo(2)
     );
     await expect(promise).rejects.toThrow('Authentication failed');
     expect(finalFrames(callback)).toHaveLength(0);
   });
 
   it('retries only up to the limit, then surfaces the failure without delivering', async () => {
-    const { transport, callback, promise } = run([[{ fail: new Error('boom') }]], policy(2));
+    const { transport, callback, promise } = run([[{ fail: drop() }]], retryUpTo(2));
     await expect(promise).rejects.toThrow(/type "continue" to resume/);
     expect(transport.attempts).toBe(3); // initial + 2 retries
     expect(callback).not.toHaveBeenCalled();
   });
 
   it('propagates a non-retryable error immediately with no retry', async () => {
-    const { transport, callback, promise } = run([[{ fail: new Error('Authentication failed') }]], policy(2));
+    const { transport, callback, promise } = run([[{ fail: new Error('Authentication failed') }]], retryUpTo(2));
     await expect(promise).rejects.toThrow('Authentication failed');
     expect(transport.attempts).toBe(1);
     expect(callback).not.toHaveBeenCalled();
   });
 
   it('treats an empty stream as retryable, then surfaces EmptyCompletionError rather than a blank turn', async () => {
-    const { transport, callback, promise } = run([[]], policy(1));
+    const { transport, callback, promise } = run([[]], retryUpTo(1));
     await expect(promise).rejects.toBeInstanceOf(EmptyCompletionError);
     expect(transport.attempts).toBe(2); // retried before giving up
     expect(callback).not.toHaveBeenCalled();
@@ -159,7 +162,7 @@ describe('runCompletion', () => {
       usage: { outputTokens: 4096 },
       stopReason: 'max_tokens',
     };
-    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], policy(2));
+    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], retryUpTo(2));
     await expect(promise).rejects.toThrow(/output limit on reasoning/);
     await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
     expect(transport.attempts).toBe(1); // one billed request, not three
@@ -170,19 +173,8 @@ describe('runCompletion', () => {
     // The no-retry rule is deliberately broad: any terminal stop reason means the
     // turn finished normally, so a retry would repeat (and re-bill) the same outcome.
     const blankEnd: StreamEvent = { type: 'content', text: '', stopReason: 'end_turn' };
-    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], policy(2));
+    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankEnd }]], retryUpTo(2));
     await expect(promise).rejects.toThrow(/stop reason: end_turn/);
-    await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
-    expect(transport.attempts).toBe(1);
-    expect(callback).not.toHaveBeenCalled();
-  });
-
-  it('does not retry a blank turn whose stop reason reads as a transient network error', async () => {
-    // 'aborted' is in the transient-network pattern list, so only the
-    // NoReplyCompletionError guard stops this blank turn from being re-billed.
-    const blankAborted: StreamEvent = { type: 'content', text: '', stopReason: 'aborted' };
-    const realPolicy: RetryPolicy = { ...createTransientRetryPolicy(), backoffMs: 0 };
-    const { transport, callback, promise } = run([[{ emit: content('') }, { emit: blankAborted }]], realPolicy);
     await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
     expect(transport.attempts).toBe(1);
     expect(callback).not.toHaveBeenCalled();
@@ -192,7 +184,7 @@ describe('runCompletion', () => {
     const controller = new AbortController();
     const { callback, promise } = run(
       [[{ emit: toolUse('search') }, { abort: true }, { emit: content('never delivered') }]],
-      policy(2),
+      retryUpTo(2),
       controller.signal,
       controller
     );
@@ -204,7 +196,7 @@ describe('runCompletion', () => {
     const controller = new AbortController();
     const { callback, promise } = run(
       [[{ emit: content('partial') }, { abort: true }, { emit: content('never delivered') }]],
-      policy(2),
+      retryUpTo(2),
       controller.signal,
       controller
     );
@@ -213,26 +205,54 @@ describe('runCompletion', () => {
     expect(finalFrames(callback)).toHaveLength(0);
   });
 
-  it('recovers under the real policy when a retry races WebSocket auto-reconnect', async () => {
-    // Attempt 1 opens before the socket has reconnected ("not connected"); the
-    // real transient policy must treat that as retryable so attempt 2 recovers.
-    const realPolicy: RetryPolicy = { ...createTransientRetryPolicy(), backoffMs: 0 };
-    const { transport, callback, promise } = run(
-      [[{ fail: new Error('WebSocket is not connected') }], [{ emit: content('recovered') }]],
-      realPolicy
-    );
-    await promise;
-    expect(transport.attempts).toBe(2);
-    expect(deliveredText(callback)).toBe('recovered');
-    expect(finalFrames(callback)).toHaveLength(1);
-  });
-
   it('settles without opening the stream when already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
-    const { transport, callback, promise } = run([[{ emit: content('x') }]], policy(2), controller.signal);
+    const { transport, callback, promise } = run([[{ emit: content('x') }]], retryUpTo(2), controller.signal);
     await expect(promise).resolves.toBeUndefined();
     expect(transport.attempts).toBe(0);
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('passes each failed attempt number to the decision', async () => {
+    const decide = vi.fn<RetryDecider>(() => ({ retry: true, delayMs: 0 }));
+    const { promise } = run([[{ fail: drop() }], [{ fail: drop() }], [{ emit: content('ok') }]], decide);
+    await promise;
+    expect(decide.mock.calls.map(([, attempt]) => attempt)).toEqual([0, 1]);
+  });
+
+  describe('backoff', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('waits the decided delay before re-opening the stream', async () => {
+      vi.useFakeTimers();
+      const { transport, callback, promise } = run([[{ fail: drop() }], [{ emit: content('ok') }]], () => ({
+        retry: true,
+        delayMs: 1_000,
+      }));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(transport.attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+      expect(transport.attempts).toBe(2);
+      expect(deliveredText(callback)).toBe('ok');
+    });
+
+    it('settles at once, without another attempt, when aborted during the wait', async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const { transport, callback, promise } = run(
+        [[{ fail: drop() }], [{ emit: content('never') }]],
+        () => ({ retry: true, delayMs: 60_000 }),
+        controller.signal
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      controller.abort();
+      await expect(promise).resolves.toBeUndefined();
+      expect(transport.attempts).toBe(1);
+      expect(callback).not.toHaveBeenCalled();
+    });
   });
 });

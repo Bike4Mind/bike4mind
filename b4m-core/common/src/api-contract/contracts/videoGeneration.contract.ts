@@ -1,8 +1,12 @@
 import { defineEndpoint } from '../defineEndpoint';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
@@ -80,7 +84,8 @@ export const createVideoGenerationContract = defineEndpoint({
     '`idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. ' +
     'Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; ' +
     'omitted, the job bills your home organization (or your personal credits if you have none). Keys are ' +
-    'scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.',
+    'scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. ' +
+    'An organization-billed API key always bills its own organization (see `organization_id`).',
   tags: ['Videos'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -93,11 +98,10 @@ export const createVideoGenerationContract = defineEndpoint({
       example: exampleJob,
     },
     403: {
-      description:
-        'The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not ' +
-        'belong to (or is not a valid id).',
-      schema: ScopeForbiddenErrorSchema,
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
     },
+    400: { description: BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION, schema: ApiErrorSchema },
     404: {
       description:
         '`input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A ' +

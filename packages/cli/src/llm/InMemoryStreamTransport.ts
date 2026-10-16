@@ -4,7 +4,7 @@ import type { CompletionRequest, StreamTransport } from './streamTransport';
 /**
  * One scripted step for {@link InMemoryStreamTransport}:
  * - `emit`  - yield a decoded stream event to the core;
- * - `fail`  - throw, simulating a wire failure (feeds the retry policy);
+ * - `fail`  - throw, simulating a wire failure (feeds the retry decision);
  * - `abort` - abort the linked controller, simulating a mid-stream user cancel.
  */
 export type ScriptedStep = { emit: StreamEvent } | { fail: Error } | { abort: true };

@@ -121,7 +121,7 @@ vi.mock('@bike4mind/database/ai', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/generatedFiles', () => ({ toGeneratedFiles: () => [] }));
+vi.mock('@server/utils/generatedFiles', () => ({ toGeneratedFiles: async () => [] }));
 vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', () => ({
   resolveQuestTimeoutRecovery: () => null,
 }));
