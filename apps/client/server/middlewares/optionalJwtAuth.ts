@@ -1,6 +1,6 @@
 import passport from '@server/auth/auth';
 import ability from '@server/auth/ability';
-import { admitsOptionalAuthSession } from '@server/auth/mfaEnforcement';
+import { admitsOptionalAuthSession } from '@server/middlewares/oauthRouteGate';
 import type { Request, Response, NextFunction } from 'express';
 
 /**

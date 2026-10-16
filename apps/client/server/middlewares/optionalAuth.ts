@@ -1,7 +1,7 @@
 import passport from 'passport';
 import type { Request, Response, NextFunction } from 'express';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
-import { admitsOptionalAuthSession } from '@server/auth/mfaEnforcement';
+import { admitsOptionalAuthSession } from '@server/middlewares/oauthRouteGate';
 
 /**
  * Optional authentication for public-facing publish surfaces. Populates
