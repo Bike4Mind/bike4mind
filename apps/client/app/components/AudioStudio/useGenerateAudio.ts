@@ -161,19 +161,20 @@ export function useGenerateAudio(mode: AudioGenMode) {
 
         const data = response.data;
         const playable = toPlayableAudio(data);
-        if (!mountedRef.current) {
+        if (mountedRef.current) {
+          if (playable.isObjectUrl) objectUrlRef.current = playable.url;
+          setResult({
+            ...playable,
+            saved: data.saved === true,
+            fabFileId: data.fabFileId,
+            contentType: data.contentType,
+          });
+        } else if (playable.isObjectUrl) {
           // Nothing here can play it any more, and no cleanup will run for this one, so revoke it
-          // here rather than leak the blob.
-          if (playable.isObjectUrl) URL.revokeObjectURL(playable.url);
-          return;
+          // here rather than leak the blob. The outcome below is still reported: the clip was
+          // billed and may have been saved, and the user has to hear about that.
+          URL.revokeObjectURL(playable.url);
         }
-        if (playable.isObjectUrl) objectUrlRef.current = playable.url;
-        setResult({
-          ...playable,
-          saved: data.saved === true,
-          fabFileId: data.fabFileId,
-          contentType: data.contentType,
-        });
 
         // The server substituted a provider, so the voice will not be the one
         // selected. Say so before the outcome toast rather than letting an

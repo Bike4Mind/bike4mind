@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     toastError: vi.fn(),
     toastSuccess: vi.fn(),
     getState: vi.fn(),
+    invalidateQueries: vi.fn(),
   },
 }));
 
@@ -21,7 +22,7 @@ vi.mock('sonner', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: (...a: unknown[]) => mocks.invalidateQueries(...a) }),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -33,6 +34,7 @@ vi.mock('@client/app/stores/useAudioGenSettings', () => ({
 }));
 
 import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGenerateAudio } from './useGenerateAudio';
 
 // A 4xx from the route arrives as an axios error carrying the JSON error body.
@@ -274,5 +276,28 @@ describe('useGenerateAudio unmount', () => {
     // The unmount cleanup runs before the response exists, so only the settle path can free this one.
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio');
+  });
+
+  // The clip was billed and stored server-side, so a tab that unmounted mid-request must
+  // still confirm the save and refresh Files - there is just no player left to hold it.
+  it('still confirms a clip that settled after the tab unmounted', async () => {
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab-3' } });
+      await pending;
+    });
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: fabFileKeys.all });
+    expect(result.current.result).toBeNull();
   });
 });
