@@ -14,7 +14,7 @@ export function getS3Url({ bucket, key, region = 'us-east-2' }: { bucket: string
  */
 export function toCdnPath(key: string): string {
   // Prefix mapping: if you add/change a prefix here, also update
-  // infra/buckets.ts routeBucket and apps/client/server/utils/appFileProxy.ts (resolveProxyTarget allowlist).
+  // infra/buckets.ts routeBucket and packages/server-utils/src/utils/appFileProxy.ts (resolveProxyTarget allowlist).
   if (key.startsWith('organizations/')) {
     return `org-files/${key.slice('organizations/'.length)}`;
   }

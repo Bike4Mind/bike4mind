@@ -1127,7 +1127,7 @@ if (isMonitoredStage) {
    * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
    * problem, not a one-off.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
@@ -1170,7 +1170,7 @@ if (isMonitoredStage) {
    * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
    * the only other trace was a logger.warn nothing alarms on.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
    * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
    * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
    */
@@ -1329,7 +1329,7 @@ if (isMonitoredStage) {
    * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
    * counter - alarming on the counter's absence would page every quiet day.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
@@ -1374,7 +1374,7 @@ if (isMonitoredStage) {
    * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
    * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
@@ -1418,7 +1418,7 @@ if (isMonitoredStage) {
    * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
    * from server/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
@@ -1457,7 +1457,7 @@ if (isMonitoredStage) {
    * 'nonprod_unconfigured') do not emit the rollup this reads - see
    * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
    * the same two call sites as feedbackDeliveryFailures above.
    * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
    */

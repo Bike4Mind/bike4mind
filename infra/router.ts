@@ -287,7 +287,7 @@ const routerInstance = shouldUseSharedRouter
 /**
  * The base URL path for the local dev file proxy.
  * Must match LOCAL_FILE_PROXY_BASE in
- * apps/client/server/utils/appFileProxy.ts — kept in sync so the
+ * packages/server-utils/src/utils/appFileProxy.ts - kept in sync so the
  * runtime gate and infra always agree on the same string.
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
