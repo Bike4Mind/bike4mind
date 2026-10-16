@@ -59,6 +59,14 @@ describe('AudioStudioWorkspace gate', () => {
     renderWithTheme(<SoundEffectsStudioWorkspace testId="sound-effects-studio" />);
     expect(screen.getByTestId('settings-sound-effects')).toBeInTheDocument();
   });
+
+  it('says why when the providers could not be loaded', () => {
+    useAudioProvidersMock.mockReturnValue({ isPending: false, data: undefined });
+    renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
+    expect(screen.getByTestId('speech-studio-error')).toHaveTextContent(
+      'Could not load the speech providers. Refresh to try again.'
+    );
+  });
 });
 
 describe('AudioStudioWorkspace form', () => {

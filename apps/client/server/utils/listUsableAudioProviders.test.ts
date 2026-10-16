@@ -47,4 +47,11 @@ describe('listUsableAudioProviders', () => {
       expect(options).toMatchObject({ nullIfMissing: true });
     }
   });
+
+  // The caller gates a Studio tab on the result, so a broken lookup must surface as a failed load rather
+  // than as "no providers", which would read as an account with nothing enabled.
+  it('rejects when a key lookup fails', async () => {
+    getEffectiveApiKey.mockRejectedValue(new Error('key store unavailable'));
+    await expect(listUsableAudioProviders('u1')).rejects.toThrow('key store unavailable');
+  });
 });
