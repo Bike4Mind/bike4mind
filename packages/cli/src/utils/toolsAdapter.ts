@@ -150,26 +150,21 @@ function notifyFileChanged(
 }
 
 /**
- * Wrap a tool with permission checking, server routing, and observation tracking.
+ * Wrap a tool with the plan-mode and permission gates, the shell sandbox, a checkpoint before an
+ * approved file write, and server routing (which redacts and caps the output).
  */
-export function wrapToolWithPermission(
-  tool: ICompletionOptionTools,
-  permissionManager: PermissionManager,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
-  agentContext: AgentContext,
-  configStore: any,
-  apiClient: ApiClient,
-  sandboxOrchestrator?: SandboxOrchestrator,
-  /** Live, mutable allow-list shared with the core tool context. The path
-   *  access-grant flow pushes onto this in place so grants take effect on the
-   *  next call without rebuilding tools. */
-  allowedDirectories?: string[],
-  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at
-   *  the less-permissive of this and the live store mode, so a subagent can never
-   *  exceed its parent's authority yet still tightens if the user switches to plan
-   *  mode mid-run. Undefined for the main agent (uses the live store mode). */
-  interactionModeOverride?: InteractionMode
-): ICompletionOptionTools {
+export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapToolDeps): ICompletionOptionTools {
+  const {
+    permissionManager,
+    showPermissionPrompt,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories,
+    interactionModeOverride,
+    checkpointStore,
+  } = deps;
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
 
@@ -276,6 +271,7 @@ export function wrapToolWithPermission(
        * sandbox failure, and record observation.
        */
       async function executeAndRecord(): Promise<string> {
+        await checkpointBeforeWrite(checkpointStore, toolName, args);
         let result: string;
         try {
           result = await executeWithFuzzyConfirmation(toolName, execArgs, apiClient, originalFn, showPermissionPrompt);
@@ -310,7 +306,6 @@ export function wrapToolWithPermission(
           originalFn,
           showPermissionPrompt
         );
-        agentContext.observationQueue.push({ toolName, result });
         notifyFileChanged(agentContext, toolName, execArgs, result);
         // Process-hook (host action_required signal): a tool finished - clear the
         // block sentinel (matcher "*").
@@ -330,9 +325,7 @@ export function wrapToolWithPermission(
           ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
           : liveInteractionMode;
         if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
-          agentContext.observationQueue.push({ toolName, result });
-          return result;
+          return `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
         }
 
         // Command-level risk gate: inspect the actual command text (not just the
@@ -464,9 +457,8 @@ export function wrapToolWithPermission(
 }
 
 /**
- * Collaborators the permission wrapper needs. Bundled so the several entrypoints
- * that build raw tool lists (MCP tools, skill, get_file_structure, find_definition)
- * can route them through the ONE wrapper without repeating its long argument list.
+ * Collaborators the permission wrapper needs. Bundled so every entrypoint that builds a tool
+ * list (B4M, MCP, CLI-built and delegation tools) routes it through the ONE wrapper.
  */
 export interface WrapToolDeps {
   permissionManager: PermissionManager;
@@ -475,9 +467,16 @@ export interface WrapToolDeps {
   configStore: any; // ConfigStore instance (no shared interface)
   apiClient: ApiClient;
   sandboxOrchestrator?: SandboxOrchestrator;
-  /** Live, mutable allow-list shared with the core tool context (see wrapToolWithPermission). */
+  /** Live, mutable allow-list shared with the core tool context. The path access-grant flow
+   *  pushes onto it in place, so a grant takes effect on the next call without rebuilding tools. */
   allowedDirectories?: string[];
+  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at the
+   *  less-permissive of this and the live store mode, so a subagent can never exceed
+   *  its parent's authority yet still tightens if the user switches to plan mode
+   *  mid-run. Undefined for the main agent (uses the live store mode). */
   interactionModeOverride?: InteractionMode;
+  /** Snapshots a file before an approved write so /undo can restore it. */
+  checkpointStore?: CheckpointStore | null;
 }
 
 /**
@@ -486,19 +485,7 @@ export interface WrapToolDeps {
  * constructed outside generateCliTools is wrapped here before it reaches the agent.
  */
 export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
-  return tools.map(tool =>
-    wrapToolWithPermission(
-      tool,
-      deps.permissionManager,
-      deps.showPermissionPrompt,
-      deps.agentContext,
-      deps.configStore,
-      deps.apiClient,
-      deps.sandboxOrchestrator,
-      deps.allowedDirectories,
-      deps.interactionModeOverride
-    )
-  );
+  return tools.map(tool => wrapToolWithPermission(tool, deps));
 }
 
 /**
@@ -968,47 +955,27 @@ export function wrapToolWithHooks(
   };
 }
 
-/**
- * Tools that modify files and should trigger automatic checkpointing
- */
+/** Tools that modify the file at `args.path` and are snapshotted before they run. */
 const CHECKPOINT_TOOLS = new Set(['create_file', 'edit_local_file', 'delete_file']);
 
 /**
- * Wrap a tool with automatic checkpointing before file modifications
- *
- * Creates a snapshot of target files in the shadow git repo BEFORE
- * the tool executes, enabling undo/restore functionality.
- *
- * Checkpoint failures are caught silently and never block tool execution.
+ * Snapshot the target of a file write in the shadow git repo so /undo can restore it. Called
+ * only once the write is approved, so a denied or plan-blocked write leaves no checkpoint. A
+ * checkpoint failure never blocks the write.
  */
-function wrapToolWithCheckpointing(
-  tool: ICompletionOptionTools,
-  checkpointStore: CheckpointStore | null
-): ICompletionOptionTools {
-  if (!checkpointStore || !CHECKPOINT_TOOLS.has(tool.toolSchema.name)) {
-    return tool;
+async function checkpointBeforeWrite(
+  checkpointStore: CheckpointStore | null | undefined,
+  toolName: string,
+  args: unknown
+): Promise<void> {
+  if (!checkpointStore || !CHECKPOINT_TOOLS.has(toolName)) return;
+  const filePath = (args as Record<string, unknown> | undefined)?.path;
+  if (typeof filePath !== 'string' || filePath.length === 0) return;
+  try {
+    await checkpointStore.createCheckpoint(toolName, [filePath], `before-${toolName}-${path.basename(filePath)}`);
+  } catch {
+    // Best effort: losing an undo point must not fail the user's write.
   }
-
-  const originalFn = tool.toolFn;
-  const toolName = tool.toolSchema.name;
-
-  return {
-    ...tool,
-
-    toolFn: async (args: any) => {
-      const filePath = (args as Record<string, unknown>)?.path as string | undefined;
-
-      if (filePath) {
-        try {
-          await checkpointStore.createCheckpoint(toolName, [filePath], `before-${toolName}-${path.basename(filePath)}`);
-        } catch {
-          // Checkpoint failure should NEVER block tool execution
-        }
-      }
-
-      return originalFn(args);
-    },
-  };
 }
 
 /**
@@ -1194,21 +1161,19 @@ export async function generateCliTools(
     codeMinifier
   );
 
-  // Convert to array and wrap with permission checks, checkpointing, server routing, and observation tracking
-  let tools = Object.entries(toolsMap).map(([_, tool]) => {
-    const permissionWrapped = wrapToolWithPermission(
-      tool,
-      permissionManager,
-      showPermissionPrompt,
-      agentContext,
-      configStore,
-      apiClient,
-      sandboxOrchestrator,
-      liveAllowedDirectories,
-      interactionModeOverride
-    );
-    return wrapToolWithCheckpointing(permissionWrapped, checkpointStore ?? null);
-  });
+  // Convert to array and route every tool through the permission wrapper
+  const wrapDeps: WrapToolDeps = {
+    permissionManager,
+    showPermissionPrompt,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories: liveAllowedDirectories,
+    interactionModeOverride,
+    checkpointStore,
+  };
+  let tools = wrapTools(Object.values(toolsMap), wrapDeps);
 
   // Apply tool filter if provided (for subagents)
   if (toolFilter) {

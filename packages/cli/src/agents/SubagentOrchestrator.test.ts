@@ -9,7 +9,7 @@ import { PermissionManager } from '../utils/PermissionManager.js';
 import { runShellCommand } from '../utils/shellRunner.js';
 import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
-import { generateCliTools } from '../utils/toolsAdapter.js';
+import { generateCliTools, wrapTools } from '../utils/toolsAdapter.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 
 // A denied hook must never reach the shell; mock it to observe (and to let the
@@ -38,6 +38,7 @@ vi.mock('../utils/toolsAdapter.js', async importOriginal => {
   return {
     ...actual,
     generateCliTools: vi.fn(async (...args: unknown[]) => ({ tools: [], agentContext: args[5] })),
+    wrapTools: vi.fn(actual.wrapTools),
   };
 });
 
@@ -416,6 +417,26 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
     const deps = vi.mocked(createSkillTool).mock.calls[0][0];
     expect(deps.permission.permissionManager).toBeDefined();
     expect(deps.permission.promptFn).toBeDefined();
+  });
+
+  it('routes injected tools through the permission wrapper under the subagent mode ceiling', async () => {
+    vi.mocked(wrapTools).mockClear();
+    const decompose = {
+      toolFn: vi.fn(async () => 'ok'),
+      toolSchema: { name: 'decompose_task', description: '', parameters: { type: 'object' as const, properties: {} } },
+    };
+    const { orchestrator } = createHookOrchestrator('allow-once');
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+      additionalTools: [decompose],
+    });
+
+    const call = vi.mocked(wrapTools).mock.calls.find(([tools]) => tools.includes(decompose));
+    expect(call).toBeDefined();
+    expect(call![1].interactionModeOverride).toBeDefined();
   });
 
   it('advertises the model-reachable command set (not getAllCommands) in the skills prompt', async () => {

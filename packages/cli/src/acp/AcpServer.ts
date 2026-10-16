@@ -671,8 +671,7 @@ export class AcpServer {
       allowedDirectories,
     } = input;
 
-    // Route the security-relevant raw tools (skill, find_definition,
-    // get_file_structure) through the ONE permission wrapper.
+    // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
     const cliWrapDeps = {
       permissionManager,
       showPermissionPrompt: this.promptFn,
@@ -682,8 +681,16 @@ export class AcpServer {
       sandboxOrchestrator,
       allowedDirectories,
     };
-    const wrappedSecurityTools = wrapTools(
+    const coordinateTools =
+      config.preferences.enableCoordinatorMode === true
+        ? [createCoordinateTaskTool(orchestrator, agentStore, sessionId)]
+        : [];
+    return wrapTools(
       [
+        createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
+        ...createBackgroundAgentTools(backgroundManager),
+        createResumeAgentTool(orchestrator, historyStore, backgroundManager),
+        createWriteTodosTool(createTodoStore()),
         createFindDefinitionTool(allowedDirectories),
         createGetFileStructureTool(allowedDirectories),
         ...(config.preferences.enableSkillTool !== false
@@ -698,21 +705,10 @@ export class AcpServer {
               }),
             ]
           : []),
+        ...coordinateTools,
       ],
       cliWrapDeps
     );
-
-    const tools: ICompletionOptionTools[] = [
-      createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
-      ...createBackgroundAgentTools(backgroundManager),
-      createResumeAgentTool(orchestrator, historyStore, backgroundManager),
-      createWriteTodosTool(createTodoStore()),
-      ...wrappedSecurityTools,
-    ];
-    if (config.preferences.enableCoordinatorMode === true) {
-      tools.push(createCoordinateTaskTool(orchestrator, agentStore, sessionId));
-    }
-    return tools;
   }
 
   private async loadCustomCommands(): Promise<void> {

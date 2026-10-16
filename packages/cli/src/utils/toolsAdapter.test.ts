@@ -739,16 +739,15 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
     const agentContext = { currentAgent: null, observationQueue: [] };
-    const wrapped = wrapToolWithPermission(
-      tool,
+    const wrapped = wrapToolWithPermission(tool, {
       permissionManager,
-      noopPrompt,
+      showPermissionPrompt: noopPrompt,
       agentContext,
-      {},
-      {} as ApiClient,
-      orchestrator,
-      allowedDirectories
-    );
+      configStore: {},
+      apiClient: {} as ApiClient,
+      sandboxOrchestrator: orchestrator,
+      allowedDirectories,
+    });
     return { wrapped, toolFn };
   }
 
@@ -858,16 +857,15 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
     const agentContext = { currentAgent: null, observationQueue: [] };
-    const wrapped = wrapFn(
-      createMockTool('bash_execute', toolFn),
+    const wrapped = wrapFn(createMockTool('bash_execute', toolFn), {
       permissionManager,
-      noopPrompt,
+      showPermissionPrompt: noopPrompt,
       agentContext,
-      {},
-      {} as ApiClient,
-      orchestrator,
-      []
-    );
+      configStore: {},
+      apiClient: {} as ApiClient,
+      sandboxOrchestrator: orchestrator,
+      allowedDirectories: [],
+    });
 
     const result = await wrapped.toolFn({ command: 'ls' });
 
@@ -965,7 +963,13 @@ describe('wrapToolWithPermission file-change notification', () => {
     } as unknown as PermissionManager;
     const onFileChanged = vi.fn();
     const agentContext = { currentAgent: null, observationQueue: [], onFileChanged };
-    const wrapped = wrapToolWithPermission(tool, permissionManager, noopPrompt, agentContext, {}, {} as ApiClient);
+    const wrapped = wrapToolWithPermission(tool, {
+      permissionManager,
+      showPermissionPrompt: noopPrompt,
+      agentContext,
+      configStore: {},
+      apiClient: {} as ApiClient,
+    });
     return { wrapped, onFileChanged };
   }
 

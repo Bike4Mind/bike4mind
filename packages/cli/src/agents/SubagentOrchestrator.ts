@@ -17,6 +17,7 @@ import {
   type AgentContext,
   type ToolFilter,
   type HookWrapperContext,
+  type WrapToolDeps,
   type UserQuestionPayload,
   type UserQuestionResponse,
 } from '../utils/toolsAdapter.js';
@@ -330,13 +331,26 @@ export class SubagentOrchestrator {
     // Apply wildcard filtering
     const filteredTools = filterToolsByPatterns(allTools, toolFilter.allowedTools, toolFilter.deniedTools);
 
+    // Tools built here go through the ONE permission wrapper, same as the main agent,
+    // carrying this subagent's interaction-mode ceiling.
+    const wrapDeps: WrapToolDeps = {
+      permissionManager: this.deps.permissionManager,
+      showPermissionPrompt: this.deps.showPermissionPrompt,
+      agentContext,
+      configStore: this.deps.configStore,
+      apiClient: this.deps.apiClient,
+      sandboxOrchestrator: this.deps.sandboxOrchestrator,
+      allowedDirectories: this.deps.additionalDirectories,
+      interactionModeOverride: effectiveInteractionMode,
+    };
+
     // Inject additional tools (e.g., decompose_task for coordinator agent)
     // Guard: never inject tools that are on the deny-list
     if (options.additionalTools) {
       const safe = options.additionalTools.filter(
         t => !(ALWAYS_DENIED_FOR_AGENTS as readonly string[]).includes(t.toolSchema.name)
       );
-      filteredTools.push(...safe);
+      filteredTools.push(...wrapTools(safe, wrapDeps));
     }
 
     // Add skill tool for subagents if customCommandStore is available
@@ -360,19 +374,7 @@ export class SubagentOrchestrator {
         // Confine skill @file refs to the workspace (plus granted dirs).
         allowedDirectories: this.deps.additionalDirectories,
       });
-      // Route the skill through the ONE permission wrapper, same as the main
-      // agent, carrying this subagent's interaction-mode ceiling.
-      const [skillTool] = wrapTools([rawSkillTool], {
-        permissionManager: this.deps.permissionManager,
-        showPermissionPrompt: this.deps.showPermissionPrompt,
-        agentContext,
-        configStore: this.deps.configStore,
-        apiClient: this.deps.apiClient,
-        sandboxOrchestrator: this.deps.sandboxOrchestrator,
-        allowedDirectories: this.deps.additionalDirectories,
-        interactionModeOverride: effectiveInteractionMode,
-      });
-      filteredTools.push(skillTool);
+      filteredTools.push(...wrapTools([rawSkillTool], wrapDeps));
 
       // Build skills section for system prompt with agent's restrictions. Use the
       // model-reachable set so a reserved-named skill is never advertised as
@@ -387,7 +389,7 @@ export class SubagentOrchestrator {
     // Inject shared context tools if agent declares shared-context access
     if (options.sharedContext && agentDef.sharedContext?.length) {
       const sharedContextTools = this.buildSharedContextTools(options.sharedContext, agentDef.sharedContext, agentName);
-      filteredTools.push(...sharedContextTools);
+      filteredTools.push(...wrapTools(sharedContextTools, wrapDeps));
     }
 
     // Wrap tools with lifecycle hooks (PreToolUse, PostToolUse, PostToolUseFailure)

@@ -413,8 +413,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
-    const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-    const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
     // Off by default - see the matching note in index.tsx.
     const workItemTools = config.preferences.enableWorkItemTools
       ? createWorkItemTools(new WorkItemsClient(apiClient))
@@ -422,36 +420,33 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
-      ? wrapTools(
-          [
-            createSkillTool({
-              customCommandStore,
-              subagentOrchestrator: orchestrator,
-              sessionId: session.id,
-              permission: { permissionManager, promptFn },
-              allowedDirectories: additionalDirectories,
-            }),
-          ],
-          cliWrapDeps
-        )[0]
+      ? createSkillTool({
+          customCommandStore,
+          subagentOrchestrator: orchestrator,
+          sessionId: session.id,
+          permission: { permissionManager, promptFn },
+          allowedDirectories: additionalDirectories,
+        })
       : null;
 
-    const cliTools = [
-      agentDelegateTool,
-      ...backgroundTools,
-      resumeAgentTool,
-      writeTodosTool,
-      findDefinitionTool,
-      getFileStructureTool,
-      ...workItemTools,
-    ];
-    if (skillTool) cliTools.push(skillTool);
-
-    // Add coordinate_task tool (gated by config flag)
-    if (config.preferences.enableCoordinatorMode === true) {
-      const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, session.id);
-      cliTools.push(coordinateTaskTool);
-    }
+    // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
+    const cliTools = wrapTools(
+      [
+        agentDelegateTool,
+        ...backgroundTools,
+        resumeAgentTool,
+        writeTodosTool,
+        createFindDefinitionTool(additionalDirectories),
+        createGetFileStructureTool(additionalDirectories),
+        ...workItemTools,
+        ...(skillTool ? [skillTool] : []),
+        // coordinate_task is gated by a config flag
+        ...(config.preferences.enableCoordinatorMode === true
+          ? [createCoordinateTaskTool(orchestrator, agentStore, session.id)]
+          : []),
+      ],
+      cliWrapDeps
+    );
 
     const allTools = [...b4mTools, ...mcpTools, ...cliTools];
 

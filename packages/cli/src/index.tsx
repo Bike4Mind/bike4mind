@@ -967,10 +967,9 @@ function CliApp() {
         reviewGateStoreRef.current.reviewGates = [];
       }
 
-      // Deps for routing the raw CLI-built tools (skill, find_definition,
-      // get_file_structure) through the ONE permission wrapper, exactly like the
-      // B4M and MCP tools. `additionalDirectories` is the same live allow-list
-      // reference threaded into generateCliTools, so runtime grants apply here too.
+      // Deps for routing the CLI-built tools through the ONE permission wrapper,
+      // exactly like the B4M and MCP tools. `additionalDirectories` is the same live
+      // allow-list reference threaded into generateCliTools, so runtime grants apply here too.
       const cliWrapDeps = {
         permissionManager,
         showPermissionPrompt: promptFn,
@@ -984,27 +983,16 @@ function CliApp() {
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
       const skillTool = enableSkillTool
-        ? wrapTools(
-            [
-              createSkillTool({
-                customCommandStore: state.customCommandStore,
-                subagentOrchestrator: orchestrator,
-                sessionId: newSession.id,
-                // Gate skill lifecycle hook shell commands through permission.
-                permission: { permissionManager, promptFn },
-                // Confine skill @file refs to the workspace (plus granted dirs).
-                allowedDirectories: additionalDirectories,
-              }),
-            ],
-            cliWrapDeps
-          )[0]
+        ? createSkillTool({
+            customCommandStore: state.customCommandStore,
+            subagentOrchestrator: orchestrator,
+            sessionId: newSession.id,
+            // Gate skill lifecycle hook shell commands through permission.
+            permission: { permissionManager, promptFn },
+            // Confine skill @file refs to the workspace (plus granted dirs).
+            allowedDirectories: additionalDirectories,
+          })
         : null;
-
-      // Create find_definition tool for fast symbol lookup
-      const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-
-      // Create get_file_structure tool for AST-based code overview
-      const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for
@@ -1013,33 +1001,30 @@ function CliApp() {
         ? createWorkItemTools(new WorkItemsClient(apiClient))
         : [];
 
-      // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
-      // registry so their names can be reserved against plugin tool-name
-      // collisions (a duplicate tool name would 400 every completion).
-      const cliTools = [
-        agentDelegateTool,
-        ...backgroundTools,
-        resumeAgentTool,
-        writeTodosTool,
-        decisionLogTool,
-        ...blockerTools,
-        reviewGateTool,
-        findDefinitionTool,
-        getFileStructureTool,
-        ...workItemTools,
-      ];
-      if (skillTool) {
-        cliTools.push(skillTool);
-      }
-      if (dynamicAgentTool) {
-        cliTools.push(dynamicAgentTool);
-      }
-
-      // Create coordinate_task tool (gated by config flag)
-      if (config.preferences.enableCoordinatorMode === true) {
-        const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, newSession.id);
-        cliTools.push(coordinateTaskTool);
-      }
+      // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
+      // Assembled before the feature registry so their names can be reserved against
+      // plugin tool-name collisions (a duplicate tool name would 400 every completion).
+      const cliTools = wrapTools(
+        [
+          agentDelegateTool,
+          ...backgroundTools,
+          resumeAgentTool,
+          writeTodosTool,
+          decisionLogTool,
+          ...blockerTools,
+          reviewGateTool,
+          createFindDefinitionTool(additionalDirectories),
+          createGetFileStructureTool(additionalDirectories),
+          ...workItemTools,
+          ...(skillTool ? [skillTool] : []),
+          ...(dynamicAgentTool ? [dynamicAgentTool] : []),
+          // coordinate_task is gated by a config flag
+          ...(config.preferences.enableCoordinatorMode === true
+            ? [createCoordinateTaskTool(orchestrator, agentStore, newSession.id)]
+            : []),
+        ],
+        cliWrapDeps
+      );
 
       // Build the feature registry: config-gated built-ins plus any enabled
       // external plugins (discovered once here; installs need a restart).
@@ -1076,12 +1061,17 @@ function CliApp() {
       const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
       const toolSearchTool =
         deferredToolRegistry.size() > 0
-          ? createToolSearchTool(() => {
-              if (!agentToolsRef.current) {
-                throw new Error('tool_search invoked before agent context was wired');
-              }
-              return agentToolsRef.current;
-            })
+          ? wrapTools(
+              [
+                createToolSearchTool(() => {
+                  if (!agentToolsRef.current) {
+                    throw new Error('tool_search invoked before agent context was wired');
+                  }
+                  return agentToolsRef.current;
+                }),
+              ],
+              cliWrapDeps
+            )[0]
           : null;
       const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools, ...featureTools];
 
