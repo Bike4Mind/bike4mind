@@ -480,6 +480,52 @@ describe('McpConnectionModel', () => {
     });
   });
 
+  describe('org member connections', () => {
+    const member = (userId: string, overrides: Partial<CreateInput> = {}) =>
+      baseConnection({ ownerKey: userId, userId, organizationId: 'org-1', ...overrides });
+
+    it('listMemberConnections returns members only, optionally by host, without schemas or secrets', async () => {
+      const def = await mcpConnectionRepository.create(orgDefinition());
+      await mcpConnectionRepository.create(member('user-1', { definitionId: def.id }));
+      await mcpConnectionRepository.create(
+        member('user-2', { slug: 'airtable', urlHost: 'mcp.airtable.com', displayUrl: 'https://mcp.airtable.com/mcp' })
+      );
+      await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-3', userId: 'user-3' }));
+
+      const all = await mcpConnectionRepository.listMemberConnections('org-1');
+      expect(all.map(c => c.userId).sort()).toEqual(['user-1', 'user-2']);
+      const linear = await mcpConnectionRepository.listMemberConnections('org-1', { urlHost: 'MCP.LINEAR.APP' });
+      expect(linear.map(c => c.userId)).toEqual(['user-1']);
+      for (const doc of all) expect(secretValues(doc)).toEqual([]);
+    });
+
+    it('finds and cascades by definition, leaving the definition and other connections', async () => {
+      const def = await mcpConnectionRepository.create(orgDefinition());
+      await mcpConnectionRepository.create(member('user-1', { definitionId: def.id }));
+      await mcpConnectionRepository.create(member('user-2', { definitionId: def.id }));
+      await mcpConnectionRepository.create(member('user-3', { slug: 'other' }));
+
+      expect((await mcpConnectionRepository.findByDefinitionId(def.id)).map(c => c.userId).sort()).toEqual([
+        'user-1',
+        'user-2',
+      ]);
+      expect(await mcpConnectionRepository.deleteByDefinitionId(def.id)).toBe(2);
+      expect(await mcpConnectionRepository.findByDefinitionId(def.id)).toEqual([]);
+      expect(await McpConnection.countDocuments({})).toBe(2);
+    });
+
+    it('deleteAllForUser removes only the user-owned connections', async () => {
+      await mcpConnectionRepository.create(baseConnection({ slug: 'one' }));
+      await mcpConnectionRepository.create(baseConnection({ slug: 'two' }));
+      await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-2', userId: 'user-2' }));
+      await mcpConnectionRepository.create(orgDefinition({ userId: 'user-1' }));
+
+      expect(await mcpConnectionRepository.deleteAllForUser('user-1')).toBe(2);
+      expect(await McpConnection.countDocuments({})).toBe(2);
+      expect(await mcpConnectionRepository.listForOrg('org-1')).toHaveLength(1);
+    });
+  });
+
   describe('hot path and bounds', () => {
     it('listForUser keeps the input schemas and narrows by slug', async () => {
       const a = await mcpConnectionRepository.create(baseConnection({ slug: 'alpha' }));

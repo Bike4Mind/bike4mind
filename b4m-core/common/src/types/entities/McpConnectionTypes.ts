@@ -471,6 +471,14 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** Org-published definitions. */
   listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]>;
   findByUrlHost(urlHost: string): Promise<IMcpConnectionSummary[]>;
+  /** Members' own (user-owned) connections inside an org, for admin views and policy sweeps. */
+  listMemberConnections(organizationId: string, options?: { urlHost?: string }): Promise<IMcpConnectionSummary[]>;
+  /** User connections instantiated from an org definition. */
+  findByDefinitionId(definitionId: string): Promise<IMcpConnectionSummary[]>;
+  /** Cascade when an org definition is removed; resolves the number deleted. Revocation is the caller's. */
+  deleteByDefinitionId(definitionId: string): Promise<number>;
+  /** Account deletion: every user-owned connection; org definitions the user created stay with the org. */
+  deleteAllForUser(userId: string): Promise<number>;
   rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
   setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
   /** Applies every entry in one atomic write. */

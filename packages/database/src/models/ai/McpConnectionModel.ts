@@ -314,6 +314,31 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return this.findSummaries({ urlHost: urlHost.toLowerCase() });
   }
 
+  async listMemberConnections(
+    organizationId: string,
+    options: { urlHost?: string } = {}
+  ): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({
+      organizationId,
+      ownerType: 'user',
+      ...(options.urlHost ? { urlHost: options.urlHost.toLowerCase() } : {}),
+    });
+  }
+
+  async findByDefinitionId(definitionId: string): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ definitionId, ownerType: 'user' });
+  }
+
+  async deleteByDefinitionId(definitionId: string): Promise<number> {
+    const result = await this.model.deleteMany({ definitionId, ownerType: 'user' });
+    return result.deletedCount;
+  }
+
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await this.model.deleteMany({ ownerType: 'user', ownerKey: userId });
+    return result.deletedCount;
+  }
+
   /** Exclusive projection, so mongoose still applies every schema `select: false` on top of it. */
   private async findSummaries(filter: Record<string, unknown>): Promise<IMcpConnectionSummary[]> {
     const docs = await this.model.find(filter, SUMMARY_PROJECTION).sort({ createdAt: 1 });
