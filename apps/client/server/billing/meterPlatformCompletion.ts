@@ -43,11 +43,16 @@ type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
  * Model admission for one user: delegates to the single implementation in
  * b4m-core/services/src/llm/modelAdmission.ts (shared with ChatCompletionInvoke, the fallback chain,
  * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
- * unpriced text model while credits are enforced, is refused too.
+ * unpriced text model while credits are enforced, is refused too. `systemModel` skips the per-user
+ * picker access rules for a model the platform chose (the operations model, a fixed default).
  */
-export async function createModelAdmission(user: IUserDocument, models?: ModelInfo[]): Promise<ModelAdmission> {
+export async function createModelAdmission(
+  user: IUserDocument,
+  models?: ModelInfo[],
+  systemModel = false
+): Promise<ModelAdmission> {
   const [configs, enforceCredits] = await Promise.all([
-    loadModelConfigurations(adminSettingsRepository),
+    systemModel ? [] : loadModelConfigurations(adminSettingsRepository),
     isCreditsEnforced(),
   ]);
   return createSharedModelAdmission({
@@ -153,22 +158,36 @@ export async function settleCompletion(
   return creditsCharged;
 }
 
+type CompletionMeterOptions = { sessionId?: string; organizationId?: string | null; systemModel?: boolean };
+
 /**
  * A CompletionMeter (b4m-core/services/src/billing/completionMeter.ts) for platform-key work with no
  * HTTP request (queue workers, crons, mission wakes): admits the model for `user`, reserves the
  * ceiling against the billing owner (`opts.organizationId` when given, else the user's org seat when
- * present, else the user), and settles through
- * settleCompletion. Throws a 422 insufficient_credits when the owner cannot cover the hold.
+ * present, else the user), and settles through settleCompletion. Throws a 422 insufficient_credits
+ * when the owner cannot cover the hold.
  */
 export function createCompletionMeter(
   user: IUserDocument,
   logger: Logger,
   featureLabel: string,
-  opts: { sessionId?: string; organizationId?: string | null } = {}
+  opts: CompletionMeterOptions = {}
 ): CompletionMeter {
-  const req = { user, logger, headers: {} };
+  return createRequestCompletionMeter({ user, logger, headers: {} }, featureLabel, opts);
+}
+
+/**
+ * createCompletionMeter for a route: bills like reserveCompletionCredits (an org-billed API key
+ * bills its org, and the ledger keeps the key's source). Wrap the route's backend with
+ * meterCompletionBackend so every call is reserved, settled or refunded.
+ */
+export function createRequestCompletionMeter(
+  req: MeteredRequest,
+  featureLabel: string,
+  opts: CompletionMeterOptions = {}
+): CompletionMeter {
   return async (modelInfo, messages, maxTokens, models) => {
-    await (await createModelAdmission(user, models)).assert(modelInfo.id);
+    await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
     const reservation = await reserveCompletionCredits(req, ceilingUsd, featureLabel, opts.organizationId);
     return {

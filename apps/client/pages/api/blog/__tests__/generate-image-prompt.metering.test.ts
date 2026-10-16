@@ -13,7 +13,7 @@ const m = vi.hoisted(() => ({
   hold: vi.fn(),
   release: vi.fn(),
   settleHold: vi.fn(),
-  settle: vi.fn(),
+  record: vi.fn(async () => undefined),
   complete: vi.fn(),
 }));
 
@@ -42,7 +42,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
-  usageEventRepository: { record: async () => undefined },
+  usageEventRepository: { record: m.record },
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: {},
@@ -52,7 +52,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
+  meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
+    .meterCompletionBackend,
   creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
@@ -67,16 +69,6 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
-  const real = await importOriginal<typeof import('@server/billing/meterPlatformCompletion')>();
-  return {
-    ...real,
-    settleCompletion: (...args: Parameters<typeof real.settleCompletion>) => {
-      m.settle(args[2]);
-      return real.settleCompletion(...args);
-    },
-  };
-});
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
 vi.mock('@client/services/operationsModelService', () => ({
@@ -124,14 +116,16 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(m.hold).toHaveBeenCalledBefore(m.complete);
-    expect(m.settle).toHaveBeenCalledOnce();
-    expect(m.settle).toHaveBeenCalledWith({
-      model: 'ops-model',
-      provider: 'openai',
-      usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
-      inputTokens: 200,
-      outputTokens: 10,
-    });
+    expect(m.record).toHaveBeenCalledOnce();
+    expect(m.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'ops-model',
+        provider: 'openai',
+        costUsd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+        inputTokens: 200,
+        outputTokens: 10,
+      })
+    );
     expect(m.settleHold).toHaveBeenCalledOnce();
   });
 

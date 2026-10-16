@@ -4,14 +4,8 @@ import { secureParameters } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
-import {
-  completionCeilingUsd,
-  completionUsd,
-  latchUsage,
-  reserveCompletionCredits,
-  settleCompletion,
-  type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 const generateSmartNameSchema = z.object({
   prompt: z.string(),
@@ -26,38 +20,18 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req,
     const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
 
     try {
-      const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-
-      const messages: IMessage[] = [{ role: 'user', content: prompt }];
-      const maxTokens = 50;
-      const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
-      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'smart file naming');
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId, modelInfo } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'smart file naming', { systemModel: true }),
+        modelInfo
+      );
 
       let result = '';
-      const usage: CompletionUsage = {};
-      try {
-        await llm.complete(
-          modelId,
-          messages,
-          { maxTokens, temperature: 0.7 },
-          async (chunks: (string | null | undefined)[], info) => {
-            result += chunks.filter(Boolean).join('');
-            latchUsage(usage, info);
-          }
-        );
-      } catch (error) {
-        await reservation.refund();
-        throw error;
-      }
-
-      // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
-      const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
-      await settleCompletion(reservation, req, {
-        model: modelId,
-        provider: modelInfo.backend,
-        usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
+      const messages: IMessage[] = [{ role: 'user', content: prompt }];
+      await llm.complete(modelId, messages, { maxTokens: 50, temperature: 0.7 }, async chunks => {
+        result += chunks.filter(Boolean).join('');
       });
 
       const generatedName = result.trim();

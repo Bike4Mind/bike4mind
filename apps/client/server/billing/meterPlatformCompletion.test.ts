@@ -207,6 +207,12 @@ describe('createModelAdmission', () => {
     m.getUserEntitlements.mockRejectedValue(new Error('db down'));
     expect(await (await createModelAdmission(user())).admits('gated')).toBe(false);
   });
+
+  it('skips the picker access rules for a platform-chosen model but keeps the catalog checks', async () => {
+    const system = await createModelAdmission(user(), [{ id: 'off', disabled: true } as ModelInfo], true);
+    expect(await system.admits('gated')).toBe(true);
+    expect(await system.admits('off')).toBe(false);
+  });
 });
 
 describe('assertOwnerCanAfford', () => {

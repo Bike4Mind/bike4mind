@@ -5,7 +5,6 @@ import {
   sessionRepository,
   questRepository,
   fabFileRepository,
-  creditTransactionRepository,
   userRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
@@ -141,7 +140,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when
         // present); the operations model runs on the platform key.
-        const meter = createCompletionMeter(user, logger, 'notebook curation', { sessionId });
+        const meter = createCompletionMeter(user, logger, 'notebook curation', { sessionId, systemModel: true });
         llmService = meterCompletionBackend(
           { complete: llm.complete.bind(llm) },
           async (...args) => {
@@ -195,7 +194,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       chatHistoryRepository: questRepository, // Quests are the chat history items
       fabFileRepository,
       fileStorageService: storageAdapter,
-      creditTransactionRepository,
       userRepository,
       adminSettingsRepository,
       logger,

@@ -180,7 +180,7 @@ export async function extractLakeMemoryForBatch(
       logger.warn('[lakeMemory] lake owner not found; skipping extraction', { dataLakeId: params.dataLakeId });
       return { docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false };
     }
-    const meter = createCompletionMeter(owner, logger, 'data lake memory extraction');
+    const meter = createCompletionMeter(owner, logger, 'data lake memory extraction', { systemModel: true });
 
     // Bounded continuation: resume AFTER the last document a prior interrupted run attempted (the
     // persisted cursor), not from the cap boundary - the deadline guard can end a run mid-slice, so the

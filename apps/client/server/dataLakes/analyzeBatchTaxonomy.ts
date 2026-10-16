@@ -120,7 +120,7 @@ export async function analyzeBatchTaxonomy(
   const models = await getAvailableModels({ openai: openaiApiKey });
   const modelInfo = models.find(m => m.id === ChatModels.GPT4o_MINI);
   if (!modelInfo) return fail('Taxonomy model is not available');
-  const meter = createCompletionMeter(user, logger, 'data lake taxonomy');
+  const meter = createCompletionMeter(user, logger, 'data lake taxonomy', { systemModel: true });
 
   const folderTree = sampleFabFilesForTaxonomy(files);
   let response: InferTaxonomyResponse;

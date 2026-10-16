@@ -3,14 +3,8 @@ import { IUserDocument, UnprocessableEntityError, type IMessage } from '@bike4mi
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import {
-  completionCeilingUsd,
-  completionUsd,
-  latchUsage,
-  reserveCompletionCredits,
-  settleCompletion,
-  type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 interface BlogEnhanceParams {
   content: string;
@@ -27,7 +21,7 @@ interface BlogEnhanceResponse {
 }
 
 async function enhanceContent(
-  req: Parameters<typeof reserveCompletionCredits>[0],
+  req: Parameters<typeof createRequestCompletionMeter>[0],
   user: IUserDocument,
   params: BlogEnhanceParams,
   logger: Logger
@@ -48,34 +42,21 @@ async function enhanceContent(
       throw new Error(`Could not create backend for ${operationsModelInfo.backend}/${operationsModelInfo.id}`);
     }
 
-    // Reserve the call's ceiling, then settle the reported usage (the ceiling when none is reported).
+    const llm = meterCompletionBackend(
+      llmBackend,
+      createRequestCompletionMeter(req, 'blog enhancement', { systemModel: true }),
+      operationsModelInfo
+    );
     const meteredComplete = async (messages: IMessage[], maxTokens: number): Promise<string> => {
-      const ceilingUsd = completionCeilingUsd(operationsModelInfo, messages, maxTokens);
-      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'blog enhancement');
       let text = '';
-      const usage: CompletionUsage = {};
-      try {
-        await llmBackend.complete(
-          operationsModelInfo.id,
-          messages,
-          { temperature: 0.7, maxTokens, stream: false },
-          async (textParts: (string | null | undefined)[], info) => {
-            text += textParts.filter(Boolean).join('');
-            latchUsage(usage, info);
-          }
-        );
-      } catch (error) {
-        await reservation.refund();
-        throw error;
-      }
-      const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
-      await settleCompletion(reservation, req, {
-        model: operationsModelInfo.id,
-        provider: operationsModelInfo.backend,
-        usd: reported ? completionUsd(operationsModelInfo, usage) : ceilingUsd,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-      });
+      await llm.complete(
+        operationsModelInfo.id,
+        messages,
+        { temperature: 0.7, maxTokens, stream: false },
+        async (textParts: (string | null | undefined)[]) => {
+          text += textParts.filter(Boolean).join('');
+        }
+      );
       return text;
     };
 

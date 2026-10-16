@@ -6,14 +6,8 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import {
-  completionCeilingUsd,
-  completionUsd,
-  latchUsage,
-  reserveCompletionCredits,
-  settleCompletion,
-  type CompletionUsage,
-} from '@server/billing/meterPlatformCompletion';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -186,24 +180,25 @@ Return only the filename (without extension) in kebab-case:`;
 
         console.log(`[Auto-Rename API] Invoking model: ${modelId}`);
 
-        const messages: IMessage[] = [{ role: 'user', content: prompt }];
-        const maxTokens = 100;
-        const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
-        const reservation = await reserveCompletionCredits(req, ceilingUsd, 'automatic file renaming');
+        // Metered per call: a timed-out call keeps running and settles its own usage when it ends.
+        const meteredLlm = meterCompletionBackend(
+          llm,
+          createRequestCompletionMeter(req, 'automatic file renaming', { systemModel: true }),
+          modelInfo
+        );
 
         // Add timeout handling for LLM request
         let suggestedName = '';
-        const usage: CompletionUsage = {};
-        const llmPromise = llm.complete(
+        const messages: IMessage[] = [{ role: 'user', content: prompt }];
+        const llmPromise = meteredLlm.complete(
           modelId,
           messages,
           {
             temperature: 0.3,
-            maxTokens,
+            maxTokens: 100,
           },
-          async (chunks: (string | null | undefined)[], info) => {
+          async (chunks: (string | null | undefined)[]) => {
             suggestedName += chunks.filter(Boolean).join('');
-            latchUsage(usage, info);
           }
         );
 
@@ -215,22 +210,11 @@ Return only the filename (without extension) in kebab-case:`;
         try {
           await Promise.race([llmPromise, timeoutPromise]);
         } catch (error) {
-          await reservation.refund();
           if (error instanceof Error && error.message.includes('timed out')) {
             throw new InternalServerError('AI request timed out. Please try again.');
           }
           throw error;
         }
-
-        // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
-        const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
-        await settleCompletion(reservation, req, {
-          model: modelId,
-          provider: modelInfo.backend,
-          usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
-          inputTokens: usage.inputTokens ?? 0,
-          outputTokens: usage.outputTokens ?? 0,
-        });
 
         // Clean up the response
         suggestedName = suggestedName.trim().toLowerCase();
