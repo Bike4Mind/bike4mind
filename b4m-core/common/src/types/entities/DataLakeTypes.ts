@@ -660,6 +660,7 @@ export interface IDataLake {
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
+  findByIds(ids: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
