@@ -13,7 +13,7 @@ import {
   fabFileRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
-import { DATALAKE_TAG_STRENGTH, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { DATALAKE_TAG_STRENGTH, FabFileSourceType, KnowledgeType, UNCATEGORIZED_TAG_SUFFIX } from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -110,9 +110,13 @@ async function seed() {
     userId: user.id as string,
     lakeId: lake.id as string,
     datalakeTag: lake.datalakeTag as string,
+    prefix: lake.fileTagPrefix as string,
     connectionId: connection.id,
   };
 }
+
+const tagNamesByPath = (files: { githubPath?: string | null; tags?: { name: string }[] }[]) =>
+  Object.fromEntries(files.map(f => [f.githubPath, (f.tags ?? []).map(t => t.name).sort()]));
 
 beforeAll(async () => {
   mongo = await createMongoReplSet();
@@ -152,10 +156,11 @@ afterEach(async () => {
 
 describe('githubLakeIngest end to end', () => {
   it('first ingest creates the filtered files, every one stamped', async () => {
-    const { lakeId, datalakeTag, connectionId } = await seed();
+    const { lakeId, datalakeTag, prefix, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
+      ['src/a/b.ts', 'export const b = 1;\n'],
       ['logo.png', 'not text'],
       ['node_modules/pkg/index.js', 'vendored'],
     ]);
@@ -163,7 +168,12 @@ describe('githubLakeIngest end to end', () => {
     await run({ connectionId });
 
     const live = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
-    expect(live.map(f => f.githubPath).sort()).toEqual(['README.md', 'src/index.ts']);
+    expect(live.map(f => f.githubPath).sort()).toEqual(['README.md', 'src/a/b.ts', 'src/index.ts']);
+    expect(tagNamesByPath(live)).toEqual({
+      'README.md': [datalakeTag, `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`].sort(),
+      'src/index.ts': [datalakeTag, `${prefix}src`].sort(),
+      'src/a/b.ts': [datalakeTag, `${prefix}src:a`].sort(),
+    });
     for (const f of live) {
       expect(f.githubConnectionId).toBe(connectionId);
       expect(f.githubBlobSha).toBe(h.blobSha(h.files.get(f.githubPath!)!));
@@ -208,6 +218,19 @@ describe('githubLakeIngest end to end', () => {
     expect(await orgGitHubLakeConnectionRepository.findById(connectionId)).toMatchObject({
       lastSyncedCommitSha: 'commit-2',
     });
+  });
+
+  it('a moved file is re-tagged under its new directory', async () => {
+    const { datalakeTag, prefix, connectionId } = await seed();
+    setRepo([['docs/a.md', 'moving\n']]);
+    await run({ connectionId });
+
+    setRepo([['examples/a.md', 'moving\n']]);
+    h.headSha.value = 'commit-2';
+    await run({ connectionId, manual: true });
+
+    const after = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
+    expect(tagNamesByPath(after)).toEqual({ 'examples/a.md': [datalakeTag, `${prefix}examples`].sort() });
   });
 
   it('a non-manual re-sync with no new commit is a no-op', async () => {

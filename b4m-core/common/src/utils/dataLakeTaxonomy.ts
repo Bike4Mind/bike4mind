@@ -156,6 +156,20 @@ export function folderTagForFile(relativePath: string, tagPrefix: string): Appli
   return [{ name: `${ensureColon(tagPrefix)}${slug}`, strength: 1.0 }];
 }
 
+export const MAX_FOLDER_PATH_TAG_SEGMENTS = 6;
+
+/**
+ * One tag naming a file's whole directory path (`docs/api/x.md` -> `prefix:docs:api`), so the tag
+ * tree mirrors the repo layout. Unlike `folderTagForFile`, `docs/api` and `src/api` stay distinct.
+ * Returns [] for root-level files or a path whose every directory slugs to empty; depth is capped.
+ */
+export function folderPathTagsForFile(relativePath: string, tagPrefix: string): AppliedTag[] {
+  const dirs = relativePath.split('/').filter(Boolean).slice(0, -1);
+  const slugs = dirs.map(slugifySegment).filter(Boolean).slice(0, MAX_FOLDER_PATH_TAG_SEGMENTS);
+  if (slugs.length === 0) return [];
+  return [{ name: `${ensureColon(tagPrefix)}${slugs.join(':')}`, strength: 1.0 }];
+}
+
 /**
  * Inference returns folder paths ("legal/agreements"), not bare folder names, and a
  * category covers everything beneath its folders. So match the entry as a contiguous

@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   checkStorageLimit: vi.fn(),
   recomputeLakeStats: vi.fn(),
+  decideStampPrefix: vi.fn(),
   recordTreeCounts: vi.fn(),
 }));
 
@@ -69,6 +70,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
     recomputeLakeStats: h.recomputeLakeStats,
+    decideStampPrefix: h.decideStampPrefix,
   },
 }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
@@ -146,6 +148,7 @@ beforeEach(() => {
   h.assertWrite.mockResolvedValue(undefined);
   h.checkStorageLimit.mockResolvedValue(undefined);
   h.recomputeLakeStats.mockResolvedValue(undefined);
+  h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'gh-x:' });
   h.flush.mockResolvedValue(undefined);
   h.recordTreeCounts.mockResolvedValue(undefined);
 });
@@ -237,10 +240,40 @@ describe('runGitHubLakeSlice', () => {
           fileName: 'index.ts',
           mimeType: 'text/plain',
           batchId: 'batch1',
-          tags: [{ name: 'datalake:lake1', strength: 1 }],
+          tags: [
+            { name: 'datalake:lake1', strength: 1 },
+            { name: 'gh-x:src', strength: 1 },
+          ],
         }),
       })
     );
+  });
+
+  const ingestedTags = () =>
+    h.ingest.mock.calls.map(([arg]: [{ data: { githubPath: string; tags: { name: string }[] } }]) => [
+      arg.data.githubPath,
+      arg.data.tags.map(t => t.name),
+    ]);
+
+  it('tags each file with its repo directory path, and a root file with the meta-tag only', async () => {
+    tree(blob('README.md', 's1'), blob('docs/guide.md', 's2'), blob('src/a/b.ts', 's3'));
+    await runGitHubLakeSlice(input());
+    expect(h.decideStampPrefix).toHaveBeenCalledTimes(1);
+    expect(ingestedTags()).toEqual([
+      ['README.md', ['datalake:lake1']],
+      ['docs/guide.md', ['datalake:lake1', 'gh-x:docs']],
+      ['src/a/b.ts', ['datalake:lake1', 'gh-x:src:a']],
+    ]);
+  });
+
+  it.each([
+    ['the gate refuses the prefix', { stamp: false, reason: 'prefix-overlap' }],
+    ['the overlap check could not run', { stamp: true, prefix: 'gh-x:', overlapCheckFailed: true }],
+  ])('mints no folder tags when %s', async (_label, decision) => {
+    h.decideStampPrefix.mockResolvedValue(decision);
+    tree(blob('docs/guide.md', 's2'));
+    await runGitHubLakeSlice(input());
+    expect(ingestedTags()).toEqual([['docs/guide.md', ['datalake:lake1']]]);
   });
 
   it('keeps the old copy when the replacement upload fails', async () => {

@@ -12,6 +12,7 @@ import {
   BATCH_NON_TERMINAL_STATUSES,
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
+  folderPathTagsForFile,
   GITHUB_LAKE_FILE_RULES,
   isStorageLimitError,
   KnowledgeType,
@@ -47,6 +48,15 @@ import { v4 as uuidv4 } from 'uuid';
 
 // Stop starting files with less than this left, so the invocation yields instead of dying mid-file.
 export const GITHUB_LAKE_DEADLINE_BUFFER_MS = 90_000;
+
+/**
+ * The prefix to mint repo-path folder tags under, or null to mint none. A prefix-arm tag is lake
+ * membership, so an unverified overlap fails CLOSED here, unlike the fallback stamp's fail-open.
+ */
+export const resolveFolderTagPrefix = async (lake: IngestLake, logger: Logger): Promise<string | null> => {
+  const decision = await dataLakeService.decideStampPrefix(lake, { dataLakes: dataLakeRepository, logger });
+  return decision.stamp && !decision.overlapCheckFailed ? decision.prefix : null;
+};
 
 export type GitHubLakeSliceInput = {
   octokit: Octokit;
@@ -271,6 +281,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       db: { dataLakes: dataLakeRepository },
       logger,
     });
+    const folderPrefix = await resolveFolderTagPrefix(lake, logger);
     let acceptedBytes = 0;
     let transientSkips = 0;
     const skip = async (githubPath: string, reason: LakeSkippedFileReason, size?: number) => {
@@ -323,7 +334,10 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       }
 
       const fileKey = `${uuidv4()}${path.posix.extname(candidate.path)}`;
-      const tags = await applyFallbackTags([{ name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
+      const tags = await applyFallbackTags([
+        { name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH },
+        ...(folderPrefix ? folderPathTagsForFile(candidate.path, folderPrefix) : []),
+      ]);
       const fabFile = await ingestLakeFile({
         data: {
           userId: connection.connectedBy,

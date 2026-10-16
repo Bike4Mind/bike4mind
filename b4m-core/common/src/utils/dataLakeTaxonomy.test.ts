@@ -3,7 +3,9 @@ import type { TaxonomyTag, TaxonomyTagSet } from '../types/entities/DataLakeType
 import {
   appliedTagsForBatch,
   folderMatches,
+  folderPathTagsForFile,
   folderTagForFile,
+  MAX_FOLDER_PATH_TAG_SEGMENTS,
   sanitizeCategories,
   tagsForFile,
 } from './dataLakeTaxonomy';
@@ -188,6 +190,39 @@ describe('folderTagForFile', () => {
       folderTagForFile('root/legal/vendor.pdf', 'acme:')
     );
     expect(folderTagForFile('root/legal/vendor.pdf', ' acme: ')).toEqual([{ name: 'acme:legal', strength: 1.0 }]);
+  });
+});
+
+describe('folderPathTagsForFile', () => {
+  it('tags a nested file with its whole directory path under the prefix', () => {
+    expect(folderPathTagsForFile('docs/api/intro.md', 'gh-x:')).toEqual([{ name: 'gh-x:docs:api', strength: 1.0 }]);
+    expect(folderPathTagsForFile('docs/intro.md', 'gh-x:')).toEqual([{ name: 'gh-x:docs', strength: 1.0 }]);
+  });
+
+  it('keeps same-named leaves under different parents apart', () => {
+    expect(folderPathTagsForFile('docs/api/a.md', 'gh-x:')).not.toEqual(folderPathTagsForFile('src/api/a.md', 'gh-x:'));
+  });
+
+  it('returns nothing for a root-level file', () => {
+    expect(folderPathTagsForFile('README.md', 'gh-x:')).toEqual([]);
+  });
+
+  it('drops directories that slug to empty, and returns nothing when all of them do', () => {
+    expect(folderPathTagsForFile('_/x.md', 'gh-x:')).toEqual([]);
+    expect(folderPathTagsForFile('\u6587\u66f8/x.md', 'gh-x:')).toEqual([]);
+    expect(folderPathTagsForFile('Legal Docs/_/2024/x.md', 'gh-x:')).toEqual([
+      { name: 'gh-x:legal_docs:2024', strength: 1.0 },
+    ]);
+  });
+
+  it('caps the depth', () => {
+    const deep = Array.from({ length: MAX_FOLDER_PATH_TAG_SEGMENTS + 3 }, (_, i) => `d${i}`).join('/');
+    const [only] = folderPathTagsForFile(`${deep}/x.md`, 'gh-x:');
+    expect(only.name.split(':').slice(1)).toHaveLength(MAX_FOLDER_PATH_TAG_SEGMENTS);
+  });
+
+  it('adds the colon to a prefix given without one', () => {
+    expect(folderPathTagsForFile('docs/x.md', ' gh-x ')).toEqual([{ name: 'gh-x:docs', strength: 1.0 }]);
   });
 });
 
