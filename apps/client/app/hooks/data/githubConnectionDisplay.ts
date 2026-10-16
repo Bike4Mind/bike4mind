@@ -70,7 +70,7 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
     };
   }
   if (connection.status === 'connected') {
-    return { label: 'Connected', title: `Syncing the GitHub repository ${repo}`, color: 'success' };
+    return { label: 'Connected', title: `Kept in sync with the GitHub repository ${repo}`, color: 'success' };
   }
   // A status newer than this client (a server deployed ahead of it) must not read as healthy.
   const unknownStatus: never = connection.status;

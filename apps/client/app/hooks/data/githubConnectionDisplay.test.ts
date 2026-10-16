@@ -16,7 +16,7 @@ describe('describeGitHubConnection', () => {
   it('reads a clean connected sync as healthy', () => {
     expect(describeGitHubConnection(conn())).toEqual({
       label: 'Connected',
-      title: 'Syncing the GitHub repository acme/docs',
+      title: 'Kept in sync with the GitHub repository acme/docs',
       color: 'success',
     });
   });
