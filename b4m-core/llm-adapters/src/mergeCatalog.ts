@@ -37,6 +37,7 @@ export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
   'bedrock-moonshot',
   'bedrock-jurassic',
   'bedrock-titan',
+  'bedrock-converse',
   'gemini',
   'xai',
   'kimi',

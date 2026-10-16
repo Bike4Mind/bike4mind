@@ -30,6 +30,8 @@ export const ADAPTER_FAMILIES = [
   'bedrock-moonshot',
   'bedrock-jurassic',
   'bedrock-titan',
+  // Any Converse-compatible Bedrock model; request shaping reads the record, not the id.
+  'bedrock-converse',
   'gemini',
   'xai',
   // Moonshot direct. Not 'openai-chat': the envelope matches but the reasoning

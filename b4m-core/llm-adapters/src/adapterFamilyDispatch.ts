@@ -5,6 +5,7 @@ import { AWSBackend } from './awsBackend';
 import type { ICompletionBackend } from './backend';
 import type { ApiKeyTable } from './backendGate';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -120,6 +121,8 @@ export function backendForAdapterFamily(
       return new JurassicTwoBedrockBackend();
     case 'bedrock-titan':
       return new TitanBedrockBackend();
+    case 'bedrock-converse':
+      return new ConverseBedrockBackend();
     case 'aws':
       return new AWSBackend();
     // VoyageAI has no completion backend at all: embeddings go through their own

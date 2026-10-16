@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T09:12:49.531Z",
+  "generatedAt": "2026-10-16T05:12:17.481Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1045,6 +1045,16 @@
           "input": 0.0000011,
           "output": 0.0000044,
           "cache_read": 2.75e-7
+        }
+      }
+    },
+    {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "300000": {
+          "input": 8.000000000000001e-7,
+          "output": 0.0000032000000000000003
         }
       }
     },

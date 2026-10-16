@@ -1,4 +1,5 @@
 import AnthropicBedrockBackend from './anthropic';
+import ConverseBedrockBackend from './converse';
 import JurassicTwoBedrockBackend from './jurassicTwo';
 import LlamaBedrockBackend from './llama';
 import TitanBedrockBackend from './titan';
@@ -18,6 +19,7 @@ export class UndifferentiatedBedrockBackend extends BaseBedrockBackend {
       ...(await new TitanBedrockBackend().getModelInfo()),
       ...(await new DeepSeekBedrockBackend().getModelInfo()),
       ...(await new MoonshotBedrockBackend().getModelInfo()),
+      ...(await new ConverseBedrockBackend().getModelInfo()),
     ];
   }
 
