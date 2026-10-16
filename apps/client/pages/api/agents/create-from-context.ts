@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentLimit } from '@server/agents/createAgent';
 import {
   agentRepository,
   agentOpsSettingsRepository,
@@ -402,6 +403,9 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     );
     throw new ForbiddenError('You do not have permission to create agents in this session');
   }
+
+  // Outside the try below, which turns every error into a 500; also ahead of the LLM generation.
+  await assertAgentLimit(req.user!);
 
   try {
     req.logger.info(`Creating agent "${agentName}" from context for user ${authenticatedUserId}`);

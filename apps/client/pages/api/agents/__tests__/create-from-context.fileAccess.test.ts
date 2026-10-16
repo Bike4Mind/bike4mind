@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ fabFileIds: ['message-file'] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
   fabFileRepository: { findAccessibleInIds: h.findAccessibleInIds, findAllByIds: h.findAllByIds },
-  agentRepository: {},
+  agentRepository: { countByUserId: vi.fn().mockResolvedValue(0) },
   apiKeyRepository: {},
   adminSettingsRepository: {},
   projectRepository: {},

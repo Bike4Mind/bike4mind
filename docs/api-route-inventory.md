@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-905 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
+903 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -74,7 +74,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | friends | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | gears | 3 | 0 | 2 | 1 | 0 | 0 | 0 |
 | generated-content | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
-| google-calendar | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | google-drive | 6 | 0 | 3 | 3 | 0 | 0 | 1 |
 | groups | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | health | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
@@ -795,13 +794,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/generated-content/[ref]` | GET | jwt+key | - | no | - | 0 |
 
-### google-calendar
-
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/google-calendar/available` | GET | jwt+key | - | no | - | 1: `hooks/data/googleCalendar.ts` |
-| `/api/google-calendar/create-event` | any | jwt+key | - | no | - | 1: `hooks/data/googleCalendar.ts` |
-
 ### google-drive
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
@@ -1422,9 +1414,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/tools/weather` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
-| `/api/tools/web-fetch` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
-| `/api/tools/web-search` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/tools/weather` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/tools/web-fetch` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/tools/web-search` | POST | jwt+key | `ai:chat`, `ai:generate` | no | - | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
 
 ### transforms
 
@@ -1594,7 +1586,6 @@ a path built in a way the generator misreads, or a string that is not an API cal
 
 | Path | Caller |
 | --- | --- |
-| `/api/integration/google-calendar/events` | `hooks/data/googleCalendar.ts` |
 | `/api/research/tasks/:param` | `hooks/data/researchTasks.ts` |
 | `/api/sessions/:param/tags/generate` | `components/layouts/Notebook/Sidenav/TagModal.tsx` |
 | `/api/webhooks/deliveries/:param` | `hooks/data/useWebhookDeliveries.ts` |
