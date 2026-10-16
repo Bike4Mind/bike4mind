@@ -216,12 +216,13 @@ export class ChatCompletionInvoke {
       );
     }
 
-    // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text, image or video - the media backends run
-    // through this same path - and speech-to-text is the one catalog type it cannot: that is served
-    // by the transcription route, and dispatching it here would fail at the provider with a raw
-    // error, so reject it up front like a disabled model. An ABSENT type is a separate case and
-    // must not fail the turn: the field is declared required but assembled from discovery feeds and
-    // cached catalog rows, so it degrades to unrecorded and resolveQuestModelType falls back.
+    // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text,
+    // image or video - the media backends run through this same path - and speech-to-text is the
+    // one catalog type it cannot: that is served by the transcription route, and dispatching it
+    // here would fail at the provider with a raw error, so reject it up front like a disabled model.
+    // An ABSENT type is a separate case and must not fail the turn: the field is declared required
+    // but assembled from discovery feeds and cached catalog rows, so it degrades to unrecorded and
+    // resolveQuestModelType falls back.
     if (model.type && !isPromptMetaModelType(model.type)) {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
     }
