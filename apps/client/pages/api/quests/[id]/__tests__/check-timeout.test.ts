@@ -39,11 +39,11 @@ const sessionRepository = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ questRepository, sessionRepository }));
 
 const resolveQuestTimeoutRecovery = vi.hoisted(() => vi.fn());
-vi.mock('@server/chatCompletion/questTimeoutRecovery', async () => {
+vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', async () => {
   // Keep the real exports (notably STUCK_QUEST_RECOVERED_LOG) so the assertion pins the message
   // every settle site must share; only the decision function is stubbed.
-  const actual = await vi.importActual<typeof import('@server/chatCompletion/questTimeoutRecovery')>(
-    '@server/chatCompletion/questTimeoutRecovery'
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery')>(
+    '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery'
   );
   return { ...actual, resolveQuestTimeoutRecovery };
 });
@@ -52,7 +52,7 @@ const dispatchQuestCallback = vi.hoisted(() => vi.fn().mockResolvedValue(undefin
 vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({ dispatchQuestCallback }));
 
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { STUCK_QUEST_RECOVERED_LOG } from '@server/chatCompletion/questTimeoutRecovery';
+import { STUCK_QUEST_RECOVERED_LOG } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import '@pages/api/quests/[id]/check-timeout';
 
 const quest = (overrides: Record<string, unknown> = {}) => ({

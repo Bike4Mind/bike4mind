@@ -7,7 +7,7 @@ import {
   applyRecoveryInMemory,
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 

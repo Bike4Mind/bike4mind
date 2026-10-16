@@ -20,7 +20,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { CloudTrailClient, DescribeTrailsCommand, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { EC2Client, DescribeSecurityGroupsCommand, type SecurityGroup } from '@aws-sdk/client-ec2';
-import { resolveStage } from './resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { computeStatusScoreAndSummary } from './securityDashboardScoring';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';

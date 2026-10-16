@@ -55,7 +55,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: h.releaseGitHubLakeConnectionForLake,
 }));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
-vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: h.getFilesStorage }));
 
 import { dispatch } from './dataLakeCleanup';

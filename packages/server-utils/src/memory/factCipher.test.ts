@@ -88,8 +88,8 @@ describe('createKeyProvider', () => {
   it('mints one stable key per principal and forgets it on destroy', async () => {
     const { keyring } = makeKeyring();
     const keys = createKeyProvider(keyring, undefined);
-    const a = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
-    const b = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+    const a = (await keys.getOrCreateDek(user, 'u1', WORK_STARTED))!;
+    const b = (await keys.getOrCreateDek(user, 'u1', WORK_STARTED))!;
     expect(a.equals(b)).toBe(true); // stable
     expect((await keys.getDek(user))?.equals(a)).toBe(true);
     await keys.destroyDek(user);
@@ -100,17 +100,15 @@ describe('createKeyProvider', () => {
     const { keyring, store } = makeKeyring();
     const master = createHash('sha256').update('master-secret').digest();
     const keys = createKeyProvider(keyring, master);
-    const dek = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+    const dek = (await keys.getOrCreateDek(user, 'u1', WORK_STARTED))!;
     // Stored value is wrapped, not the raw key.
     expect(store.get('user:u1')?.startsWith('enc:')).toBe(true);
     expect((await keys.getDek(user))?.equals(dek)).toBe(true);
   });
 
   it("threads the caller's startedAt through to the keyring, in the position the fence reads", async () => {
-    // The load-bearing seam of the whole crypto-shred fence, and the one place a typecheck cannot help:
-    // apps/client/tsconfig.json excludes test files, so dropping this argument compiles cleanly and the
-    // fence silently stops applying for every production caller. Assert the exact position, not just
-    // that a refusal is possible.
+    // The load-bearing seam of the whole crypto-shred fence: passing `new Date()` here instead of the
+    // caller's startedAt still typechecks and silently disables the fence. Assert the exact value and position.
     const { keyring } = makeKeyring();
     const getOrCreate = vi.fn(keyring.getOrCreate);
     const keys = createKeyProvider({ ...keyring, getOrCreate }, undefined);
@@ -136,7 +134,7 @@ describe('createKeyProvider', () => {
   it('encrypts a fact end-to-end through the provider key', async () => {
     const { keyring } = makeKeyring();
     const keys = createKeyProvider(keyring, undefined);
-    const dek = await keys.getOrCreateDek(user, 'u1', WORK_STARTED);
+    const dek = (await keys.getOrCreateDek(user, 'u1', WORK_STARTED))!;
     const sealed = encryptFact(dek, 'discovery calls');
     const fetched = await keys.getDek(user);
     expect(fetched && decryptFact(fetched, sealed)).toBe('discovery calls');

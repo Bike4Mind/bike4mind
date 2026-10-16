@@ -4,7 +4,7 @@ import {
   hasOperationsToPerform,
   type SessionGroomingResult,
   type SpiderOperation,
-} from '@server/utils/sessionOperations';
+} from '@bike4mind/server-utils/utils/sessionOperations';
 import { SpiderEvents, SessionEvents, NotebookCurationEvents } from '@server/utils/eventBus';
 import { sessionRepository } from '@bike4mind/database/auth';
 import { Quest } from '@bike4mind/database/content';
