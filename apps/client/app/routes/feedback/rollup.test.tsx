@@ -158,7 +158,9 @@ describe('FeedbackRollupPage', () => {
     });
     renderPage();
 
-    expect(screen.getByTestId('rollup-error-alert')).toHaveTextContent(/^That date range is not valid\.$/);
+    expect(screen.getByTestId('rollup-error-alert')).toHaveTextContent(
+      /^That date range is not valid\. Pick a start before the end, within the allowed window length\.$/
+    );
   });
 
   it('falls back to a generic failure for any other error status', () => {

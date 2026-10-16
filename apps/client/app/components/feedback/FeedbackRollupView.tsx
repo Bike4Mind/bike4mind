@@ -113,7 +113,7 @@ const FeedbackRollupView: FC<FeedbackRollupViewProps> = ({ from, to, showHeading
       <Box sx={{ p: 3 }}>
         <Alert color="danger" variant="soft" data-testid="rollup-error-alert">
           {invalidWindow
-            ? 'That date range is not valid.'
+            ? 'That date range is not valid. Pick a start before the end, within the allowed window length.'
             : 'We could not load your feedback counts. Please try again.'}
         </Alert>
       </Box>
