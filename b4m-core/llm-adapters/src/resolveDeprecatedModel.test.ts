@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { isModelDeprecated, type ModelInfo } from '@bike4mind/common';
+import { isModelDeprecated, pricingTierForTokens, type ModelInfo } from '@bike4mind/common';
 import {
   DEPRECATED_MODEL_MAP,
   buildSupersededIndex,
@@ -184,6 +184,8 @@ const KNOWN_COST_RAISES: ReadonlySet<string> = new Set<string>([
   'gemini-2.5-pro -> gemini-3.5-flash',
   'gemini-2.5-flash-lite -> gemini-3.1-flash-lite',
   'kimi-k2.5 -> kimi-k2.6',
+  // Cheaper below 100K prompt tokens; above that Haiku 5.5's long-context tier costs more.
+  'anthropic.claude-3-haiku-20240307-v1:0 -> global.anthropic.claude-haiku-5-5',
 ]);
 
 describe('DEPRECATED_MODEL_MAP invariants', () => {
@@ -250,29 +252,46 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     expect(unreachable, `mappings pointing at a disabled model: ${unreachable.join(', ')}`).toEqual([]);
   });
 
-  it('never redirects a model to a successor that costs more per token', async () => {
-    const { models } = await staticCatalog();
+  // Tiered models price a request by its prompt length, so compare the rate each side pays at every
+  // tier boundary a request to the source can reach, not just the base tier.
+  const costRaisingEdges = (models: ModelInfo[]): string[] => {
     const byId = new Map(models.map(m => [String(m.id), m]));
-    // Base-tier rates: the cheapest threshold is what an ordinary prompt pays.
-    const baseRate = (id: string) => {
-      const tiers = byId.get(id)?.pricing;
-      if (!tiers) return undefined;
-      const [, rate] = Object.entries(tiers).sort(([a], [b]) => Number(a) - Number(b))[0] ?? [];
-      return rate;
-    };
-
-    const raises = Object.entries(DEPRECATED_MODEL_MAP)
+    const thresholds = (m: ModelInfo) => Object.keys(m.pricing).map(Number);
+    // Prices are written as 0.003 / 1000 in one table and 3 / 1e6 in another, so equal rates
+    // differ in the last float bit.
+    const higher = (a: number, b: number) => a > b * 1.0001;
+    return Object.entries(DEPRECATED_MODEL_MAP)
       .filter(([from, to]) => {
-        const source = baseRate(from);
-        const target = baseRate(to);
-        // Prices are written as 0.003 / 1000 in one table and 3 / 1e6 in another, so
-        // equal rates differ in the last float bit.
-        return source && target && (target.input > source.input * 1.0001 || target.output > source.output * 1.0001);
+        const source = byId.get(from);
+        const target = byId.get(to);
+        if (!source || !target || source.freeToRun || thresholds(source).length === 0) return false;
+        if (thresholds(target).length === 0) return !target.freeToRun;
+        const sourceMax = Math.max(...thresholds(source));
+        const points = [...thresholds(source), ...thresholds(target)]
+          .flatMap(t => [t, t + 1])
+          .filter(t => t <= sourceMax);
+        return points.some(tokens => {
+          const s = source.pricing[pricingTierForTokens(source, tokens)!];
+          const t = target.pricing[pricingTierForTokens(target, tokens)!];
+          return higher(t.input, s.input) || higher(t.output, s.output);
+        });
       })
-      .map(([from, to]) => `${from} -> ${to}`)
-      .filter(edge => !KNOWN_COST_RAISES.has(edge));
+      .map(([from, to]) => `${from} -> ${to}`);
+  };
+
+  it('never redirects a model to a successor that costs more per token, at any prompt length', async () => {
+    const { models } = await staticCatalog();
+    const raises = costRaisingEdges(models).filter(edge => !KNOWN_COST_RAISES.has(edge));
 
     expect(raises, `mappings whose target costs more than its source: ${raises.join(', ')}`).toEqual([]);
+  });
+
+  it('lists only allowlisted cost raises that are still mapped and still raise cost', async () => {
+    const { models } = await staticCatalog();
+    const raising = new Set(costRaisingEdges(models));
+    const stale = [...KNOWN_COST_RAISES].filter(edge => !raising.has(edge));
+
+    expect(stale, `remove these from KNOWN_COST_RAISES: ${stale.join(', ')}`).toEqual([]);
   });
 
   it('maps only to models that exist in the catalog', async () => {

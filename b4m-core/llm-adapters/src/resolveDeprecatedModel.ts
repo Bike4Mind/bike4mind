@@ -42,7 +42,8 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'anthropic.claude-3-opus-20240229-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-3-5-sonnet-20241022-v2:0': 'global.anthropic.claude-sonnet-4-6',
   'us.anthropic.claude-3-7-sonnet-20250219-v1:0': 'global.anthropic.claude-sonnet-4-6',
-  // Haiku 5.5, not 4.5: 3 Haiku is $0.25/$1.25 per 1M and 4.5 is $1/$5, a 4x raise.
+  // Haiku 5.5, not 4.5: 3 Haiku is $0.25/$1.25 per 1M and 4.5 is $1/$5, a 4x raise. Haiku 5.5 is
+  // $0.10/$0.50 up to 100K prompt tokens and $0.50/$2.50 beyond, so only a prompt over 100K costs more.
   'anthropic.claude-3-haiku-20240307-v1:0': 'global.anthropic.claude-haiku-5-5',
   // Superseded within the Bedrock Claude family by the current Sonnet 4.6 / Opus 4.8;
   // successors are no more expensive.
