@@ -1158,6 +1158,14 @@ describe('nextRebuildPoll', () => {
     expect(nextRebuildPoll(60, start, 1).interval).toBe(15_000);
   });
 
+  it('keeps a small repairable remainder beside a large wave at the slow cadence', () => {
+    // The size tiers read the TOTAL backlog, not the repairable remainder: mid-wave, 1000 files are
+    // already reset and one straggler is still under-chunked. Keying the tiers off the remainder
+    // would drop the panel to the 5s lane - 6x the rescans - on exactly the large lakes the tiers
+    // exist to protect.
+    expect(nextRebuildPoll(1001, start, 1000).interval).toBe(30_000);
+  });
+
   it('stops immediately when there was never a backlog to drain', () => {
     expect(nextRebuildPoll(0, start).interval).toBe(false);
   });
@@ -1704,6 +1712,44 @@ describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
     const second = mount();
     await waitFor(() => expect(second.result.current.data).toBeDefined());
     expect(second.result.current.data?.rebuildingCount).toBe(0);
+  });
+});
+
+/**
+ * The badge's refetchInterval reads the server's counts, so a wiring slip here is silent: no test
+ * executes the closure and the wrong cadence just polls too fast. The shape that matters is a backlog
+ * made only of rebuilds in flight - what one rejected queue send leaves behind - which must stay on
+ * the slow lane rather than rescanning the whole lake every 5s for the stale window.
+ */
+describe('useUnderChunkedCount poll cadence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUnderChunkedCount('lake1'), { wrapper });
+  };
+
+  it('refetches an in-flight-only backlog on the slow lane, not the 5s one', async () => {
+    apiGet.mockResolvedValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    mount();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apiGet).toHaveBeenCalledTimes(1);
+
+    // Dropping the third argument (its default is 0) puts this on the 5s lane and refetches here.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(apiGet).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(apiGet).toHaveBeenCalledTimes(2);
   });
 });
 

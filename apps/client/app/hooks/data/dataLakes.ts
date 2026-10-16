@@ -1643,12 +1643,14 @@ export const rebuildBacklog = (
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The
- * cadence follows what remains once that slice is taken out - under-chunked and
- * stale-embedding-space, the populations a wave drains - because only repairable work is worth a
- * full lake rescan per tick; a rebuild in flight commits on the chunk worker's own clock. Without
- * that split one file whose queue send was rejected holds every open panel at the 5s cadence for
- * the whole 2h stale window. `failedCount` deliberately is NOT in the sum: a failed file never
+ * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The size
+ * tiers read the TOTAL backlog, because each tick is a full lake rescan and the whole lake is what
+ * that rescan costs - not just its repairable remainder. The in-flight slice only picks fast lane
+ * vs slow: a backlog with nothing repairable left (every file reset, or a send the queue rejected)
+ * parks at the slow cadence, since a rebuild in flight commits on the chunk worker's own clock.
+ * Keeping the tiers off `backlog - rebuilding` is the point: one straggler left under-chunked beside
+ * a 1000-file wave must not drop the panel to the fast lane on exactly the large lakes the tiers
+ * exist to protect. `failedCount` deliberately is NOT in the sum: a failed file never
  * retries (see countFailedFilesByScope - it is invisible to both the detection query and the rescue
  * sweep), so including it gives a term that can never reach zero and the badge polls forever on any
  * lake holding one. But the backlog alone still stops too early: a wave is RESET minutes before
@@ -1663,7 +1665,7 @@ export function nextRebuildPoll(
 ): { interval: number | false; next: RebuildPollState } {
   if (backlog > 0) {
     const repairable = backlog - rebuilding;
-    const interval = repairable > 200 ? 30_000 : repairable > 50 ? 15_000 : repairable > 0 ? 5_000 : 30_000;
+    const interval = repairable <= 0 || backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
