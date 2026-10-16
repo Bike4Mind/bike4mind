@@ -17,6 +17,28 @@ describe('looksLikeFollowUp', () => {
       looksLikeFollowUp('Summarize the onboarding steps a new enterprise customer goes through during the first month')
     ).toBe(false);
   });
+
+  it('turns on the word count exactly at the limit', () => {
+    const twelve = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima';
+    expect(twelve.split(' ')).toHaveLength(12);
+    expect(looksLikeFollowUp(twelve)).toBe(true);
+    expect(looksLikeFollowUp(`${twelve} mike`)).toBe(false);
+  });
+
+  it('blends a long self-contained question carrying a referring word, by design', () => {
+    // The gate is the OR, so a 15-word question still blends when it says "that"; relied on by the
+    // floor's bare-reading fallback, pinned here rather than left to chance.
+    const message = 'Summarize the Birchway pricing model for a new enterprise customer that signed up in April';
+    expect(message.split(' ').length).toBeGreaterThan(12);
+    expect(looksLikeFollowUp(message)).toBe(true);
+  });
+
+  it('treats a space-free script as a follow-up however long it is', () => {
+    // Documented limit for Japanese/Chinese/Thai, which use no spaces: the whole message counts as one
+    // word. A space-free ASCII run stands in for it - the branch is word-count only, so it exercises
+    // the same path without a non-ASCII literal.
+    expect(looksLikeFollowUp('thisisaverylongspacefreemessageinonelanguageanditkeepsgoingforquiteawhile')).toBe(true);
+  });
 });
 
 describe('forcedRetrievalFollowUpContext', () => {
@@ -49,6 +71,15 @@ describe('forcedRetrievalFollowUpContext', () => {
   it('has nothing to add without earlier turns', () => {
     expect(forcedRetrievalFollowUpContext('what does it cost?', undefined)).toBeUndefined();
     expect(forcedRetrievalFollowUpContext('what does it cost?', ['  '])).toBeUndefined();
+  });
+
+  it('skips a server-authored placeholder prompt, which names no subject', () => {
+    // Proactive agent messages store "[Proactive message from <agent>]" and put the real content in the
+    // reply, so the placeholder would add a direction the follow-up is not about.
+    expect(forcedRetrievalFollowUpContext('yes, tell me more', ['[Proactive message from Ava]'])).toBeUndefined();
+    expect(
+      forcedRetrievalFollowUpContext('yes, tell me more', ['tell me about the product', '[Proactive message from Ava]'])
+    ).toEqual({ context: 'tell me about the product', priorTurnsUsed: 1 });
   });
 });
 
