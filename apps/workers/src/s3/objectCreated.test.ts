@@ -337,8 +337,8 @@ describe('objectCreated - storage charge', () => {
     // counter's truth disagree with the bytes actually charged.
     const file = metadata({ fileSize: 1 }) as ReturnType<typeof metadata> & { fileSize?: number };
     h.findOne.mockResolvedValue(file);
-    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
-      isStorageClaim(filter) ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? null : { id: 'ff1' }
     );
 
     await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
