@@ -20,7 +20,9 @@ vi.mock('@client/app/hooks/data/invites', () => ({ useGetUserInvites: () => ({ d
 vi.mock('./Messages', () => ({ default: () => <div data-testid="messages-panel" /> }));
 vi.mock('./Invites', () => ({ default: () => <div data-testid="invites-panel" /> }));
 vi.mock('@client/app/components/feedback/FeedbackRollupView', () => ({
-  default: ({ from, to }: { from: string; to: string }) => <div data-testid="feedback-panel">{`${from}|${to}`}</div>,
+  default: ({ from, to, showHeading }: { from: string; to: string; showHeading?: boolean }) => (
+    <div data-testid="feedback-panel" data-show-heading={String(showHeading)}>{`${from}|${to}`}</div>
+  ),
 }));
 vi.mock('@client/app/utils/feedbackRollupWindow', () => ({
   defaultFeedbackRollupWindow: () => ({ from: 'F', to: 'T' }),
@@ -49,11 +51,13 @@ describe('InboxTabs', () => {
     expect(screen.queryByTestId('feedback-panel')).not.toBeInTheDocument();
   });
 
-  it('selects the feedback tab and renders the rollup with the default window', () => {
+  it('selects the feedback tab and lazy-loads the rollup with the default window, under the tab label only', async () => {
     h.index = 2;
     renderTabs();
     expect(screen.getByTestId('inbox-tab-feedback')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('feedback-panel')).toHaveTextContent('F|T');
+    const panel = await screen.findByTestId('feedback-panel');
+    expect(panel).toHaveTextContent('F|T');
+    expect(panel).toHaveAttribute('data-show-heading', 'false');
   });
 
   it('switches to Your feedback on click', () => {

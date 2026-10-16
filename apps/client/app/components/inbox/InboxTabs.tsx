@@ -3,20 +3,38 @@ import { useUser } from '@client/app/contexts/UserContext';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox';
 import MessageIcon from '@mui/icons-material/Message';
-import { Box, Badge } from '@mui/joy';
+import { Box, Badge, Skeleton } from '@mui/joy';
 import Tab from '@mui/joy/Tab';
 import TabList from '@mui/joy/TabList';
 import TabPanel from '@mui/joy/TabPanel';
 import Tabs from '@mui/joy/Tabs';
-import { FC } from 'react';
+import { FC, lazy, Suspense } from 'react';
 import Invites from './Invites';
 import Messages from './Messages';
 import { useTranslation } from 'react-i18next';
 import { useGetInbox } from '@client/app/hooks/data/inbox';
 import { useGetUserInvites } from '@client/app/hooks/data/invites';
 import { useMemo } from 'react';
-import FeedbackRollupView from '@client/app/components/feedback/FeedbackRollupView';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
+
+// Lazy: InboxModal is imported statically by the always-loaded InboxContext, so a static import here
+// would put the rollup view in the app's entry chunk for a tab most sessions never open.
+const FeedbackRollupView = lazy(() => import('@client/app/components/feedback/FeedbackRollupView'));
+
+const FeedbackRollupFallback = () => (
+  <Box sx={{ p: 3 }} data-testid="inbox-feedback-loading" aria-busy="true">
+    <Skeleton variant="text" level="body-sm" sx={{ width: '60%', mb: 3 }} />
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+      {[0, 1, 2].map(i => (
+        <Skeleton
+          key={i}
+          variant="rectangular"
+          sx={{ flex: '1 1 260px', minWidth: 240, height: 160, borderRadius: 'md' }}
+        />
+      ))}
+    </Box>
+  </Box>
+);
 
 export enum InboxTabList {
   Messages = 'Messages',
@@ -184,7 +202,11 @@ const InboxTabs: FC = () => {
         </TabPanel>
 
         <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0, overflow: 'auto' }} value={2}>
-          {inboxIndex === 2 && <FeedbackRollupView {...defaultFeedbackRollupWindow()} />}
+          {inboxIndex === 2 && (
+            <Suspense fallback={<FeedbackRollupFallback />}>
+              <FeedbackRollupView {...defaultFeedbackRollupWindow()} showHeading={false} />
+            </Suspense>
+          )}
         </TabPanel>
       </Tabs>
     </Box>
