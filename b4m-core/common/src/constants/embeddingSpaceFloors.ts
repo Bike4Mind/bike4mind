@@ -126,8 +126,10 @@ export function forcedRetrievalFloorAboveMeasured(pct: number, space: string): n
 
 export function forcedRetrievalFloorAboveMeasuredMessage(pct: number, measuredPct: number, space: string): string {
   return (
-    `${pct}% is above the ${measuredPct}% minimum measured for ${space}, the default embedding model, and can ` +
-    'reject every passage on every turn. Clear the field to use the measured minimum.'
+    `${pct}% is above the ${measuredPct}% minimum measured for ${space}, the deployment's default embedding ` +
+    'model, and would reject every passage of a corpus embedded with that model. This is checked against the ' +
+    'default model only; a corpus embedded with another model is graded against that model. Clear the field to ' +
+    'use the measured minimum.'
   );
 }
 
