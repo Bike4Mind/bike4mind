@@ -454,7 +454,7 @@
     "current_credits": "Current credits amount",
     "best_value": "Best Value",
     "purchase_success": "Purchased {{credits}} credits",
-    "history_title": "Credits Purchase History",
+    "history_title": "Credits purchase history",
     "purchase": "Purchase",
     "no_transactions": "No transactions yet",
     "low_credits": "Your credits are low",
