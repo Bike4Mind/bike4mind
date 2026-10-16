@@ -3,21 +3,14 @@ import { organizationRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { getRequestMembershipOrgIds, type MembershipRequest } from '@server/dataLakes/requestMembership';
+import type { MembershipRequest } from '@server/dataLakes/requestMembership';
 
 export type ActiveSubscription = ISubscription & IMongoDocument;
 
-export interface ActiveSubscriptionsOptions {
-  /**
-   * Resolves the caller's org-membership ids, e.g. `() => getRequestMembershipOrgIds(req)` so the
-   * request memo is reused. Lazy so a failure lands inside the org leg and degrades like the rest.
-   */
-  membershipOrgIds?: () => Promise<readonly string[]>;
-}
-
 /**
  * Every ACTIVE subscription that grants this user a plan: their own rows plus the rows of every
- * org they belong to (owner or users[] member - membership is the seat). The single source for
+ * org that holds a plan for them (owner, users[] member - membership is the seat - or the org's
+ * manager / an appointed admin, who get the plan without a member row). The single source for
  * entitlements, rate tier and the `/api/v1/me` plan, so the three cannot disagree.
  *
  * Deliberately uncached across requests so removing a member or lapsing an org plan takes effect
@@ -27,13 +20,10 @@ export interface ActiveSubscriptionsOptions {
  * and logs: a seat member is under-granted for that request (the pre-seat behavior) instead of
  * every gated route and `/me` failing for every org member. The user-row read still throws.
  */
-export async function getActiveSubscriptionsForUser(
-  userId: string,
-  opts: ActiveSubscriptionsOptions = {}
-): Promise<ActiveSubscription[]> {
+export async function getActiveSubscriptionsForUser(userId: string): Promise<ActiveSubscription[]> {
   const resolveOrgRows = async (): Promise<ActiveSubscription[]> => {
     try {
-      const orgIds = await (opts.membershipOrgIds?.() ?? organizationRepository.findMembershipOrgIds(userId));
+      const orgIds = await organizationRepository.findPlanHolderOrgIds(userId);
       if (orgIds.length === 0) return [];
       return await subscriptionRepository.findActiveSubscriptionsByOwners(SubscriptionOwnerType.Organization, orgIds);
     } catch (error) {
@@ -57,13 +47,12 @@ export interface ActiveSubscriptionsRequest extends MembershipRequest {
 
 /**
  * Per-request memo of `getActiveSubscriptionsForUser` for the authenticated caller, so the rate
- * limiter, the entitlement gate and `/me` share one set of reads within a request (same pattern as
- * `getRequestMembershipOrgIds`). A rejection is not memoized.
+ * limiter, the entitlement gate and `/me` share one set of reads within a request. A rejection is
+ * not memoized. Plan-holder orgs are resolved separately and never written to `req.membershipOrgIds`:
+ * managers/admins get the plan, not data access.
  */
 export async function getRequestActiveSubscriptions(req: ActiveSubscriptionsRequest): Promise<ActiveSubscription[]> {
   if (!req.user) return [];
   const user = req.user;
-  return (req.activeSubscriptions ??= await getActiveSubscriptionsForUser(user.id, {
-    membershipOrgIds: () => getRequestMembershipOrgIds(req),
-  }));
+  return (req.activeSubscriptions ??= await getActiveSubscriptionsForUser(user.id));
 }

@@ -8,8 +8,11 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions, findActiveSubscriptionsByOwners },
 }));
 
-const { findMembershipOrgIds } = vi.hoisted(() => ({ findMembershipOrgIds: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository: { findMembershipOrgIds } }));
+const { findPlanHolderOrgIds, findMembershipOrgIds } = vi.hoisted(() => ({
+  findPlanHolderOrgIds: vi.fn(),
+  findMembershipOrgIds: vi.fn(),
+}));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolderOrgIds, findMembershipOrgIds } }));
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn } } }));
@@ -24,7 +27,7 @@ describe('getActiveSubscriptionsForUser', () => {
     vi.clearAllMocks();
     findActiveUserSubscriptions.mockResolvedValue([]);
     findActiveSubscriptionsByOwners.mockResolvedValue([]);
-    findMembershipOrgIds.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
   });
 
   it('returns only the user rows and skips the org read when the user has no memberships', async () => {
@@ -34,17 +37,9 @@ describe('getActiveSubscriptionsForUser', () => {
     expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
   });
 
-  it('uses the supplied membership resolver instead of reading membership itself', async () => {
-    findActiveUserSubscriptions.mockResolvedValue([own]);
-
-    await expect(getActiveSubscriptionsForUser('u1', { membershipOrgIds: async () => [] })).resolves.toEqual([own]);
-    expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
-  });
-
   it('merges the user rows with the org rows of every membership', async () => {
     findActiveUserSubscriptions.mockResolvedValue([own]);
-    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwners.mockResolvedValue([seat]);
 
     await expect(getActiveSubscriptionsForUser('u1')).resolves.toEqual([own, seat]);
@@ -55,19 +50,18 @@ describe('getActiveSubscriptionsForUser', () => {
   // behavior); failing would take every gated route and /me down for every org member.
   it('degrades to the user rows and logs when the org-subscription read fails', async () => {
     findActiveUserSubscriptions.mockResolvedValue([own]);
-    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwners.mockRejectedValue(new Error('mongo unavailable'));
 
     await expect(getActiveSubscriptionsForUser('u1')).resolves.toEqual([own]);
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('degrades to the user rows when the membership resolver fails', async () => {
+  it('degrades to the user rows when the plan-holder lookup fails', async () => {
     findActiveUserSubscriptions.mockResolvedValue([own]);
+    findPlanHolderOrgIds.mockRejectedValue(new Error('mongo unavailable'));
 
-    await expect(
-      getActiveSubscriptionsForUser('u1', { membershipOrgIds: () => Promise.reject(new Error('mongo unavailable')) })
-    ).resolves.toEqual([own]);
+    await expect(getActiveSubscriptionsForUser('u1')).resolves.toEqual([own]);
     expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
   });
@@ -85,29 +79,52 @@ describe('getRequestActiveSubscriptions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findActiveUserSubscriptions.mockResolvedValue([own]);
-    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwners.mockResolvedValue([seat]);
   });
 
-  it('memoizes the rows and the membership on the request, so later callers pay no reads', async () => {
-    const req: { user: never; membershipOrgIds?: string[]; activeSubscriptions?: unknown } = { user };
+  it('memoizes the rows on the request, so later callers pay no reads', async () => {
+    const req: { user: never; activeSubscriptions?: unknown } = { user };
 
     const first = await getRequestActiveSubscriptions(req);
     const second = await getRequestActiveSubscriptions(req);
 
     expect(first).toEqual([own, seat]);
     expect(second).toBe(first);
-    expect(req.membershipOrgIds).toEqual(['org1']);
     expect(findActiveUserSubscriptions).toHaveBeenCalledTimes(1);
-    expect(findMembershipOrgIds).toHaveBeenCalledTimes(1);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(1);
     expect(findActiveSubscriptionsByOwners).toHaveBeenCalledTimes(1);
   });
 
-  it('reuses an already-resolved membership memo', async () => {
-    await getRequestActiveSubscriptions({ user, membershipOrgIds: ['org2'] });
+  it('an org manager without a member row resolves to the org plan', async () => {
+    // findPlanHolderOrgIds is the arm that returns managerId orgs; membership alone would be [].
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue(['managedOrg']);
+    findMembershipOrgIds.mockResolvedValue([]);
+    findActiveSubscriptionsByOwners.mockResolvedValue([{ ...seat, ownerId: 'managedOrg' }]);
 
+    await expect(getRequestActiveSubscriptions({ user })).resolves.toEqual([{ ...seat, ownerId: 'managedOrg' }]);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['managedOrg']);
+  });
+
+  it('an org admin without a member row resolves to the org plan', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue(['adminOrg']);
+    findMembershipOrgIds.mockResolvedValue([]);
+    findActiveSubscriptionsByOwners.mockResolvedValue([{ ...seat, ownerId: 'adminOrg' }]);
+
+    await expect(getRequestActiveSubscriptions({ user })).resolves.toEqual([{ ...seat, ownerId: 'adminOrg' }]);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['adminOrg']);
+  });
+
+  it('manager and admin orgs do not widen request membership', async () => {
+    findPlanHolderOrgIds.mockResolvedValue(['org1', 'managedOrg', 'adminOrg']);
+    const req: { user: never; membershipOrgIds?: string[]; activeSubscriptions?: unknown } = { user };
+
+    await getRequestActiveSubscriptions(req);
+
+    expect(req.membershipOrgIds).toBeUndefined();
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org2']);
   });
 
   it('returns [] without reading for an unauthenticated request', async () => {

@@ -20,8 +20,8 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-const { findMembershipOrgIds } = vi.hoisted(() => ({ findMembershipOrgIds: vi.fn(async (): Promise<string[]> => []) }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository: { findMembershipOrgIds } }));
+const { findPlanHolderOrgIds } = vi.hoisted(() => ({ findPlanHolderOrgIds: vi.fn(async (): Promise<string[]> => []) }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolderOrgIds } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
@@ -70,7 +70,7 @@ describe('getUserEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPartnerEntitlements.mockResolvedValue(new Set<string>());
-    findMembershipOrgIds.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
     findActiveByOwners.mockResolvedValue([]);
   });
 
@@ -85,7 +85,7 @@ describe('getUserEntitlements', () => {
   // price-to-key resolution as owned rows. The real Team price has no key row today.
   it("confers an org row's price-derived keys on a seat member", async () => {
     findActive.mockResolvedValue([]);
-    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
     findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro', ownerType: 'Organization', ownerId: 'org1' }]);
 
     await expect(getUserEntitlements(user)).resolves.toContain('someproduct:pro');
@@ -94,7 +94,7 @@ describe('getUserEntitlements', () => {
 
   it('does not grant org plan entitlements to a user outside the org', async () => {
     findActive.mockResolvedValue([]);
-    findMembershipOrgIds.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
 
     await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
     expect(findActiveByOwners).not.toHaveBeenCalled();
@@ -227,7 +227,7 @@ describe('userHasEntitlement', () => {
 describe('getRequestEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    findMembershipOrgIds.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
     findActiveByOwners.mockResolvedValue([]);
   });
 
@@ -241,17 +241,16 @@ describe('getRequestEntitlements', () => {
     expect(first).toEqual(expect.arrayContaining(['sometag', 'someproduct:pro']));
     expect(second).toBe(first); // same array reference — memoized
     expect(findActive).toHaveBeenCalledTimes(1);
-    // The membership read fills the request memo for later gates (data-lake scope), and is
-    // paid once across both calls.
-    expect((req as unknown as { membershipOrgIds?: string[] }).membershipOrgIds).toEqual([]);
-    expect(findMembershipOrgIds).toHaveBeenCalledTimes(1);
+    // Plan-holder resolution must not fill the data-access membership memo.
+    expect((req as unknown as { membershipOrgIds?: string[] }).membershipOrgIds).toBeUndefined();
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(1);
   });
 
   // An org-leg failure degrades to the caller's own rows (logged in activeSubscriptions) rather
   // than failing every gated route for every org member; the user-owned keys still resolve.
   it('degrades to user-owned keys when the membership read fails', async () => {
     findActive.mockResolvedValue([{ priceId: 'price_pro' }]);
-    findMembershipOrgIds.mockRejectedValue(new Error('mongo unavailable'));
+    findPlanHolderOrgIds.mockRejectedValue(new Error('mongo unavailable'));
     const req = makeReq(user);
 
     await expect(getRequestEntitlements(req)).resolves.toContain('someproduct:pro');
@@ -260,7 +259,7 @@ describe('getRequestEntitlements', () => {
 
   it('degrades to user-owned keys when the org-subscription read fails', async () => {
     findActive.mockResolvedValue([]);
-    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
     findActiveByOwners.mockRejectedValue(new Error('mongo unavailable'));
     const req = makeReq(user);
 
@@ -283,16 +282,6 @@ describe('getRequestEntitlements', () => {
     await getRequestEntitlements(req);
 
     expect(findActive).toHaveBeenCalledTimes(1);
-  });
-
-  it('reuses the request membership memo for org seats instead of re-reading membership', async () => {
-    findActive.mockResolvedValue([]);
-    findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro' }]);
-    const req = Object.assign(makeReq(user), { membershipOrgIds: ['org1'] });
-
-    await expect(getRequestEntitlements(req)).resolves.toContain('someproduct:pro');
-    expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(findActiveByOwners).toHaveBeenCalledWith('Organization', ['org1']);
   });
 
   // Fail-closed on an unauthenticated request - returns an empty list (holds nothing)

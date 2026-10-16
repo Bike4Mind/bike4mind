@@ -8,7 +8,7 @@ const {
   isDevelopmentMock,
   findActiveUserSubscriptionsMock,
   findActiveSubscriptionsByOwnersMock,
-  findMembershipOrgIdsMock,
+  findPlanHolderOrgIdsMock,
   getSettingsMapMock,
   getSettingsValueMock,
 } = vi.hoisted(() => ({
@@ -16,7 +16,7 @@ const {
   findActiveUserSubscriptionsMock: vi.fn<(userId: string) => Promise<{ priceId: string }[]>>(),
   findActiveSubscriptionsByOwnersMock:
     vi.fn<(ownerType: string, ownerIds: readonly string[]) => Promise<{ priceId: string }[]>>(),
-  findMembershipOrgIdsMock: vi.fn<(userId: string) => Promise<string[]>>(),
+  findPlanHolderOrgIdsMock: vi.fn<(userId: string) => Promise<string[]>>(),
   getSettingsMapMock: vi.fn(async () => ({}) as Record<string, string>),
   getSettingsValueMock: vi.fn<(key: string, settings: Record<string, string>) => number>(),
 }));
@@ -30,7 +30,7 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  organizationRepository: { findMembershipOrgIds: findMembershipOrgIdsMock },
+  organizationRepository: { findPlanHolderOrgIds: findPlanHolderOrgIdsMock },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...(args as [])),
@@ -61,14 +61,14 @@ describe('resolveUserRateTier', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([]);
     findActiveSubscriptionsByOwnersMock.mockReset();
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
-    findMembershipOrgIdsMock.mockReset();
-    findMembershipOrgIdsMock.mockResolvedValue([]);
+    findPlanHolderOrgIdsMock.mockReset();
+    findPlanHolderOrgIdsMock.mockResolvedValue([]);
   });
 
   it('bypasses for admins without reading org subscriptions', async () => {
     expect(await resolveUserRateTier({ id: 'u1', isAdmin: true })).toBe('bypass');
     expect(findActiveUserSubscriptionsMock).not.toHaveBeenCalled();
-    expect(findMembershipOrgIdsMock).not.toHaveBeenCalled();
+    expect(findPlanHolderOrgIdsMock).not.toHaveBeenCalled();
     expect(findActiveSubscriptionsByOwnersMock).not.toHaveBeenCalled();
   });
 
@@ -98,21 +98,21 @@ describe('resolveUserRateTier', () => {
   });
 
   it('resolves an org seat member to the Pro tier', async () => {
-    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('pro');
     expect(findActiveSubscriptionsByOwnersMock).toHaveBeenCalledWith('Organization', ['org1']);
   });
 
   it('does not grant org plan tier to a user outside the org', async () => {
-    findMembershipOrgIdsMock.mockResolvedValue([]);
+    findPlanHolderOrgIdsMock.mockResolvedValue([]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
     expect(findActiveSubscriptionsByOwnersMock).not.toHaveBeenCalled();
   });
 
   it('takes the highest tier across user-owned and org-owned subscriptions', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_basic' }]);
-    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('pro');
   });
@@ -121,7 +121,7 @@ describe('resolveUserRateTier', () => {
   // whose plan has lapsed simply contributes no rows.
   it('ignores inactive org subscriptions', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_basic' }]);
-    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('basic');
   });
@@ -139,8 +139,8 @@ describe('resolveUserRateLimitPerMin', () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([]);
     findActiveSubscriptionsByOwnersMock.mockReset();
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
-    findMembershipOrgIdsMock.mockReset();
-    findMembershipOrgIdsMock.mockResolvedValue([]);
+    findPlanHolderOrgIdsMock.mockReset();
+    findPlanHolderOrgIdsMock.mockResolvedValue([]);
     getSettingsValueMock.mockReset();
     getSettingsValueMock.mockImplementation((key: string) => TIER_LIMITS[key]);
   });
@@ -163,12 +163,12 @@ describe('resolveUserRateLimitPerMin', () => {
   });
 
   it('falls back to the free floor when org resolution throws', async () => {
-    findMembershipOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
+    findPlanHolderOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
   });
 
   it('falls back to the free floor when the org subscription read throws', async () => {
-    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockRejectedValue(new Error('mongo unavailable'));
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
   });
@@ -176,12 +176,12 @@ describe('resolveUserRateLimitPerMin', () => {
   // The org leg degrades to the user's own rows, so a personal subscriber keeps their own tier.
   it("keeps the user's own tier when org resolution throws", async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
-    findMembershipOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
+    findPlanHolderOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(TIER_LIMITS.apiRateLimitProPerMin);
   });
 
   it('resolves through the request memo, leaving the reads for the handler to reuse', async () => {
-    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findPlanHolderOrgIdsMock.mockResolvedValue(['org1']);
     findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
     const user = { id: 'u1' };
     const req: { user: never; membershipOrgIds?: string[]; activeSubscriptions?: unknown[] } = {
@@ -189,12 +189,12 @@ describe('resolveUserRateLimitPerMin', () => {
     };
 
     expect(await resolveUserRateLimitPerMin(user, req)).toBe(TIER_LIMITS.apiRateLimitProPerMin);
-    expect(req.membershipOrgIds).toEqual(['org1']);
+    expect(req.membershipOrgIds).toBeUndefined();
     expect(req.activeSubscriptions).toEqual([{ priceId: 'price_team' }]);
 
     await resolveUserRateLimitPerMin(user, req);
     expect(findActiveUserSubscriptionsMock).toHaveBeenCalledTimes(1);
-    expect(findMembershipOrgIdsMock).toHaveBeenCalledTimes(1);
+    expect(findPlanHolderOrgIdsMock).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed to the Free-tier floor when subscription resolution throws (no 500)', async () => {
