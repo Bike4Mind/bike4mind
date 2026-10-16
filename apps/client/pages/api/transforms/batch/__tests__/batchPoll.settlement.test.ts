@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   claim: vi.fn(),
   settle: vi.fn(),
   catalog: vi.fn(),
+  record: vi.fn(async () => undefined),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -32,6 +33,7 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { findByAnthropicBatchId: async () => m.batch, claimCompletion: m.claim },
+  usageEventRepository: { record: m.record },
 }));
 const usage = (input: number, output: number) => ({ inputTokens: input, outputTokens: output });
 const batchResults = vi.hoisted(() => ({ items: [] as Record<string, unknown>[] }));
@@ -99,6 +101,15 @@ describe('GET /api/transforms/batch/:id settlement', () => {
         outputTokens: 55,
       },
       expect.objectContaining({ featureLabel: 'batch transforms' })
+    );
+    expect(m.record).toHaveBeenCalledOnce();
+    expect(m.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'msgbatch_1',
+        feature: 'completion_api',
+        inputTokens: 110,
+        outputTokens: 55,
+      })
     );
   });
 

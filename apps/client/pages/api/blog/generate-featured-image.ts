@@ -5,7 +5,7 @@ import { ImageModels, ModelInfo, UnprocessableEntityError, usdToCredits } from '
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import imageLogger from '@server/utils/imageLogger';
 import axios from 'axios';
@@ -186,13 +186,32 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
       }
 
       const sessionId = `blog-image-${userId}-${randomUUID()}`;
-      await reservation.settle(
-        reservation.reservedCredits > 0
-          ? usdToCredits(computeImageUsdCostPerImage(imageModelId, costInput) * generatedImages.length)
-          : 0,
+      const costUsd =
+        requiredCredits > 0 ? computeImageUsdCostPerImage(imageModelId, costInput) * generatedImages.length : 0;
+      const creditsCharged = await reservation.settle(
+        reservation.reservedCredits > 0 ? usdToCredits(costUsd) : 0,
         // No quest backs this generation; the sessionId stands in for the ledger's questId.
         { type: 'image_generation_usage', model: imageModelId, sessionId, questId: sessionId }
       );
+      await usageEventRepository
+        .record({
+          requestId: sessionId,
+          userId,
+          ownerId: reservation.ownerId,
+          ownerType: reservation.ownerType,
+          feature: 'image_generation',
+          provider: imageModelInfo.backend,
+          model: imageModelId,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          units: generatedImages.length,
+          costUsd,
+          creditsCharged,
+          status: 'ok',
+        })
+        .catch(err => req.logger.warn('[Blog Image] usage event failed', err));
 
       const providerImageUrl = generatedImages[0];
       imageLogger.info(`[Blog Image] Generated successfully: ${providerImageUrl.substring(0, 100)}...`);

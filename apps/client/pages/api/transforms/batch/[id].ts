@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
-import { transformBatchRepository } from '@bike4mind/database';
+import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getTextModelCost } from '@bike4mind/common';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
@@ -106,13 +106,14 @@ const handler = baseApi().get(async (req, res) => {
       outputTokens += u.outputTokens;
       models.add(modelInfo.id);
     }
-    await settleHeldCredits(
+    const model = [...models].join(',') || 'unknown';
+    const creditsCharged = await settleHeldCredits(
       claimed.creditHold,
       usdToCreditsStochastic(usd),
       {
         type: 'completion_api_usage',
         sessionId: anthropicBatchId,
-        model: [...models].join(',') || 'unknown',
+        model,
         apiKeyId: claimed.apiKeyId,
         source: claimed.usageSource,
         inputTokens,
@@ -120,6 +121,27 @@ const handler = baseApi().get(async (req, res) => {
       },
       { featureLabel: 'batch transforms', logger: req.logger }
     );
+    await usageEventRepository
+      .record({
+        requestId: anthropicBatchId,
+        userId: claimed.ownerUserId,
+        ownerId: claimed.creditHold.ownerId,
+        ownerType: claimed.creditHold.ownerType,
+        feature: 'completion_api',
+        provider: 'anthropic',
+        model,
+        inputTokens,
+        outputTokens,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        settledBasis: 'local',
+        costUsd: usd,
+        creditsCharged,
+        status: 'ok',
+        source: claimed.usageSource,
+        apiKeyId: claimed.apiKeyId,
+      })
+      .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
   }
 
   return res.json({

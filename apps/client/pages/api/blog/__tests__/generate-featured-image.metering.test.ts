@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   release: vi.fn(),
   settleHold: vi.fn(),
   generate: vi.fn(),
+  record: vi.fn(async () => undefined),
 }));
 
 vi.mock('@client/server/middlewares/baseApi', () => ({
@@ -23,7 +24,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
-  usageEventRepository: { record: async () => undefined },
+  usageEventRepository: { record: m.record },
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: {},
@@ -101,6 +102,10 @@ describe('POST /api/blog/generate-featured-image metering', () => {
       expect.objectContaining({ type: 'image_generation_usage', model: 'gpt-image-1' }),
       expect.anything(),
       expect.anything()
+    );
+    expect(m.record).toHaveBeenCalledOnce();
+    expect(m.record).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'image_generation', model: 'gpt-image-1', creditsCharged: expectedCredits })
     );
   });
 
