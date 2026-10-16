@@ -181,11 +181,13 @@ export const updateSession = async (
   if (lakeScopeRequested) {
     update.retrievalTags = lakeScope ?? [];
     update.lakeScopeExplicit = lakeScope !== null;
-    // A fresh pick overrides a stored `false` (the picker is hidden while the mode is off); only
-    // a value sent in this request wins.
-    if (forceKnowledgeRetrieval === undefined) {
+    // A pick implies forced retrieval only on a session that never named one, matching create; a
+    // value the session already carries is its owner's own setting - including an explicit opt-out,
+    // which this must not silently reverse - and a value sent in this request always wins (written
+    // just above).
+    if (forceKnowledgeRetrieval === undefined && session.forceKnowledgeRetrieval === undefined) {
       const forced = resolveLakeScopeForcedRetrieval({
-        forceKnowledgeRetrieval: undefined,
+        forceKnowledgeRetrieval,
         retrievalTags: update.retrievalTags,
         lakeScopeExplicit: update.lakeScopeExplicit,
       });

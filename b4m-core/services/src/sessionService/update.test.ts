@@ -656,12 +656,24 @@ describe('updateSession - lake-scope derivation on attach', () => {
         expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
       });
 
-      it('turns it on over a stored false', async () => {
+      it('leaves a stored false alone, so an existing opt-out survives the pick', async () => {
+        // A stored value is the caller's own setting. Flipping it here would reverse an explicit
+        // opt-out on the public PUT path, where no picker invariant applies.
         const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false }, []);
 
         await updateSession(user, { id: 'session-1', lakeScope: ['datalake:research'] } as never, adapters as never);
 
-        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: true });
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+
+      it('leaves a stored true alone when the pick is empty or cleared', async () => {
+        for (const lakeScope of [[], null]) {
+          const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true }, []);
+
+          await updateSession(user, { id: 'session-1', lakeScope } as never, adapters as never);
+
+          expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+        }
       });
 
       it('lets an opt-out in the same request win', async () => {
@@ -674,6 +686,18 @@ describe('updateSession - lake-scope derivation on attach', () => {
         );
 
         expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: false });
+      });
+
+      it('lets an explicit on in the same request win over a stored opt-out', async () => {
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false }, []);
+
+        await updateSession(
+          user,
+          { id: 'session-1', lakeScope: ['datalake:research'], forceKnowledgeRetrieval: true } as never,
+          adapters as never
+        );
+
+        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: true });
       });
 
       it('does not turn it on for a scope derived from an attached file', async () => {
