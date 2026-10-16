@@ -286,7 +286,7 @@
     "renews_on": "Se renueva el {{ date }}"
   },
   "billing": {
-    "title": "Facturación"
+    "title": "Fatturazione"
   },
   "credits": {
     "title": "Crediti",

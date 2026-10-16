@@ -286,7 +286,7 @@
     "renews_on": "Renews on {{ date }}"
   },
   "billing": {
-    "title": "Billing"
+    "title": "Оплата"
   },
   "credits": {
     "title": "Кредити",
