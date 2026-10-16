@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import GeneralSettingsTab from './GeneralSettingsTab';
@@ -61,9 +61,9 @@ const renderTab = () =>
   );
 
 describe('GeneralSettingsTab security section', () => {
-  it('mounts the MFA card', () => {
+  it('mounts the MFA card inside the Security section', () => {
     renderTab();
-    expect(screen.getByTestId('mfa-card-stub')).toBeTruthy();
+    expect(within(screen.getByTestId('settings-security-section')).getByTestId('mfa-card-stub')).toBeTruthy();
   });
 });
 

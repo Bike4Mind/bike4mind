@@ -317,7 +317,7 @@ const GeneralSettingsTab = () => {
       )}
 
       {/* Security Section */}
-      <Box ref={securitySectionRef}>
+      <Box ref={securitySectionRef} data-testid="settings-security-section">
         <SectionContainer title="Security">
           <MfaCard />
           <ActiveSessionsSection />
