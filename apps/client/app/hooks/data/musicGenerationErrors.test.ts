@@ -1,7 +1,7 @@
 import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it } from 'vitest';
 import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
-import { describeMusicGenerationError } from './musicGenerationErrors';
+import { describeMusicGenerationError, isMusicNotCancellableError } from './musicGenerationErrors';
 
 const FALLBACK = 'Could not start the song. Try again.';
 
@@ -43,5 +43,19 @@ describe('describeMusicGenerationError', () => {
   it('falls back for an unknown code or a non-HTTP error', () => {
     expect(describeMusicGenerationError(axiosError(500, { errorCode: 'mystery' }), FALLBACK)).toBe(FALLBACK);
     expect(describeMusicGenerationError(new Error('boom'), FALLBACK)).toBe(FALLBACK);
+  });
+});
+
+describe('isMusicNotCancellableError', () => {
+  it('is true only for a 409 carrying the not_cancellable code', () => {
+    expect(isMusicNotCancellableError(axiosError(409, { errorCode: 'not_cancellable' }))).toBe(true);
+    expect(isMusicNotCancellableError(axiosError(409, { errorCode: 'other' }))).toBe(false);
+    expect(isMusicNotCancellableError(axiosError(500, { errorCode: 'not_cancellable' }))).toBe(false);
+  });
+
+  it('is false for a body it cannot read or a non-HTTP error', () => {
+    expect(isMusicNotCancellableError(axiosError(409, null))).toBe(false);
+    expect(isMusicNotCancellableError(axiosError(409, 'not_cancellable'))).toBe(false);
+    expect(isMusicNotCancellableError(new Error('boom'))).toBe(false);
   });
 });

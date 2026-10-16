@@ -4,7 +4,7 @@ import {
   parseStorageLimitErrorInfo,
   type MusicGenerationApiErrorCode,
 } from '@bike4mind/common';
-import { describeGenerationError } from './generationErrors';
+import { describeGenerationError, readErrorCode } from './generationErrors';
 
 // Keyed by the API's errorCode (b4m-core/common/src/schemas/musicGenerations.ts). As with video, the response's
 // `error` text is never shown: user-facing messages come from the code.
@@ -28,11 +28,8 @@ const MESSAGES: Record<MusicGenerationApiErrorCode, string> = {
 const STORAGE_FULL_MESSAGE = 'Your file storage is full. Free up space in Files, then try again.';
 
 // The cancel hook uses this to refetch the card; the toast text comes from MESSAGES like any other code.
-export const isMusicNotCancellableError = (error: unknown): boolean => {
-  if (!isAxiosError(error) || error.response?.status !== 409) return false;
-  const data: unknown = error.response.data;
-  return typeof data === 'object' && data !== null && 'errorCode' in data && data.errorCode === 'not_cancellable';
-};
+export const isMusicNotCancellableError = (error: unknown): boolean =>
+  isAxiosError(error) && error.response?.status === 409 && readErrorCode(error.response.data) === 'not_cancellable';
 
 export function describeMusicCancelError(error: unknown): string {
   return describeMusicGenerationError(error, 'Could not cancel the song. Try again.');

@@ -6,7 +6,8 @@ import { isAxiosError } from 'axios';
 
 export const GENERATION_RATE_LIMITED_MESSAGE = 'Too many requests. Wait a moment and try again.';
 
-const readErrorCode = (data: unknown): unknown =>
+/** The `errorCode` on a response body, when it has one; the single reader every generation surface uses. */
+export const readErrorCode = (data: unknown): unknown =>
   typeof data === 'object' && data !== null && 'errorCode' in data ? data.errorCode : undefined;
 
 /**
