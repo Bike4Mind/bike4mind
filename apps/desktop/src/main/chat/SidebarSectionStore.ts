@@ -47,10 +47,10 @@ function isMissingFile(error: unknown): boolean {
  * Sections and assignments in userData, app-wide like approval-mode.json rather than per account,
  * so a second account on this machine sees the first one's section names.
  *
- * Only a missing file reads as empty. A file that exists but cannot be read or parsed also reads as
- * empty, but is moved aside to `<file>.corrupt-<ms>` before the first write, so a transient read
- * error or a bad hand edit never overwrites the user's sections; if it cannot be moved, the write
- * fails instead.
+ * A missing file reads as empty. A file that cannot be parsed also reads as empty, but is moved aside
+ * to `<file>.corrupt-<ms>` before the first write, so a bad hand edit never overwrites the user's
+ * sections; if it cannot be moved, the write fails instead. Any other read error (EACCES, a Windows
+ * lock) is not cached: the read and any change fail, and the next call tries the file again.
  */
 export class SidebarSectionStore {
   private state: SidebarSectionsState | null = null;
@@ -75,7 +75,10 @@ export class SidebarSectionStore {
     try {
       text = await readFile(this.filePath, 'utf8');
     } catch (error) {
-      if (!isMissingFile(error)) this.keepAside = true;
+      if (!isMissingFile(error)) {
+        this.loading = null;
+        throw error;
+      }
       this.state ??= EMPTY_SIDEBAR_SECTIONS;
       return this.state;
     }

@@ -204,23 +204,26 @@ describe('SidebarSectionStore', () => {
     });
   });
 
-  it('keeps an unreadable file intact through a later change', async () => {
-    const file = await sectionsFile();
-    const original = JSON.stringify({ sections: [{ id: 'a', name: 'Work' }], assignments: { one: 'a' } });
-    await writeFile(file, original, 'utf8');
-    await chmod(file, 0o000);
-    const store = new SidebarSectionStore(file, sequentialIds());
+  // chmod 0o000 does not stop root reading the file, and does nothing on Windows.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'fails on an unreadable file without touching it, and reads it once it is readable again',
+    async () => {
+      const file = await sectionsFile();
+      const original = JSON.stringify({ sections: [{ id: 'a', name: 'Work' }], assignments: { one: 'a' } });
+      await writeFile(file, original, 'utf8');
+      await chmod(file, 0o000);
+      const store = new SidebarSectionStore(file, sequentialIds());
 
-    expect(await store.read()).toEqual({ sections: [], assignments: {} });
-    await store.forgetSession('one');
-    await store.create('Home');
+      await expect(store.read()).rejects.toThrow();
+      await expect(store.forgetSession('one')).rejects.toThrow();
+      await expect(store.create('Home')).rejects.toThrow();
+      expect(await asideCopies(file)).toEqual([]);
 
-    const kept = await asideCopies(file);
-    expect(kept).toHaveLength(1);
-    const aside = join(dirname(file), kept[0]);
-    await chmod(aside, 0o600);
-    expect(await readFile(aside, 'utf8')).toBe(original);
-  });
+      await chmod(file, 0o600);
+      expect(await readFile(file, 'utf8')).toBe(original);
+      expect(await store.read()).toEqual({ sections: [{ id: 'a', name: 'Work' }], assignments: { one: 'a' } });
+    }
+  );
 
   it('does not move a missing file aside', async () => {
     const file = await sectionsFile();
