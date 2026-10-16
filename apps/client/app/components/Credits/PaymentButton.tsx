@@ -143,6 +143,9 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({ onPayment, ar
             setClientSecret(response.data.clientSecret);
             // Open the payment pop-over
             setOpen(true);
+          } else {
+            toast.error('Could not start the payment. Please try again.');
+            setWantOpen(false);
           }
         })
         .catch(error => {

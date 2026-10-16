@@ -190,4 +190,15 @@ describe('PaymentButton start-payment requests', () => {
 
     expect(apiPost).toHaveBeenCalledTimes(2);
   });
+
+  it('re-enables the button without a second request when the response has no client secret', async () => {
+    apiPost.mockResolvedValue({ data: { publishableKey: 'pk_test' } });
+    renderButton();
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('credits-purchase-btn')).not.toBeDisabled());
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('payment-modal-confirm-btn')).not.toBeInTheDocument();
+  });
 });
