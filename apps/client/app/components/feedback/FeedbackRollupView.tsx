@@ -90,9 +90,11 @@ const DimensionCard: FC<{ dimension: DimensionKey; label: string; data: Feedback
 export interface FeedbackRollupViewProps {
   from: string;
   to: string;
+  /** False where the host already names the view (the inbox tab), to avoid a second heading. */
+  showHeading?: boolean;
 }
 
-const FeedbackRollupView: FC<FeedbackRollupViewProps> = ({ from, to }) => {
+const FeedbackRollupView: FC<FeedbackRollupViewProps> = ({ from, to, showHeading = true }) => {
   const { data, isPending, isError, error } = useFeedbackRollup({ from, to });
 
   if (isPending) {
@@ -111,7 +113,7 @@ const FeedbackRollupView: FC<FeedbackRollupViewProps> = ({ from, to }) => {
       <Box sx={{ p: 3 }}>
         <Alert color="danger" variant="soft" data-testid="rollup-error-alert">
           {invalidWindow
-            ? 'That date range is not valid. Pick a start before the end, within the allowed window length.'
+            ? 'That date range is not valid.'
             : 'We could not load your feedback counts. Please try again.'}
         </Alert>
       </Box>
@@ -120,10 +122,12 @@ const FeedbackRollupView: FC<FeedbackRollupViewProps> = ({ from, to }) => {
 
   return (
     <Box sx={{ p: 3, maxWidth: 1100, mx: 'auto', width: '100%' }} data-testid="rollup-page-root">
-      <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
-        <FeedbackOutlinedIcon />
-        <Typography level="h2">Your feedback</Typography>
-      </Stack>
+      {showHeading && (
+        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
+          <FeedbackOutlinedIcon />
+          <Typography level="h2">Your feedback</Typography>
+        </Stack>
+      )}
       <Typography level="body-sm" textColor="text.secondary">
         {data.total} {data.total === 1 ? 'report' : 'reports'} between {formatBound(data.from)} and{' '}
         {formatBound(data.to)}. Counts only - this page does not show what any report said.

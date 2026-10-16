@@ -20,6 +20,7 @@ vi.mock('@client/app/hooks/data/feedback', () => ({
 }));
 
 import FeedbackRollupPage from './rollup';
+import FeedbackRollupView from '@client/app/components/feedback/FeedbackRollupView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -60,6 +61,17 @@ describe('FeedbackRollupPage', () => {
     renderPage();
 
     expect(useFeedbackRollup).toHaveBeenCalledWith(search);
+  });
+
+  it('heads the page with Your feedback, and drops the heading when the host names the view', () => {
+    succeed(payload());
+    const { unmount } = renderPage();
+    expect(screen.getByRole('heading', { name: 'Your feedback' })).toBeInTheDocument();
+    unmount();
+
+    render(<FeedbackRollupView from={search.from} to={search.to} showHeading={false} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('rollup-page-root')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Your feedback' })).not.toBeInTheDocument();
   });
 
   it('says the window is empty rather than showing five empty tables', () => {
@@ -146,7 +158,7 @@ describe('FeedbackRollupPage', () => {
     });
     renderPage();
 
-    expect(screen.getByTestId('rollup-error-alert')).toHaveTextContent('date range is not valid');
+    expect(screen.getByTestId('rollup-error-alert')).toHaveTextContent(/^That date range is not valid\.$/);
   });
 
   it('falls back to a generic failure for any other error status', () => {
