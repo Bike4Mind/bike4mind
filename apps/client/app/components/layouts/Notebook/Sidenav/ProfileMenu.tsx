@@ -712,7 +712,7 @@ const ProfileMenu = () => {
                   label={t('apiKeys.title', 'API Keys')}
                   onClick={() => {
                     navigateFromMenu('/integrations', () =>
-                      navigate({ to: '/integrations', search: { tab: 'api-keys', source: 'profile_menu' } })
+                      navigate({ to: '/integrations', search: { tab: 'api-keys' } })
                     );
                   }}
                 />

@@ -54,12 +54,29 @@ describe('IntegrationsPage tabs', () => {
     expect(screen.queryByTestId('api-keys-stub')).not.toBeInTheDocument();
   });
 
-  it('selects the API Keys tab for ?tab=api-keys, keeping the gallery mounted', () => {
+  it('selects the API Keys tab for ?tab=api-keys without mounting the gallery', () => {
     router.search = { tab: 'api-keys' };
     renderPage();
     expect(screen.getByTestId('connections-tab-api-keys')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('api-keys-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('gallery-stub')).not.toBeInTheDocument();
+    expect(gallery.mounts).toEqual([]);
+  });
+
+  it('keeps the gallery mounted, hidden, once the Integrations tab has been shown', () => {
+    const view = renderPage();
+    router.search = { tab: 'api-keys' };
+    view.rerender(pageElement());
     expect(screen.getByTestId('gallery-stub').closest('[role="tabpanel"]')).toHaveAttribute('hidden');
+    router.search = { tab: 'integrations' };
+    view.rerender(pageElement());
+    expect(gallery.mounts).toEqual(['direct']);
+  });
+
+  it('records one view under StrictMode', () => {
+    router.search = { source: 'profile_menu' };
+    render(<React.StrictMode>{pageElement()}</React.StrictMode>);
+    expect(gallery.mounts).toEqual(['profile_menu']);
   });
 
   it('writes the chosen tab to the URL when switching', () => {
@@ -79,16 +96,20 @@ describe('IntegrationsPage tabs', () => {
     router.search = { source: 'profile_menu', tab: 'api-keys' };
     renderPage();
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { tab: 'api-keys' }, replace: true });
-    // The entry point reaches the gallery even though the URL opened on the API Keys tab.
-    expect(screen.getByTestId('gallery-stub')).toHaveTextContent('profile_menu');
   });
 
-  it('counts one visit with the real entry point when the URL opens on API Keys', () => {
+  it('counts no gallery view for an API Keys visit, and one with the entry point if Integrations is then opened', () => {
     router.search = { tab: 'api-keys', source: 'profile_menu' };
     const view = renderPage();
+    expect(gallery.mounts).toEqual([]);
+
+    // The URL has lost ?source= by now; the entry point the page first saw still reaches the gallery.
+    router.search = { tab: 'integrations' };
+    view.rerender(pageElement());
     expect(gallery.mounts).toEqual(['profile_menu']);
 
-    // Switching to Integrations reuses the mounted gallery, so the visit is not counted again.
+    router.search = { tab: 'api-keys' };
+    view.rerender(pageElement());
     router.search = { tab: 'integrations' };
     view.rerender(pageElement());
     expect(gallery.mounts).toEqual(['profile_menu']);

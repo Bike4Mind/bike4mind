@@ -451,7 +451,7 @@ describe('ProfileMenu - Connections', () => {
     fireEvent.click(keys);
     expect(router.navigate).toHaveBeenCalledWith({
       to: '/integrations',
-      search: { tab: 'api-keys', source: 'profile_menu' },
+      search: { tab: 'api-keys' },
     });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
   });
