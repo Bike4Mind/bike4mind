@@ -5466,4 +5466,24 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
     });
     expect(injected).toEqual(['ALDER_PRICING']);
   });
+
+  it('keeps the best admitted passage when the highest blended score was rejected', async () => {
+    // The BIRCHWAY chunk scores highest by the blended query (0.570) but clears no floor, while the
+    // Alder chunk is admitted only by its bare reading (0.60) at a blended 0.403. Measuring the
+    // relative cutoff from that rejected top score (0.90 * 0.570 = 0.513) would cut the one admitted
+    // passage and abstain; it has to measure from the best ADMITTED passage instead.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0, 1, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, -0.3, 0.7416];
+      return [0.2, 0.875, 0.4407];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+  });
 });

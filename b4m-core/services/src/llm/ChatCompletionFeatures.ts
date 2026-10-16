@@ -3320,30 +3320,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
+      // Both cutoffs below measure from this turn's best ADMITTED candidate, `ranked[0]`, not from
+      // `topScore`. The two stopped being the same score when the absolute floor started clearing on
+      // EITHER the blended or the bare reading: the chunk with the highest blended score can now be
+      // rejected outright while a chunk it outscored was admitted on its bare score alone. A cutoff
+      // anchored on `topScore` would then sit above the only admitted candidate and empty the turn,
+      // which is the one thing a ranking floor must never do - `ranked` is score-descending, so its
+      // head is the candidate that has to survive. `topScore` is the fallback for an empty `ranked`,
+      // where neither cutoff has anything to act on either way.
+      const anchorScore = ranked.length > 0 ? ranked[0].score : topScore;
       // The relative floor runs HERE rather than inside the scan above: it is a fraction of the
-      // turn's FINAL top score, which is not known until the last batch has been scored. This is
+      // turn's top admitted score, which is not known until the last batch has been scored. This is
       // the floor that ranks - it moves with the turn, so it keeps discriminating whichever band a
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing.
       //
-      // Skipped when the top score is not positive - that guard now lives in
-      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it.
-      // `topScore` is not derived from `pool`: it is updated one line BEFORE the absolute-floor
-      // `continue`, so it tracks every finite scored candidate while `pool` holds only those that
-      // cleared the floor, and can therefore be negative here. The guard is inert on THIS path (a
-      // non-positive `topScore` makes the product non-positive, so the unfiltered branch is taken
-      // either way) and load-bearing on the sweep's, which is handed arbitrary floor pairs.
+      // Skipped when the anchor is not positive - that guard now lives in
+      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it. It
+      // is inert on THIS path (a non-positive anchor makes the product non-positive, so the
+      // unfiltered branch is taken either way) and load-bearing on the sweep's, which is handed
+      // arbitrary floor pairs.
       //
-      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
-      // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
-      // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
-      // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
-      const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, floors.relativeFloor);
+      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100), so the head of
+      // `ranked` always clears its own cutoff. No new empty-handed exit is introduced.
+      const relativeCutoff = forcedRetrievalRelativeCutoff(anchorScore, floors.relativeFloor);
       const afterRelative = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
       if (afterRelative.length < ranked.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: relative floor kept ${afterRelative.length}/${ranked.length} candidates ` +
-            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${topScore.toFixed(3)})`
+            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${anchorScore.toFixed(3)})`
         );
       }
 
@@ -3358,17 +3363,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // would move with the very floor this one exists to be independent of.
       //
       // Runs after the relative floor purely so the two `pre`/`post` counts on promptMeta stay a
-      // chain; the two cuts are independent, and applying both is an AND either way. Cannot empty
-      // the turn at any setting: the cutoff never exceeds `topScore`, which the head of `ranked`
-      // meets, and `ranked` is non-empty here.
+      // chain; the two cuts are independent, and applying both is an AND either way. Anchored on
+      // `anchorScore` for the reason above, and cannot empty the turn at any setting: the cutoff lands
+      // between the anchor and the background when the background is the lower of the two, and is 0
+      // otherwise, so it never sits above the head of `ranked`, which is non-empty here.
       const backgroundScore = backgroundScoreOf(scannedScores);
-      const spreadCutoff = forcedRetrievalSpreadCutoff(topScore, backgroundScore, floors.spreadFloor);
+      const spreadCutoff = forcedRetrievalSpreadCutoff(anchorScore, backgroundScore, floors.spreadFloor);
       const scored = spreadCutoff > 0 ? afterRelative.filter(c => c.score >= spreadCutoff) : afterRelative;
       if (scored.length < afterRelative.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: spread floor kept ${scored.length}/${afterRelative.length} candidates ` +
             `(cutoff ${spreadCutoff.toFixed(3)} = ${(floors.spreadFloor * 100).toFixed(0)}% of the way from ` +
-            `top ${topScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
+            `top ${anchorScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
         );
       }
 
@@ -3461,7 +3467,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // walk above skips a candidate only via its budget `break`, and `used` starts at 0
           // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
           // an empty `sections` means an empty `scored`. And the top candidate always survives
-          // BOTH per-turn cutoffs - the relative one is `topScore * fraction` with fraction <= 1,
+          // BOTH per-turn cutoffs - the relative one is `anchorScore * fraction` with fraction <= 1,
           // the spread one interpolates between the top and the background and so never exceeds the
           // top - meaning an empty `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE
           // floor, which is exactly what the `chunks: 0` beside it says. If that budget ever admits
