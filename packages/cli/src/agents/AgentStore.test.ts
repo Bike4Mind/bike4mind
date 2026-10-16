@@ -123,6 +123,19 @@ describe('retiring and retired aliases', () => {
     expect(getAvailableModelAliases(onDate)).not.toContain('o4-mini');
   });
 
+  it('resolves the dated id of a still-served model until its retirement date', () => {
+    const result = resolveModelAlias('o3-2025-04-16', 'test-agent', '/test/path.md', before);
+    expect(result).toEqual({ model: 'o3-2025-04-16', resolved: true });
+  });
+
+  it('warns for the dated id of a retired model instead of pinning it', () => {
+    const result = resolveModelAlias('O4-MINI-2025-04-16', 'test-agent', '/test/path.md', onDate);
+    expect(result.resolved).toBe(false);
+    expect(result.model).toBe(DEFAULT_AGENT_MODEL);
+    expect(result.warning).toContain('is retired');
+    expect(result.warning).toContain('model: gpt-5-mini');
+  });
+
   it('a retired alias names its replacement instead of pinning a dead id', () => {
     const result = resolveModelAlias('o1', 'test-agent', '/test/path.md');
     expect(result.resolved).toBe(false);
@@ -250,7 +263,7 @@ describe('resolveModelAlias', () => {
 
     it('should resolve OpenAI aliases', () => {
       expect(resolveModelAlias('gpt-4o', testAgent, testPath).model).toBe('gpt-4o');
-      expect(resolveModelAlias('o3-2025-04-16', testAgent, testPath).model).toBe('o3-2025-04-16');
+      expect(resolveModelAlias('gpt-4.1-2025-04-14', testAgent, testPath).model).toBe('gpt-4.1-2025-04-14');
     });
 
     it('should resolve Gemini aliases', () => {

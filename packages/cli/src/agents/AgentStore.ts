@@ -233,7 +233,11 @@ export function resolveModelAlias(
     return { model: alias, resolved: true };
   }
 
-  const sunsetting = ownEntry(SUNSETTING_MODEL_ALIASES, normalizedInput);
+  // Match the alias key or the full id it points at, so the dated id of a
+  // sunsetting model retires on the same date as its alias.
+  const sunsetting =
+    ownEntry(SUNSETTING_MODEL_ALIASES, normalizedInput) ??
+    Object.values(SUNSETTING_MODEL_ALIASES).find(entry => entry.model === normalizedInput);
   if (sunsetting && now.toISOString().slice(0, 10) < sunsetting.retiresOn) {
     return { model: sunsetting.model, resolved: true };
   }
