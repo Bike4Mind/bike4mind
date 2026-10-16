@@ -164,7 +164,7 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
           disabled={field.disabled}
           onChange={event => field.onChange(event.target.checked)}
           endDecorator={field.label}
-          slotProps={{ input: { 'data-testid': `${testId}-switch` } }}
+          slotProps={{ input: { 'data-testid': `${testId}-switch`, 'aria-label': field.label } }}
         />
       );
     case 'note':

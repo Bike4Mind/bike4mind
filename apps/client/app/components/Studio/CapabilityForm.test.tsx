@@ -80,6 +80,7 @@ describe('CapabilityForm', () => {
     expect(onSegment).toHaveBeenCalledWith('y');
     expect(screen.getByTestId('demo-form-mode-x-btn')).toHaveAttribute('aria-pressed', 'true');
 
+    expect(screen.getByRole('switch', { name: 'Vocals' })).toBe(screen.getByTestId('demo-form-vocals-switch'));
     fireEvent.click(screen.getByTestId('demo-form-vocals-switch'));
     expect(onSwitch).toHaveBeenCalledWith(true);
 
