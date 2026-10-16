@@ -9,7 +9,9 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   adminSettingsRepository: {},
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: h.signUrl }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: h.signUrl }),
+}));
 
 import { signBrowserFileResponse } from './signBrowserFileResponse';
 

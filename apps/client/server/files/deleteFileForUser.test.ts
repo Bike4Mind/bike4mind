@@ -35,7 +35,10 @@ vi.mock('@bike4mind/services', () => ({ fabFilesService: { deleteFabFile: mockDe
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn(), getGeneratedImageStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(),
+  getGeneratedImageStorage: vi.fn(),
+}));
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: mockRecompute }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));

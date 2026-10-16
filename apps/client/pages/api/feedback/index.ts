@@ -31,7 +31,11 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
 import { saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
-import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
+import {
+  buildFeedbackDeepLinks,
+  FEEDBACK_LINK_LABELS,
+  type FeedbackDeepLinks,
+} from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,

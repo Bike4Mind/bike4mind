@@ -146,7 +146,9 @@ vi.mock('@bike4mind/services', () => ({
     admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({

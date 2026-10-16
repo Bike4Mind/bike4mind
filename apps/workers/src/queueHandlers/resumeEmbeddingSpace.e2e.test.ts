@@ -37,7 +37,9 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => ({ url: 'https://queue.test', managementEndpoint: 'wss://ws.test' }) }),
 }));

@@ -90,7 +90,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordBatchCompletion: vi.fn(async () => undefined),
   recordTaxonomyDailyCapExceeded: vi.fn(async () => undefined),

@@ -35,7 +35,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 // asserting the chat-completion-specific keys (`websocket`, `SECRET_ENCRYPTION_KEY`,
 // `mcpHandler`) are NOT touched at import but ARE touched when the factory is invoked.
 // Storage and database modules are mocked to isolate this module's own contract from
-// upstream Resource access via `@server/utils/config`.
+// upstream Resource access via `@bike4mind/server-utils/utils/config`.
 
 const resourceAccessLog: string[] = [];
 
@@ -61,7 +61,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
 
-// Mock `@server/utils/config` - its module body eagerly reads several `Resource.X.value`
+// Mock `@bike4mind/server-utils/utils/config` - its module body eagerly reads several `Resource.X.value`
 // (notably `SECRET_ENCRYPTION_KEY`, `MONGODB_URI`, etc.) and would pollute the access
 // log with import-time noise. That's a separate, pre-existing eager-Resource concern
 // outside this PR's scope. Mocking here isolates the assertion to chatCompletionDefaults'

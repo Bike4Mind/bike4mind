@@ -91,7 +91,7 @@ async function run() {
   const first = await linkNodeArtifacts([fresh], runs(QUEST_ID), `${RUN}-user`, logger);
   const found = first.get(node.id) ?? [];
   check('both artifacts found for the node', found.length === 2, `got ${found.length}`);
-  check('another user\'s artifact on the same quest is not joined', !found.some(a => a.id === `${RUN}-planted`));
+  check("another user's artifact on the same quest is not joined", !found.some(a => a.id === `${RUN}-planted`));
   check('projection carries type and title', Boolean(found[0]?.type && found[0]?.title), JSON.stringify(found[0]));
 
   console.log('\n2. the ids are persisted onto the node');

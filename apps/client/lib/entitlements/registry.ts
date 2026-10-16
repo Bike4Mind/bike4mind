@@ -14,7 +14,13 @@
  * import constants from a product namespace into this file (wrong dependency
  * direction); keep the literals inline.
  */
-import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from '@bike4mind/server-utils/lib/entitlements/types';
+import type {
+  DomainGrantRow,
+  EntitlementKey,
+  ImpliedEntitlementRow,
+  PriceEntitlementRow,
+  TagGrantRow,
+} from '@bike4mind/server-utils/lib/entitlements/types';
 import { isTestMode } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   parseInternalStaffDomains,

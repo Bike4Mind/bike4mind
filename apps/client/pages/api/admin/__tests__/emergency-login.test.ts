@@ -27,7 +27,9 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_q: any, _s:
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_q: any, _s: any, next: any) => next(),
 }));
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({ UnauthorizedError: class UnauthorizedError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
+  UnauthorizedError: class UnauthorizedError extends Error {},
+}));
 vi.mock('@bike4mind/services', () => ({
   mfaService: { userHasMFAConfigured: (user: any) => user.mfa?.totpEnabled === true },
 }));

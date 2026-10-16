@@ -18,7 +18,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: getEffectiveLLMApiKeysMock } }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/mementoEmbedding', () => ({ generateMementoSummaryEmbedding: generateEmbeddingMock }));
+vi.mock('@bike4mind/server-utils/utils/mementoEmbedding', () => ({
+  generateMementoSummaryEmbedding: generateEmbeddingMock,
+}));
 vi.mock('../../../../services/MementoGroomingService', () => ({
   MementoGroomingService: vi.fn(function () {
     return { checkAndScheduleGrooming: vi.fn().mockResolvedValue(undefined) };

@@ -98,7 +98,9 @@ const mockRecordSuccess = vi.fn();
 const mockRecordFailure = vi.fn();
 const mockEmitMetrics = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/cloudwatch')>('@bike4mind/server-utils/utils/cloudwatch');
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/cloudwatch')>(
+    '@bike4mind/server-utils/utils/cloudwatch'
+  );
   return {
     recordFeedbackDeliverySuccess: (...args: unknown[]) => mockRecordSuccess(...args),
     recordFeedbackDeliveryFailure: (...args: unknown[]) => mockRecordFailure(...args),

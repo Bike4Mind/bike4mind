@@ -127,7 +127,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({})),
   getGeneratedImageStorage: vi.fn(() => ({})),
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' },
+}));
 
 // Test helpers are not exported from the package barrel / dist; deep-import the source.
 import {

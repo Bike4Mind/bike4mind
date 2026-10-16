@@ -125,7 +125,7 @@ type DefaultChatCompletionOptions = Omit<
 // pulled this file in (e.g. just to grab `getSharedTokenizer`).
 //
 // The factory below defers all Resource access to first invocation, matching the lazy
-// pattern in `@server/utils/storage` and the queueHandler service factories. Memoization
+// pattern in `@bike4mind/server-utils/utils/storage` and the queueHandler service factories. Memoization
 // preserves the prior reference-equality semantics for callers that spread the object.
 let _defaultChatCompletionOptions: DefaultChatCompletionOptions | undefined;
 

@@ -48,7 +48,9 @@ vi.mock('@server/cli/auth', () => ({
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({ logCompletionAnalytics: vi.fn() }));
 vi.mock('@server/websocket/utils', () => ({ sendToConnection: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'wss://example.test' } },
 }));

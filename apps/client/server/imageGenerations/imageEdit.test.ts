@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // link array omits the relevant resource.
 //
 // We track every `Resource.X` access via a tracking Proxy that returns benign stubs
-// (so unrelated module-load Resource access via `@server/utils/config` doesn't pollute
+// (so unrelated module-load Resource access via `@bike4mind/server-utils/utils/config` doesn't pollute
 // the assertion). After import, the factory-specific keys must be absent. After
 // invoking the factory, they must be present.
 

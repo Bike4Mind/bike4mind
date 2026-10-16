@@ -7,7 +7,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockSendBatch = vi.fn();
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args),
+}));
 
 const mockEmitMetric = vi.fn().mockResolvedValue(undefined);
 const mockEmitMetrics = vi.fn().mockResolvedValue(undefined);

@@ -76,7 +76,9 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/cloudwatch')>('@bike4mind/server-utils/utils/cloudwatch');
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/cloudwatch')>(
+    '@bike4mind/server-utils/utils/cloudwatch'
+  );
   return {
     recordFeedbackDeliverySuccess: vi.fn(),
     recordFeedbackDeliveryFailure: vi.fn(),

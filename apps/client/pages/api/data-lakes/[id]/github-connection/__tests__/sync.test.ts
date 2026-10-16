@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ConflictError,
+  InternalServerError,
+  NotFoundError,
+} from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),

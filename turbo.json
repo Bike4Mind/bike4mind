@@ -14,11 +14,7 @@
       // packages resolve), which no input glob can capture. A cache replay would
       // restore glue for the WRONG link state. The script is sub-second.
       "cache": false,
-      "inputs": [
-        "scripts/generate-premium-glue.mjs",
-        "../../packages/premium/*/package.json",
-        "../../sst.config.ts"
-      ],
+      "inputs": ["scripts/generate-premium-glue.mjs", "../../packages/premium/*/package.json", "../../sst.config.ts"],
       "outputs": [
         "app/premium-generated/**",
         "pages/api/premium-*/**",
@@ -136,34 +132,32 @@
     // config REPLACES the generic entry, so dependsOn is repeated here.
     "@bike4mind/client#typecheck": {
       "dependsOn": ["codegen", "^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
-      ]
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
     },
     "@bike4mind/client#typecheck:native": {
       "dependsOn": ["codegen", "^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
-      ]
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
     },
     "@bike4mind/client#typecheck:fast": {
       "dependsOn": ["codegen", "^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
-      ]
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
     },
     "@bike4mind/client#test": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+    },
+    // The wiring tests read app, infra and self-host files outside this package.
+    "@bike4mind/server-utils#test": {
+      "dependsOn": ["^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
+        "../../apps/client/pages/**",
+        "../../apps/client/server/**",
+        "../../apps/workers/src/**",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/compose.*.yaml",
+        "$TURBO_ROOT$/selfhost/kubernetes/files/**",
+        "$TURBO_ROOT$/scripts/smoke_selfhost_objectstore.py"
       ]
     },
     // The moderation scanner reads source outside this package.

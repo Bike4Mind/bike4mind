@@ -30,7 +30,10 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Resource } from 'sst';
-import { LiveOpsTriageJobMessageSchema, type LiveOpsTriageJobMessage } from '@bike4mind/server-utils/utils/liveopsTriageJobMessage';
+import {
+  LiveOpsTriageJobMessageSchema,
+  type LiveOpsTriageJobMessage,
+} from '@bike4mind/server-utils/utils/liveopsTriageJobMessage';
 
 // Register global handlers to absorb transient network errors (TypeError: terminated)
 // that escape try/catch via orphaned undici promises.

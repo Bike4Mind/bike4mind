@@ -4,7 +4,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import {
+  generateVerificationLink,
+  getLogoUrl,
+  buildEmailLogoImg,
+  escapeHtml,
+} from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 import { MailService } from '@server/utils/mailer';
 

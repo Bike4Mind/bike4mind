@@ -64,7 +64,9 @@ vi.mock('@bike4mind/observability', () => {
     }),
   };
 });
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' },
+}));
 vi.mock('sst', () => ({
   Resource: {
     App: { stage: 'dev' },

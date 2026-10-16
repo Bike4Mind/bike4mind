@@ -70,7 +70,9 @@ vi.mock('@server/utils/eventBus', () => ({
 const { mockLogo } = vi.hoisted(() => ({ mockLogo: { url: 'https://example.com/logo.png' } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async () => ({
   escapeHtml: (
-    await vi.importActual<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>('@bike4mind/server-utils/utils/mailer/emailHelpers')
+    await vi.importActual<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>(
+      '@bike4mind/server-utils/utils/mailer/emailHelpers'
+    )
   ).escapeHtml,
   getLogoUrl: () => mockLogo.url,
   buildEmailLogoImg: (brand: string, logoUrl = mockLogo.url) =>
