@@ -64,7 +64,7 @@ export interface QuestPoll {
   reply?: string;
   /** Bare generated-file basenames, e.g. `<uuid>.png`. */
   images?: string[];
-  /** The same files with resolved URLs, empty when the deployment advertises no CDN base. */
+  /** The same files with short-lived presigned URLs (about an hour); empty only on an older server. */
   files?: { name: string; url: string; isImage: boolean; isAudio: boolean }[];
 }
 
