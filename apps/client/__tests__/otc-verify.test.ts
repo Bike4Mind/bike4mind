@@ -64,6 +64,11 @@ vi.mock('@bike4mind/common', async () => {
   };
 });
 
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
+
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
