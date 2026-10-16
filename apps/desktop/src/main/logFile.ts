@@ -30,6 +30,11 @@ const nodeFileSystem: LogFileSystem = {
   rename: (from, to) => renameSync(from, to),
 };
 
+function isFileBusy(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
 type ConsoleLike = Pick<Console, 'warn' | 'error'>;
 
 /**
@@ -62,13 +67,29 @@ export function persistConsoleWarnings(
     original.error.call(target, `LOG: cannot open ${path}, warnings will not be persisted`, err);
   }
 
+  // Another instance sharing the directory may already have rotated, and on Windows a file held
+  // open by another process cannot be renamed; in both cases keep appending rather than give up.
+  const rotate = (lineBytes: number) => {
+    const actual = fs.size(path);
+    if (actual + lineBytes <= MAX_LOG_BYTES) {
+      bytes = actual;
+      return;
+    }
+    try {
+      fs.rename(path, join(directory, ROTATED_LOG_FILE_NAME));
+      bytes = 0;
+    } catch (err) {
+      if (!isFileBusy(err)) throw err;
+      bytes = actual;
+    }
+  };
+
   const write = (level: 'warn' | 'error', args: unknown[]) => {
     if (failed) return;
     const line = `${new Date().toISOString()} [${level}] [pid ${pid}] ${redact(format(...args))}\n`;
     try {
       if (bytes + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-        fs.rename(path, join(directory, ROTATED_LOG_FILE_NAME));
-        bytes = 0;
+        rotate(Buffer.byteLength(line));
       }
       fs.append(path, line);
       bytes += Buffer.byteLength(line);

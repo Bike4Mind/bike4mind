@@ -70,6 +70,36 @@ describe('persistConsoleWarnings', () => {
     expect(files.get(LOG)).toContain('one more line');
   });
 
+  it('adopts the real size instead of rotating when another process already rotated', () => {
+    const { fs, files } = memoryFileSystem(MAX_LOG_BYTES - 10);
+    const target = fakeConsole();
+    persistConsoleWarnings(target, DIRECTORY, fs);
+    files.set(LOG, 'small');
+    fs.rename = vi.fn();
+
+    target.warn('one more line that does not fit');
+
+    expect(fs.rename).not.toHaveBeenCalled();
+    expect(files.get(LOG)).toContain('one more line');
+  });
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('keeps appending when the rotation is refused with %s', code => {
+    const { fs, files } = memoryFileSystem(MAX_LOG_BYTES - 10);
+    fs.rename = vi.fn(() => {
+      throw Object.assign(new Error(code), { code });
+    });
+    const target = fakeConsole();
+    const { error } = target;
+    persistConsoleWarnings(target, DIRECTORY, fs);
+
+    target.warn('first line that does not fit');
+    target.warn('second line');
+
+    expect(files.get(LOG)).toContain('first line');
+    expect(files.get(LOG)).toContain('second line');
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it('stops persisting after a write fails, and says so once on the real console', () => {
     const { fs } = memoryFileSystem();
     fs.append = vi.fn(() => {
