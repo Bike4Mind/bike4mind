@@ -363,14 +363,18 @@ describe.each(['github', 'atlassian'])('%s MCP server preview gate', label => {
   });
 
   it('never issues a write request from any tool without _executeFromButton', async () => {
-    const { tools } = serverUnderTest();
+    const { tools, reads } = serverUnderTest();
     const undriven = KNOWN_UNDRIVEN.filter(entry => entry.server === label).map(entry => entry.tool);
+    const readErrors: string[] = [];
     for (const [name, { handler, shape }] of tools) {
       if (undriven.includes(name)) continue;
       requests.length = 0;
-      await handler(minimalArgs(name, shape)).catch(() => undefined);
+      await handler(minimalArgs(name, shape)).catch((error: unknown) => {
+        if (reads.includes(name)) readErrors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      });
       expect({ name, writes: requests.filter(isWrite) }).toEqual({ name, writes: [] });
     }
+    expect(readErrors).toEqual([]);
   });
 
   it('answers every write tool with a confirmation preview', async () => {
