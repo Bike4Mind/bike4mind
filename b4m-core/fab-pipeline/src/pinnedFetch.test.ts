@@ -76,6 +76,13 @@ function route(req: IncomingMessage, res: ServerResponse): void {
       res.writeHead(200, { 'content-length': String(TEN_MB) });
       res.write('x');
       return;
+    case '/head-or-304':
+      if (req.method === 'HEAD') {
+        res.writeHead(200, { 'content-length': String(TEN_MB) }).end();
+      } else {
+        res.writeHead(304, { 'content-length': String(TEN_MB) }).end();
+      }
+      return;
     case '/gzip-bomb': {
       const body = gzipSync(Buffer.alloc(TEN_MB, 0));
       res.writeHead(200, { 'content-encoding': 'gzip', 'content-length': String(body.length) }).end(body);
@@ -247,6 +254,16 @@ describe('pinnedFetch - body cap and timeout', () => {
     controller.abort();
     await expect(pending).rejects.not.toBeInstanceOf(PinnedFetchError);
   });
+
+  it('does not cap a declared Content-Length on a HEAD response, which has no body', async () => {
+    const response = await pinned({ maxBodyBytes: 1024 })(at('/head-or-304'), { method: 'HEAD' });
+    expect(response.status).toBe(200);
+  });
+
+  it('does not cap a declared Content-Length on a null-body status', async () => {
+    const response = await pinned({ maxBodyBytes: 1024 })(at('/head-or-304'));
+    expect(response.status).toBe(304);
+  });
 });
 
 describe('buildPrivateAddressAdmission', () => {
@@ -262,6 +279,27 @@ describe('buildPrivateAddressAdmission', () => {
 
   it('admits nothing by default', () => {
     expect(buildPrivateAddressAdmission({})('10.0.0.1', 4)).toBe(false);
+  });
+
+  it('never admits loopback, link-local, unspecified or a mapped form, even under a catch-all CIDR', () => {
+    const admit = buildPrivateAddressAdmission({ allowPrivateCidrs: ['0.0.0.0/0', '::/0'] });
+    expect(admit('169.254.169.254', 4)).toBe(false);
+    expect(admit('0.0.0.1', 4)).toBe(false);
+    expect(admit('127.0.0.1', 4)).toBe(false);
+    expect(admit('::', 6)).toBe(false);
+    expect(admit('::1', 6)).toBe(false);
+    expect(admit('fe80::1', 6)).toBe(false);
+    expect(admit('::ffff:7f00:1', 6)).toBe(false);
+  });
+
+  it('never admits the cloud metadata endpoints that are not link-local', () => {
+    const admit = buildPrivateAddressAdmission({ allowPrivateCidrs: ['fd00::/8', '100.64.0.0/10'] });
+    // AWS IMDS over IPv6 (ULA) and Alibaba's CGNAT endpoint, reachable only through an opt-in otherwise.
+    expect(admit('fd00:ec2::254', 6)).toBe(false);
+    expect(admit('100.100.100.200', 4)).toBe(false);
+    // Their opted-in neighbours stay reachable.
+    expect(admit('fd00::5', 6)).toBe(true);
+    expect(admit('100.64.0.1', 4)).toBe(true);
   });
 
   it('rejects a malformed CIDR', () => {

@@ -471,6 +471,39 @@ export function isPrivateOrInternalHostname(hostname: string): boolean {
   return false;
 }
 
+/** Suffixes that are not public DNS (RFC 6762, RFC 8375, ICANN-reserved private-use names). */
+const NON_PUBLIC_SUFFIXES = [
+  '.internal',
+  '.local',
+  '.localdomain',
+  '.home.arpa',
+  '.lan',
+  '.corp',
+  '.home',
+  '.intranet',
+  '.private',
+];
+
+/**
+ * Hostnames that are not public DNS: localhost, a single-label name (which resolves through the search
+ * domains rather than the public root), and the private-use suffixes in RFC 6762, RFC 8375 and the
+ * ICANN-reserved space. `isPrivateOrInternalHostname` covers the address-shaped and `.internal`/
+ * cluster-DNS cases; this is the name-and-suffix half of the same policy.
+ *
+ * Kept here, and shared, so `validateRemoteMcpUrl` and the connect-time hop check in `pinnedFetch` cannot
+ * drift apart on it - the entry check refusing `foo.corp` while a redirect hop accepts it is the split
+ * this export exists to prevent.
+ */
+export function isNonPublicHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    !host.includes('.') ||
+    NON_PUBLIC_SUFFIXES.some(suffix => host.endsWith(suffix))
+  );
+}
+
 /**
  * Validate a URL before fetching.
  * Blocks internal/private networks to prevent SSRF attacks.

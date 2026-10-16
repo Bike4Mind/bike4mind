@@ -13,7 +13,13 @@
 
 import { BlockList, isIP } from 'net';
 import { Agent, fetch as undiciFetch } from 'undici';
-import { SSRF_BLOCKED_CODE, createSsrfSafeLookup, isPrivateIP, isPrivateOrInternalHostname } from './ssrfProtection';
+import {
+  SSRF_BLOCKED_CODE,
+  createSsrfSafeLookup,
+  isNonPublicHostname,
+  isPrivateIP,
+  isPrivateOrInternalHostname,
+} from './ssrfProtection';
 
 export type PinnedFetchErrorCode =
   'ssrf_blocked' | 'scheme_blocked' | 'redirect_blocked' | 'too_many_redirects' | 'size_cap' | 'timeout';
@@ -31,7 +37,8 @@ export class PinnedFetchError extends Error {
 export interface PinnedFetchOptions {
   /**
    * Self-host opt-in: private CIDRs (e.g. `10.20.0.0/16`) that may be dialled. Default deny. Loopback,
-   * link-local (including the metadata address) and unspecified ranges are never admitted, whatever is listed.
+   * link-local and the cloud metadata addresses (including AWS IMDS over IPv6 and Alibaba's CGNAT
+   * endpoint) are never admitted, whatever is listed.
    */
   allowPrivateCidrs?: string[];
   /** Permit plain http. Default false. */
@@ -70,6 +77,11 @@ function buildNeverAdmitted(): BlockList {
   list.addSubnet('0.0.0.0', 8, 'ipv4');
   list.addSubnet('127.0.0.0', 8, 'ipv4');
   list.addSubnet('169.254.0.0', 16, 'ipv4');
+  // Cloud metadata endpoints that are not link-local: AWS IMDS over IPv6 is ULA, and Alibaba's metadata
+  // endpoint sits in CGNAT space. An operator opting in `fd00::/8` or `100.64.0.0/10` would otherwise
+  // hand a user-supplied URL a path to instance credentials.
+  list.addAddress('fd00:ec2::254', 'ipv6');
+  list.addAddress('100.100.100.200', 'ipv4');
   list.addAddress('::', 'ipv6');
   list.addAddress('::1', 'ipv6');
   list.addSubnet('fe80::', 10, 'ipv6');
@@ -88,8 +100,13 @@ function parseCidr(cidr: string): { network: string; prefix: number; type: 'ipv4
 }
 
 /**
- * Builds the private-address admission check for `createSsrfSafeLookup`. IPv4-mapped IPv6 forms are never
- * admitted: they stay blocked by `isPrivateIP`, which is the conservative reading.
+ * Builds the private-address admission check for `createSsrfSafeLookup`.
+ *
+ * The family gate refuses any IPv6 spelling that still contains a dot, which is what a dotted
+ * IPv4-mapped form re-serializes to (`[::ffff:10.0.0.1]`). An all-hex mapped form (`[::ffff:a00:1]`)
+ * has no dot, so it reaches the BlockList, which matches it against the IPv4 CIDRs - it is admitted
+ * under the same CIDRs as the bare IPv4 address. That is safe only because `buildNeverAdmitted` is
+ * mapped-aware too: `::ffff:7f00:1` is judged as `127.0.0.1` and stays blocked.
  */
 export function buildPrivateAddressAdmission(
   options: Pick<PinnedFetchOptions, 'allowPrivateCidrs' | 'testOnlyAllowLoopback'>
@@ -174,7 +191,7 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): PinnedFetch
       }
       return;
     }
-    if (!hasPrivateOptIn && isPrivateOrInternalHostname(host)) {
+    if (!hasPrivateOptIn && (isPrivateOrInternalHostname(host) || isNonPublicHostname(host))) {
       throw violation('ssrf_blocked', `Blocked request to internal hostname ${host}`);
     }
   };
@@ -268,7 +285,13 @@ export function createPinnedFetch(options: PinnedFetchOptions = {}): PinnedFetch
       }
 
       const declaredLength = Number(upstream.headers.get('content-length'));
-      if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+      // A HEAD response, or a status that carries no body, may declare any length; there is nothing to cap.
+      if (
+        method !== 'HEAD' &&
+        !NULL_BODY_STATUSES.has(upstream.status) &&
+        Number.isFinite(declaredLength) &&
+        declaredLength > maxBodyBytes
+      ) {
         await upstream.body?.cancel().catch(() => undefined);
         throw violation('size_cap', `Response body of ${declaredLength} bytes exceeds ${maxBodyBytes}`);
       }
