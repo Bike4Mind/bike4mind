@@ -1,9 +1,8 @@
 // apps/client/pages/api/skills/market/[id]/index.ts
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
-import { findListing } from '@server/skillMarket/market';
+import { findListing, withdrawListing } from '@server/skillMarket/market';
 import { buildListingDetail } from '@server/skillMarket/detail';
 
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -14,27 +13,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const token = typeof req.query.token === 'string' ? req.query.token : undefined;
     res.json(await buildListingDetail(listing, { id: req.user!.id, isAdmin: req.user!.isAdmin }, token));
   })
-  /**
-   * DELETE /api/skills/market/[id] - the author withdraws the listing. Importers keep their copies
-   * and see "no longer available"; a held version is superseded so it can't be approved later.
-   */
+  /** DELETE /api/skills/market/[id] - the author withdraws the listing (see `withdrawListing`). */
   .delete<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
     const listing = await findListing(String(req.query.id));
     if (!listing) throw new NotFoundError('Listing not found');
     if (listing.authorUserId !== req.user!.id) throw new ForbiddenError('Only the author can withdraw a listing');
 
-    const before = await SkillListing.findOneAndUpdate(
-      { _id: listing.id, status: { $nin: ['withdrawn', 'delisted'] } },
-      { $set: { status: 'withdrawn', pendingVersionId: null, pendingVersion: null }, $unset: { activeSlot: 1 } },
-      { new: false }
-    );
-    if (!before) throw new ConflictError('This listing is already withdrawn or delisted');
-    await SkillListingVersion.updateMany(
-      // Defensive: never supersede the version the listing serves. Read from the pre-image, since a
-      // concurrent approve could have moved the pointer since `listing` was read.
-      { listingId: String(listing.id), reviewStatus: 'pending', _id: { $ne: before.currentApprovedVersionId } },
-      { $set: { reviewStatus: 'superseded' } }
-    );
+    if (!(await withdrawListing(listing.id))) throw new ConflictError('This listing is already withdrawn or delisted');
     res.status(204).end();
   });
 

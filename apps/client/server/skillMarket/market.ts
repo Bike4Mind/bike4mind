@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
-import { adminSettingsRepository, inboxRepository, SkillListing } from '@bike4mind/database';
+import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
@@ -255,6 +255,39 @@ export async function findListing(id: string): Promise<ISkillListing | null> {
   if (!mongoose.isObjectIdOrHexString(id)) return null;
   const doc = await SkillListing.findOne({ _id: id, deletedAt: null });
   return doc ? (doc.toJSON() as unknown as ISkillListing) : null;
+}
+
+/**
+ * Take a listing off the market. Importers keep their copies and see "no longer available"; a held
+ * version is superseded so it can't be approved later. False when it was already withdrawn or delisted.
+ */
+export async function withdrawListing(listingId: string): Promise<boolean> {
+  const before = await SkillListing.findOneAndUpdate(
+    { _id: listingId, status: { $nin: ['withdrawn', 'delisted'] } },
+    { $set: { status: 'withdrawn', pendingVersionId: null, pendingVersion: null }, $unset: { activeSlot: 1 } },
+    { new: false }
+  );
+  if (!before) return false;
+  await SkillListingVersion.updateMany(
+    // Defensive: never supersede the version the listing serves. Read from the pre-image, since a
+    // concurrent approve could have moved the pointer since the caller read the listing.
+    { listingId: String(listingId), reviewStatus: 'pending', _id: { $ne: before.currentApprovedVersionId } },
+    { $set: { reviewStatus: 'superseded' } }
+  );
+  return true;
+}
+
+/** Account deletion: withdraw every listing the user still has on the market. Returns how many. */
+export async function withdrawAuthorListings(authorUserId: string): Promise<number> {
+  const listings = await SkillListing.find(
+    { authorUserId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
+    { _id: 1 }
+  ).lean();
+  let withdrawn = 0;
+  for (const { _id } of listings) {
+    if (await withdrawListing(String(_id))) withdrawn += 1;
+  }
+  return withdrawn;
 }
 
 const HOUR_MS = 60 * 60 * 1000;

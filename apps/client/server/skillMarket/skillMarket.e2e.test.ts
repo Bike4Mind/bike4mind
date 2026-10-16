@@ -96,7 +96,7 @@ import type { ISkill, ISkillListing } from '@bike4mind/common';
 import { submitListingVersion, decideVersion, rescanVersion } from './submitVersion';
 import { recommendListings, searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
-import { serializeListing } from './market';
+import { serializeListing, withdrawAuthorListings } from './market';
 import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';
 import importHandler from '@pages/api/skills/market/[id]/import';
@@ -715,6 +715,29 @@ describe('Skill Market (real mongod)', () => {
     const [status] = await attachMarketStatus([copy]);
     expect(status.marketStatus?.state).toBe('removed');
     await expect(call(detailHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('account deletion withdraws only the listings of that author still on the market', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    await skillRepository.update({ id: source.id, body: 'MISMATCH v2' });
+    const v2 = await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+    expect(v2.reviewStatus).toBe('pending');
+    const delisted = await publish(await makeSkill(AUTHOR, 'Summarize as a table.'), 'public');
+    await SkillListing.updateOne({ _id: delisted.listing.id }, { $set: { status: 'delisted' } });
+    const others = await publish(await makeSkill(OTHER, 'Translate to French.'), 'public');
+
+    expect(await withdrawAuthorListings(AUTHOR)).toBe(1);
+
+    expect((await SkillListing.findById(listing.id))!.status).toBe('withdrawn');
+    expect((await SkillListingVersion.findById(v2.id))!.reviewStatus).toBe('superseded');
+    expect((await SkillListing.findById(delisted.listing.id))!.status).toBe('delisted');
+    expect((await SkillListing.findById(others.listing.id))!.status).toBe('approved');
+    const [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('removed');
+    expect(await withdrawAuthorListings(AUTHOR)).toBe(0);
   });
 
   it('organization membership is enforced on a later version and on a rescan', async () => {
