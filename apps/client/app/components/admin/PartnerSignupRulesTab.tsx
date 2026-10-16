@@ -15,6 +15,8 @@ import {
   Modal,
   ModalClose,
   ModalDialog,
+  Option,
+  Select,
   Sheet,
   Stack,
   Switch,
@@ -34,6 +36,8 @@ import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import type { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import {
   fetchPartnerSignupRules,
   createPartnerSignupRule,
@@ -50,6 +54,14 @@ import { getErrorMessage } from '@client/app/utils/error';
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
 const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
 
+const planLabel = (plan: SubscriptionPlanDetail): string => `${plan.name} (${plan.interval})`;
+
+// A saved rule can outlive its plan, so fall back to the raw price id rather than hide it.
+const planLabelForPriceId = (priceId: string): string => {
+  const plan = SUBSCRIPTION_PLANS.find(candidate => candidate.priceId === priceId);
+  return plan ? planLabel(plan) : priceId;
+};
+
 const QUERY_KEY = 'partner-signup-rules';
 const PAGE_LIMIT = 25;
 
@@ -58,6 +70,8 @@ type FormState = {
   label: string;
   entitlements: string[];
   tags: string[];
+  subscriptionPriceId: string | null;
+  subscriptionMonths: string;
   signupCredits: string;
   notes: string;
   enabled: boolean;
@@ -72,6 +86,8 @@ const emptyForm: FormState = {
   label: '',
   entitlements: [],
   tags: [],
+  subscriptionPriceId: null,
+  subscriptionMonths: '1',
   signupCredits: '0',
   notes: '',
   enabled: true,
@@ -84,6 +100,8 @@ const ruleToForm = (rule: IPartnerSignupRuleDocument): FormState => ({
   label: rule.label ?? '',
   entitlements: rule.entitlements ?? [],
   tags: rule.tags ?? [],
+  subscriptionPriceId: rule.subscription?.priceId ?? null,
+  subscriptionMonths: String(rule.subscription?.durationMonths ?? 1),
   signupCredits: String(rule.signupCredits ?? 0),
   notes: rule.notes ?? '',
   enabled: rule.enabled,
@@ -120,6 +138,10 @@ export default function PartnerSignupRulesTab() {
       const payload = {
         entitlements: form.entitlements,
         tags: form.tags,
+        // null (not undefined) so clearing the subscription is a real update; see organizationId below.
+        subscription: form.subscriptionPriceId
+          ? { priceId: form.subscriptionPriceId, durationMonths: Number(form.subscriptionMonths) }
+          : null,
         signupCredits: Number(form.signupCredits),
         label: form.label.trim(),
         notes: form.notes.trim(),
@@ -299,6 +321,7 @@ export default function PartnerSignupRulesTab() {
                 <th>Label</th>
                 <th>Entitlements</th>
                 <th>Tags</th>
+                <th>Subscription</th>
                 <th style={{ width: 140, textAlign: 'right' }}>Signup credits</th>
                 <th style={{ width: 90, textAlign: 'center' }}>Org</th>
                 <th style={{ width: 90, textAlign: 'center' }}>Enabled</th>
@@ -359,6 +382,17 @@ export default function PartnerSignupRulesTab() {
                       ) : (
                         <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
                           none
+                        </Typography>
+                      )}
+                    </td>
+                    <td data-testid={`partner-rule-subscription-${rule.domain}`}>
+                      {rule.subscription ? (
+                        <Typography level="body-sm">
+                          {planLabelForPriceId(rule.subscription.priceId)}, {rule.subscription.durationMonths} mo
+                        </Typography>
+                      ) : (
+                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                          -
                         </Typography>
                       )}
                     </td>
@@ -542,6 +576,41 @@ export default function PartnerSignupRulesTab() {
                 or deleted.
               </FormHelperText>
             </FormControl>
+
+            <FormControl>
+              <FormLabel>Subscription</FormLabel>
+              <Select
+                placeholder="None"
+                value={form.subscriptionPriceId}
+                onChange={(_event, value) => setForm(f => ({ ...f, subscriptionPriceId: value }))}
+                slotProps={{ button: { 'data-testid': 'partner-rule-subscription-select' } }}
+              >
+                <Option value={null}>None</Option>
+                {SUBSCRIPTION_PLANS.map(plan => (
+                  <Option key={plan.priceId} value={plan.priceId}>
+                    {planLabel(plan)}
+                  </Option>
+                ))}
+              </Select>
+              <FormHelperText>
+                Granted free at email verification through the admin-grant path (no Stripe). It stays on the user if the
+                rule is later disabled or deleted.
+              </FormHelperText>
+            </FormControl>
+
+            {form.subscriptionPriceId && (
+              <FormControl>
+                <FormLabel>Subscription duration</FormLabel>
+                <Input
+                  type="number"
+                  slotProps={{ input: { min: 1, max: 12, step: 1 } }}
+                  endDecorator={<Typography level="body-xs">months</Typography>}
+                  value={form.subscriptionMonths}
+                  onChange={e => setForm(f => ({ ...f, subscriptionMonths: e.target.value }))}
+                  data-testid="partner-rule-subscription-months-input"
+                />
+              </FormControl>
+            )}
 
             <FormControl>
               <FormLabel>Signup credits</FormLabel>

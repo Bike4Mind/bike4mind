@@ -7,9 +7,16 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { partnerEntitlementsForEmail, partnerSignupGrantForEmail, invalidatePartnerRuleCache } from './partnerRules';
+import {
+  assertKnownSubscriptionPlan,
+  partnerEntitlementsForEmail,
+  partnerSignupGrantForEmail,
+  invalidatePartnerRuleCache,
+} from './partnerRules';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 
 const RULE = {
+  id: 'rule-1',
   domain: 'partner.com',
   entitlements: ['optihashi:pro'],
   signupCredits: 150_000,
@@ -86,6 +93,27 @@ describe('partnerRules resolver', () => {
     const grant = await partnerSignupGrantForEmail('a@partner.com', true);
     expect(grant.matched).toBe(false);
     expect(grant.tags).toEqual([]);
+  });
+
+  it('signup grant carries the rule id, domain and subscription, and null when the rule has none', async () => {
+    const subscription = { priceId: 'price_pro', durationMonths: 3 };
+    mockFindActiveRules.mockResolvedValue([{ ...RULE, subscription }]);
+    expect(await partnerSignupGrantForEmail('a@partner.com', true)).toMatchObject({
+      ruleId: 'rule-1',
+      domain: 'partner.com',
+      subscription,
+    });
+
+    invalidatePartnerRuleCache();
+    mockFindActiveRules.mockResolvedValue([RULE]);
+    expect((await partnerSignupGrantForEmail('a@partner.com', true)).subscription).toBeNull();
+  });
+
+  it('assertKnownSubscriptionPlan accepts a catalog plan and no subscription, and rejects an unknown price', () => {
+    expect(() => assertKnownSubscriptionPlan(null)).not.toThrow();
+    expect(() => assertKnownSubscriptionPlan(undefined)).not.toThrow();
+    expect(() => assertKnownSubscriptionPlan({ priceId: SUBSCRIPTION_PLANS[0].priceId })).not.toThrow();
+    expect(() => assertKnownSubscriptionPlan({ priceId: 'price_nope' })).toThrow(/Unknown subscription plan/);
   });
 
   it('caches the rule set so repeated resolutions hit the DB once', async () => {

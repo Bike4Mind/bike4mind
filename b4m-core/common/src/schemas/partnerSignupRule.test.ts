@@ -34,6 +34,25 @@ describe('createPartnerSignupRuleSchema', () => {
     expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: ['pending-free-credits'] })).toThrow(/reserved/);
   });
 
+  it('accepts a subscription, trimming the price id', () => {
+    const parsed = createPartnerSignupRuleSchema.parse({
+      ...base,
+      subscription: { priceId: ' price_pro ', durationMonths: 12 },
+    });
+    expect(parsed.subscription).toEqual({ priceId: 'price_pro', durationMonths: 12 });
+  });
+
+  it('rejects subscription months outside 1..12 or fractional, and an empty price id', () => {
+    for (const durationMonths of [0, 13, 1.5]) {
+      expect(() =>
+        createPartnerSignupRuleSchema.parse({ ...base, subscription: { priceId: 'price_pro', durationMonths } })
+      ).toThrow();
+    }
+    expect(() =>
+      createPartnerSignupRuleSchema.parse({ ...base, subscription: { priceId: '  ', durationMonths: 1 } })
+    ).toThrow();
+  });
+
   it('normalizes domain and entitlement keys to lowercase', () => {
     const parsed = createPartnerSignupRuleSchema.parse({
       ...base,
@@ -110,5 +129,21 @@ describe('updatePartnerSignupRuleSchema', () => {
 describe('normalizeSignupRuleDomain', () => {
   it('trims and lowercases', () => {
     expect(normalizeSignupRuleDomain('  Partner.COM ')).toBe('partner.com');
+  });
+});
+
+describe('updatePartnerSignupRuleSchema subscription', () => {
+  it('accepts null to clear the subscription and leaves it undefined when omitted', () => {
+    expect(updatePartnerSignupRuleSchema.parse({ subscription: null }).subscription).toBeNull();
+    expect(updatePartnerSignupRuleSchema.parse({}).subscription).toBeUndefined();
+  });
+
+  it('validates a provided subscription', () => {
+    expect(
+      updatePartnerSignupRuleSchema.parse({ subscription: { priceId: 'price_pro', durationMonths: 6 } }).subscription
+    ).toEqual({ priceId: 'price_pro', durationMonths: 6 });
+    expect(() =>
+      updatePartnerSignupRuleSchema.parse({ subscription: { priceId: 'price_pro', durationMonths: 13 } })
+    ).toThrow();
   });
 });

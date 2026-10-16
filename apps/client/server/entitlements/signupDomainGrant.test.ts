@@ -25,6 +25,11 @@ vi.mock('@server/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: unknown[]) => mockPartnerGrant(...a),
 }));
 
+const mockGrantSubscription = vi.fn();
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: (...a: unknown[]) => mockGrantSubscription(...a),
+}));
+
 const mockEntitlementsForEmail = vi.fn();
 const mockSignupCreditsForKeys = vi.fn();
 vi.mock('@client/lib/entitlements/registry', () => ({
@@ -33,8 +38,10 @@ vi.mock('@client/lib/entitlements/registry', () => ({
 }));
 
 const mockPushInvalidation = vi.fn();
+const mockPushSubscriptionsInvalidation = vi.fn();
 vi.mock('@server/entitlements/invalidate', () => ({
   pushEntitlementInvalidation: (...a: unknown[]) => mockPushInvalidation(...a),
+  pushSubscriptionsInvalidation: (...a: unknown[]) => mockPushSubscriptionsInvalidation(...a),
 }));
 
 const mockNotifyRaised = vi.fn();
@@ -67,6 +74,7 @@ describe('applySignupDomainGrant', () => {
       tags: ['Partner', 'cohort-a'],
     });
     mockAddTagsToUser.mockResolvedValue(undefined);
+    mockGrantSubscription.mockResolvedValue({ status: 'granted', credits: 3000, currentCredits: 4100 });
     mockAddCredits.mockResolvedValue({ currentCredits: 1100 });
     mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
     mockEntitlementsForEmail.mockReturnValue(new Set());
@@ -81,6 +89,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: 'org-1',
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionGranted: false,
     });
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'user-1', credits: 1000, transactionId: 'domain-grant-credits:user-1' }),
@@ -107,7 +116,13 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run();
 
-    expect(result).toEqual({ creditsGranted: 250, currentCredits: 1100, joinedOrganizationId: null, tagsApplied: [] });
+    expect(result).toEqual({
+      creditsGranted: 250,
+      currentCredits: 1100,
+      joinedOrganizationId: null,
+      tagsApplied: [],
+      subscriptionGranted: false,
+    });
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
   });
@@ -165,6 +180,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: 'org-1',
       tagsApplied: [],
+      subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -224,6 +240,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: null,
       joinedOrganizationId: 'org-1',
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -239,6 +256,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: null,
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
@@ -249,10 +267,114 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run(logger);
 
-    expect(result).toEqual({ creditsGranted: 0, currentCredits: null, joinedOrganizationId: null, tagsApplied: [] });
+    expect(result).toEqual({
+      creditsGranted: 0,
+      currentCredits: null,
+      joinedOrganizationId: null,
+      tagsApplied: [],
+      subscriptionGranted: false,
+    });
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
     expect(mockPushInvalidation).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+  });
+
+  describe('partner-rule subscription', () => {
+    const subscriptionGrant = {
+      matched: true,
+      entitlements: new Set<string>(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      ruleId: 'rule-1',
+      domain: 'partner.example',
+      subscription: { priceId: 'price_pro', durationMonths: 3 },
+    };
+
+    it('grants the rule subscription through the admin-grant path and wakes the entitlement cache', async () => {
+      mockPartnerGrant.mockResolvedValue(subscriptionGrant);
+
+      const result = await run();
+
+      expect(result.subscriptionGranted).toBe(true);
+      expect(mockGrantSubscription).toHaveBeenCalledWith({
+        userId: 'user-1',
+        priceId: 'price_pro',
+        durationMonths: 3,
+        grantedBy: 'partner-rule:rule-1',
+        grantedReason: 'partner signup rule partner.example',
+        skipIfAnyActiveIndividual: true,
+        creditTransactionId: 'partner-rule-subscription:user-1:price_pro',
+      });
+      expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+      expect(mockPushSubscriptionsInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+    });
+
+    it('folds the subscription credits and post-grant balance into the reported result', async () => {
+      mockPartnerGrant.mockResolvedValue({ ...subscriptionGrant, signupCredits: 1000 });
+
+      const result = await run();
+
+      expect(result.creditsGranted).toBe(1000 + 3000);
+      expect(result.currentCredits).toBe(4100);
+    });
+
+    it('skips the grant when the rule has no subscription', async () => {
+      mockPartnerGrant.mockResolvedValue({ ...subscriptionGrant, subscription: null });
+
+      const result = await run();
+
+      expect(result.subscriptionGranted).toBe(false);
+      expect(mockGrantSubscription).not.toHaveBeenCalled();
+    });
+
+    it('treats an already-active subscription as a normal outcome, not an error', async () => {
+      mockPartnerGrant.mockResolvedValue(subscriptionGrant);
+      mockGrantSubscription.mockResolvedValue({ status: 'already_active' });
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(result.subscriptionGranted).toBe(false);
+      expect(result.creditsGranted).toBe(0);
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('already has an active individual'));
+      expect(mockPushSubscriptionsInvalidation).not.toHaveBeenCalled();
+    });
+
+    it('warns when the rule references a plan that no longer exists', async () => {
+      mockPartnerGrant.mockResolvedValue(subscriptionGrant);
+      mockGrantSubscription.mockResolvedValue({ status: 'unknown_plan' });
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(result.subscriptionGranted).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unknown plan price_pro'));
+    });
+
+    it('logs and still applies credits, membership and tags when the subscription grant throws', async () => {
+      mockPartnerGrant.mockResolvedValue({
+        ...subscriptionGrant,
+        signupCredits: 1000,
+        organizationId: 'org-1',
+        tags: ['Partner'],
+      });
+      mockGrantSubscription.mockRejectedValue(new Error('subscription store down'));
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(result).toEqual({
+        creditsGranted: 1000,
+        currentCredits: 1100,
+        joinedOrganizationId: 'org-1',
+        tagsApplied: ['Partner'],
+        subscriptionGranted: false,
+      });
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('rule-1'), expect.any(Error));
+    });
   });
 });

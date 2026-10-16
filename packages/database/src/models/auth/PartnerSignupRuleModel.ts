@@ -65,6 +65,13 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     // IPartnerSignupRule.organizationId; existence is validated in the admin route, not here.
     organizationId: { type: String, default: null },
     tags: { type: [String], default: [] },
+    subscription: {
+      type: new Schema(
+        { priceId: { type: String, required: true }, durationMonths: { type: Number, required: true } },
+        { _id: false }
+      ),
+      default: null,
+    },
     enabled: { type: Boolean, default: true },
     label: { type: String, default: null },
     notes: { type: String, default: null },

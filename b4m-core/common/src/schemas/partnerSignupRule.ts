@@ -74,6 +74,15 @@ const tagsSchema = z
   .array(userTagSchema)
   .max(20, 'Too many tags')
   .transform(tags => [...new Set(tags)]);
+const subscriptionSchema = z.object({
+  // That the priceId is a known plan is checked server-side: b4m-core cannot see the plan catalog.
+  priceId: z.string().trim().min(1, 'Plan is required'),
+  durationMonths: z
+    .number()
+    .int('Duration must be a whole number of months')
+    .min(1, 'Duration must be at least 1 month')
+    .max(12, 'Duration cannot exceed 12 months'),
+});
 const labelSchema = z.string().trim().max(120);
 const notesSchema = z.string().trim().max(2000);
 
@@ -99,6 +108,7 @@ export const createPartnerSignupRuleSchema = z.object({
   signupCredits: signupCreditsSchema,
   organizationId: organizationIdSchema.optional(),
   tags: tagsSchema.optional(),
+  subscription: subscriptionSchema.nullable().optional(),
   enabled: z.boolean().default(true),
   label: labelSchema.optional(),
   notes: notesSchema.optional(),
@@ -115,6 +125,8 @@ export const updatePartnerSignupRuleSchema = z
     signupCredits: signupCreditsSchema.optional(),
     organizationId: organizationIdSchema.optional(),
     tags: tagsSchema.optional(),
+    // `null` clears the subscription; omitting the field leaves it untouched.
+    subscription: subscriptionSchema.nullable().optional(),
     enabled: z.boolean().optional(),
     label: labelSchema.optional(),
     notes: notesSchema.optional(),

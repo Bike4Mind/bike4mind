@@ -10,7 +10,8 @@ import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
-import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
+import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
+import { pushEntitlementInvalidation, pushSubscriptionsInvalidation } from '@server/entitlements/invalidate';
 import {
   notifyPartnerSignupBlockedAtCapacity,
   notifySeatCeilingRaised,
@@ -26,6 +27,8 @@ export type SignupDomainGrantResult = {
   joinedOrganizationId: string | null;
   /** Partner-rule tags merged into the user's tags; empty when none applied or the write failed. */
   tagsApplied: string[];
+  /** Whether this call granted the rule's subscription; false when none applied, already active, or failed. */
+  subscriptionGranted: boolean;
 };
 
 const NO_GRANT: SignupDomainGrantResult = {
@@ -33,14 +36,16 @@ const NO_GRANT: SignupDomainGrantResult = {
   currentCredits: null,
   joinedOrganizationId: null,
   tagsApplied: [],
+  subscriptionGranted: false,
 };
 
 /**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
  * partner-rule org membership (with the seat-ceiling / at-capacity alerts), partner-rule user tags,
- * and the entitlement cache wake-up. Shared by every path that proves email ownership: the new-account branches of
- * /api/otc/verify, server/utils/auth/verifyCallback.ts and pages/api/auth/okta/callback.ts, and
- * every path that verifies an EXISTING account via server/auth/emailVerifiedGrants.ts.
+ * the partner-rule individual subscription, and the entitlement cache wake-up. Shared by every path
+ * that proves email ownership: the new-account branches of /api/otc/verify,
+ * server/utils/auth/verifyCallback.ts and pages/api/auth/okta/callback.ts, and every path that
+ * verifies an EXISTING account via server/auth/emailVerifiedGrants.ts.
  *
  * `email` must already be verified. Source precedence (issue #293): a DB PartnerSignupRule wins;
  * the env registry is the fallback for a domain not yet in the collection, and `matched` lets a rule
@@ -49,7 +54,8 @@ const NO_GRANT: SignupDomainGrantResult = {
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. The credit grant (stable `domain-grant-credits:${userId}`
  * transactionId), the membership write and the tag merge ($addToSet) are all idempotent, so a
- * re-run from another path or a retry cannot double-apply.
+ * re-run from another path or a retry cannot double-apply. The subscription grant skips when the
+ * user already has any active individual subscription, and its credits carry a stable transactionId.
  */
 export async function applySignupDomainGrant(params: {
   userId: string;
@@ -64,6 +70,7 @@ export async function applySignupDomainGrant(params: {
   // Only a DB rule can confer org membership; the env registry has no org concept.
   let partnerOrganizationId: string | null;
   let partnerTags: string[];
+  let partnerRule: PartnerSubscriptionRule | null;
   try {
     const partnerGrant = await partnerSignupGrantForEmail(email, true);
     if (partnerGrant.matched) {
@@ -71,11 +78,16 @@ export async function applySignupDomainGrant(params: {
       signupCredits = partnerGrant.signupCredits;
       partnerOrganizationId = partnerGrant.organizationId;
       partnerTags = partnerGrant.tags;
+      partnerRule =
+        partnerGrant.subscription && partnerGrant.ruleId && partnerGrant.domain
+          ? { ruleId: partnerGrant.ruleId, domain: partnerGrant.domain, subscription: partnerGrant.subscription }
+          : null;
     } else {
       domainGrantKeys = entitlementsForEmail(email, true);
       signupCredits = signupCreditsForKeys(domainGrantKeys);
       partnerOrganizationId = null;
       partnerTags = [];
+      partnerRule = null;
     }
   } catch (resolveError) {
     logger.error(`Signup domain grant could not be resolved for user ${userId} (${trigger})`, resolveError);
@@ -120,12 +132,78 @@ export async function applySignupDomainGrant(params: {
     result.tagsApplied = partnerTags;
   }
 
-  // A tag can itself be an entitlement key (getUserEntitlements reads user.tags), so new tags wake the cache too.
-  if (domainGrantKeys.size > 0 || result.tagsApplied.length > 0) {
+  if (partnerRule) {
+    const granted = await applyPartnerSubscription(userId, partnerRule, trigger, logger);
+    if (granted) {
+      result.subscriptionGranted = true;
+      result.creditsGranted += granted.credits;
+      result.currentCredits = granted.currentCredits ?? result.currentCredits;
+      await pushSubscriptionsInvalidation(userId, logger);
+    }
+  }
+
+  // A tag can itself be an entitlement key (getUserEntitlements reads user.tags) and a subscription's
+  // price can map to entitlement keys, so both wake the cache too.
+  if (domainGrantKeys.size > 0 || result.tagsApplied.length > 0 || result.subscriptionGranted) {
     await pushEntitlementInvalidation(userId, logger);
   }
 
   return result;
+}
+
+type PartnerSubscriptionRule = {
+  ruleId: string;
+  domain: string;
+  subscription: { priceId: string; durationMonths: number };
+};
+
+/**
+ * Grants a partner rule's individual subscription through the admin-grant path. Skips when the user
+ * already has any active individual subscription (never stacks a plan on a Stripe subscriber), which
+ * also makes a re-run from the signup and email-verify paths a no-op. Returns the credits and
+ * post-grant balance when newly granted, null otherwise.
+ */
+async function applyPartnerSubscription(
+  userId: string,
+  { ruleId, domain, subscription }: PartnerSubscriptionRule,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<{ credits: number; currentCredits: number | null } | null> {
+  const { priceId, durationMonths } = subscription;
+  try {
+    const grant = await grantIndividualAdminSubscription({
+      userId,
+      priceId,
+      durationMonths,
+      grantedBy: `partner-rule:${ruleId}`,
+      grantedReason: `partner signup rule ${domain}`,
+      skipIfAnyActiveIndividual: true,
+      creditTransactionId: `partner-rule-subscription:${userId}:${priceId}`,
+    });
+    if (grant.status === 'granted') {
+      logger.info(
+        `Partner-rule subscription: granted ${priceId} for ${durationMonths} month(s) to user ${userId} (${trigger})`
+      );
+      return { credits: grant.credits, currentCredits: grant.currentCredits };
+    }
+    if (grant.status === 'already_active') {
+      logger.info(
+        `Partner-rule subscription: user ${userId} already has an active individual subscription (${trigger}); skipped`
+      );
+    } else {
+      logger.warn(
+        `Partner-rule subscription not granted to user ${userId} (rule ${ruleId}): unknown plan ${priceId}; ` +
+          `the plan was likely removed after the rule was saved`
+      );
+    }
+  } catch (subscriptionError) {
+    logger.error(
+      `Partner-rule subscription grant failed for user ${userId} (rule ${ruleId}, ${trigger}); not retried ` +
+        `automatically - grant ${priceId} for ${durationMonths} month(s) by hand via admin grant-subscription`,
+      subscriptionError
+    );
+  }
+  return null;
 }
 
 /** Merges a partner rule's tags into the user's tags. Returns whether the write succeeded. */

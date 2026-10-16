@@ -116,6 +116,7 @@ export async function applyEmailVerifiedGrants(params: {
     currentCredits: null,
     joinedOrganizationId: null,
     tagsApplied: [],
+    subscriptionGranted: false,
   };
   try {
     domainGrant = await applySignupDomainGrant({ userId: user.id, email: verifiedEmail, trigger, logger });
