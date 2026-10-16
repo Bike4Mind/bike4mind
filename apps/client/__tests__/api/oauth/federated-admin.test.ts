@@ -118,6 +118,8 @@ describe('POST /api/oauth/federated-admin', () => {
     expect(mockCheckGrant).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: 'client-1', userId: 'b4m-user-1', scopes: [], enforce: true })
     );
+    // The gate keys its relying-party exemption off clientType, so it must see the authenticated client.
+    expect(mockCheckGrant.mock.calls[0][0].client).toBe(FEDERATED_CLIENT);
     expect(mockUserFindById).not.toHaveBeenCalled();
   });
 
