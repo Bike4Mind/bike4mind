@@ -1894,6 +1894,54 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('skips a prefetched quest that invoke already saved as an error', async () => {
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });
+      const errorQuest = { ...mockQuest, type: 'error', status: 'done', reply: 'denied' };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: errorQuest });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalled();
+      expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    });
+
+    it('still processes a prefetched quest that is not an error', async () => {
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      });
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: mockQuest });
+
+      expect(complete).toHaveBeenCalled();
+    });
+
     // The root cause of the slow-first-token anomaly never firing was THIS call site dropping
     // the TTFVT pair. Every other test drives `performanceFromPromptMeta` directly, so only a
     // test through the real finalisation fails if the call site regresses to the two-field

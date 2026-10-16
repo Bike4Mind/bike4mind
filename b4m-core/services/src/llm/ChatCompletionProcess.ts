@@ -1760,6 +1760,12 @@ export class ChatCompletionProcess {
     timer.phase('init');
     logger.info('⏱️ === LLM COMPLETION PROCESS START ===');
 
+    // invoke already saved this turn as failed; running it would answer with a model the caller was refused.
+    if (prefetchedQuest?.type === 'error') {
+      logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
+      return;
+    }
+
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
       parsedBody,
