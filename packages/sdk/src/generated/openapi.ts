@@ -182,7 +182,8 @@ export interface paths {
     put?: never;
     /**
      * Generate background music
-     * @description Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @deprecated
+     * @description **Deprecated, sunset 2027-01-15.** Use `/api/v1/music-generations` instead. Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateMusic'];
     delete?: never;
@@ -482,7 +483,7 @@ export interface paths {
     put?: never;
     /**
      * Create a session
-     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
+     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
      */
     post: operations['createSession'];
     delete?: never;
@@ -614,7 +615,7 @@ export interface paths {
     put?: never;
     /**
      * Start a video generation
-     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
+     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. An organization-billed API key always bills its own organization (see `organization_id`).
      */
     post: operations['createVideoGeneration'];
     delete?: never;
@@ -655,6 +656,90 @@ export interface paths {
      * @description Returns the video models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and per-second credit price. Validate requests against these capabilities: an unsupported duration, aspect ratio or resolution is a 422, never silently adjusted.
      */
     get: operations['listVideoModels'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/music-generations/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel a music generation
+     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`), and the job runs to its end, charged if the song is produced. A finished job is returned unchanged.
+     */
+    post: operations['cancelMusicGeneration'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/music-generations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List your music generations
+     * @description Your jobs, newest first, optionally filtered by `state` and `source`. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listMusicGenerations'];
+    put?: never;
+    /**
+     * Start a music generation
+     * @description Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the `generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the model's price are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the song before rejecting it and billed it: then the price is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. An organization-billed API key always bills its own organization (see `organization_id`).
+     */
+    post: operations['createMusicGeneration'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/music-generations/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a music generation
+     * @description Returns one job you requested. Each read signs a fresh `output.url` (valid 15 minutes, see `expires_at`).
+     */
+    get: operations['getMusicGeneration'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/music-models': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the music models you can use
+     * @description Returns the music models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and credit price. Validate requests against these capabilities: an unsupported duration, lyrics or vocals option is a 422, never silently adjusted. A few limits only show when the song is rendered (e.g. more lyrics than fit a very short song); such a job ends `failed`.
+     */
+    get: operations['listMusicModels'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1639,10 +1724,15 @@ export interface components {
               };
             };
         /**
-         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
+         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
+        thinking?: {
+          enabled: boolean;
+          budget_tokens?: number;
+        };
       };
     };
     /**
@@ -2213,6 +2303,21 @@ export interface components {
       /** @enum {string} */
       intent: 'fresh' | 'continuation';
     };
+    generateImageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "prompt": "a watercolor lighthouse at dusk",
@@ -2271,6 +2376,7 @@ export interface components {
       aspect_ratio?: string;
       sessionId?: string;
       questId?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organizationId?: string | null;
       /** @default [] */
       fabFileIds?: string[];
@@ -2362,6 +2468,21 @@ export interface components {
       sessionId: string;
       images?: string[];
     };
+    editImageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "prompt": "replace the sky with a starry night",
@@ -2424,6 +2545,7 @@ export interface components {
       aspect_ratio?: string;
       sessionId: string;
       questId?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organizationId?: string | null;
       /** @default [] */
       fabFileIds?: string[];
@@ -3075,6 +3197,7 @@ export interface components {
       videos: string[];
       files: {
         name: string;
+        /** @description Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it. */
         url: string;
         isImage: boolean;
         isAudio: boolean;
@@ -3495,6 +3618,21 @@ export interface components {
       created_at: string;
       updated_at: string;
     };
+    createVideoGenerationResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     createVideoGenerationResponse404: {
       error: string;
       request_id?: string;
@@ -3569,7 +3707,7 @@ export interface components {
       /** @description An image file you own, for image_to_video. */
       input_image_file_id?: string;
       audio?: boolean;
-      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. */
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
     };
     /**
@@ -3738,6 +3876,427 @@ export interface components {
         credits_per_second: {
           [key: string]: number;
         } | null;
+        deprecation_date: string | null;
+      }[];
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "music_generation",
+     *       "state": "pending",
+     *       "model": "lyria-3.5",
+     *       "prompt": "An upbeat synth-pop song about a road trip at sunrise",
+     *       "lyrics": null,
+     *       "instrumental": false,
+     *       "duration_seconds": 120,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 160,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:00.000Z"
+     *     }
+     */
+    cancelMusicGenerationResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'music_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      model: string;
+      prompt: string;
+      /** @description The lyrics you sent, or null. */
+      lyrics: string | null;
+      instrumental: boolean;
+      /** @description The length requested (the model default when omitted). */
+      duration_seconds: number;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code:
+          | 'content_blocked'
+          | 'provider_timeout'
+          | 'provider_error'
+          | 'region_unavailable'
+          | 'output_too_large'
+          | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the song produced, which can differ from the request. */
+        duration_seconds: number;
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
+        lyrics: string | null;
+        /** @description The Files entry, or null when the song was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    cancelMusicGenerationResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_duration'
+        | 'unsupported_lyrics'
+        | 'unsupported_vocals'
+        | 'lyrics_with_instrumental'
+        | 'lyrics_too_long'
+        | 'invalid_request'
+        | 'model_disabled'
+        | 'model_unavailable'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "music_generation",
+     *       "state": "pending",
+     *       "model": "lyria-3.5",
+     *       "prompt": "An upbeat synth-pop song about a road trip at sunrise",
+     *       "lyrics": null,
+     *       "instrumental": false,
+     *       "duration_seconds": 120,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 160,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:00.000Z"
+     *     }
+     */
+    createMusicGenerationResponse202: {
+      id: string;
+      /** @enum {string} */
+      object: 'music_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      model: string;
+      prompt: string;
+      /** @description The lyrics you sent, or null. */
+      lyrics: string | null;
+      instrumental: boolean;
+      /** @description The length requested (the model default when omitted). */
+      duration_seconds: number;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code:
+          | 'content_blocked'
+          | 'provider_timeout'
+          | 'provider_error'
+          | 'region_unavailable'
+          | 'output_too_large'
+          | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the song produced, which can differ from the request. */
+        duration_seconds: number;
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
+        lyrics: string | null;
+        /** @description The Files entry, or null when the song was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    createMusicGenerationResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
+    };
+    createMusicGenerationResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
+    createMusicGenerationResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_duration'
+        | 'unsupported_lyrics'
+        | 'unsupported_vocals'
+        | 'lyrics_with_instrumental'
+        | 'lyrics_too_long'
+        | 'invalid_request'
+        | 'model_disabled'
+        | 'model_unavailable'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
+    /**
+     * @example {
+     *       "model": "lyria-3.5",
+     *       "prompt": "An upbeat synth-pop song about a road trip at sunrise"
+     *     }
+     */
+    createMusicGenerationRequest: {
+      /** @description A model id from GET /api/v1/music-models. */
+      model: string;
+      /** @description The style, mood and subject of the song. */
+      prompt: string;
+      /** @description Lyrics to sing. Only for models whose `lyrics` is not null, within that model's limits. */
+      lyrics?: string;
+      /** @description true for no vocals. Defaults to false, or to true for an instrumental-only model. */
+      instrumental?: boolean;
+      /** @description Whole seconds. Defaults to the model's default; see the model's `duration` for how it is honoured. */
+      duration_seconds?: number;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
+      organization_id?: string | null;
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "music_generation",
+     *       "state": "pending",
+     *       "model": "lyria-3.5",
+     *       "prompt": "An upbeat synth-pop song about a road trip at sunrise",
+     *       "lyrics": null,
+     *       "instrumental": false,
+     *       "duration_seconds": 120,
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 160,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-10-14T00:00:00.000Z",
+     *       "updated_at": "2026-10-14T00:00:00.000Z"
+     *     }
+     */
+    getMusicGenerationResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'music_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      model: string;
+      prompt: string;
+      /** @description The lyrics you sent, or null. */
+      lyrics: string | null;
+      instrumental: boolean;
+      /** @description The length requested (the model default when omitted). */
+      duration_seconds: number;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code:
+          | 'content_blocked'
+          | 'provider_timeout'
+          | 'provider_error'
+          | 'region_unavailable'
+          | 'output_too_large'
+          | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The length of the song produced, which can differ from the request. */
+        duration_seconds: number;
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
+        lyrics: string | null;
+        /** @description The Files entry, or null when the song was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    listMusicGenerationsResponse200: {
+      data: {
+        id: string;
+        /** @enum {string} */
+        object: 'music_generation';
+        /** @enum {string} */
+        state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        model: string;
+        prompt: string;
+        /** @description The lyrics you sent, or null. */
+        lyrics: string | null;
+        instrumental: boolean;
+        /** @description The length requested (the model default when omitted). */
+        duration_seconds: number;
+        /** @enum {string} */
+        source: 'api' | 'studio' | 'agent';
+        error: {
+          /** @enum {string} */
+          code:
+            | 'content_blocked'
+            | 'provider_timeout'
+            | 'provider_error'
+            | 'region_unavailable'
+            | 'output_too_large'
+            | 'cancelled';
+          message: string;
+        } | null;
+        output: {
+          /**
+           * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+           * @enum {string}
+           */
+          availability: 'ready' | 'pending_scan' | 'unavailable';
+          /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+          url: string | null;
+          /** @description ISO 8601. When url stops working; null whenever url is. */
+          expires_at: string | null;
+          content_type: string;
+          /** @description The length of the song produced, which can differ from the request. */
+          duration_seconds: number;
+          /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
+          lyrics: string | null;
+          /** @description The Files entry, or null when the song was stored outside Files. */
+          file_id: string | null;
+        } | null;
+        credits: {
+          reserved: number | null;
+          settled: number | null;
+        };
+        created_at: string;
+        updated_at: string;
+      }[];
+      next_cursor: string | null;
+    };
+    listMusicModelsResponse200: {
+      models: {
+        id: string;
+        /** @enum {string} */
+        object: 'music_model';
+        display_name: string;
+        provider: string;
+        /**
+         * @description `never`: instrumental only.
+         * @enum {string}
+         */
+        vocals: 'optional' | 'never';
+        /** @description Limits on custom lyrics, or null when the model does not accept them. */
+        lyrics: {
+          max_chars: number;
+          max_line_chars: number | null;
+        } | null;
+        /** @description `exact`: the song has the requested length. `approximate`: the length is steered by the prompt, so the song may run shorter or longer. `fixed`: every song has this length; omit duration_seconds or repeat it. */
+        duration:
+          | {
+              /** @enum {string} */
+              control: 'exact' | 'approximate';
+              min: number;
+              max: number;
+              default: number;
+            }
+          | {
+              /** @enum {string} */
+              control: 'fixed';
+              seconds: number;
+            };
+        output_formats: 'mp3'[];
+        /** @description A rough wall-clock estimate, to set expectations. Not billed on. */
+        typical_render_seconds: number;
+        /** @description `per_song`: a flat price whatever the length. `per_second`: credits per second of output. */
+        pricing: {
+          /** @enum {string} */
+          unit: 'per_song' | 'per_second';
+          credits: number;
+        };
+        /** @description Labelled preview by its provider: may change or be retired at short notice. */
+        preview: boolean;
         deprecation_date: string | null;
       }[];
     };
@@ -6125,6 +6684,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6145,7 +6710,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -6163,6 +6727,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6184,6 +6754,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6242,6 +6818,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6260,11 +6842,17 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6288,6 +6876,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6311,6 +6905,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6377,7 +6977,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -6492,7 +7091,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6901,7 +7500,7 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse200'];
         };
       };
-      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. */
+      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6935,15 +7534,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateImageResponse403'];
         };
       };
       /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
@@ -7043,7 +7654,7 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse200'];
         };
       };
-      /** @description `fabFileIds` is empty, `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. */
+      /** @description `fabFileIds` is empty, `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7077,15 +7688,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['editImageResponse403'];
         };
       };
       /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
@@ -8921,7 +9544,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The key lacks `notebooks:write`, is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
+      /** @description The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare session), is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10291,6 +10914,29 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse202'];
         };
       };
+      /** @description An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -10302,7 +10948,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not belong to (or is not a valid id). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10322,7 +10968,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
       /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
@@ -10591,6 +11237,746 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['listVideoModelsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  cancelMusicGeneration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job after the cancel request. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelMusicGenerationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No music generation with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The song is already rendering (`running`); `errorCode` is `not_cancellable`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelMusicGenerationResponse409'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listMusicGenerations: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+        state?: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        source?: 'api' | 'studio' | 'agent';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A page of jobs. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listMusicGenerationsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A malformed `cursor`, `limit`, `state` or `source`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createMusicGeneration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createMusicGenerationRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted; the job is queued (or replayed for a repeated Idempotency-Key). */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createMusicGenerationResponse202'];
+        };
+      };
+      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` here is the most the song can take at the requested length, not its final size. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createMusicGenerationResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createMusicGenerationResponse403'];
+        };
+      };
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createMusicGenerationResponse422'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getMusicGeneration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getMusicGenerationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No music generation with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listMusicModels: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The usable models. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listMusicModelsResponse200'];
         };
       };
       /** @description Missing or invalid credentials. */

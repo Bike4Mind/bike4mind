@@ -329,6 +329,31 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.model.findOne({ email }).collation({ locale: 'en', strength: 2 });
   }
 
+  async existsOtherUserWithEmail(email: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('email', email, excludeUserId);
+  }
+
+  async existsOtherUserWithUsername(username: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('username', username, excludeUserId);
+  }
+
+  // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
+  // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
+  // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.
+  private async existsOtherUserWithValue(
+    field: 'email' | 'username',
+    value: string,
+    excludeUserId: string | undefined
+  ): Promise<boolean> {
+    const normalized = value.normalize('NFC').trim();
+    if (!normalized) return false;
+    const filter: Record<string, unknown> = {
+      [field]: { $regex: `^\\s*${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+    };
+    if (excludeUserId) filter._id = { $ne: excludeUserId };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   async findOrCreateByEmail(email: string, defaults: Partial<IUserDocument>): Promise<IUserDocument> {
     try {
       const doc = await this.model.findOneAndUpdate(
@@ -443,6 +468,38 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * What the admin integration-demand requester list shows per user: name, email and the
+   * organization the user belongs to today, plus whether the account is soft-deleted (a
+   * `deletedAt` is set). Inclusion projection only; a deleted account is returned, not filtered,
+   * so the caller can blank it rather than lose the row.
+   */
+  async findRequesterProfilesByIds(
+    ids: string[]
+  ): Promise<Array<{ id: string; name?: string; email?: string; organizationId: string | null; deleted: boolean }>> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email organizationId deletedAt')
+      .lean<
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          name?: string;
+          email?: string;
+          organizationId?: mongoose.Types.ObjectId | null;
+          deletedAt?: Date | null;
+        }>
+      >();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      name: doc.name,
+      email: doc.email,
+      organizationId: doc.organizationId ? String(doc.organizationId) : null,
+      deleted: !!doc.deletedAt,
+    }));
+  }
+
+  /**
    * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
    * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
    * resolver never mails an emailless account.
@@ -512,6 +569,33 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       ],
       { new: true }
     );
+  }
+
+  async setCurrentStorageIfUnchanged(userId: string, expected: number, next: number): Promise<boolean> {
+    // `null` also matches a missing field, which every reader treats as 0.
+    const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
+    const res = await this.model.updateOne(
+      { _id: userId, currentStorageSize: counterFilter },
+      { $set: { currentStorageSize: next } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  async findCurrentStorageSize(userId: string): Promise<number | null> {
+    if (!mongoose.isValidObjectId(userId)) return null;
+    const row = await this.model
+      .findById(userId, { currentStorageSize: 1 })
+      .lean<{ currentStorageSize?: number | null }>();
+    return row ? (row.currentStorageSize ?? 0) : null;
+  }
+
+  async listUserIdsAfter(afterId: string | null, limit: number): Promise<string[]> {
+    const rows = await this.model
+      .find(afterId ? { _id: { $gt: afterId } } : {}, { _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
   }
 
   /**

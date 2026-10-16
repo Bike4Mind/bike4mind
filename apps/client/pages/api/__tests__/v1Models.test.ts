@@ -267,6 +267,48 @@ describe('GET /api/v1/models', () => {
     expect(secondPage.next_cursor).toBeNull();
   });
 
+  it('pages across a disabled model: the cursor skips it and the last page ends with a null cursor', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [
+        textModel('model-a'),
+        { ...textModel('model-b'), disabled: true, disabledReason: 'not invocable on demand' },
+        textModel('model-c'),
+        textModel('model-d'),
+      ],
+      supersededModels: [],
+    });
+    const first = get({ limit: '2' });
+    await run(first.req, first.res);
+    const firstPage = first.res._getJSONData();
+
+    const second = get({ limit: '2', cursor: firstPage.next_cursor });
+    await run(second.req, second.res);
+    const secondPage = second.res._getJSONData();
+
+    expect(firstPage.data.map((model: { id: string }) => model.id)).toEqual(['model-a', 'model-c']);
+    expect(firstPage.next_cursor).toEqual(expect.any(String));
+    expect(secondPage.data.map((model: { id: string }) => model.id)).toEqual(['model-d']);
+    expect([...firstPage.data, ...secondPage.data].map((model: { id: string }) => model.id)).not.toContain('model-b');
+    expect(secondPage.next_cursor).toBeNull();
+  });
+
+  it('ends with a null cursor when every model on the page is disabled', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [
+        { ...textModel('model-a'), disabled: true },
+        { ...textModel('model-b'), disabled: true },
+      ],
+      supersededModels: [],
+    });
+    const { req, res } = get({ limit: '2' });
+
+    await run(req, res);
+
+    const body = res._getJSONData();
+    expect(body.data).toEqual([]);
+    expect(body.next_cursor).toBeNull();
+  });
+
   it('rejects a cursor minted by another endpoint with a 422', async () => {
     const foreign = Buffer.from(JSON.stringify({ v: 1, s: 'v1.data-lakes', after: 'x' })).toString('base64url');
     const { req, res } = get({ cursor: foreign });

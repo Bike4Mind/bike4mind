@@ -15,7 +15,7 @@ import {
   type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
@@ -59,6 +59,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -539,7 +540,9 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          400000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // $2.50 / 1M Input tokens, $15.00 / 1M Output tokens
+          // List is $2.50/$15 per 1M up to 272k and $5/$22.50 above. Held flat until agent runs
+          // pick the tier per request: summed run input would cross 272k and bill at the upper rate.
+          400000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 },
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -630,7 +633,7 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: false,
         pricing: {
-          128_000: { input: 1.75 / 1_000_000, output: 14.0 / 1_000_000 }, // $1.25 / 1M Input tokens, $10.00 / 1M Output tokens
+          128_000: { input: 1.75 / 1_000_000, output: 14.0 / 1_000_000 }, // $1.75 / 1M Input tokens, $14.00 / 1M Output tokens
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -1027,6 +1030,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; the two
     // are only made disjoint at the emit, by splitCachedInput.
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -1236,8 +1240,10 @@ export class OpenAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
-      const totalCacheReadTokens =
-        accumCacheReadTokens + cachedTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined);
+      const turnCacheReadTokens = cachedTokensFromUsage(
+        response.usage as unknown as Record<string, unknown> | undefined
+      );
+      const totalCacheReadTokens = accumCacheReadTokens + turnCacheReadTokens;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from OpenAI API');
@@ -1440,6 +1446,12 @@ export class OpenAIBackend implements ICompletionBackend {
                   totalCacheReadTokens
                 ),
                 outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                turnUsage: appendCacheInclusiveTurn(
+                  accumTurnUsage,
+                  response.usage?.prompt_tokens || 0,
+                  turnCacheReadTokens,
+                  response.usage?.completion_tokens || 0
+                ),
                 toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
                 stopReason: 'tool_use',
               });
@@ -1468,6 +1480,12 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: totalCacheReadTokens,
+                  accumTurnUsage: appendCacheInclusiveTurn(
+                    accumTurnUsage,
+                    response.usage?.prompt_tokens || 0,
+                    turnCacheReadTokens,
+                    response.usage?.completion_tokens || 0
+                  ),
                   artifactGuard,
                 },
               },
@@ -1489,6 +1507,12 @@ export class OpenAIBackend implements ICompletionBackend {
                 totalCacheReadTokens
               ),
               outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+              turnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                response.usage?.prompt_tokens || 0,
+                turnCacheReadTokens,
+                response.usage?.completion_tokens || 0
+              ),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
             return;
@@ -1517,6 +1541,12 @@ export class OpenAIBackend implements ICompletionBackend {
       const completionInfo = {
         ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+        turnUsage: appendCacheInclusiveTurn(
+          accumTurnUsage,
+          response.usage?.prompt_tokens || 0,
+          turnCacheReadTokens,
+          response.usage?.completion_tokens || 0
+        ),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(options.responseFormat?.type === 'json_schema' ? { responseFormatMode: 'native' as const } : {}),
@@ -1606,6 +1636,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback(streamedText, {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
@@ -1658,6 +1689,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         responseFormatMode: 'native',
@@ -1809,6 +1841,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumCacheReadTokens + cachedTokensFromStream
                 ),
                 outputTokens: accumOutputTokens + outputTokens,
+                turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
                 toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
                 cacheStats,
                 ...artifactInfo,
@@ -1841,6 +1874,7 @@ export class OpenAIBackend implements ICompletionBackend {
           await (artifactGuard?.callback ?? callback)([], {
             ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
             outputTokens: accumOutputTokens + outputTokens,
+            turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
             toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             cacheStats,
             stopReason: 'tool_use',
@@ -1867,6 +1901,12 @@ export class OpenAIBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
               accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              accumTurnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                inputTokens,
+                cachedTokensFromStream,
+                outputTokens
+              ),
               artifactGuard,
             },
           },
@@ -1883,6 +1923,7 @@ export class OpenAIBackend implements ICompletionBackend {
         await callback([null], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           cacheStats,
         });
@@ -1897,35 +1938,6 @@ export class OpenAIBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>
   ): OpenAI.ChatCompletionMessageParam[] {
     const filteredMessages = isO1Model ? messages.filter(msg => msg.role !== 'system') : messages;
-
-    // Get tool names from options.tools
-    const toolNames = options.tools?.map(tool => tool.toolSchema.name) || [];
-    const isGPT5Family =
-      GPT5_MODELS.includes(model) ||
-      GPT5_1_MODELS.includes(model) ||
-      GPT5_2_MODELS.includes(model) ||
-      GPT5_4_MODELS.includes(model) ||
-      GPT5_5_MODELS.includes(model) ||
-      GPT5_6_MODELS.includes(model);
-
-    // For GPT-5 models: do NOT list tool names in the system prompt when tools are provided
-    // via the API's `tools` parameter. GPT-5 gets confused by dual descriptions (text + API)
-    // and defaults to talking ABOUT tools instead of making native function calls.
-    // For other models (GPT-4o, etc.): keep the existing behavior which works well.
-    let systemContent: string;
-    if (isGPT5Family) {
-      systemContent = 'You are a helpful assistant.';
-      if (toolNames.length > 0) {
-        systemContent += ' Use the provided tools when appropriate. Present results clearly and naturally.';
-      }
-      systemContent += `\nOnly when someone asks, remember that you are specifically the ${model} model.`;
-      if (toolNames.includes('web_search')) {
-        systemContent +=
-          '\nFor web search results, present clean human-readable answers. Do not expose raw search queries or API response metadata to the user.';
-      }
-    } else {
-      systemContent = `You are a helpful assistant${toolNames.length > 0 ? ` with access to these tools:\n      - ${toolNames.join(', ')}: Available tools for various operations\n\n      When responding:\n      1. Identify when a task can be handled by an available tool\n      2. Use the appropriate tool for accurate results\n      3. For tools other than recharts: Explain what you're doing and why\n      4. For tools other than recharts: Present results in a clear, natural way with context\n      5. For tools other than recharts: Add relevant explanations or observations when needed` : '.'}`;
-    }
 
     // Hoist any caller-supplied `role: 'system'` messages (e.g. org-authority guards,
     // CompanyFactsBinder context) into the lead system message instead of leaving them
@@ -1943,15 +1955,13 @@ export class OpenAIBackend implements ICompletionBackend {
       )
       .map(m => m.content)
       .join('\n\n');
-    // Bare-completion contract (API promptMode raw): synthesize nothing - no
-    // helpful-assistant preamble, no identity line. The lead message is then exactly the
-    // caller's own system text, or absent entirely. Must stay in sync with the same flag
-    // in anthropicBackend / bedrockBackend.
+    // The only synthesized text is the shared identity reminder, placed last to mirror the
+    // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
+    // nothing, so the lead message is exactly the caller's own system text, or absent
+    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
     const mergedContent = options.omitIdentityReminder
       ? callerSystem
-      : callerSystem
-        ? `${systemContent}\n\n${callerSystem}`
-        : systemContent;
+      : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -2100,6 +2110,7 @@ export class OpenAIBackend implements ICompletionBackend {
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Reuse the chat-path message formatting (system consolidation + B4M->OpenAI
     // conversion), then translate to Responses input items.
@@ -2159,12 +2170,14 @@ export class OpenAIBackend implements ICompletionBackend {
         await callback([event.delta], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
       } else if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
         await callback([], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           toolStarted: { name: event.item.name, id: event.item.call_id },
         });
@@ -2210,6 +2223,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(stopReason ? { stopReason } : {}),
       });
@@ -2226,6 +2240,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([null], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
       return;
@@ -2329,6 +2344,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await (artifactGuard?.callback ?? callback)([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         stopReason: 'tool_use',
       });
@@ -2352,6 +2368,7 @@ export class OpenAIBackend implements ICompletionBackend {
           accumInputTokens: accumInputTokens + inputTokens,
           accumOutputTokens: accumOutputTokens + outputTokens,
           accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+          accumTurnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           artifactGuard,
         },
       },

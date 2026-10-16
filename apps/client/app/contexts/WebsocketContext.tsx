@@ -1,5 +1,5 @@
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
 import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
@@ -21,6 +21,15 @@ export { ReadyState };
 // stale, so refetch the quest lists on screen (active queries only).
 const refetchAfterLostFrames = (queryClient: QueryClient) =>
   void queryClient.invalidateQueries({ queryKey: ['quests', 'session'] });
+
+// What to refetch after a gap in pushes: a reconnect, or a reauth that dropped this socket's
+// subscriptions. The two paths share this so neither can miss a query the other catches up.
+const catchUpAfterGap = (queryClient: QueryClient) => {
+  refetchAfterLostFrames(queryClient);
+  // InboxProvider's `invites` resubscribe skips the server replay once it has rescoped
+  // (InboxContext.tsx), so a replay can no longer be relied on to catch invites up.
+  void queryClient.invalidateQueries({ queryKey: ['invites'] });
+};
 
 const reportLostChunkedMessage = (queryClient: QueryClient, reason: string) => {
   console.warn('[WebSocket] Lost a chunked message:', reason);
@@ -154,6 +163,21 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
 
   const [activeSubscriptions, setActiveSubscriptions] = useState<ReadonlySet<string>>(() => new Set());
+  // Last subscribe_query frame per subscriptionId, replayed when the server answers a reauth with
+  // resubscribe_required. The socket stays open and sendJsonMessage keeps its identity across token
+  // refreshes (it reads the token from accessTokenRef), so the hooks' own resubscribe-on-change
+  // effect does not run; this replay is the only resubscribe on that path. A reconnect is the
+  // opposite: the hooks resubscribe themselves, so onClose clears this map.
+  const subscribePayloadsRef = useRef(new Map<string, IMessageDataToServer>());
+  const accessTokenRef = useRef(accessToken);
+  // Layout effect: runs before any child's passive effect in the same commit, so a subscribe sent
+  // by a hook mounting alongside a refresh carries the new token.
+  useLayoutEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+  // The token the current connect ticket was minted with; a refresh that lands while the socket
+  // is still CONNECTING is reconciled on open (see onOpen).
+  const ticketTokenRef = useRef<string | null>(null);
   const [clientId] = useState(() => crypto.randomUUID().slice(0, 8));
 
   // Pulsed true-then-false to force react-use-websocket to tear down and reconnect with a
@@ -176,10 +200,15 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // retries on its own backoff if the mint throws - which is why it needs a timeout: a
   // mint that never settles holds readyState at CONNECTING with no retry ever scheduled.
   const getWebsocketUrl = useCallback(async () => {
-    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
+    const response = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
       timeout: WEBSOCKET_TICKET_TIMEOUT_MS,
     });
-    return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
+    // The ticket is bound to the token the successful request carried. ApiContext's 401 retry
+    // re-sends through the token-attach interceptor, so after a refresh this is the new token;
+    // the store itself may have moved on again while the POST was in flight, so it is not used.
+    const sentToken = String(response.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
+    ticketTokenRef.current = sentToken || null;
+    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}`;
   }, [url]);
 
   const { sendJsonMessage, sendMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
@@ -206,12 +235,23 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       openedThisAttemptRef.current = true;
       reconnectExhaustedRef.current = false;
       chunkReassemblerRef.current?.clear();
+      // The token refreshed while this socket was connecting: the connection was opened under the
+      // older token, and the refresh effect below skipped it because the socket was not OPEN yet.
+      const currentToken = accessTokenRef.current;
+      if (currentToken && ticketTokenRef.current && currentToken !== ticketTokenRef.current) {
+        ticketTokenRef.current = currentToken;
+        sendJsonMessage({ action: 'reauth_connection', accessToken: currentToken });
+      }
     },
     onClose(event: CloseEvent) {
       console.log('ws disconnected', event.code, event.reason);
       const openedThisAttempt = openedThisAttemptRef.current;
       openedThisAttemptRef.current = false;
       chunkReassemblerRef.current?.clear();
+      // A reconnect re-sends every live subscription through its hook (each reacts to the socket
+      // coming back), which re-tracks it. Keeping the old entries would replay them a second time
+      // on a resubscribe_required that follows the reconnect.
+      subscribePayloadsRef.current.clear();
 
       if (
         shouldProbeOnFailedWsConnect({
@@ -420,10 +460,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   useEffect(() => {
     const isOpen = readyState === ReadyState.OPEN;
     if (isOpen && !wasOpenRef.current && hasOpenedRef.current) {
-      refetchAfterLostFrames(queryClient);
-      // InboxProvider's `invites` resubscribe skips the server replay once it has rescoped
-      // (InboxContext.tsx), so the reconnect replay can no longer be relied on to catch invites up.
-      void queryClient.invalidateQueries({ queryKey: ['invites'] });
+      catchUpAfterGap(queryClient);
     }
     if (isOpen) hasOpenedRef.current = true;
     wasOpenRef.current = isOpen;
@@ -436,13 +473,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // That's the focused-tab gap: nothing ever blurs, so the visibilitychange pulse above never
   // fires. Treat a post-exhaustion token change as the second trigger for the same pulse.
   // prevAccessTokenRef skips the mount's own token (nothing has exhausted yet at mount).
+  //
+  // An open socket also re-authenticates with every refreshed token: the server extends the
+  // connection's lifetime to the new token's expiry and answers resubscribe_required.
   const prevAccessTokenRef = useRef(accessToken);
   useEffect(() => {
-    const changed = prevAccessTokenRef.current !== accessToken;
+    const previous = prevAccessTokenRef.current;
     prevAccessTokenRef.current = accessToken;
-    if (!changed) return;
+    if (previous === accessToken) return;
     pulseReconnect();
-  }, [accessToken, pulseReconnect]);
+    if (previous && accessToken && readyStateRef.current === ReadyState.OPEN) {
+      sendJsonMessage({ action: 'reauth_connection', accessToken });
+    }
+  }, [accessToken, pulseReconnect, sendJsonMessage]);
 
   // Third trigger, and the only self-armed one. Both triggers above are external events, and a
   // tab that stays focused while its access token is still valid produces neither: no
@@ -486,9 +529,23 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     []
   );
 
+  // A reauth dropped this connection's subscriptions server-side: re-send each tracked one with
+  // the current token, and refetch what may have changed while it was unsubscribed.
+  useEffect(
+    () =>
+      subscribeToAction('resubscribe_required', async () => {
+        for (const payload of subscribePayloadsRef.current.values()) {
+          sendJsonMessage({ ...payload, accessToken: accessTokenRef.current } as IMessageDataToServer);
+        }
+        catchUpAfterGap(queryClient);
+      }),
+    [subscribeToAction, sendJsonMessage, queryClient]
+  );
+
   const trackedSendJsonMessage = useCallback(
     (action: IMessageDataToServer) => {
       if (action.action === 'subscribe_query') {
+        subscribePayloadsRef.current.set(action.subscriptionId, action);
         setActiveSubscriptions(prev => {
           if (prev.has(action.subscriptionId)) return prev;
           const next = new Set(prev);
@@ -496,6 +553,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
           return next;
         });
       } else if (action.action === 'unsubscribe_query') {
+        subscribePayloadsRef.current.delete(action.subscriptionId);
         setActiveSubscriptions(prev => {
           if (!prev.has(action.subscriptionId)) return prev;
           const next = new Set(prev);
@@ -503,9 +561,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
           return next;
         });
       }
-      sendJsonMessage({ ...action, accessToken });
+      sendJsonMessage({ ...action, accessToken: accessTokenRef.current });
     },
-    [sendJsonMessage, accessToken]
+    // The token comes from accessTokenRef so a refresh does not change this callback's identity:
+    // every collection hook lists sendJsonMessage as an effect dependency and would otherwise
+    // unsubscribe and resubscribe on each refresh.
+    [sendJsonMessage]
   );
 
   const value: WebsocketContextValue = useMemo(() => {

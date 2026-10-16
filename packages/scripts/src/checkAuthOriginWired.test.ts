@@ -40,7 +40,7 @@ const FORWARDERS = new Map<string, string>([
     'Runs the queued quest-start body as-is; the invoke() that queued it set authOrigin.',
   ],
   [
-    'apps/client/server/queueHandlers/slackQuestProcessor.ts',
+    'apps/workers/src/queueHandlers/slackQuestProcessor.ts',
     'Runs the queued quest-start body as-is; the Slack invoke() that queued it set authOrigin.',
   ],
   [
@@ -48,6 +48,13 @@ const FORWARDERS = new Map<string, string>([
     "Spreads the executor's own ToolBuilderDeps, whose authOrigin is required by type.",
   ],
 ]);
+
+/**
+ * Trees with their own, unrelated `ToolContext` that never reach the server's tool context.
+ * apps/desktop runs its tools in the Electron main process as the signed-in user; the server
+ * turns it starts go through the completions endpoint, whose auth middleware sets authOrigin.
+ */
+const SEPARATE_TOOL_RUNTIMES = ['apps/desktop/'];
 
 /** Drops comments so a door named only in prose (or a doc example) is neither a match nor a pass. */
 function stripComments(source: string): string {
@@ -68,6 +75,7 @@ describe('every door that runs tools states its authOrigin', () => {
     const doors = out
       .split('\n')
       .filter(Boolean)
+      .filter(file => !SEPARATE_TOOL_RUNTIMES.some(prefix => file.startsWith(prefix)))
       .map(file => ({ file, code: stripComments(readFileSync(path.join(REPO_ROOT, file), 'utf8')) }))
       .filter(({ code }) => isDoor(code));
     // Fail loudly rather than vacuously passing if the patterns ever stop matching the tree.

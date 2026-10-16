@@ -20,7 +20,10 @@ vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.f
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: vi.fn() },
 }));
-vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 
 const mockRotateSession = vi.fn();
@@ -29,13 +32,28 @@ vi.mock('@bike4mind/services', () => ({
     isOpaqueRefreshToken: (t: string) => t.includes('.'),
     parseRefreshToken: (t: string) => (t.includes('.') ? { sid: t.split('.')[0], secret: t.split('.')[1] } : null),
     rotateSession: (...args: any[]) => mockRotateSession(...args),
+    endRealtimeConnections: async (
+      filter: unknown,
+      {
+        db,
+      }: { db: { realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> } } }
+    ) => {
+      // Same contract as the real best-effort wrapper: never throws.
+      try {
+        return (await db.realtimeConnections.endConnections(filter)).connectionIds;
+      } catch {
+        return [];
+      }
+    },
   },
 }));
 
 const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
+const mockEndConnections = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
+  realtimeConnectionRepository: { endConnections: (...args: any[]) => mockEndConnections(...args) },
   authSessionRepository: {
     revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
     findBySid: (...args: any[]) => mockFindBySid(...args),
@@ -55,6 +73,7 @@ describe('POST /api/auth/returnToAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
+    mockEndConnections.mockResolvedValue({ connectionIds: [] });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
       user: { id: 'admin-1' },
@@ -88,6 +107,17 @@ describe('POST /api/auth/returnToAdmin', () => {
 
     await handler(req as any, res as any);
 
+    expect(mockRevokeBySid).toHaveBeenCalledWith('cust-sid');
+    expect(mockEndConnections).toHaveBeenCalledWith({ sid: 'cust-sid' });
+  });
+
+  it('still returns the admin to safety when ending the impersonation realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValue(new Error('prune failed'));
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
     expect(mockRevokeBySid).toHaveBeenCalledWith('cust-sid');
   });
 

@@ -6,6 +6,9 @@ export interface JwtPayloadClaims {
   id: string;
   tokenVersion?: number;
   mfaPending?: boolean;
+  /** Pending sign-in origin (signInSecondFactor.ts SignInOrigin); present only with mfaPending. */
+  signInStrategy?: string;
+  signInVia?: string;
   impersonatedBy?: string;
   typ?: string;
   /** AuthSession id this token belongs to (present on session-store tokens; absent on legacy
@@ -20,6 +23,8 @@ export interface JwtPayloadClaims {
   scope?: string;
   /** Resource audience (RFC 9068); present iff kind==='oauth'. */
   aud?: string;
+  /** Standard expiry (seconds since epoch), set by jsonwebtoken's expiresIn. */
+  exp?: number;
 }
 
 /**
@@ -54,12 +59,17 @@ export async function verifyJwtPayload(
       }
       assertAccountStateUsable(user);
       (user as any).mfaPending = !!jwt_payload.mfaPending;
+      if (jwt_payload.mfaPending && jwt_payload.signInStrategy && jwt_payload.signInVia) {
+        (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };
+      }
       // Propagate the impersonation marker (set by loginAs) so request handlers
       // can distinguish an admin-driven session from the real customer's - see logout.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;
       // Surface the session id so per-device logout can revoke exactly THIS session
       // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
+      // The realtime connect ticket inherits this token's expiry (see pages/api/websocket/ticket.ts).
+      (user as any).accessTokenExpiresAt = jwt_payload.exp ? new Date(jwt_payload.exp * 1000) : undefined;
       // An OAuth (relying-party) access token is recognized here but NOT rejected: first-party
       // sessions carry no `kind` and must still pass. The marker is surfaced so the route gate
       // (oauthRouteGate) can default-deny it everywhere except OAuth-reachable routes.

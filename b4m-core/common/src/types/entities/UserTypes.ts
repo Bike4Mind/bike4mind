@@ -673,6 +673,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
+   * Whether any user other than `excludeUserId` holds `email`, compared trimmed and
+   * case-insensitively. Engine-portable (MongoDB and DocumentDB), unlike the collation lookups.
+   */
+  existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
+  /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
+  existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
+  /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
    * cannot mistake it for a single-user operation.
@@ -730,6 +737,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * @param count - The amount to increment by (can be negative for decrements)
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
+  /**
+   * Compare-and-set `currentStorageSize`: writes `next` only while the stored counter still equals
+   * `expected` (a missing counter counts as 0). Returns false when a concurrent charge or refund moved
+   * it, so a recalculated absolute value never overwrites an adjustment it did not see.
+   */
+  setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
+  findCurrentStorageSize: (userId: string) => Promise<number | null>;
+  /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */
+  listUserIdsAfter: (afterId: string | null, limit: number) => Promise<string[]>;
   /**
    * Atomically bump the user's tokenVersion - the server-side session kill switch.
    * Every currently-issued access/refresh token for the user carries the old version and

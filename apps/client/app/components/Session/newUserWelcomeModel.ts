@@ -59,5 +59,5 @@ export function welcomeCreditsLine({
       : 'Verify your email to unlock your free credits.';
   }
   if (balance <= 0) return null;
-  return `You're starting with ${formatCreditBalance(balance)}. Each answer shows what it used, and your balance sits next to the send button.`;
+  return `You're starting with ${formatCreditBalance(balance)}. Each answer shows what it used.`;
 }

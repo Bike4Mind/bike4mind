@@ -8,7 +8,11 @@ Background work that used to live under `apps/client/server`, moved here one cat
 | `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the LiveOps/SecOps triage SQS workers | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
 | `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
 | `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
-| `src/queueHandlers/` | SQS queue handlers: comms/ops, data-lake pipeline, What's New, image generation, quest export, lake ingest, and the agent executor | Lambdas declared in `infra/*.ts` by handler path; the agent executor also runs self-host through `src/agentExecutor/` |
+| `src/queueHandlers/` | SQS queue handlers: comms/ops, data-lake pipeline, What's New, image generation, quest export, lake ingest, the agent executor, and the Slack quest processor | Lambdas declared in `infra/*.ts` by handler path; the agent executor also runs self-host through `src/agentExecutor/` |
+| `src/s3/` | S3 upload-complete handlers for app files and FabFiles (moderation, storage charge, chunk enqueue) | Bucket notification subscribers in `infra/buckets.ts` and `infra/queues.ts` |
+| `src/database/` | Database migrator, seeder and preview cleaner | Lambdas declared in `infra/database.ts`, invoked on deploy and preview teardown |
+| `src/media/` | Image processor (PNG conversion and resizing with jimp) | Lambda declared in `infra/imageProcessor.ts` |
+| `src/cli/` | CLI tools endpoint (the Lambda transport of the tools contract) | Lambda declared in `infra/cliToolHandler.ts` |
 | `src/security/` | Security alert processor and Active Defense attack-simulation runner | Lambdas declared in `infra/securityAlerts.ts` and `infra/cron.ts` |
 | `src/selfhost/` | Self-host worker runner: SQS long-poll loop, scheduler, and event dispatch | The `worker` service in `compose.selfhost.yaml` |
 | `src/agentExecutor/` | Self-host agent executor: HTTP + SQS consumer that runs agent starts and resumes | The `agentexecutor` service in `compose.selfhost.yaml` |

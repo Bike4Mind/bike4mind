@@ -46,7 +46,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
       // any user's image into their own files by supplying its key. Only copy an image the caller
       // created (or one shared with them via the source chat).
-      if (!(await userCanAccessGeneratedImage(imageS3Key, user.id))) {
+      if (!(await userCanAccessGeneratedImage(imageS3Key, user))) {
         throw new ForbiddenError('You do not have access to this image');
       }
 
@@ -108,8 +108,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
                   throw error;
                 }
               },
-              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(filepath, 'put', {
+              generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+                getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                   expiresIn: expireInSeconds,
                 }),
             },
@@ -125,19 +125,24 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // The generated image is already moderated, but the new FabFile row starts 'pending' until
       // the async objectCreated scan clears it - only return a working URL once serveable;
       // otherwise return the record with no fileUrl so the client can show a placeholder.
-      if (result.filePath && isImageServeable(result)) {
-        const presignedUrl = await getFilesStorage().getSignedUrl(result.filePath, 'get', {
+      const responseFile =
+        typeof (result as { toJSON?: unknown }).toJSON === 'function'
+          ? (result as unknown as { toJSON: () => typeof result }).toJSON()
+          : result;
+      if (responseFile.filePath && isImageServeable(responseFile)) {
+        const presignedUrl = await getFilesStorage().getSignedUrl(responseFile.filePath, 'get', {
           expiresIn: 3600,
+          audience: 'browser',
         });
 
         return res.json({
-          ...result,
+          ...responseFile,
           fileUrl: presignedUrl,
           fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
         });
       }
 
-      return res.json(result);
+      return res.json(responseFile);
     })
   );
 

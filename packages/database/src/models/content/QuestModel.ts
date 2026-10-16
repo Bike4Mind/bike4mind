@@ -10,6 +10,10 @@ import {
   MessageContentObject,
   QuestCallbackState,
   QuestCallbackStateSchema,
+  ChatToolModeSchema,
+  type GenerationJobRef,
+  type GenerationJobKind,
+  GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -446,6 +450,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       },
     ],
     offeredTools: [{ type: String, required: false }],
+    toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -582,9 +587,21 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    // Legacy: read only (see questGenerationJobs); new jobs go to generationJobs.
     videoJobIds: { type: [String], default: undefined },
-    // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
+    generationJobs: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, required: true },
+          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+        },
+      ],
+      default: undefined,
+    },
+    // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
+    agentMusicTracksClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -869,6 +886,11 @@ function staleCallbackDispatchFilter({
   };
 }
 
+const AGENT_GENERATION_SLOT_FIELDS = {
+  video: 'agentVideoClipsClaimed',
+  music: 'agentMusicTracksClaimed',
+} as const satisfies Record<GenerationJobKind, keyof IChatHistoryItem>;
+
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
 
@@ -1124,6 +1146,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           images: 1,
           videos: 1,
           videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1221,39 +1244,40 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Append video job ids to a chat Quest the moment each job is created. `$addToSet` makes a
+   * Append generation jobs to a chat Quest the moment each job is created. `$addToSet` makes a
    * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
    * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can
    * briefly drop a second id, and the next save restores it. No-op if no Quest matches.
    */
-  async addVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
-    if (!jobIds.length) return;
-    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { videoJobIds: { $each: jobIds } } });
+  async addGenerationJobs(questId: string, jobs: GenerationJobRef[]): Promise<void> {
+    if (!jobs.length) return;
+    // $addToSet matches a subdocument on its fields in order, so rebuild each ref as { id, kind }.
+    const refs = jobs.map(({ id, kind }) => ({ id, kind }));
+    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { generationJobs: { $each: refs } } });
   }
 
   /**
-   * Claim one of an agent run's `limit` video clip slots. The run's parent, its in-process subagents and its checkpoint continuations share
-   * this Quest and can claim concurrently, so the check and the increment must be one atomic update.
+   * Claim one of an agent run's `limit` slots for a `kind` of generation job. The run's parent, its in-process subagents and its
+   * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentVideoClip(questId: string, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: GenerationJobKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
       {
         _id: convertId(questId),
-        $or: [{ agentVideoClipsClaimed: { $exists: false } }, { agentVideoClipsClaimed: { $lt: limit } }],
+        $or: [{ [field]: { $exists: false } }, { [field]: { $lt: limit } }],
       },
-      { $inc: { agentVideoClipsClaimed: 1 } }
+      { $inc: { [field]: 1 } }
     );
     return result.modifiedCount === 1;
   }
 
-  /** Give back a slot from claimAgentVideoClip whose call started no new clip. */
-  async releaseAgentVideoClip(questId: string): Promise<void> {
-    await this.model.updateOne(
-      { _id: convertId(questId), agentVideoClipsClaimed: { $gt: 0 } },
-      { $inc: { agentVideoClipsClaimed: -1 } }
-    );
+  /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
+  async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
+    await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }
 
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
@@ -1273,6 +1297,19 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     if (!image) return [];
     const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
     return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // The subset of `keys` that some quest in this session references as generated media (`images`
+  // or `videos`). Session-scoped twin of findSessionIdsByImage: once the caller's access to the
+  // session is established, a key is readable iff one of its turns produced it.
+  async findGeneratedMediaKeysInSession(sessionId: string, keys: string[]): Promise<string[]> {
+    if (!sessionId || keys.length === 0) return [];
+    const docs = await this.model
+      .find({ sessionId, $or: [{ images: { $in: keys } }, { videos: { $in: keys } }] }, { images: 1, videos: 1 })
+      .lean();
+    const requested = new Set(keys);
+    const referenced = docs.flatMap(doc => [...(doc.images ?? []), ...(doc.videos ?? [])]);
+    return [...new Set(referenced.filter(key => requested.has(key)))];
   }
 
   /**
@@ -1310,6 +1347,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           images: 1,
           videos: 1,
           videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1644,7 +1682,15 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
+  | 'agentExecutionId'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;
 
 /**
@@ -1658,5 +1704,13 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
+  | 'status'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;

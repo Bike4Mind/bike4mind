@@ -24,7 +24,8 @@ export interface CachedAdminSetting {
  * @returns cached settings plus helper accessors
  */
 export const useAdminSettingsCache = () => {
-  const { settings, isLoading, error, getSetting, getSettingBoolean, getSettingNumber, refetch } = useAdminSettings();
+  const { settings, isLoading, error, authedSettingsLoaded, getSetting, getSettingBoolean, getSettingNumber, refetch } =
+    useAdminSettings();
 
   // Memoize the array conversion; stable as long as the settings object is.
   // Object.entries().map() on every render creates a new array reference,
@@ -61,6 +62,8 @@ export const useAdminSettingsCache = () => {
 
     isLoading,
     error,
+    /** False while non-public keys still read as compiled-in defaults; see AdminSettingsContext. */
+    authedSettingsLoaded,
 
     getSetting,
     getSettingBoolean,

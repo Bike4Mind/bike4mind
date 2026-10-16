@@ -37,9 +37,13 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         adminSettings: adminSettingsRepository,
       },
       storage: {
+        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
         generateSignedUrl: async (path: string, expireInSeconds: number) => {
           try {
-            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+            return await getFilesStorage().getSignedUrl(path, 'get', {
+              expiresIn: expireInSeconds,
+              audience: 'browser',
+            });
           } catch (e) {
             req.logger.error('Error generating signed URL for file', {
               error: e,
@@ -85,7 +89,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         try {
           // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
           const files = await FabFile.find(ownedFilter)
-            .select('filePath moderationStatus sourceMetadata.generatedCopyKey sourceMetadata.sessionId')
+            .select(
+              'filePath versions moderationStatus blockReason sourceMetadata.generatedCopyKey sourceMetadata.sessionId'
+            )
             .session(session);
           const user = await User.findById(userId).session(session);
 

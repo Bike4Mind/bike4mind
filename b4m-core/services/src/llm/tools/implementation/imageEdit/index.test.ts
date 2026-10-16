@@ -58,6 +58,19 @@ vi.mock('axios', async importOriginal => {
 });
 
 // Imported after the mocks so `processAndStoreImage` and `imageEditTool` pick up the mocked services.
+const { mockSaveFromTool } = vi.hoisted(() => ({ mockSaveFromTool: vi.fn() }));
+vi.mock('../../helpers/persistGeneratedFile', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../helpers/persistGeneratedFile')>();
+  return { ...actual, saveGeneratedAssetFromTool: mockSaveFromTool };
+});
+
+const { mockFileTypeFromBuffer } = vi.hoisted(() => ({ mockFileTypeFromBuffer: vi.fn() }));
+vi.mock('file-type', async importOriginal => {
+  const actual = await importOriginal<typeof import('file-type')>();
+  mockFileTypeFromBuffer.mockImplementation(actual.fileTypeFromBuffer);
+  return { ...actual, fileTypeFromBuffer: mockFileTypeFromBuffer };
+});
+
 const { processAndStoreImage, getImageFromFileId, imageEditTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImageAsBuffer() short-circuits data: URLs with no network call.
@@ -186,8 +199,16 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 });
 
 describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate bypass)', () => {
+  const EDIT = {
+    model: 'gpt-image-1-5',
+    provider: 'openai',
+    prompt: 'make the sky purple',
+    modelId: ImageModels.GPT_IMAGE_2,
+  };
+
   beforeEach(() => {
     mockCheckImage.mockReset();
+    mockSaveFromTool.mockReset().mockResolvedValue({ saved: true, fileId: 'f1', s3Key: 'k', fileName: 'n' });
   });
 
   it('block: moderation rejects the edited image — upload is NOT called and the call rejects', async () => {
@@ -196,21 +217,60 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     );
     const context = createFakeContext();
 
-    await expect(processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai')).rejects.toBeInstanceOf(
-      ImageModerationBlockedError
-    );
+    await expect(processAndStoreImage(PNG_DATA_URL, context, EDIT)).rejects.toBeInstanceOf(ImageModerationBlockedError);
 
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    expect(mockSaveFromTool).not.toHaveBeenCalled();
   });
 
   it('clean image: moderation passes — upload IS called', async () => {
     mockCheckImage.mockResolvedValue(undefined);
     const context = createFakeContext();
 
-    const result = await processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai');
+    const result = await processAndStoreImage(PNG_DATA_URL, context, EDIT);
 
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
+    expect(result).toBe('generated/stored-key.png');
+  });
+
+  it('saves the edited image to files with the rendering model and the prompt', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImage(PNG_DATA_URL, context, EDIT);
+
+    expect(mockSaveFromTool).toHaveBeenCalledWith(context, {
+      bytes: expect.any(Buffer),
+      contentType: 'image/png',
+      generation: {
+        generator: 'image',
+        provider: 'openai',
+        modelId: EDIT.modelId,
+        prompt: EDIT.prompt,
+        jobId: expect.any(String),
+      },
+    });
+  });
+
+  it('falls back to a .png key and image/png when the file type cannot be sniffed', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    mockFileTypeFromBuffer.mockResolvedValueOnce(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImage(PNG_DATA_URL, context, EDIT);
+
+    expect(vi.mocked(context.imageGenerateStorage.upload).mock.calls[0][1]).toMatch(/\.png$/);
+    expect(mockSaveFromTool).toHaveBeenCalledWith(context, expect.objectContaining({ contentType: 'image/png' }));
+  });
+
+  it('a skipped save still returns the stored image', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    mockSaveFromTool.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+    const context = createFakeContext();
+
+    const result = await processAndStoreImage(PNG_DATA_URL, context, EDIT);
+
     expect(result).toBe('generated/stored-key.png');
   });
 });
@@ -268,7 +328,7 @@ describe('imageEditTool - OpenAI branch', () => {
 // independently of the configured generation model and falls back to a hardcoded
 // default when imageConfig.editModel is unset, so the two routinely diverge - and the
 // provider invoice follows `editModel`. Same invariant as the queue path (ImageEdit.ts).
-describe('imageEditTool - credit reservation names the rendered model', () => {
+describe('imageEditTool - credit gate names the rendered model', () => {
   beforeEach(() => {
     mockEditSpy.mockReset();
     mockBflEditSpy.mockReset();
@@ -340,19 +400,46 @@ describe('imageEditTool - credit reservation names the rendered model', () => {
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_MINI })
     );
   });
+
+  it('records the rendered model, not the generation model, on the saved file', async () => {
+    mockCheckImage.mockReset().mockResolvedValue(undefined);
+    mockSaveFromTool.mockReset();
+    mockBflEditSpy.mockResolvedValue({ type: 'success', dataUrl: PNG_DATA_URL });
+    const context = createFakeContext();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(mockSaveFromTool).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        generation: {
+          generator: 'image',
+          provider: 'bfl',
+          modelId: ImageModels.FLUX_PRO_FILL,
+          prompt: 'make it warmer',
+          jobId: expect.any(String),
+        },
+      })
+    );
+  });
 });
 
-describe('imageEditTool - credit reservation counts the image that renders', () => {
+describe('imageEditTool - credit gate counts the image that renders', () => {
   beforeEach(() => {
     mockEditSpy.mockReset();
     // Same stop-after-dispatch trick as the block above: onStart fires before the provider call.
     mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
   });
 
-  // onStart is the single payload both credit rails bill from - ToolBuilder.reserveImageCredits
-  // for classic chat and estimateGeneratedMediaUsd for agent mode - so an n above 1 reaching it
-  // overcharged on both, for images edit() has never been able to return.
-  it('reserves one image however many the model asks for', async () => {
+  // onStart and onFinish carry the one cost input both credit rails bill from -
+  // ToolBuilder.settleImageCredits for classic chat and estimateGeneratedMediaUsd for agent
+  // mode - so an n above 1 reaching it overcharged on both, for images edit() has never been
+  // able to return.
+  it('bills one image however many the model asks for', async () => {
     const context = createFakeContext();
     context.onStart = vi.fn();
 
@@ -365,7 +452,7 @@ describe('imageEditTool - credit reservation counts the image that renders', () 
     expect(context.onStart).toHaveBeenCalledWith('edit_image', expect.objectContaining({ n: IMAGES_PER_EDIT_REQUEST }));
   });
 
-  it('reserves one image however many the image settings ask for', async () => {
+  it('bills one image however many the image settings ask for', async () => {
     const context = createFakeContext();
     context.onStart = vi.fn();
 
@@ -414,6 +501,55 @@ function createFakeContextWithGeneratedImageOwner(ownerUserId: string): ToolCont
   context.imageGenerateStorage.getSignedUrl = vi.fn().mockResolvedValue('https://signed.example/generated.png');
   return context;
 }
+
+// onFinish is the payload both credit rails bill from, so a call that never reaches it is free
+// and one that does must carry the full cost input.
+describe('imageEditTool - billing follows delivery', () => {
+  beforeEach(() => {
+    mockCheckImage.mockReset().mockResolvedValue(undefined);
+    mockBflEditSpy.mockReset();
+  });
+
+  it('bills a delivered edit from onFinish with the rendered cost input', async () => {
+    mockBflEditSpy.mockResolvedValue({ type: 'success', dataUrl: PNG_DATA_URL });
+    const context = createFakeContext();
+    context.onFinish = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onFinish).toHaveBeenCalledWith('edit_image', {
+      model: ImageModels.FLUX_PRO_FILL,
+      n: IMAGES_PER_EDIT_REQUEST,
+      size: undefined,
+      quality: undefined,
+      paths: ['generated/stored-key.png'],
+    });
+  });
+
+  it.each([
+    ['rejects', () => mockBflEditSpy.mockRejectedValue(new Error('Invalid API key'))],
+    ['asks for clarification', () => mockBflEditSpy.mockResolvedValue({ type: 'clarification', question: 'Which?' })],
+  ])('never reaches onFinish when the provider %s', async (_label, arrange) => {
+    arrange();
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+    context.onFinish = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    await expect(toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' })).resolves.toMatch(
+      /^Error: /
+    );
+    expect(context.onStart).toHaveBeenCalledTimes(1);
+    expect(context.onFinish).not.toHaveBeenCalled();
+  });
+});
 
 describe('imageEditTool - generated-image key ownership', () => {
   beforeEach(() => {

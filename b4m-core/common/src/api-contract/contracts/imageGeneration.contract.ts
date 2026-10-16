@@ -4,7 +4,12 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { GenerateImageRequestBodySchema } from '../../llm';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
+
 import { GenerateImageResponseSchema, ImageQuestSchema } from '../../schemas/imageApi';
 import {
   GENERATION_CALLBACK_DESCRIPTION,
@@ -71,8 +76,14 @@ export const generateImageContract = defineEndpoint({
       pollResult: imageQuestPollResult,
     },
     400: {
-      description: `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
+      description:
+        `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
+        BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ApiErrorSchema,
+    },
+    403: {
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description:

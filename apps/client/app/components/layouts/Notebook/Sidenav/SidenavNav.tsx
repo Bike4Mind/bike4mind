@@ -11,7 +11,6 @@ import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlin
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
-import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
@@ -300,7 +299,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             isActive: location.pathname.startsWith('/studio/video'),
             onClick: () => {
               closeOnMobile();
-              navigate({ to: '/studio/video' });
+              navigate({ to: '/studio/$modality', params: { modality: 'video' } });
             },
           },
         ]
@@ -328,24 +327,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/skills/market' });
       },
     },
-    // Gated on the experimental flag alone: the flag says the feature exists for
-    // this user, and that is the whole question. Sits beside Tavern/Gears - the
-    // shared-log destination.
-    ...(isFeatureEnabled('enableHearth')
-      ? [
-          {
-            key: 'hearth',
-            label: t('sidenav.hearth', 'Hearth'),
-            icon: iconSlot(<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/hearth'),
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/hearth' });
-            },
-          },
-        ]
-      : []),
-    // Single-gated on the experimental flag (unlike Hearth's flag+gear pair):
+    // Single-gated on the experimental flag:
     // v5 has no gear, and the flag is opt-in-only, so anyone who turned it on
     // asked for the surface and needs a way to reach it.
     ...(isFeatureEnabled('enableQuestMasterV5')

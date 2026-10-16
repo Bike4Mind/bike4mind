@@ -7,11 +7,20 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { verifyApiKey } from '@server/cli/auth';
 import { UnauthorizedError } from '@server/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
+import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 import type { ConnectionSource } from '@bike4mind/common';
+
+/** What a Connection row records about the credential that opened it (see IConnection). */
+interface ConnectionAuth {
+  sid?: string;
+  tokenVersion?: number;
+  authExpiresAt: Date;
+  apiKeyId?: string;
+}
 
 /**
  * Extract the auth token from the Sec-WebSocket-Protocol header (CLI). The web
@@ -49,14 +58,21 @@ function extractToken(event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEv
  */
 async function resolveWebTicket(
   event: APIGatewayProxyWebsocketEventV2 & APIGatewayProxyEvent
-): Promise<{ userId: string; tokenVersion: number; source: ConnectionSource } | null> {
+): Promise<({ userId: string; tokenVersion: number; source: ConnectionSource } & ConnectionAuth) | null> {
   const queryTicket = event?.queryStringParameters?.ticket;
   if (!queryTicket) return null;
 
   const consumed = await wsConnectTicketRepository.consume(z.string().parse(queryTicket));
   if (!consumed) throw new UnauthorizedError('Invalid or expired connect ticket');
 
-  return { userId: consumed.userId, tokenVersion: consumed.tokenVersion, source: 'web' };
+  return {
+    userId: consumed.userId,
+    tokenVersion: consumed.tokenVersion,
+    source: 'web',
+    sid: consumed.sid,
+    // Tickets minted before authExpiresAt existed fall back to the gateway cap.
+    authExpiresAt: consumed.authExpiresAt ?? gatewayCapExpiry(),
+  };
 }
 
 /**
@@ -74,7 +90,7 @@ async function resolveWebTicket(
 async function resolveIdentity(
   token: string,
   logger: Logger
-): Promise<{ userId: string; scopes?: ApiKeyScope[]; tokenVersion?: number }> {
+): Promise<{ userId: string; scopes?: ApiKeyScope[] } & ConnectionAuth> {
   let jwtErr: unknown;
   try {
     const decoded = authTokenGenerator.verifyToken(token) as jwt.JwtPayload;
@@ -99,7 +115,16 @@ async function resolveIdentity(
     // REST path (auth.ts) so the kill switch still fires for it once the user's
     // version is bumped. The API-key path below leaves tokenVersion undefined
     // so the check is skipped only for API keys.
-    if (decoded?.id) return { userId: String(decoded.id), tokenVersion: decoded.tokenVersion ?? 0 };
+    if (decoded?.id) {
+      return {
+        userId: String(decoded.id),
+        tokenVersion: decoded.tokenVersion ?? 0,
+        sid: typeof decoded.sid === 'string' ? decoded.sid : undefined,
+        // The CLI never sends reauth_connection, so the token exp would cut a live socket every
+        // access-token lifetime; it is bounded by the gateway cap and ends on revoke instead.
+        authExpiresAt: gatewayCapExpiry(),
+      };
+    }
   } catch (err) {
     jwtErr = err;
   }
@@ -112,7 +137,12 @@ async function resolveIdentity(
       { authorization: `Bearer ${token}` },
       { requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT, ApiKeyScope.CC_BRIDGE] }
     );
-    return { userId: apiKeyInfo.userId, scopes: apiKeyInfo.scopes };
+    return {
+      userId: apiKeyInfo.userId,
+      scopes: apiKeyInfo.scopes,
+      apiKeyId: apiKeyInfo.keyId,
+      authExpiresAt: gatewayCapExpiry(),
+    };
   } catch (apiKeyErr) {
     logger.warn('[WS_CONNECT] both JWT and API-key auth failed', {
       jwtError: jwtErr instanceof Error ? jwtErr.message : String(jwtErr ?? 'n/a'),
@@ -130,14 +160,21 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     let userId: string;
     let source: ConnectionSource;
     let scopes: ApiKeyScope[] | undefined = undefined;
-    let tokenVersion: number | undefined;
+    let auth: ConnectionAuth;
     if (ticketIdentity) {
-      ({ userId, source, tokenVersion } = ticketIdentity);
+      const { userId: ticketUserId, source: ticketSource, ...ticketAuth } = ticketIdentity;
+      userId = ticketUserId;
+      source = ticketSource;
+      auth = ticketAuth;
     } else {
       const extracted = extractToken(event);
       source = extracted.source;
-      ({ userId, scopes, tokenVersion } = await resolveIdentity(extracted.token, logger));
+      const { userId: tokenUserId, scopes: tokenScopes, ...tokenAuth } = await resolveIdentity(extracted.token, logger);
+      userId = tokenUserId;
+      scopes = tokenScopes;
+      auth = tokenAuth;
     }
+    const { tokenVersion } = auth;
 
     const user = await User.findById(userId);
     if (!user) throw new UnauthorizedError('User not found');
@@ -148,12 +185,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       throw new UnauthorizedError('Session expired');
     }
     assertAccountStateUsable(user);
+    await assertRealtimeSessionActive(auth.sid);
 
     await Connection.create({
       connectionId: event.requestContext.connectionId,
       userId: user.id,
       source,
       ...(scopes !== undefined && { scopes }),
+      ...(auth.sid && { sid: auth.sid }),
+      ...(tokenVersion !== undefined && { tokenVersion }),
+      authExpiresAt: auth.authExpiresAt,
+      ...(auth.apiKeyId && { apiKeyId: auth.apiKeyId }),
     });
 
     user.lastActiveAt = new Date();

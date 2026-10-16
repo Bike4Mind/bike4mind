@@ -182,6 +182,8 @@ import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-store
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 import EnsureSkillListingIndexes from './20260921235960_ensure-skill-listing-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -324,6 +326,7 @@ const coreMigrations: MigrationFile[] = [
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
   EnsureSkillListingIndexes,
+  EnsureConnectionIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
 import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_MODES } from '../video/types';
@@ -78,16 +79,7 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
   resolution: z.enum(RESOLUTION_TIERS).optional(),
   input_image_file_id: z.string().min(1).optional().describe('An image file you own, for image_to_video.'),
   audio: z.boolean().optional(),
-  organization_id: z
-    .string()
-    .trim()
-    .min(1)
-    .nullable()
-    .optional()
-    .describe(
-      'The organization to bill: one you belong to, or null for your personal credits. Omitted bills your ' +
-        'home organization, or your personal credits if you have none.'
-    ),
+  organization_id: BillingOrganizationIdSchema,
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
 

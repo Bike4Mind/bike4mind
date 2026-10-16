@@ -23,7 +23,6 @@ export {
 export { logger } from './Logger';
 export { searchCommands } from './fuzzySearch';
 export {
-  walkDirectory,
   searchFiles,
   formatFileSize,
   invalidateFileCache,

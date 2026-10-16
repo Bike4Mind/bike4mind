@@ -43,9 +43,8 @@ interface CreateInviteAdapters {
     // TODO: Use Invite model create type def
     invites: IInviteRepository;
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
-    // add findShareAccessById to fabFiles
-    fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
-    sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
+    fabFiles: Pick<IFabFileRepository, 'shareable'>;
+    sessions: Pick<ISessionRepository, 'shareable'>;
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
@@ -79,7 +78,7 @@ export const createInvite = async (
       name = (doc as IFabFileDocument)?.fileName;
       break;
     case InviteType.Session:
-      doc = await db.sessions.findByIdAndUserId(id, user.id);
+      doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
     case InviteType.Organization:
@@ -272,9 +271,8 @@ export const createInvite = async (
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,
-    // Who minted the invite -- accept.ts's Session arm caps propagated file grants to
-    // what this user actually holds, so an attached file the inviter cannot share
-    // does not silently inherit the invite's permissions.
+    // Who minted the invite. accept.ts re-checks this user's current access on every shareable arm
+    // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
     typedRecipients,
   };

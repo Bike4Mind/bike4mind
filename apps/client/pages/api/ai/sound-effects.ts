@@ -1,5 +1,8 @@
+import { randomUUID } from 'crypto';
 import {
   ApiKeyType,
+  isSupportedElevenLabsFormat,
+  UnprocessableEntityError,
   shouldPersistGeneratedAudio,
   generateSoundEffectContract,
   SoundGenerationVendor,
@@ -20,6 +23,12 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
   elevenlabs: ApiKeyType.elevenlabs,
 };
 
+// Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
+// billed, then could be neither labelled nor saved.
+const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => boolean> = {
+  elevenlabs: isSupportedElevenLabsFormat,
+};
+
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
 // deterministic (duration-driven), it RESERVES the exact charge before calling
 // the provider and settles it on success / refunds it on failure - so a charge
@@ -35,6 +44,12 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
   const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
+
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+    throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
+  }
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -67,7 +82,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
-  const sessionId = `sound-effects-${userId}-${Date.now()}`;
+  const sessionId = `sound-effects-${userId}-${randomUUID()}`;
   const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider

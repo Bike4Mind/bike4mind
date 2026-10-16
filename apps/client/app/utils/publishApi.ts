@@ -9,7 +9,7 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX, deriveArtifactPublishSlug } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
@@ -160,6 +160,32 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
   } catch {
     // Best-effort lookup: a transport/auth failure must never block publishing, so
     // degrade to "not published" and let the dialog offer a plain publish-as-new.
+    return null;
+  }
+}
+
+/**
+ * Look up the caller's OWN publication of a chat reply, as the share result the dialog renders,
+ * so reopening Publish & Share on an answer lands on the live page. Owner-scoped server-side.
+ * Returns null on no match or on failure - publishing must never block on this lookup.
+ */
+export async function findPublishedByReply(messageId: string): Promise<PublishResult | null> {
+  try {
+    const { data } = await api.get<{ artifacts: ManagedArtifact[] }>(
+      `/api/publish/artifacts?sourceMessageId=${encodeURIComponent(messageId)}&limit=1`
+    );
+    const a = data.artifacts?.[0];
+    if (!a) return null;
+    return {
+      publicId: a.publicId,
+      url: `/p/r/${a.publicId}`,
+      tier: a.tier,
+      scopeId: a.scopeId,
+      slug: a.slug,
+      visibility: a.visibility,
+      publishedAt: a.publishedAt ?? '',
+    };
+  } catch {
     return null;
   }
 }
@@ -523,7 +549,7 @@ export async function publishArtifactBundle(input: {
   const isReact = input.type === 'react';
   const indexHtml = isReact ? input.content : buildArtifactIndexHtml(input.type, input.content, input.title);
   const size = new TextEncoder().encode(indexHtml).length;
-  let slug = input.slug ?? `${slugify(input.title) || 'artifact'}-${input.artifactId.slice(0, 6)}`;
+  let slug = input.slug ?? (await deriveArtifactPublishSlug(input.title, input.artifactId));
   // "Publish as new" must land a SEPARATE page. finalize upserts on tier+scopeId+slug, so a
   // derived slug that matches ANY prior publication of this artifact (same artifactId, and a
   // title that again slugifies the same) would silently append a version to it instead.
@@ -680,14 +706,6 @@ function escapeHtml(s: string): string {
 
 function isSlugOwnedByOther(err: unknown): boolean {
   return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === SLUG_OWNED_BY_OTHER;
-}
-
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
 }
 
 /**

@@ -20,7 +20,7 @@ import {
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
@@ -110,6 +110,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      disableUserIntegrations,
       skipReplyChoices,
       deniedTools,
       systemPrompt,
@@ -129,6 +130,7 @@ export class ChatCompletionInvoke {
       correctsQuestId,
       allowedAgents,
       enableSlackTools,
+      toolMode,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -186,7 +188,22 @@ export class ChatCompletionInvoke {
     if (!modelInfo) {
       throw new InternalServerError('No available models found');
     }
-    const model = modelInfo.find(m => m.id === params.model);
+    // Resolve before the availability checks: a pinned model that is now hidden or disabled is
+    // absent from (or inert in) the catalog, so ChatCompletionProcess never gets to redirect it.
+    // The warning-free variant, because Process still resolves params.model and owns the
+    // [model-sunset] log and metric; calling the logging one here would count each redirect twice.
+    const resolvedModelId = resolveSuccessorChain(params.model);
+    // API-key callers keep the provider convention: a retired id that is hidden or disabled is
+    // rejected (naming its successor), not rerouted. Access below is still checked on the id that runs.
+    if (authOrigin === 'apiKey' && resolvedModelId !== params.model) {
+      const requested = modelInfo.find(m => m.id === params.model);
+      if (!requested || requested.disabled) {
+        throw new BadRequestError(
+          `Invalid model: "${params.model}" is not available; it is replaced by "${resolvedModelId}"`
+        );
+      }
+    }
+    const model = modelInfo.find(m => m.id === resolvedModelId);
     if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
@@ -292,6 +309,7 @@ export class ChatCompletionInvoke {
           : []),
         { status: 'Received by backend', timestamp: now },
       ],
+      ...(toolMode ? { toolMode } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is
@@ -411,7 +429,7 @@ export class ChatCompletionInvoke {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
-      const originalModel = params?.model;
+      const originalModel = model.id;
 
       // Check if primary model is accessible
       const modelToUse = originalModel;
@@ -471,6 +489,7 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        disableUserIntegrations,
         skipReplyChoices,
         deniedTools,
         authOrigin,

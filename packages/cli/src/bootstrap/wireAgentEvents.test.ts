@@ -4,8 +4,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // them at event time, and these tests assert subscription wiring plus the
 // usage-tracking store calls, not UI rendering.
 const storeState = {
-  pendingMessages: [],
-  updatePendingMessage: vi.fn(),
+  pendingMessages: [] as Array<{ id: string; role: string; content: string }>,
+  updatePendingMessage: vi.fn((index: number, message: { id: string; role: string; content: string }) => {
+    storeState.pendingMessages[index] = message;
+  }),
   updateLiveSubagentUsage: vi.fn(),
   removeLiveSubagentUsage: vi.fn(),
 };
@@ -63,11 +65,71 @@ describe('wireAgentEvents', () => {
     expect(agent.observationQueue).toBe(agentContext.observationQueue);
   });
 
-  it('subscribes the step handler to thought/observation/action and tavern handlers to action/observation/final_answer', () => {
+  it('subscribes the step, live-text and tavern handlers to the main agent', () => {
     const events = agent.on.mock.calls.map(c => c[0]);
-    // step handler: thought, observation, action
-    // tavern handlers: action, observation, final_answer
-    expect(events).toEqual(['thought', 'observation', 'action', 'action', 'observation', 'final_answer']);
+    expect(events).toEqual([
+      // step handler
+      'thought',
+      'observation',
+      'action',
+      // live text: stream deltas, clear the preamble once it becomes a thought/action
+      'text_delta',
+      'thought',
+      'action',
+      // tavern handlers
+      'action',
+      'observation',
+      'final_answer',
+    ]);
+  });
+
+  describe('live reply text', () => {
+    const emit = (event: string, payload: unknown) => {
+      for (const [name, handler] of agent.on.mock.calls) {
+        if (name === event) (handler as (p: unknown) => void)(payload);
+      }
+    };
+    const pendingContent = () => storeState.pendingMessages[0].content;
+
+    beforeEach(() => {
+      storeState.pendingMessages = [{ id: 'm1', role: 'assistant', content: '...' }];
+    });
+
+    it('appends streamed deltas to the pending message', () => {
+      emit('text_delta', { delta: 'Hello', iteration: 1 });
+      emit('text_delta', { delta: ' world', iteration: 1 });
+      expect(pendingContent()).toBe('Hello world');
+    });
+
+    it('starts fresh on a new iteration, matching the agent restarting its text', () => {
+      emit('text_delta', { delta: 'draft', iteration: 1 });
+      emit('text_delta', { delta: 'revised', iteration: 2 });
+      expect(pendingContent()).toBe('revised');
+    });
+
+    it('starts fresh for a new pending message', () => {
+      emit('text_delta', { delta: 'first turn', iteration: 1 });
+      storeState.pendingMessages = [{ id: 'm2', role: 'assistant', content: '...' }];
+      emit('text_delta', { delta: 'second turn', iteration: 1 });
+      expect(pendingContent()).toBe('second turn');
+    });
+
+    it('clears a streamed preamble once it becomes a thought step', () => {
+      emit('text_delta', { delta: 'Let me check the files.', iteration: 1 });
+      emit('thought', { type: 'thought', content: 'Let me check the files.', metadata: {} });
+      expect(pendingContent()).toBe('...');
+    });
+
+    it('clears streamed text on a tool call even when no thought step fired', () => {
+      emit('text_delta', { delta: '  ', iteration: 1 });
+      emit('action', { type: 'action', content: '', metadata: { toolName: 'grep' } });
+      expect(pendingContent()).toBe('...');
+    });
+
+    it('leaves the placeholder alone on a tool call when nothing streamed', () => {
+      emit('action', { type: 'action', content: '', metadata: { toolName: 'grep' } });
+      expect(pendingContent()).toBe('...');
+    });
   });
 
   it('registers before/after run callbacks exactly once (single-slot setters)', () => {

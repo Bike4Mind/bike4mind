@@ -142,6 +142,26 @@ export type ConventionExemptions = {
   pagination?: string;
 };
 
+/**
+ * A published endpoint on its way out (CONVENTIONS.md section 7). Dates are
+ * `YYYY-MM-DD` (UTC); `defineEndpoint` rejects anything else, and a sunset that is
+ * not after `since`.
+ *
+ * One declaration drives every surface: the spec marks the operation
+ * `deprecated: true` and leads its description with the sunset, and the Next
+ * adapter sends the RFC 9745 `Deprecation`, RFC 8594 `Sunset` and (with a
+ * `successor`) `Link: rel="successor-version"` headers on every response the
+ * handler produces.
+ */
+export type EndpointDeprecation = {
+  /** The day the endpoint was deprecated. */
+  since: string;
+  /** The first day the endpoint may stop being served. */
+  sunset: string;
+  /** Path of the replacement endpoint, e.g. `/api/v1/music-generations`. */
+  successor?: string;
+};
+
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   method: HttpMethod;
   path: string;
@@ -229,4 +249,6 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * for a new endpoint. See CONVENTIONS.md.
    */
   conventionExemptions?: Readonly<ConventionExemptions>;
+  /** Set once the endpoint is deprecated; see {@link EndpointDeprecation}. */
+  deprecated?: Readonly<EndpointDeprecation>;
 };

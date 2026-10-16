@@ -359,6 +359,27 @@ describe('AnthropicBackend end-of-turn tools (non-streaming)', () => {
     expect(apiCalls).toBe(1);
     expect(answerText(calls)).toBe(ANSWER);
     expect(lastTokenInfo(calls)?.inputTokens).toBe(10);
+    expect(lastTokenInfo(calls)?.turnUsage).toEqual([{ inputTokens: 10, outputTokens: 5 }]);
     expect(JSON.stringify(messages)).toContain(SUGGEST_RESULT);
+  });
+
+  it('reports the ending call as its own turn when streaming', async () => {
+    const { backend, setMockSequence } = anthropicSpec.build();
+    setMockSequence([
+      anthropicSpec.round(ANSWER, [{ name: 'suggest_links', id: 'call_nav', args: { target: 'x' } }], {
+        input: 10,
+        output: 5,
+      }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      anthropicSpec.model,
+      [{ role: 'user', content: 'question' }],
+      { stream: true, tools: [suggestTool], executeTools: true },
+      cb
+    );
+
+    expect(lastTokenInfo(calls)?.turnUsage).toEqual([{ inputTokens: 10, outputTokens: 5 }]);
   });
 });

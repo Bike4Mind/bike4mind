@@ -44,6 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: (...a: unknown[]) => mockFindById(...a) },
   userRepository: {},
   authSessionRepository: {},
+  realtimeConnectionRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findByKeyNameWithSecret: vi.fn().mockResolvedValue(null) },

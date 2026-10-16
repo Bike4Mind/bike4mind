@@ -45,7 +45,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
     resolveApiKey: async () => 'key',
-    hasStorageFor: async () => true,
+    checkStorageFor: async () => undefined,
     saveToFiles: vi.fn(async ({ generation: { jobId } }: { generation: { jobId: string } }) => ({
       saved: true as const,
       fileId: `file-${jobId}`,
@@ -286,8 +286,8 @@ describe('music job end to end with the test provider', () => {
     const t = setup();
     const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
     const job = t.jobOf(created);
-    // A worker that died inside generate left the submit marker and nothing else.
-    await t.repository.markSubmitAttempted(job.id, new Date());
+    // A worker that died inside generate left the job running with the submit marker, and nothing else.
+    await t.repository.markSubmitAttempted(job.id, new Date(), { markRunning: true });
     await t.engine.step(job.id);
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
     expect(generate).not.toHaveBeenCalled();
@@ -459,11 +459,34 @@ describe('music job end to end with the test provider', () => {
     const generate = vi.spyOn(TestMusicProvider.prototype, 'generate');
     const t = setup();
     const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
-    await t.engine.requestCancel(t.jobOf(created).id);
+    await t.engine.requestCancel(t.jobOf(created));
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'cancelled', settledCredits: 0 });
     expect(generate).not.toHaveBeenCalled();
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    generate.mockRestore();
+  });
+
+  it('reports running while generating and refuses a cancel then, charging the song the provider billed', async () => {
+    const t = setup();
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    const original = TestMusicProvider.prototype.generate;
+    let stateDuringGenerate: string | undefined;
+    let cancel: Awaited<ReturnType<typeof t.engine.requestCancel>> | undefined;
+    const generate = vi.spyOn(TestMusicProvider.prototype, 'generate').mockImplementationOnce(async function (
+      this: TestMusicProvider,
+      ...args
+    ) {
+      stateDuringGenerate = t.jobOf(created).state;
+      cancel = await t.engine.requestCancel(job);
+      return original.apply(this, args);
+    });
+    await t.runToCompletion();
+    expect(stateDuringGenerate).toBe('running');
+    expect(cancel).toMatchObject({ status: 'not_cancellable' });
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
     generate.mockRestore();
   });
 

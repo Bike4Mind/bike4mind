@@ -192,8 +192,22 @@ export function applyAccountLink({
   }
 
   const emailVerifiedAt = new Date();
-  const emailVerifiedFields: { emailVerified?: true; emailVerifiedAt?: Date } = promoteEmailVerified
-    ? { emailVerified: true, emailVerifiedAt }
+  // A promotion proves the email, so any verification link still pending on the account is stale:
+  // left live, a later click would re-run the verified-email grants for an already-verified address.
+  const emailVerifiedFields: {
+    emailVerified?: true;
+    emailVerifiedAt?: Date;
+    emailVerificationToken?: null;
+    emailVerificationExpires?: null;
+    emailVerificationSentAt?: null;
+  } = promoteEmailVerified
+    ? {
+        emailVerified: true,
+        emailVerifiedAt,
+        emailVerificationToken: null,
+        emailVerificationExpires: null,
+        emailVerificationSentAt: null,
+      }
     : {};
 
   const reflect: AccountLinkWrite['reflect'] = {};

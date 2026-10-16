@@ -70,9 +70,46 @@ export interface IAuthSession {
   expiresAt: Date;
   /** Set when revoked (logout, reuse detection, admin force-logout). */
   revokedAt?: Date | null;
+  /** Last time the user re-proved their identity in this session; sensitive account changes
+   *  require it to be recent (see apps/client/server/auth/stepUp.ts). Survives refresh rotation. */
+  stepUpAt?: Date | null;
+  /** Wrong passwords submitted to step-up since the last successful step-up. Absent on older rows. */
+  stepUpPasswordFailures?: number;
+  /** Outstanding emailed step-up code for this session (select:false). Bound to the session, so a
+   *  sign-in code from /api/otc/send can never satisfy it. */
+  stepUpEmailChallenge?: IAuthSessionStepUpEmailChallenge | null;
+}
+
+/** Proofs a session can re-verify with (POST /api/auth/step-up); the server picks which apply. */
+export type StepUpMethod = 'totp' | 'passkey' | 'password' | 'email';
+
+/** Error `code` a step-up-gated route returns (status 403); the client keys its verification prompt on it. */
+export const STEP_UP_REQUIRED_CODE = 'step_up_required';
+
+/** Error `code` POST /api/auth/step-up returns (status 400) for a wrong, expired or used-up proof. */
+export const STEP_UP_FAILED_CODE = 'step_up_failed';
+
+export interface IAuthSessionStepUpEmailChallenge {
+  /** sha256 of the opaque pending token handed to the client. */
+  tokenHash: string;
+  /** bcrypt hash of the emailed code. */
+  codeHash: string;
+  expiresAt: Date;
+  /** Wrong codes submitted against this challenge. */
+  attempts: number;
 }
 
 export interface IAuthSessionDocument extends IAuthSession, IMongoDocument {}
+
+/**
+ * The one rule for "this session may still back a credential": the row exists, is not revoked and
+ * has not expired. Shared by the realtime $connect/reauth check and the realtime sweep so they
+ * cannot drift apart.
+ */
+export const isAuthSessionActive = (
+  session: { revokedAt?: Date | null; expiresAt: Date } | null | undefined,
+  now: Date = new Date()
+): boolean => !!session && !session.revokedAt && session.expiresAt > now;
 
 /**
  * Client-safe projection of an AuthSession for the active-sessions UI (GET /api/users/me/sessions).
@@ -163,6 +200,34 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
    * rotateHash.
    */
   registerReplayUse: (sid: string, maxUses: number) => Promise<IAuthSessionDocument | null>;
+  /** Stamp `stepUpAt` on a live session owned by `userId`. Returns the doc, or null when the
+   *  session is missing, revoked, expired, or belongs to someone else. */
+  markStepUp: (sid: string, userId: string, at: Date) => Promise<IAuthSessionDocument | null>;
+  /** Count a wrong step-up password against a live session owned by `userId`. Returns the new
+   *  total, or null when the session is missing, revoked, expired, or not theirs. */
+  recordStepUpPasswordFailure: (sid: string, userId: string) => Promise<number | null>;
+  /** Replace this live session's emailed step-up challenge (attempts reset). False when the
+   *  session is missing, revoked, expired, or not owned by `userId`. */
+  setStepUpEmailChallenge: (
+    sid: string,
+    userId: string,
+    challenge: Omit<IAuthSessionStepUpEmailChallenge, 'attempts'>
+  ) => Promise<boolean>;
+  /** The live session's unexpired emailed step-up challenge, or null. */
+  findStepUpEmailChallenge: (sid: string, userId: string) => Promise<IAuthSessionStepUpEmailChallenge | null>;
+  /** Count a wrong code against the challenge identified by `tokenHash` on a session that is not
+   *  revoked; returns the new count, or null when that challenge is no longer outstanding. */
+  recordStepUpEmailChallengeFailure: (sid: string, tokenHash: string) => Promise<number | null>;
+  /** Atomically clear the challenge identified by `tokenHash` and stamp `stepUpAt`. Null when the
+   *  challenge was already consumed or replaced, has expired by `at`, or has `maxAttempts` wrong
+   *  codes against it, so a code can satisfy step-up at most once and only within its limits. */
+  consumeStepUpEmailChallenge: (
+    sid: string,
+    userId: string,
+    tokenHash: string,
+    at: Date,
+    maxAttempts: number
+  ) => Promise<IAuthSessionDocument | null>;
   /** Revoke a single session (this-device logout / reuse detection). Returns the doc, or null. */
   revokeBySid: (sid: string) => Promise<IAuthSessionDocument | null>;
   /** Revoke every active session for a user ("log out all devices"); `exceptSid` keeps one alive.

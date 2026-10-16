@@ -57,8 +57,23 @@ const DEFAULT_CONFIG: Omit<CircuitBreakerConfig, 'name'> = {
   halfOpenMaxConcurrent: 1,
 };
 
-/** Singleton registry of CircuitBreaker instances, keyed by `server:opType`. */
-const breakers = new Map<string, CircuitBreaker>();
+type BreakerEntry = {
+  serverOp: string;
+  breaker: CircuitBreaker;
+};
+
+/**
+ * Cap on per-tenant breakers held by one warm instance. Insertion order is recency order (a hit is
+ * re-inserted), so the least recently used breaker is evicted first; an evicted breaker simply
+ * starts CLOSED on that tenant's next call.
+ */
+export const MAX_TRACKED_BREAKERS = 1000;
+
+/** LRU registry of CircuitBreaker instances, keyed by tenant + `server:opType`. */
+const breakers = new Map<string, BreakerEntry>();
+
+const serverOpKey = (mcpServerName: string, operationType: OperationType) => `${mcpServerName}:${operationType}`;
+const registryKey = (tenantKey: string, serverOp: string) => `${tenantKey}|${serverOp}`;
 
 /**
  * Classify whether an error represents an integration outage (counts as breaker failure)
@@ -113,62 +128,98 @@ export function isCircuitBreakerFailure(error: Error): boolean {
   return true;
 }
 
-/**
- * Get or create a CircuitBreaker instance for the given MCP server name and operation type.
- * Key is compound: `${mcpServerName}:${operationType}` (e.g., `github:read`, `atlassian:write`).
- */
-export function getBreaker(mcpServerName: string, operationType: OperationType = 'read'): CircuitBreaker {
-  const key = `${mcpServerName}:${operationType}`;
-  let breaker = breakers.get(key);
-  if (breaker) return breaker;
-
+function createBreaker(tenantKey: string, mcpServerName: string, operationType: OperationType): CircuitBreaker {
   const serverOverrides = CONFIG_OVERRIDES[mcpServerName] ?? {};
   const opOverrides = OP_TYPE_OVERRIDES[operationType];
-  breaker = new CircuitBreaker({
+  return new CircuitBreaker({
     ...DEFAULT_CONFIG,
     ...opOverrides,
     ...serverOverrides,
-    name: key,
+    // The tenant stays out of the name: it is the CloudWatch metric dimension.
+    name: serverOpKey(mcpServerName, operationType),
     isFailure: isCircuitBreakerFailure,
     onStateChange: event => {
-      console.log(`[CircuitBreaker] ${event.name}: ${event.from} -> ${event.to} (${event.reason})`);
+      console.log(
+        `[CircuitBreaker] ${event.name} (tenant ${tenantKey}): ${event.from} -> ${event.to} (${event.reason})`
+      );
       recordCircuitBreakerTransition(event.name, event.from, event.to, operationType).catch(err => {
         console.error(`[CircuitBreaker] Failed to record CloudWatch transition metric for ${event.name}:`, err);
       });
     },
   });
-
-  breakers.set(key, breaker);
-  return breaker;
 }
 
 /**
- * Get snapshots of all active breakers (for dashboard API).
+ * Get or create the CircuitBreaker for one tenant's calls to an MCP server and operation type.
+ * Breakers are per tenant (see resolveMcpTenantKey) so one tenant's failing server or credential
+ * never trips the tools for another.
+ */
+export function getBreaker(
+  tenantKey: string,
+  mcpServerName: string,
+  operationType: OperationType = 'read'
+): CircuitBreaker {
+  const serverOp = serverOpKey(mcpServerName, operationType);
+  const key = registryKey(tenantKey, serverOp);
+
+  const existing = breakers.get(key);
+  if (existing) {
+    breakers.delete(key);
+    breakers.set(key, existing);
+    return existing.breaker;
+  }
+
+  const breaker = createBreaker(tenantKey, mcpServerName, operationType);
+  breakers.set(key, { serverOp, breaker });
+
+  if (breakers.size > MAX_TRACKED_BREAKERS) {
+    const leastRecentlyUsed = breakers.keys().next().value;
+    if (leastRecentlyUsed !== undefined) breakers.delete(leastRecentlyUsed);
+  }
+
+  return breaker;
+}
+
+const STATE_SEVERITY: Record<CircuitBreakerSnapshot['state'], number> = {
+  CLOSED: 0,
+  HALF_OPEN: 1,
+  OPEN: 2,
+};
+
+function isWorse(candidate: CircuitBreakerSnapshot, current: CircuitBreakerSnapshot): boolean {
+  const severityDelta = STATE_SEVERITY[candidate.state] - STATE_SEVERITY[current.state];
+  if (severityDelta !== 0) return severityDelta > 0;
+  return candidate.failureCount > current.failureCount;
+}
+
+/**
+ * Breaker state per `server:opType` for the admin dashboards, which key on that pair. Each value
+ * is the worst tenant's snapshot, so OPEN means "tripped for at least one tenant", not for all.
  */
 export function getAllBreakerStates(): Record<string, CircuitBreakerSnapshot> {
   const result: Record<string, CircuitBreakerSnapshot> = {};
-  for (const [name, breaker] of breakers) {
-    result[name] = breaker.getState();
+  for (const { serverOp, breaker } of breakers.values()) {
+    const snapshot = breaker.getState();
+    const current = result[serverOp];
+    if (!current || isWorse(snapshot, current)) {
+      result[serverOp] = snapshot;
+    }
   }
   return result;
 }
 
 /**
- * Admin reset: force a breaker back to CLOSED.
- * When called with a plain server name (e.g., 'atlassian'), resets both :read and :write variants.
- * When called with a compound key (e.g., 'atlassian:read'), resets only that variant.
+ * Admin reset: force breakers back to CLOSED for every tenant.
+ * A plain server name (e.g. 'atlassian') resets both :read and :write; a compound key
+ * (e.g. 'atlassian:read') resets only that operation type.
  */
 export function resetBreaker(name: string): void {
-  if (name.includes(':')) {
-    // Compound key - reset the specific breaker
-    const breaker = breakers.get(name);
-    if (breaker) breaker.reset();
-  } else {
-    // Plain server name - reset both variants
-    for (const suffix of [':read', ':write'] as const) {
-      const breaker = breakers.get(`${name}${suffix}`);
-      if (breaker) breaker.reset();
-    }
+  const matches = name.includes(':')
+    ? (serverOp: string) => serverOp === name
+    : (serverOp: string) => serverOp === `${name}:read` || serverOp === `${name}:write`;
+
+  for (const { serverOp, breaker } of breakers.values()) {
+    if (matches(serverOp)) breaker.reset();
   }
 }
 

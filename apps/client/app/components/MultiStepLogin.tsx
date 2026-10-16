@@ -29,9 +29,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
-import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
-import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
@@ -42,7 +41,7 @@ import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/set
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import {
@@ -99,6 +98,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Username collected when a verified code belongs to an email with no account yet
   // (the login form doubling as inline registration - see handleRegisterUsernameSubmit).
   const [username, setUsername] = useState('');
+  const [usernameError, setUsernameError] = useState<string | null>(null);
   // Abuse gate on the inline path too: registerUser rejects creation unless
   // the current policy version + age attestation are sent, so both must be collected here;
   // the checkboxes gate the Create account button.
@@ -108,14 +108,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // is required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [isCheckingStrategy, setIsCheckingStrategy] = useState(false);
-
-  // MFA state
-  const [showMFAModal, setShowMFAModal] = useState(false);
-  const [mfaUserId, setMfaUserId] = useState<string | null>(null);
-  const [mfaError, setMfaError] = useState<string | null>(null);
-  const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
-  const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
-  const [mfaPasskeyAvailable, setMfaPasskeyAvailable] = useState(false);
 
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -127,11 +119,24 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const rateLimit = useOtcRateLimit();
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
-  const verifyMFA = useVerifyMFA();
-  const verifyPasskeyMFA = useVerifyPasskeyMFA();
   const { data: publicConfig } = usePublicConfig();
-  const setupMFA = useSetupMFA();
-  const verifyMFASetup = useVerifyMFASetup();
+  const mfaChallenge = useMfaChallenge({
+    allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
+    onComplete: ({ user }) => setCurrentUser(user),
+    onCancel: mode => {
+      // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
+      // challenge, so the OTC/username steps can't be resumed (any retry dies as "Invalid
+      // code."). Restart cleanly from the email step.
+      handleBackToEmail();
+      if (mode === 'setup') {
+        toast.info(
+          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
+        );
+      } else {
+        toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
+      }
+    },
+  });
   const { t } = useTranslation();
   const openCookieSettings = useCookieSettings(s => s.open);
   const theme = useTheme();
@@ -270,94 +275,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  const handleMFASetup = async () => {
-    try {
-      const result = await setupMFA.mutateAsync();
-      setMfaSetupData(result);
-      setShowMFAModal(true);
-    } catch (error: unknown) {
-      const errorMessage = (error as Record<string, unknown>)?.response
-        ? (error as Record<string, Record<string, Record<string, string>>>).response?.data?.error
-        : (error as Error).message || 'MFA setup failed';
-      toast.error(errorMessage);
-      useAccessToken.getState().resetTokens();
-      setMfaUserId(null);
-      setMfaMode('verify');
-      setMfaSetupData(null);
-    }
-  };
-
-  const finishMfaLogin = (result: { accessToken: string; user: Parameters<typeof setCurrentUser>[0] }) => {
-    resetRefreshCoordinator();
-    // Drop the cached cold-load result: this browser just acquired a session, so the next
-    // protected navigation must not reuse the "no session" answer from before login.
-    resetSessionBootstrap();
-    useAccessToken.getState().setVerifiedSession(result.accessToken);
-    setShowMFAModal(false);
-    setMfaPasskeyAvailable(false);
-    setCurrentUser(result.user);
-  };
-
-  const handlePasskeyVerification = async (rememberDevice: boolean) => {
-    if (!mfaUserId) return;
-    setMfaError(null);
-    try {
-      finishMfaLogin(await verifyPasskeyMFA.mutateAsync({ rememberDevice }));
-    } catch (error: unknown) {
-      setMfaError(describePasskeyMfaError(error));
-    }
-  };
-
-  const handleMFAVerification = async (token: string, rememberDevice = false) => {
-    if (!mfaUserId) return;
-    setMfaError(null);
-    try {
-      let result;
-      if (mfaMode === 'setup') {
-        result = await verifyMFASetup.mutateAsync({ token });
-      } else {
-        result = await verifyMFA.mutateAsync({ token, rememberDevice });
-      }
-      finishMfaLogin(result);
-    } catch (error: unknown) {
-      const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
-      if (errorData?.forceLogout) {
-        useAccessToken.getState().forceLogoutTokens();
-        setShowMFAModal(false);
-        setMfaUserId(null);
-        setMfaError(null);
-        setMfaMode('verify');
-        setMfaSetupData(null);
-        toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
-        return;
-      }
-      const baseError = (errorData?.error as string) || (error as Error).message || 'MFA verification failed';
-      const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
-      setMfaError(baseError + attemptsInfo);
-    }
-  };
-
-  const handleMFACancel = () => {
-    useAccessToken.getState().resetTokens();
-    setShowMFAModal(false);
-    setMfaPasskeyAvailable(false);
-    setMfaUserId(null);
-    setMfaError(null);
-    setMfaMode('verify');
-    setMfaSetupData(null);
-    // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
-    // challenge, so the OTC/username steps can't be resumed (any retry dies as "Invalid
-    // code."). Restart cleanly from the email step.
-    handleBackToEmail();
-    if (mfaMode === 'setup') {
-      toast.info(
-        'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-      );
-    } else {
-      toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
-    }
-  };
-
   const handleOTCSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isSubmittableOtcCode(otcCode)) {
@@ -386,23 +303,17 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       dismissOtcCodeSentToast();
 
       if ('mfaRequired' in response && response.mfaRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('verify');
-        setMfaPasskeyAvailable(!!response.passkeyAvailable);
-        setShowMFAModal(true);
+        await mfaChallenge.begin({
+          userId: response.userId,
+          mfaToken: response.accessToken,
+          mode: 'verify',
+          passkeyAvailable: !!response.passkeyAvailable,
+        });
         return;
       }
 
       if ('mfaSetupRequired' in response && response.mfaSetupRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('setup');
-        await handleMFASetup();
+        await mfaChallenge.begin({ userId: response.userId, mfaToken: response.accessToken, mode: 'setup' });
         return;
       }
 
@@ -458,11 +369,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // the account. A brand-new user has no MFA, so this returns a logged-in session.
   const handleRegisterUsernameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const uname = username.trim();
-    if (!uname) {
+    if (!username.trim()) {
       toast.error('Please enter a username');
       return;
     }
+    // Checked before any server call: the code is single-use-ish, so a rejected username must not
+    // burn an attempt.
+    const parsedUsername = usernameSchema.safeParse(username);
+    if (!parsedUsername.success) {
+      setUsernameError(USERNAME_RULES_MESSAGE);
+      return;
+    }
+    const uname = parsedUsername.data;
     // The button is disabled until both boxes are checked, but Enter-key implicit form
     // submission can bypass a disabled submit button - and acceptedPolicyVersion is sent
     // unconditionally below, so the handler must enforce the acceptance itself.
@@ -498,22 +416,17 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // MFA challenges. Mirror handleOTCSubmit so that path doesn't fall into finishLogin with
       // no refresh token.
       if ('mfaRequired' in response && response.mfaRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('verify');
-        setMfaPasskeyAvailable(!!response.passkeyAvailable);
-        setShowMFAModal(true);
+        await mfaChallenge.begin({
+          userId: response.userId,
+          mfaToken: response.accessToken,
+          mode: 'verify',
+          passkeyAvailable: !!response.passkeyAvailable,
+        });
         return;
       }
+
       if ('mfaSetupRequired' in response && response.mfaSetupRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('setup');
-        await handleMFASetup();
+        await mfaChallenge.begin({ userId: response.userId, mfaToken: response.accessToken, mode: 'setup' });
         return;
       }
 
@@ -559,6 +472,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setEmail('');
     setOtcCode('');
     setUsername('');
+    setUsernameError(null);
     setAcceptPolicies(false);
     setConfirmAdult(false);
     setPendingToken(null);
@@ -1013,13 +927,25 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     type="text"
                     placeholder="Choose a username"
                     value={username}
-                    onChange={e => setUsername(e.target.value)}
+                    onChange={e => {
+                      setUsername(e.target.value);
+                      setUsernameError(null);
+                    }}
                     autoComplete="username"
                     fullWidth
                     autoFocus
                     disabled={isVerifying}
                     sx={{ ...inputStyles, '--Input-minHeight': '48px' }}
                   />
+                  {usernameError && (
+                    <FormHelperText
+                      role="alert"
+                      data-testid="login-register-username-error"
+                      sx={{ color: 'danger.plainColor' }}
+                    >
+                      {usernameError}
+                    </FormHelperText>
+                  )}
                 </FormControl>
 
                 {/* Abuse gate: same acceptance controls as /register - the
@@ -1194,30 +1120,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       </Container>
 
       {/* MFA Modal */}
-      <MFAModal
-        className="mfa-modal"
-        open={showMFAModal}
-        onClose={handleMFACancel}
-        onCancel={handleMFACancel}
-        onVerify={handleMFAVerification}
-        loading={verifyMFA.isPending || verifyMFASetup.isPending}
-        error={mfaError}
-        title={mfaMode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required'}
-        description={
-          mfaMode === 'setup'
-            ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : mfaPasskeyAvailable && passkeysSupported()
-              ? 'Use your passkey, or enter your 6-digit code or backup code to continue.'
-              : 'Enter your 6-digit code or backup code to continue.'
-        }
-        qrCodeUrl={mfaSetupData?.qrCodeUrl}
-        manualEntryKey={mfaSetupData?.manualEntryKey}
-        backupCodes={mfaSetupData?.backupCodes}
-        showVerify={true}
-        allowRememberDevice={publicConfig?.allowTrustedDevices ?? false}
-        onPasskeyVerify={mfaPasskeyAvailable ? handlePasskeyVerification : undefined}
-        passkeyLoading={verifyPasskeyMFA.isPending}
-      />
+      <MFAModal {...mfaChallenge.modalProps} />
     </Box>
   );
 };

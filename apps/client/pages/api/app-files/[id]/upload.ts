@@ -20,7 +20,7 @@ import type { Request, Response } from 'express';
  * Auth is normal baseApi (the logged-in user / API key), but the target AppFile must exist, have
  * been created by the caller, and still be awaiting upload - so the presign-issuing endpoint's own
  * authorization (org membership, self-or-admin for photos) is what gates the write. Marking the
- * AppFile complete here mirrors server/s3/appFileUploadComplete.ts, whose ObjectCreated webhook
+ * AppFile complete here mirrors apps/workers/src/s3/appFileUploadComplete.ts, whose ObjectCreated webhook
  * still fires and whose status write is then an idempotent no-op.
  *
  * Self-host only (404 otherwise).

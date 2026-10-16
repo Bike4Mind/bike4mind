@@ -460,6 +460,6 @@ describe('Lambdas that can execute the premium tool set', () => {
       .map(declaration => declaration.handler);
 
     expect(toolCapable).toContain('apps/workers/src/queueHandlers/agentExecutor.handler');
-    expect(toolCapable).toContain('apps/client/server/queueHandlers/slackQuestProcessor.handler');
+    expect(toolCapable).toContain('apps/workers/src/queueHandlers/slackQuestProcessor.handler');
   });
 });

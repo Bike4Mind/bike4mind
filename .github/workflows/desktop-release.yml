@@ -1,0 +1,340 @@
+name: Desktop Release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop-release.yml'
+      - 'scripts/desktop_release_version.py'
+      - 'scripts/test_desktop_release_version.py'
+      - 'scripts/desktop_affected.py'
+      - 'scripts/test_desktop_affected.py'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - '.github/workflows/desktop-release.yml'
+      - 'scripts/desktop_release_version.py'
+      - 'scripts/test_desktop_release_version.py'
+      - 'scripts/desktop_affected.py'
+      - 'scripts/test_desktop_affected.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      feed: ${{ steps.feed.outputs.feed }}
+      repository-name: ${{ steps.feed.outputs.repository-name }}
+      mac-mode: ${{ steps.mac-policy.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test semantic version selection
+        run: |
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+          python3 -m unittest discover -s scripts -p 'test_desktop_*.py' -v
+      - name: Test desktop release scripts
+        run: python3 -m unittest discover -s apps/desktop/scripts -p 'test_*.py' -v
+      - name: Validate isolated distribution feed
+        id: feed
+        env:
+          DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+        run: python3 apps/desktop/scripts/distribution.py feed
+      - name: Choose installer version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          CHANGE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: python3 scripts/desktop_release_version.py
+      - name: Select macOS signing policy
+        id: mac-policy
+        if: steps.version.outputs.release == 'true'
+        env:
+          DESKTOP_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING: ${{ vars.DESKTOP_MAC_SIGNING }}
+          ADHOC_BETA: ${{ vars.DESKTOP_MAC_ADHOC_BETA }}
+        run: python3 apps/desktop/scripts/mac_release_policy.py
+      - uses: actions/upload-artifact@v6
+        if: steps.version.outputs.release == 'true'
+        with:
+          name: release-notes
+          path: desktop-release-notes.md
+          retention-days: 1
+
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ${{ vars.OSX_RUNNER_LABEL || 'macos-26-runner' }}
+            platform: mac
+            arch: arm64
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      DESKTOP_VERSION: ${{ needs.version.outputs.version }}
+      B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+      B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}
+      VITEST_MAX_WORKERS: '2'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared packages
+        run: pnpm turbo:core:build
+      - name: Check desktop types
+        run: pnpm --filter @bike4mind/desktop typecheck
+      - name: Test desktop
+        run: pnpm --filter @bike4mind/desktop test
+      - name: Check updater transport with temporary profiles
+        if: matrix.platform == 'linux'
+        run: node apps/desktop/scripts/smoke-updater.cjs
+      - uses: actions/setup-python@v6
+        if: matrix.platform == 'linux'
+        with:
+          python-version: '3.12'
+      - name: Check embedded blockmap differential downloads
+        if: matrix.platform == 'linux'
+        run: |
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+          node apps/desktop/scripts/smoke-differential.cjs
+      - name: Package installers
+        if: matrix.platform != 'mac' || needs.version.outputs.mac-mode == 'adhoc'
+        working-directory: apps/desktop
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          if [ "$PLATFORM" = mac ]; then
+            B4M_UPDATE_FEED_URL='' pnpm build
+          else
+            pnpm build
+          fi
+          if [ "$PLATFORM" = mac ]; then
+            for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
+              if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in ad-hoc packaging: $key"; exit 1; fi
+            done
+            CSC_FOR_PULL_REQUEST=true pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            app_dir=release/mac
+            if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
+            codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
+          else
+            pnpm exec electron-builder --linux --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+          fi
+      - name: Sign and notarize macOS installers
+        if: matrix.platform == 'mac' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.version.outputs.mac-mode == 'signed'
+        working-directory: apps/desktop
+        env:
+          ARCH: ${{ matrix.arch }}
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.DESKTOP_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.DESKTOP_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          for key in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
+          done
+          pnpm build
+          pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
+          app_dir=release/mac
+          if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
+          codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
+          codesign -d --verbose=4 "$app_dir/Bike4Mind.app" 2>&1 | tee signing.txt
+          grep -q '^Authority=Developer ID Application:' signing.txt
+          xcrun stapler validate "$app_dir/Bike4Mind.app"
+          xcrun stapler validate "release/Bike4Mind-$DESKTOP_VERSION-$ARCH.dmg"
+      - name: Compare Linux builder metadata with embedded blockmap
+        if: matrix.platform == 'linux'
+        env:
+          DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+        run: python3 apps/desktop/scripts/distribution.py verify-linux apps/desktop/release
+      - name: Install Linux smoke test runtime
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgbm1 libasound2t64
+      - name: Launch packaged Linux AppImage
+        if: matrix.platform == 'linux'
+        timeout-minutes: 3
+        run: xvfb-run -a node apps/desktop/scripts/smoke-packaged.mjs
+      - name: Install and launch packaged macOS DMG
+        if: matrix.platform == 'mac'
+        timeout-minutes: 3
+        env:
+          EXPECT_UPDATES_DISABLED: ${{ needs.version.outputs.mac-mode == 'adhoc' }}
+        run: |
+          install_dir=$(mktemp -d)
+          mount_dir="$install_dir/mount"
+          mkdir -p "$mount_dir"
+          trap 'hdiutil detach "$mount_dir" -quiet || true; rm -rf "$install_dir"' EXIT
+          arch=$(node -p 'process.arch')
+          hdiutil attach "apps/desktop/release/Bike4Mind-$DESKTOP_VERSION-$arch.dmg" -readonly -nobrowse -mountpoint "$mount_dir"
+          ditto "$mount_dir/Bike4Mind.app" "$install_dir/Bike4Mind.app"
+          hdiutil detach "$mount_dir" -quiet
+          node apps/desktop/scripts/smoke-packaged.mjs "$install_dir/Bike4Mind.app/Contents/MacOS/Bike4Mind"
+      - name: Upload packaged startup evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}-smoke-results
+          path: apps/desktop/smoke-results/
+          retention-days: 3
+      - uses: actions/upload-artifact@v6
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+
+  validate:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: installers
+      - name: Validate and checksum installers
+        env:
+          DESKTOP_VERSION: ${{ needs.version.outputs.version }}
+          DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+          MAC_RELEASE_MODE: ${{ needs.version.outputs.mac-mode }}
+        run: python3 apps/desktop/scripts/distribution.py installers
+      - uses: actions/upload-artifact@v6
+        with:
+          name: installer-checksums
+          path: |
+            installers/SHA256SUMS.txt
+            installers/latest-*.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [version, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: installers
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-checksums
+          path: installers
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-notes
+          path: notes
+      - name: Generate release App token
+        id: release-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Generate distribution App token
+        id: distribution-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.DESKTOP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.DESKTOP_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.version.outputs.repository-name }}
+          permission-contents: write
+      # Fail before reserving a protected source tag that a later failure would strand.
+      - name: Check distribution destination
+        env:
+          DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          SIGNING: ${{ vars.DESKTOP_MAC_SIGNING }}
+          ADHOC_BETA: ${{ vars.DESKTOP_MAC_ADHOC_BETA }}
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+          EXPECTED_MAC_MODE: ${{ needs.version.outputs.mac-mode }}
+          GH_REPO: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+          DISTRIBUTION_REPOSITORY_NAME: ${{ needs.version.outputs.repository-name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo 'Release App token is required.'; exit 1; fi
+          test "$GH_REPO" = "$GITHUB_REPOSITORY_OWNER/$DISTRIBUTION_REPOSITORY_NAME"
+          python3 apps/desktop/scripts/mac_release_policy.py
+          test "$(gh api "repos/$GH_REPO" --jq .private)" = false
+      - name: Reserve protected source version tag
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+        run: python3 apps/desktop/scripts/reserve-source-tag.py
+      - name: Publish desktop release
+        env:
+          DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TARGET: main
+          MAC_RELEASE_MODE: ${{ needs.version.outputs.mac-mode }}
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+          GH_REPO: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+        run: |
+          printf '\nSource: https://github.com/%s/commit/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes/desktop-release-notes.md
+          if [ "$MAC_RELEASE_MODE" = adhoc ]; then
+            printf '\nmacOS beta: ad-hoc signed, not Developer ID signed or notarized. Install manually; macOS may require Privacy & Security > Open Anyway. Fresh-download Gatekeeper acceptance is not verified. macOS in-app updates are disabled in this build. Linux updates are unchanged.\n' >> notes/desktop-release-notes.md
+          else
+            printf '\nmacOS Developer ID signing and notarization enabled.\n' >> notes/desktop-release-notes.md
+          fi
+          (cd installers && sha256sum --check SHA256SUMS.txt)
+          bash apps/desktop/scripts/publish-release.sh installers notes/desktop-release-notes.md
+          printf 'Desktop release: https://github.com/%s/releases/tag/desktop-v%s\n' "$GH_REPO" "$DESKTOP_VERSION" >> "$GITHUB_STEP_SUMMARY"

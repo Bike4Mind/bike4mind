@@ -1,6 +1,7 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
+export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -33,6 +34,8 @@ export const API_ERROR_CODES = [
   'provider_rejected',
   /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
   UNKNOWN_MODEL_ERROR_CODE,
+  /** An organization-billed API key named a different billing organization; remediation is omitting it. */
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
@@ -54,6 +57,14 @@ export const API_ERROR_CODES = [
   'cancelled',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  // Music generation (POST /api/v1/music-generations). Must stay in sync with MUSIC_GENERATION_API_ERROR_CODES;
+  // the codes it shares with video are listed above.
+  'unsupported_lyrics',
+  'unsupported_vocals',
+  'lyrics_with_instrumental',
+  'lyrics_too_long',
+  /** A cancel that arrived after the provider started (and so billed) the song; returned with a 409. */
+  'not_cancellable',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

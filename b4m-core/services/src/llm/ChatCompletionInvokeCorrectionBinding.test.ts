@@ -8,6 +8,7 @@ vi.mock('../apiKeyService', () => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', disabled: false }]),
+  resolveSuccessorChain: (id: string) => id,
 }));
 
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';

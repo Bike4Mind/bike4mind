@@ -47,6 +47,8 @@ import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
+import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
+import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -61,13 +63,19 @@ interface IProps {
 // of the scroll container - including Footer content (streaming messages).
 const ScrollToBottomButton = memo(
   ({ isAtBottom, scrollerRef }: { isAtBottom: boolean; scrollerRef: React.RefObject<HTMLElement | null> }) => {
-    if (isAtBottom) return null;
+    // It would cover the composer's plus menu, which lives in a lower stacking layer.
+    const composerMenuOpen = useComposerMenuOpen(state => state.open);
+    const composerNotesHeight = useComposerNotesHeight(state => state.height);
+    if (isAtBottom || composerMenuOpen) return null;
 
     return (
       <Box
         sx={{
           position: 'absolute',
-          bottom: 0,
+          // Hangs down into the composer's status line (its empty middle) and stops 16px above the
+          // composer box. That line is 36px tall, 44px on phones (ComposerStatusLine) - keep in sync.
+          // Account notes above the line push this pane's bottom up by their height, so add it back.
+          bottom: { xs: `${-28 - composerNotesHeight}px`, sm: `${-20 - composerNotesHeight}px` },
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1100,

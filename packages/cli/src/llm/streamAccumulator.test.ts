@@ -272,3 +272,43 @@ describe('StreamAccumulator', () => {
     });
   });
 });
+
+describe('StreamAccumulator streaming deltas', () => {
+  it('flushes visible text as a text-only delta, then finalizes only the remainder', async () => {
+    const accumulator = new StreamAccumulator();
+    const callback = vi.fn().mockResolvedValue(undefined);
+
+    accumulator.apply(content('Hello'));
+    await accumulator.flushText(callback);
+    accumulator.apply(content(' world', { stopReason: 'end_turn' }));
+    await accumulator.finalize(callback);
+
+    expect(callback.mock.calls).toEqual([
+      [['Hello']],
+      [[' world'], expect.objectContaining({ stopReason: 'end_turn' })],
+    ]);
+    expect(accumulator.hasDeliveredText).toBe(true);
+  });
+
+  it('still sends the final frame when every text byte was already flushed', async () => {
+    const accumulator = new StreamAccumulator();
+    const callback = vi.fn().mockResolvedValue(undefined);
+
+    accumulator.apply(content('done', { stopReason: 'end_turn' }));
+    await accumulator.flushText(callback);
+    await accumulator.finalize(callback);
+
+    expect(callback.mock.calls).toEqual([[['done']], [[''], expect.objectContaining({ stopReason: 'end_turn' })]]);
+  });
+
+  it('does not flush while only thinking text has arrived', async () => {
+    const accumulator = new StreamAccumulator();
+    const callback = vi.fn().mockResolvedValue(undefined);
+
+    accumulator.apply(content('<think>still reasoning'));
+    await accumulator.flushText(callback);
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(accumulator.hasDeliveredText).toBe(false);
+  });
+});

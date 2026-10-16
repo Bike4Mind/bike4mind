@@ -5,7 +5,7 @@
  * and the repository are mocked: their behaviour is covered in services and database.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import {
   asUser,
   fire,
@@ -14,42 +14,40 @@ import {
   resetHarness,
   validateWithScopes,
   videoJob,
-} from '@server/videoGenerations/__test__/routeHarness';
+} from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@server/middlewares/rateLimit', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+  (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+  (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@server/utils/orgAccess', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/services/videoJobs', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).videoJobsServiceMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).videoJobsServiceMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
 vi.mock('@server/generationJobs/wiring', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+  (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
 vi.mock('@server/generations/signOutputUrl', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+  (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/videoGenerations/listUsableVideoModels', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
 );
-vi.mock('@server/auth/auth', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
-);
+vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../video-generations/index';
 
@@ -225,6 +223,100 @@ describe('POST /api/v1/video-generations', () => {
     });
   });
 
+  describe('billing target (API key)', () => {
+    const KEY_ORG = 'd'.repeat(24);
+    const OTHER_ORG = 'b'.repeat(24);
+    const HOME_ORG = 'c'.repeat(24);
+    const base = { model: 'gemini-omni-1.1-flash', prompt: 'p' };
+    const orgKey = () =>
+      validateWithScopes([ApiKeyScope.AI_GENERATE], 'user-1', {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: KEY_ORG,
+      });
+
+    beforeEach(() => {
+      h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    });
+
+    it('bills the key org when the body names none', async () => {
+      orgKey();
+      const { req, res } = post(base);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+    });
+
+    it('bills the key org when the body names the same org', async () => {
+      orgKey();
+      const { req, res } = post({ ...base, organization_id: KEY_ORG });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+    });
+
+    it.each([
+      ['another org', OTHER_ORG],
+      ['null (personal)', null],
+    ])('refuses %s on an org-billed key (403) before the domain', async (_label, orgId) => {
+      orgKey();
+      const { req, res } = post({ ...base, organization_id: orgId });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'billing_organization_mismatch' });
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses an org-billed key whose org no longer exists (400) before the domain', async () => {
+      orgKey();
+      h.orgFindById.mockResolvedValue(null);
+      const { req, res } = post(base);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
+
+    describe('without an org-billed key', () => {
+      beforeEach(async () => {
+        asUser('user-1', HOME_ORG);
+        const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+        h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
+        h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
+          id === HOME_ORG ? { id } : null
+        );
+      });
+
+      it('keeps a personal key on the home org when the body names none', async () => {
+        validateWithScopes([ApiKeyScope.AI_GENERATE]);
+        const { req, res } = post(base);
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.orgFindById).not.toHaveBeenCalled();
+      });
+
+      it('keeps a personal key on the org the body names', async () => {
+        validateWithScopes([ApiKeyScope.AI_GENERATE]);
+        const { req, res } = post({ ...base, organization_id: HOME_ORG });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+      });
+
+      it('keeps a session caller on the org the body names', async () => {
+        const { req, res } = fire({
+          method: 'POST',
+          url: '/api/v1/video-generations',
+          apiKey: null,
+          body: { ...base, organization_id: HOME_ORG },
+        });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.orgFindById).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it('falls back to personal billing when the org pointer is stale', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     asUser('user-1', 'left-org');
@@ -335,6 +427,14 @@ describe('GET /api/v1/video-generations', () => {
   const list = (query: Record<string, string> = {}) => fire({ url: '/api/v1/video-generations', query });
   const forgeCursor = (after: string) =>
     Buffer.from(JSON.stringify({ v: 1, s: 'v1.video-generations', after }), 'utf8').toString('base64url');
+
+  it('rejects a key lacking ai:generate (403) before listing', async () => {
+    validateWithScopes([ApiKeyScope.READ_FILES]);
+    const { req, res } = list();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.listByRequester).not.toHaveBeenCalled();
+  });
 
   it('pages newest first across two pages with an opaque cursor', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);

@@ -50,7 +50,10 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
 
 import authenticateHandler from '@pages/api/auth/mfa/passkey/authenticate';
 import registerHandler from '@pages/api/auth/mfa/passkey/register';
@@ -206,48 +209,27 @@ describe('/api/auth/mfa/passkey/register', () => {
   });
 });
 
+// The step-up gate in front of this route is exercised in auth/step-up/__tests__/gatedRoutes.test.ts.
 describe('/api/auth/mfa/passkey/register-options', () => {
-  it('issues creation options only after a valid authenticator code', async () => {
-    mockVerifyTOTP.mockReturnValue(true);
+  it('issues creation options without an authenticator code in the body', async () => {
     mockStartRegistration.mockResolvedValue({ challenge: 'chal' });
-    const { req, res } = makeReqRes({ token: '123456' });
+    const { req, res } = makeReqRes({});
 
     await registerOptionsHandler(req as any, res as any);
 
-    expect(mockVerifyTOTP).toHaveBeenCalledWith('SECRET', '123456');
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ challenge: 'chal' });
-  });
-
-  it('refuses a stolen session that cannot produce a current code, counting the miss', async () => {
-    mockVerifyTOTP.mockReturnValue(false);
-    mockRecordFailedAttempt.mockResolvedValue({ id: 'user-1', mfa: { failedAttempts: 1 } });
-    const { req, res } = makeReqRes({ token: '000000' });
-
-    await registerOptionsHandler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(400);
-    expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 2 });
-    expect(mockRecordFailedAttempt).toHaveBeenCalledWith('user-1');
-    expect(mockStartRegistration).not.toHaveBeenCalled();
-  });
-
-  it('honours the shared MFA lockout', async () => {
-    mockFindByIdWithMfaSecrets.mockResolvedValue({
-      id: 'user-1',
-      mfa: { totpEnabled: true, totpSecret: 'SECRET', lockedUntil: new Date(Date.now() + 60_000) },
-    });
-    const { req, res } = makeReqRes({ token: '123456' });
-
-    await registerOptionsHandler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(423);
+    expect(mockStartRegistration.mock.calls[0][0]).toMatchObject({ user: { id: 'user-1' }, rp: RP });
     expect(mockVerifyTOTP).not.toHaveBeenCalled();
   });
 
-  it('rejects a request without a code', async () => {
+  it('maps a ceremony refusal to its status', async () => {
+    mockStartRegistration.mockRejectedValue(passkeyError('limit_reached'));
     const { req, res } = makeReqRes({});
-    await expect(registerOptionsHandler(req as any, res as any)).rejects.toThrow();
-    expect(mockStartRegistration).not.toHaveBeenCalled();
+
+    await registerOptionsHandler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({ code: 'limit_reached' });
   });
 });

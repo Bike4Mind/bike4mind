@@ -7,16 +7,36 @@ import {
   friendshipRepository,
   creditTransactionRepository,
   TelemetryAuditLogModel,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
-import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  redactUserSecretsForSelf,
+  selfUserProfileResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
+import { requireStepUp } from '@server/auth/stepUp';
 
 const idParamSchema = z.object({ id: z.string() });
+
+const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  ignoredFields: z.array(z.string()).optional(),
+});
+
+/** Fields that change how the account signs in; see the credential gates in the handler. */
+const CREDENTIAL_FIELDS = ['password', 'email'] as const;
+
+const writesCredentialFields = (body: unknown): boolean => {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  return CREDENTIAL_FIELDS.some(field => fields[field] !== undefined && fields[field] !== null);
+};
 
 async function getPreviousConsentLevel(
   userId: string,
@@ -119,9 +139,20 @@ const handler = baseApi().put(
     const { id: userId } = idParamSchema.parse(req.query);
     const currentUser = req.user;
 
+    // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
+    const isSelf = currentUser.id.toLowerCase() === userId.toLowerCase();
+
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && currentUser.id !== userId) {
+    if (!currentUser.isAdmin && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
+    // an API key can never do it. Only the admin schema accepts `email`. An admin writing ANOTHER
+    // user's credentials or granting the admin role is held to the same bar in the admin branch.
+    if (isSelf && writesCredentialFields(req.body)) {
+      if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
+      await requireStepUp(req);
     }
 
     if (currentUser.isAdmin) {
@@ -135,6 +166,21 @@ const handler = baseApi().put(
       // needs one field off the request.
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
         throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
+      }
+
+      // Another user's credentials and the admin role are session-only changes: an API key is
+      // refused, a browser session must have recently re-verified. Both run before any write.
+      // Revoking the role, bans and every other field stay ungated.
+      if (!isSelf) {
+        const grantsAdminRole =
+          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
+          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
+        if (writesCredentialFields(req.body) || grantsAdminRole) {
+          if (req.apiKeyInfo) {
+            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
+          }
+          await requireStepUp(req);
+        }
       }
 
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
@@ -157,7 +203,7 @@ const handler = baseApi().put(
       if (body.isAdmin === false) {
         const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
         if (targetUser?.isAdmin) {
-          if (currentUser.id === userId) {
+          if (isSelf) {
             return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
           }
           const adminCount = await userRepository.count({ isAdmin: true });
@@ -187,6 +233,7 @@ const handler = baseApi().put(
               organizations: Organization,
               friendship: friendshipRepository,
               userApiKeys: userApiKeyRepository,
+              realtimeConnections: realtimeConnectionRepository,
               // Audits admin `currentCredits` changes as CreditTransactions.
               creditTransactions: creditTransactionRepository,
             },
@@ -214,7 +261,11 @@ const handler = baseApi().put(
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
@@ -259,7 +310,11 @@ const handler = baseApi().put(
       const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     }
   })
 );

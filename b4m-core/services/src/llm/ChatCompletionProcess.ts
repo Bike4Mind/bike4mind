@@ -13,6 +13,7 @@ import {
   type SupportedEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
+  getTurnsCost,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -45,6 +46,7 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
+  questGenerationJobs,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -150,8 +152,9 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
-import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
+import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -1724,6 +1727,7 @@ export class ChatCompletionProcess {
     prefetchedOrganization,
     externalTools,
     videoToolConfigResolver,
+    musicToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1738,6 +1742,8 @@ export class ChatCompletionProcess {
     externalTools?: Record<string, ToolDefinition>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
+    /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
+    musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -2054,8 +2060,10 @@ export class ChatCompletionProcess {
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
       // toolset - no user MCP servers, no agent delegation. No product-specific branch in
-      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
-      if (session.disableUserIntegrations) {
+      // core; mirrors the generic `enabledTools`/`disabledTools` capability above. The request
+      // field is the per-turn twin for callers running a prompt the user did not author.
+      const userIntegrationsDisabled = Boolean(session.disableUserIntegrations || parsedBody.disableUserIntegrations);
+      if (userIntegrationsDisabled) {
         enableAgents = false;
         parsedBody.mcpServers = [];
       }
@@ -2242,7 +2250,10 @@ export class ChatCompletionProcess {
         projectId,
         // Not built at all under a prompt mode, rather than built and filtered later: these
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
-        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
+        // Skills are the user's own authored instructions, so they go with their integrations.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode).filter(
+          feature => !(userIntegrationsDisabled && feature === 'skills')
+        ),
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
@@ -3042,7 +3053,7 @@ export class ChatCompletionProcess {
         // A curated surface that suppresses user integrations must never delegate to agents. This
         // hard veto makes `session.disableUserIntegrations` honor its "no agent delegation"
         // contract self-sufficiently; the disabledTools denylist below is the second layer.
-        disableUserIntegrations: Boolean(session.disableUserIntegrations),
+        disableUserIntegrations: userIntegrationsDisabled,
         allowedAgents: parsedBody.allowedAgents,
         sessionAgentIds: session.agentIds,
         message,
@@ -3083,7 +3094,10 @@ export class ChatCompletionProcess {
       }
 
       const videoToolConfig = enabledTools.includes('video_generation')
-        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        ? await resolveToolConfigSafely('video_generation', videoToolConfigResolver, logger)
+        : null;
+      const musicToolConfig = enabledTools.includes('music_generation')
+        ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
       let allTools = toolBuilder.buildTools({
@@ -3112,6 +3126,7 @@ export class ChatCompletionProcess {
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
+          music_generation: musicToolConfig ?? undefined,
         },
         model,
         organization,
@@ -4247,12 +4262,13 @@ export class ChatCompletionProcess {
       let stopSignalSent = false;
       const actualTokenUsage: Pick<
         CompletionInfo,
-        'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+        'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens' | 'turnUsage'
       > & { stopReason?: string } = {
         inputTokens: undefined,
         outputTokens: undefined,
         cacheReadInputTokens: undefined,
         cacheCreationInputTokens: undefined,
+        turnUsage: undefined,
         stopReason: undefined,
       };
 
@@ -4490,9 +4506,11 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
-      // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
-      // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
-      const imageCountAtTurnStart = quest.images?.length ?? 0;
+      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music),
+      // statusUpdate({ generationJobs }); applyQuestStatusChanges (tools/ToolBuilder.ts) merges both with
+      // dedup, so growth means a new file or a new job card.
+      const countDeliverables = () => (quest.images?.length ?? 0) + questGenerationJobs(quest).length;
+      const deliverableCountAtTurnStart = countDeliverables();
       // Tools set pendingAction to a fresh object (imageGeneration's model picker, MCP confirm
       // tokens via ToolBuilder onPendingAction), so a changed reference means this turn set one.
       const pendingActionAtTurnStart = quest.pendingAction;
@@ -4503,15 +4521,15 @@ export class ChatCompletionProcess {
           .trim().length;
 
       const producedNonTextDeliverable = () =>
-        (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+        countDeliverables() > deliverableCountAtTurnStart ||
         (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart);
 
       // Re-snapshotted at each fallback hop: a deliverable the failed primary produced must not
       // count as the fallback's answer.
-      let imageCountAtFallbackHop = imageCountAtTurnStart;
+      let deliverableCountAtFallbackHop = deliverableCountAtTurnStart;
       let pendingActionAtFallbackHop = pendingActionAtTurnStart;
       const producedDeliverableSinceFallbackHop = () =>
-        (quest.images?.length ?? 0) > imageCountAtFallbackHop ||
+        countDeliverables() > deliverableCountAtFallbackHop ||
         (quest.pendingAction != null && quest.pendingAction !== pendingActionAtFallbackHop);
 
       // A fallback hop can be selected (fallbackInfo set) and then end with nothing to show
@@ -4551,6 +4569,7 @@ export class ChatCompletionProcess {
             actualTokenUsage.outputTokens = undefined;
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
+            actualTokenUsage.turnUsage = undefined;
             actualTokenUsage.stopReason = undefined;
             toolCallsSeen = 0;
             visibleCharsAtLastToolCall = 0;
@@ -4830,6 +4849,7 @@ export class ChatCompletionProcess {
                   actualTokenUsage.cacheReadInputTokens = completionInfo.cacheReadInputTokens;
                 if (completionInfo?.cacheCreationInputTokens != null)
                   actualTokenUsage.cacheCreationInputTokens = completionInfo.cacheCreationInputTokens;
+                if (completionInfo?.turnUsage?.length) actualTokenUsage.turnUsage = completionInfo.turnUsage;
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
@@ -5021,6 +5041,7 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
+                  requireTools: !!options.tools?.length,
                 }
               );
 
@@ -5080,7 +5101,7 @@ export class ChatCompletionProcess {
 
               // Clear previous replies for retry
               resetStreamStateForRetry();
-              imageCountAtFallbackHop = quest.images?.length ?? 0;
+              deliverableCountAtFallbackHop = countDeliverables();
               pendingActionAtFallbackHop = quest.pendingAction;
               // Continue the loop with the new model
               continue;
@@ -5505,10 +5526,10 @@ export class ChatCompletionProcess {
         // double-bills the cached portion here; one that forwards nothing bills every
         // cache hit at the full input rate.
         //
-        // NOTE: the provider input (uncached tail) drives getTextModelCost's
-        // pricing-tier selection. Every model today publishes a single tier, so
-        // this is exact; if tiered pricing lands, a heavily-cached prompt could
-        // select a cheaper tier for its cache volume - revisit tier selection then.
+        // Long-context tiers: providers pick the tier per request on that request's
+        // whole prompt (cache included), so the provider basis prices turnUsage turn by
+        // turn when the adapter reports it. Aggregates alone are cache-exclusive and
+        // summed across tool round-trips, which picks the wrong tier in both directions.
         // Summed across all three input components, not just the uncached tail: on a
         // fully-cached prompt the provider legitimately reports 0 uncached input, and
         // reading that as "nothing reported" would drop the row onto the local estimate
@@ -5535,17 +5556,23 @@ export class ChatCompletionProcess {
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
         const estimatedCost = hasProviderUsage
-          ? getTextModelCost(
-              currentModel,
-              settledInputTokens,
-              settledOutputTokens,
-              cacheReadInputTokens,
-              cacheCreationInputTokens
-            )
+          ? actualTokenUsage.turnUsage?.length
+            ? getTurnsCost(currentModel, actualTokenUsage.turnUsage)
+            : getTextModelCost(
+                currentModel,
+                settledInputTokens,
+                settledOutputTokens,
+                cacheReadInputTokens,
+                cacheCreationInputTokens
+              )
           : getTextModelCost(
               currentModel,
               localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
-              outputTokens
+              outputTokens,
+              0,
+              0,
+              // The local estimate is one whole prompt; the cache discount above must not lower its tier.
+              localInputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
         // usage event, and the ledger deduction below so they can never

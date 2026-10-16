@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-891 routes: 44 contracted, 9 aliases of another route, 193 with no static caller in `apps/client/app`.
+897 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | gears | 3 | 0 | 2 | 1 | 0 | 0 | 0 |
 | generated-content | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | google-calendar | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
-| google-drive | 5 | 0 | 3 | 2 | 0 | 0 | 1 |
+| google-drive | 6 | 0 | 3 | 3 | 0 | 0 | 1 |
 | groups | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | health | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | hearth | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
@@ -123,7 +123,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | search-image | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | secret-rotations | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | security | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
-| sessions | 29 | 1 | 28 | 1 | 0 | 0 | 4 |
+| sessions | 30 | 1 | 28 | 2 | 0 | 0 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
 | skills | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -140,7 +140,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
 | users | 30 | 0 | 30 | 0 | 0 | 0 | 4 |
-| v1 | 42 | 38 | 37 | 0 | 0 | 5 | 35 |
+| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 38 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -804,6 +804,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/google-drive/callback` | GET | jwt+key | - | no | - | 1: `routes/google-drive/callback.tsx` |
 | `/api/google-drive/connect` | POST | jwt+key | - | no | - | 2: `hooks/data/driveAccessToken.ts`, `hooks/data/googleDrive.ts` |
 | `/api/google-drive/disconnect` | DELETE | jwt+key | - | no | - | 1: `hooks/data/googleDrive.ts` |
+| `/api/google-drive/estimate-folder` | POST | jwt | - | no | - | 1: `hooks/data/useDriveFolderEstimate.ts` |
 | `/api/google-drive/list-folder` | POST | jwt | - | no | - | 0 |
 | `/api/google-drive/token` | GET | jwt | - | no | - | 2: `components/Session/AttachFileButton.tsx`, `hooks/data/driveAccessToken.ts` |
 
@@ -1290,6 +1291,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/sessions/[id]/correction-pairs` | GET | jwt | - | no | - | 0 |
 | `/api/sessions/[id]/favorite` | POST, DELETE | jwt+key | - | no | - | 2: `components/layouts/Notebook/Sidenav/useBulkActions.ts`, `hooks/data/sessions.ts` |
 | `/api/sessions/[id]/files` | GET | jwt+key | - | no | - | 1: `hooks/data/fabFileQueries.ts` |
+| `/api/sessions/[id]/generated-media` | POST | jwt | - | no | - | 1: `hooks/data/generatedMedia.ts` |
 | `/api/sessions/[id]/questmaster-plans` | GET | jwt+key | - | no | - | 0 |
 | `/api/sessions/[id]/summary` | POST | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]/surface` | PATCH | jwt+key | `notebooks:write` | no | - | 1: `utils/sessionsAPICalls.ts` |
@@ -1297,7 +1299,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/sessions/[id]/tool-approvals` | GET, DELETE | jwt+key | - | no | - | 0 |
 | `/api/sessions/bulk` | DELETE | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/count` | GET | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/create` | POST | jwt+key | `notebooks:write` | yes | `/api/v1/sessions` | 5: `components/admin/AdminPage.tsx`, `components/questmaster-v5/QuestGraphView.tsx`, `hooks/useCreateDataLakeSession.ts` +2 more |
+| `/api/sessions/create` | POST | jwt+key | `ai:generate`, `notebooks:write` | yes | `/api/v1/sessions` | 5: `components/admin/AdminPage.tsx`, `components/questmaster-v5/QuestGraphView.tsx`, `hooks/useCreateDataLakeSession.ts` +2 more |
 | `/api/sessions/download` | GET | jwt+key | - | no | - | 0 |
 | `/api/sessions/favorites` | GET | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/recent-proactive-messages` | GET | jwt+key | - | no | - | 1: `hooks/useUnreadProactiveMessages.ts` |
@@ -1517,13 +1519,17 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/me` | GET | jwt+key | `me:read` | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |
 | `/api/v1/projects/[id]` | GET, PATCH, DELETE | jwt+key | GET: `projects:read`, `projects:write`; PATCH, DELETE: `projects:write` | yes | - | 0 |
 | `/api/v1/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
 | `/api/v1/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
-| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | yes | - | 0 |
+| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | yes | - | 0 |
 | `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | yes | - | 0 |
 | `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | yes | - | 0 |

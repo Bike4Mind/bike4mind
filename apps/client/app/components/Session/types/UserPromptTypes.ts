@@ -2,6 +2,7 @@ import { DetailedHTMLProps, HTMLAttributes, ReactNode } from 'react';
 import {
   IChatHistoryItem,
   IChatHistoryItemDocument,
+  GenerationJobRef,
   IFabFileDocument,
   PromptMeta,
   SnippetMeta,
@@ -39,6 +40,7 @@ export interface PromptReplyProps {
     images?: string[];
     videos?: string[];
     videoJobIds?: string[];
+    generationJobs?: GenerationJobRef[];
     status?: string;
     promptMeta?: PromptMeta;
     deepResearchState?: IChatHistoryItem['deepResearchState'];
@@ -60,9 +62,9 @@ export interface ReplyContainerProps {
   /** Non-image files a tool generated this turn (e.g. .xlsx), rendered as download chips. */
   generatedFiles?: { name: string; url: string }[];
   videos?: string[];
-  /** Video generation job ids started by the agent tool this turn, one live card each. */
-  videoJobIds?: string[];
-  /** Audio tracks a tool generated this turn (music_generation), rendered as inline players. */
+  /** Generation jobs (video, music) started by the agent tool this turn, one live card each. */
+  generationJobs?: GenerationJobRef[];
+  /** Audio tracks a tool generated this turn (audio_generation, or a pre-job music turn), rendered as inline players. */
   audio?: string[];
   search?: string;
   isExpandable?: boolean;

@@ -1,4 +1,4 @@
-import { User, userRepository, authSessionRepository } from '@bike4mind/database';
+import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@server/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
@@ -15,6 +15,12 @@ import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readRefreshCookie, setRefreshCookie } from '@server/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
+import * as z from 'zod';
+import { respond } from '@server/utils/respond';
+import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
+
+// Non-browser callers (CLI, OAuth flows) get the rotated token back in the body.
+const refreshSessionResponseSchema = selfSessionResponseSchema.extend({ refreshToken: z.string().optional() });
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -42,12 +48,14 @@ const handler = baseApi({ auth: false })
     // `refreshToken: null` means this refresh did not advance the chain (a concurrent sibling did),
     // so the caller's existing token is still the live one. Emitting nothing is what keeps the
     // cookie jar on the single surviving token - see rotateSession's `coalesced` outcome.
-    const respond = (payload: Record<string, unknown>, refreshToken: string | null) => {
+    const sendSession = (payload: Record<string, unknown>, refreshToken: string | null) => {
       if (useCookie) {
         if (refreshToken) setRefreshCookie(res, refreshToken);
-        return res.status(200).json(payload);
+        return respond(res, refreshSessionResponseSchema, payload);
       }
-      return res.status(200).json(refreshToken ? { ...payload, refreshToken } : payload);
+      // Body transport: the chain already advanced, so a schema failure here loses the new refresh
+      // token (cookie transport is safe, Set-Cookie is already on res). Keep these fields permissive.
+      return respond(res, refreshSessionResponseSchema, refreshToken ? { ...payload, refreshToken } : payload);
     };
 
     const signAccessToken = (id: string, tokenVersion: number, extra?: Record<string, unknown>) =>
@@ -57,7 +65,11 @@ const handler = baseApi({ auth: false })
     // AuthSession store (rotation + grace window + reuse detection live in the service).
     if (authSessionService.isOpaqueRefreshToken(token)) {
       const rotated = await authSessionService.rotateSession(token, {
-        db: { authSessions: authSessionRepository, users: userRepository },
+        db: {
+          authSessions: authSessionRepository,
+          users: userRepository,
+          realtimeConnections: realtimeConnectionRepository,
+        },
         signAccessToken,
         // Involuntary session outcomes -> the forensic audit log. The service's event types are
         // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
@@ -73,7 +85,7 @@ const handler = baseApi({ auth: false })
       });
       requireNonSystemUser(rotated.user);
       await refuseBlockedRotatedSession(rotated, req.logger);
-      return respond(
+      return sendSession(
         {
           // Redact before returning: the bootstrap refresh feeds this straight into the client's
           // currentUser, so it must carry the same self-view shape as the login endpoints.
@@ -128,7 +140,7 @@ const handler = baseApi({ auth: false })
       { db: { authSessions: authSessionRepository }, signAccessToken, logger: req.logger }
     );
 
-    return respond(
+    return sendSession(
       {
         user: redactUserSecretsForSelf(user),
         accessToken: migrated.accessToken,

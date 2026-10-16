@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
+import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import { isObjectIdShaped } from '../../base/objectId';
 import { resolveAttachmentLakeAccess } from '../../base/resolveAttachmentLakeAccess';
 import { resolveOwnedGeneratedImageUrl } from '../../base/resolveOwnedGeneratedImage';
@@ -36,6 +37,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -202,21 +204,32 @@ async function moderateToolImage(
   });
 }
 
+/**
+ * `model` is the one the moderation incident records (see the provider note in the tool body); `modelId` is the
+ * model that rendered the image, recorded as its provenance in the user's files.
+ */
 export async function processAndStoreImage(
   imageUrl: string,
   context: ToolContext,
-  model: string,
-  provider: string
+  { model, provider, prompt, modelId }: { model: string; provider: string; prompt: string; modelId: string }
 ): Promise<string> {
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
-  const filename = `${uuidv4()}.${fileType?.ext}`;
+  // Same fallback as the image_generation tool: never store a `${uuid}.undefined` key.
+  const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
   const mimeType = fileType?.mime ?? 'image/png';
 
   // Block moderated content BEFORE upload - see moderateToolImage doc comment.
   await moderateToolImage(context, buffer, mimeType, model, provider);
 
   const path = await context.imageGenerateStorage.upload(buffer, filename, {});
+
+  // A failed save resolves with a reason rather than throwing, so it never blocks the edited image.
+  await saveGeneratedAssetFromTool(context, {
+    bytes: buffer,
+    contentType: mimeType,
+    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt },
+  });
 
   return path;
 }
@@ -259,9 +272,14 @@ async function generateFullMask(imageBuffer: Buffer): Promise<string> {
   return maskBuffer.toString('base64');
 }
 
-async function updateQuestAndReturnMarkdown(storedImagePath: string, context: ToolContext): Promise<string> {
-  // Call onFinish callback for credit deduction
-  await context.onFinish?.('edit_image', storedImagePath);
+async function updateQuestAndReturnMarkdown(
+  storedImagePath: string,
+  costInput: ImageToolCostInput,
+  context: ToolContext
+): Promise<string> {
+  // onFinish is where both credit rails bill, so only a delivered edit is charged.
+  const finishData: ImageToolFinishData = { ...costInput, paths: [storedImagePath] };
+  await context.onFinish?.('edit_image', finishData);
 
   // Update the quest's images array
   await context.statusUpdate({ images: [storedImagePath] });
@@ -371,28 +389,26 @@ Please select a supported edit model in your image settings modal.`;
       // separate question from billing, and is not settled here.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
 
-      // Resolve the source and mask (URL, fabFile ObjectId, or generated-image key) BEFORE onStart:
-      // a refused or unknown image must not leave a credit reservation behind, and the chat rail
-      // has no refund for a call that throws.
+      // Resolve the source and mask (URL, fabFile ObjectId, or generated-image key).
       const sourceImage = await resolveImageInputUrl(toolImage, context);
       const maskImage = toolMask ? await resolveImageInputUrl(toolMask, context) : null;
 
-      // Call onStart callback for credit validation. Bills `editModel`, NOT the
-      // configured generation model: `editModel` is what the render below actually
-      // dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two diverge
-      // whenever imageConfig.editModel is unset and the fallback above picks a default.
+      // Bills `editModel`, NOT the configured generation model: `editModel` is what the render
+      // below actually dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two
+      // diverge whenever imageConfig.editModel is unset and the fallback above picks a default.
       // Same billed-model-vs-rendered-model invariant the queue path holds in ImageEdit.ts.
-      await context.onStart?.('edit_image', {
+      const costInput: ImageToolCostInput = {
         model: editModel,
-        // The count both credit rails bill off this payload - ToolBuilder.reserveImageCredits
-        // (classic chat) and estimateGeneratedMediaUsd (agent mode). It has to be what the edit
-        // below actually renders, which is one image however many the model asked for; billing
-        // the request's n here charged for images that were never returned.
+        // The count both credit rails bill off (ToolBuilder.settleImageCredits for classic chat,
+        // estimateGeneratedMediaUsd for agent mode). It has to be what the edit below actually
+        // renders, which is one image however many the model asked for; billing the request's n
+        // charged for images that were never returned.
         n: IMAGES_PER_EDIT_REQUEST,
         size,
         quality: imageConfig?.quality,
-        prompt,
-      });
+      };
+      // onStart only gates affordability; the charge waits for onFinish.
+      await context.onStart?.('edit_image', { ...costInput, prompt });
 
       const sourceBase64Image = await imageUrlToBase64(sourceImage.url, sourceImage.trustConfiguredStorageOrigin);
       let maskBase64Image: string | null = null;
@@ -434,14 +450,14 @@ Please select a supported edit model in your image settings modal.`;
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: bflModel,
+            });
 
-            return updateQuestAndReturnMarkdown(storedImagePath, context);
+            return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);
           }
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
@@ -490,14 +506,14 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: editModel,
+            });
 
-            return updateQuestAndReturnMarkdown(storedImagePath, context);
+            return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);
           }
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
@@ -538,14 +554,14 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: editModel,
+            });
 
-            return updateQuestAndReturnMarkdown(storedImagePath, context);
+            return updateQuestAndReturnMarkdown(storedImagePath, costInput, context);
           }
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;

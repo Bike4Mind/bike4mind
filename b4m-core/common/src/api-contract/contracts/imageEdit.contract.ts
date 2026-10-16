@@ -3,7 +3,12 @@ import { EXAMPLE_FILE_ID, EXAMPLE_SESSION_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import { EditImageRequestBodySchema } from '../../llm';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
+
 import { ImageQuestSchema } from '../../schemas/imageApi';
 import { imageQuestPollResult } from './imageGeneration.contract';
 import {
@@ -60,8 +65,12 @@ export const editImageContract = defineEndpoint({
     400: {
       description:
         `\`fabFileIds\` is empty, \`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ` +
-        GENERATION_CALLBACK_REJECTED_DESCRIPTION,
+        `${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
       schema: ApiErrorSchema,
+    },
+    403: {
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description:

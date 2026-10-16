@@ -18,7 +18,7 @@ import crypto from 'crypto';
 /**
  * Self-host S3 ObjectCreated webhook.
  *
- * In AWS, an S3 ObjectCreated event invokes objectCreated.ts (server/s3) to mark the
+ * In AWS, an S3 ObjectCreated event invokes apps/workers/src/s3/objectCreated.ts to mark the
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the
@@ -161,6 +161,10 @@ const handler = baseApi({ auth: false }).post(
           await withTransaction(async session => {
             const user = await User.findById(metadata.userId).session(session);
             if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, session))) {
+              // Match the hosted path: record the measured bytes the charge used, so a later refund
+              // and the counter's truth both agree with the counter.
+              metadata.fileSize = size;
+              await FabFile.updateOne({ _id: metadata._id }, { $set: { fileSize: size } }, { session });
               await user.save({ session });
             }
           });

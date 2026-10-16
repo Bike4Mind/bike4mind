@@ -8,24 +8,27 @@ function makeQuest(overrides: Partial<IChatHistoryItemDocument> = {}): IChatHist
 }
 
 describe('applyQuestStatusChanges', () => {
-  describe('videoJobIds', () => {
-    it('keeps both ids when two sequential updates each carry one job', () => {
+  describe('generationJobs', () => {
+    const video = (id: string) => ({ id, kind: 'video' as const });
+    const music = (id: string) => ({ id, kind: 'music' as const });
+
+    it('keeps both jobs when two sequential updates each carry one job', () => {
       const quest = makeQuest();
-      applyQuestStatusChanges(quest, { videoJobIds: ['job-a'] }, 'user-1');
-      applyQuestStatusChanges(quest, { videoJobIds: ['job-b'] }, 'user-1');
-      expect(quest.videoJobIds).toEqual(['job-a', 'job-b']);
+      applyQuestStatusChanges(quest, { generationJobs: [video('job-a')] }, 'user-1');
+      applyQuestStatusChanges(quest, { generationJobs: [music('job-b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([video('job-a'), music('job-b')]);
     });
 
-    it('dedupes already-present ids and keeps order', () => {
-      const quest = makeQuest({ videoJobIds: ['a'] });
-      applyQuestStatusChanges(quest, { videoJobIds: ['a', 'b'] }, 'user-1');
-      expect(quest.videoJobIds).toEqual(['a', 'b']);
+    it('dedupes already-present jobs by id and keeps order', () => {
+      const quest = makeQuest({ generationJobs: [music('a')] });
+      applyQuestStatusChanges(quest, { generationJobs: [music('a'), video('b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([music('a'), video('b')]);
     });
 
     it('initializes the field when the quest has none', () => {
       const quest = makeQuest();
-      applyQuestStatusChanges(quest, { videoJobIds: ['b'] }, 'user-1');
-      expect(quest.videoJobIds).toEqual(['b']);
+      applyQuestStatusChanges(quest, { generationJobs: [music('b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([music('b')]);
     });
   });
 

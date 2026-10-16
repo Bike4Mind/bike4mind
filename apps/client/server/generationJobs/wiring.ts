@@ -2,9 +2,9 @@ import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
   ApiKeyType,
-  BadRequestError,
   isImageServeable,
   isPlaceholderApiKey,
+  isStorageLimitError,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
   type MusicProviderId,
@@ -280,14 +280,14 @@ const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
 };
 
 // The same per-user quota createFabFile enforces on the save (saveGeneratedAsset passes no organization).
-export const hasStorageFor: CreateMusicJobDeps['hasStorageFor'] = async (userId, bytes) => {
+export const checkStorageFor: CreateMusicJobDeps['checkStorageFor'] = async (userId, bytes) => {
   const user = await userRepository.findById(userId);
   if (!user) throw new Error(`user ${userId} not found`);
   try {
     await checkStorageLimit(user, bytes);
-    return true;
+    return undefined;
   } catch (error) {
-    if (error instanceof BadRequestError) return false;
+    if (isStorageLimitError(error)) return error.info;
     throw error;
   }
 };
@@ -409,7 +409,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
 export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   ...getMusicJobDeps(),
   engine: getGenerationJobEngine(),
-  hasStorageFor,
+  checkStorageFor,
 });
 
 let generationJobEngine: GenerationJobEngine | undefined;

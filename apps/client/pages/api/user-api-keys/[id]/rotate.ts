@@ -1,6 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
@@ -22,6 +22,7 @@ const handler = baseApi().post(
         db: {
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
+          realtimeConnections: realtimeConnectionRepository,
         },
         // Undefined for a browser/JWT caller (unrestricted: they hold the whole
         // account); the actual held scopes when an API key is rotating, which is when
@@ -60,8 +61,9 @@ const handler = baseApi().post(
         }, REOWN_NOTIFY_TIMEOUT_MS);
       });
       await Promise.race([
-        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger)
-          .finally(() => clearTimeout(timeoutId)),
+        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger).finally(() =>
+          clearTimeout(timeoutId)
+        ),
         timeoutP,
       ]);
     }

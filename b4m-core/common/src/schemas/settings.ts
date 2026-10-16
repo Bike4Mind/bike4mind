@@ -27,6 +27,11 @@ import {
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  AI_EDIT_VERSION_RETENTION_MAX,
+  AI_EDIT_VERSION_RETENTION_MIN,
+} from '../constants/aiEditVersionRetention';
+import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
@@ -353,6 +358,7 @@ export const SettingKeySchema = z.enum([
   'EnableUserDeletionSlackNotification',
   'AdminEmail',
   'MaxFileSize',
+  'AiEditVersionRetention',
   'DefaultContext',
   'FeedbackSendEmailUsername',
   'FeedbackSendEmailPassword',
@@ -578,6 +584,7 @@ export const SettingKeySchema = z.enum([
 
   // MUSIC GENERATION
   'musicGeneration',
+  'agentMusicTracksPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -645,6 +652,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // to expose.
     'image_generation',
     'edit_image',
+    // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
     'audio_generation',
     'excel_generation',
@@ -1975,6 +1983,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxFileSize', order: 1 },
       { key: 'VectorThreshold', order: 2 },
       { key: 'MaxContentLength', order: 3 },
+      { key: 'AiEditVersionRetention', order: 4 },
     ],
   },
   SLACK: {
@@ -3182,6 +3191,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.KNOWLEDGE.id,
     order: 1,
   }),
+  AiEditVersionRetention: makeNumberSetting({
+    key: 'AiEditVersionRetention',
+    name: 'AI Edit Versions Kept',
+    defaultValue: AI_EDIT_VERSION_RETENTION_DEFAULT,
+    min: AI_EDIT_VERSION_RETENTION_MIN, // a blank field coerces to 0, which would trim every edited version
+    max: AI_EDIT_VERSION_RETENTION_MAX,
+    description:
+      'How many AI-edited versions are kept per file. Older edited versions are deleted from storage ' +
+      'on the next edit. The original upload is always kept in addition.',
+    category: 'Knowledge',
+    group: API_SERVICE_GROUPS.KNOWLEDGE.id,
+    order: 4,
+  }),
   DefaultContext: makeNumberSetting({
     key: 'DefaultContext',
     name: 'Default Context Size',
@@ -3252,6 +3274,8 @@ export const settingsMap = {
     category: 'Calendar',
     group: API_SERVICE_GROUPS.CALENDAR.id,
     order: 1,
+    // The Integrations page derives the Google Calendar card's status from it.
+    userReadable: true,
   }),
   googleCalendarServiceAccountEmail: makeStringSetting({
     key: 'googleCalendarServiceAccountEmail',
@@ -3692,6 +3716,8 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 1,
+    // The Integrations page derives the agent-tool capabilities' status from it.
+    userReadable: true,
   }),
   githubMcpClientId: makeStringSetting({
     key: 'githubMcpClientId',
@@ -4553,6 +4579,8 @@ export const settingsMap = {
     description: 'Enable AI-powered analysis of ingested emails (summary, entities, sentiment, action items).',
     category: 'AI',
     order: 200,
+    // The Integrations page derives the inbound-email analysis capability's status from it.
+    userReadable: true,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
@@ -5118,6 +5146,19 @@ export const settingsMap = {
     category: 'AI',
     order: 147,
     schema: MusicGenerationSettingsSchema,
+  }),
+  agentMusicTracksPerRun: makeNumberSetting({
+    key: 'agentMusicTracksPerRun',
+    name: 'Agent Music Tracks Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most music_generation songs one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each song still holds and settles its own credits.',
+    category: 'AI',
+    order: 148,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

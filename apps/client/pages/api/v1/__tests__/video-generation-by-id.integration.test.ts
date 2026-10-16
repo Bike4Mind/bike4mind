@@ -14,36 +14,34 @@ import {
   resetHarness,
   validateWithScopes,
   videoJob,
-} from '@server/videoGenerations/__test__/routeHarness';
+} from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@server/middlewares/rateLimit', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+  (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+  (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@server/utils/orgAccess', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
 vi.mock('@server/generationJobs/wiring', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+  (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
 vi.mock('@server/generations/signOutputUrl', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+  (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
-vi.mock('@server/auth/auth', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
-);
+vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import getHandler from '../video-generations/[id]/index';
 import cancelHandler from '../video-generations/[id]/cancel';
@@ -150,22 +148,25 @@ describe('POST /api/v1/video-generations/{id}/cancel', () => {
 
   it('requests cancellation of a running job and returns it', async () => {
     h.findById.mockResolvedValue(videoJob({ state: 'running' }));
-    h.requestCancel.mockResolvedValue(videoJob({ state: 'running', cancelRequested: true }));
+    h.requestCancel.mockResolvedValue({
+      status: 'requested',
+      job: videoJob({ state: 'running', cancelRequested: true }),
+    });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
+    expect(h.requestCancel).toHaveBeenCalledWith(expect.objectContaining({ id: JOB_ID }));
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, state: 'running' });
   });
 
   it('cancel during storing returns 200 with the job as-is when the engine declines the cancel', async () => {
     const storing = videoJob({ state: 'storing', updatedAt: new Date('2026-10-06T00:05:00Z') });
     h.findById.mockResolvedValue(storing);
-    h.requestCancel.mockResolvedValue(null);
+    h.requestCancel.mockResolvedValue({ status: 'unchanged', job: null });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
+    expect(h.requestCancel).toHaveBeenCalledWith(expect.objectContaining({ id: JOB_ID }));
     // The response renders the job read before the cancel, unchanged, rather than a cancelled or failed one.
     expect(res._getJSONData()).toMatchObject({
       id: JOB_ID,

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WebSocketLlmBackend } from './WebSocketLlmBackend';
-import { isTransientNetworkError } from './retryPolicy';
 import type { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
 import type { ApiClient } from '../auth/ApiClient';
 import type { CompletionRequest } from './streamTransport';
@@ -112,8 +111,8 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.dropConnection();
 
     await expect(consumer).rejects.toThrow(/connection closed/i);
-    // Being classified transient is what earns the WebSocket path its retries.
-    expect(isTransientNetworkError(new Error('WebSocket connection closed during completion'))).toBe(true);
+    // The network kind is what earns the WebSocket path its retries.
+    await expect(consumer).rejects.toMatchObject({ kind: 'network' });
   });
 
   it('throws on a cli_completion_error frame', async () => {
@@ -127,6 +126,8 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.emit({ action: 'cli_completion_error', error: 'model overloaded' });
 
     await expect(consumer).rejects.toThrow('model overloaded');
+    // No code on these frames, so nothing marks this one transient.
+    await expect(consumer).rejects.toMatchObject({ kind: 'refused' });
   });
 
   it('surfaces retryAfter from a rate-limit cli_completion_error frame', async () => {
@@ -140,6 +141,24 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.emit({ action: 'cli_completion_error', error: 'Rate limit exceeded.', retryAfter: 120 });
 
     await expect(consumer).rejects.toThrow('Rate limit exceeded. (retry after 120s)');
+    await expect(consumer).rejects.toMatchObject({ kind: 'rate_limited', retryAfterMs: 120_000 });
+  });
+
+  it('classifies a POST that could not connect as unreachable, and any other POST failure as plain', async () => {
+    const backendPosting = (failure: Error) =>
+      new WebSocketLlmBackend({
+        wsManager: new FakeWsManager() as unknown as WebSocketConnectionManager,
+        apiClient: { getAxiosInstance: () => ({ post: () => Promise.reject(failure) }) } as unknown as ApiClient,
+        model: 'test-model',
+        tokenGetter: async () => 'token',
+        wsCompletionUrl: '/ws-completions',
+      });
+    const failureOf = async (backend: WebSocketLlmBackend) => {
+      for await (const _event of backend.open(req)) void _event;
+    };
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    await expect(failureOf(backendPosting(refused))).rejects.toMatchObject({ kind: 'unreachable' });
+    await expect(failureOf(backendPosting(new Error('bad request')))).rejects.not.toHaveProperty('kind');
   });
 
   it('throws a retryable error when the socket is not connected', async () => {
@@ -151,6 +170,27 @@ describe('WebSocketLlmBackend transport (open)', () => {
     })();
     await expect(consumer).rejects.toThrow('WebSocket is not connected');
     // Retryable so a retry racing auto-reconnect waits out another backoff window.
-    expect(isTransientNetworkError(new Error('WebSocket is not connected'))).toBe(true);
+    await expect(consumer).rejects.toMatchObject({ kind: 'network' });
+  });
+});
+
+describe('WebSocketLlmBackend.getModelInfo', () => {
+  it('drops disabled models from the CLI picker', async () => {
+    const backend = new WebSocketLlmBackend({
+      wsManager: new FakeWsManager() as unknown as WebSocketConnectionManager,
+      apiClient: {
+        get: async () => ({
+          models: [
+            { id: 'live', type: 'text', supportsTools: true },
+            { id: 'disabled', type: 'text', supportsTools: true, disabled: true },
+          ],
+        }),
+      } as unknown as ApiClient,
+      model: 'test-model',
+      tokenGetter: async () => 'token',
+      wsCompletionUrl: '/ws-completions',
+    });
+
+    expect((await backend.getModelInfo()).map(m => m.id)).toEqual(['live']);
   });
 });

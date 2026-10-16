@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { AI_EDIT_VERSION_RETENTION_DEFAULT, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import type { BaseStorage } from '@bike4mind/fab-pipeline';
 import type { Logger } from '@bike4mind/observability';
 
@@ -8,6 +8,7 @@ vi.mock('axios', () => ({ default: { get: mockAxiosGet } }));
 
 import {
   appendEditedVersion,
+  trimVersionHistory,
   computeContentHash,
   getFileContent,
   nextVersionNumber,
@@ -89,6 +90,7 @@ describe('appendEditedVersion', () => {
     newFileSize: 120,
     now,
     nonce: 'abc',
+    maxEditedVersions: 10,
   };
 
   it('seeds v1 from the pre-edit bytes and appends v2 on the first edit', () => {
@@ -108,6 +110,75 @@ describe('appendEditedVersion', () => {
     expect(versions).toHaveLength(3);
     expect(versions[2]).toMatchObject({ version: 3, filePath: 'files/u1/f9/v3_abc_report.docx', fileSize: 130 });
     expect(newFilePath).toBe('files/u1/f9/v3_abc_report.docx');
+  });
+
+  const historyOf = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      version: i + 1,
+      filePath: i === 0 ? 'files/u1/original_report.docx' : `files/u1/f9/v${i + 1}_report.docx`,
+      fileSize: 100,
+      mimeType: base.mimeType,
+      createdAt: now,
+    }));
+
+  it('drops nothing while under or exactly at the cap', () => {
+    // 1 + 2 existing, +1 new = v1 + 3 edited, cap 3
+    const under = appendEditedVersion({ ...base, existingVersions: historyOf(2), maxEditedVersions: 3 });
+    expect(under.versions).toHaveLength(3);
+    expect(under.droppedVersions).toEqual([]);
+    const atCap = appendEditedVersion({ ...base, existingVersions: historyOf(3), maxEditedVersions: 3 });
+    expect(atCap.versions.map(v => v.version)).toEqual([1, 2, 3, 4]);
+    expect(atCap.droppedVersions).toEqual([]);
+  });
+
+  it('caps at the default retention when maxEditedVersions is omitted', () => {
+    const { maxEditedVersions: _omitted, ...withoutCap } = base;
+    const { versions, droppedVersions } = appendEditedVersion({
+      ...withoutCap,
+      existingVersions: historyOf(AI_EDIT_VERSION_RETENTION_DEFAULT + 3),
+    });
+    expect(versions).toHaveLength(AI_EDIT_VERSION_RETENTION_DEFAULT + 1);
+    expect(droppedVersions).toHaveLength(3);
+  });
+
+  it('keeps v1 plus the last N edited versions and reports the dropped ones', () => {
+    const { newFilePath, versions, droppedVersions } = appendEditedVersion({
+      ...base,
+      existingVersions: historyOf(5),
+      maxEditedVersions: 3,
+    });
+    expect(versions.map(v => v.version)).toEqual([1, 4, 5, 6]);
+    expect(versions[versions.length - 1].filePath).toBe(newFilePath);
+    expect(droppedVersions.map(v => v.filePath)).toEqual(['files/u1/f9/v2_report.docx', 'files/u1/f9/v3_report.docx']);
+  });
+
+  it('with N=1 keeps only v1 and the new version', () => {
+    const first = appendEditedVersion({ ...base, maxEditedVersions: 1 });
+    expect(first.versions.map(v => v.version)).toEqual([1, 2]);
+    expect(first.droppedVersions).toEqual([]);
+    const next = appendEditedVersion({ ...base, existingVersions: first.versions, maxEditedVersions: 1 });
+    expect(next.versions.map(v => v.version)).toEqual([1, 3]);
+    expect(next.droppedVersions.map(v => v.version)).toEqual([2]);
+  });
+});
+
+describe('trimVersionHistory', () => {
+  const v = (version: number, filePath: string) => ({
+    version,
+    filePath,
+    fileSize: 1,
+    mimeType: 'x',
+    createdAt: new Date(0),
+  });
+
+  it('never reports a dropped entry whose key a retained entry still holds', () => {
+    const { versions, droppedVersions } = trimVersionHistory([v(1, 'a'), v(2, 'a'), v(3, ''), v(4, 'b'), v(5, 'c')], 2);
+    expect(versions.map(x => x.version)).toEqual([1, 4, 5]);
+    expect(droppedVersions).toEqual([]);
+  });
+
+  it('treats a non-positive cap as 1', () => {
+    expect(trimVersionHistory([v(1, 'a'), v(2, 'b'), v(3, 'c')], 0).versions.map(x => x.version)).toEqual([1, 3]);
   });
 });
 

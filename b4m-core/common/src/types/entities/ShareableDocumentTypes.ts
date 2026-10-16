@@ -113,9 +113,14 @@ export interface IShareableStaticMethods<DocType> {
    *
    * @param user - The user doc
    * @param ids - The document IDs
+   * @param options - `includeDeleted` also returns soft-deleted documents the user can read
    * @returns The documents
    */
-  findAllAccessibleByIds: (user: Pick<IUserDocument, 'id' | 'groups'>, ids: string[]) => Promise<DocType[]>;
+  findAllAccessibleByIds: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ids: string[],
+    options?: { includeDeleted?: boolean }
+  ) => Promise<DocType[]>;
 
   /**
    * Find a document with update access by ID

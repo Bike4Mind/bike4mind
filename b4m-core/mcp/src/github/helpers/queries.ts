@@ -64,6 +64,12 @@ export const LIST_PROJECT_FIELDS_QUERY = `
                   startDate
                   duration
                 }
+                completedIterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
               }
             }
           }
@@ -142,6 +148,71 @@ export const GET_PROJECT_ITEM_QUERY = `
                 }
               }
             }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Confirmation-preview lookups: resolve the labels a preview shows from the ids that execute.
+
+export const GET_ADD_TO_PROJECT_PREVIEW_QUERY = `
+  query($projectId: ID!, $contentId: ID!) {
+    project: node(id: $projectId) {
+      __typename
+      ... on ProjectV2 {
+        id
+        title
+      }
+    }
+    content: node(id: $contentId) {
+      __typename
+      ... on Issue {
+        number
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+      ... on PullRequest {
+        number
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+`;
+
+export const GET_PROJECT_ITEM_PREVIEW_QUERY = `
+  query($itemId: ID!) {
+    node(id: $itemId) {
+      __typename
+      ... on ProjectV2Item {
+        project {
+          id
+          title
+        }
+        content {
+          __typename
+          ... on Issue {
+            number
+            title
+            repository {
+              nameWithOwner
+            }
+          }
+          ... on PullRequest {
+            number
+            title
+            repository {
+              nameWithOwner
+            }
+          }
+          ... on DraftIssue {
+            title
           }
         }
       }
@@ -267,7 +338,7 @@ export const CONVERT_PR_TO_DRAFT_MUTATION = `
   }
 `;
 
-// Repository info queries (for whitelist validation)
+// Repository info queries (resolve a node ID to its repository for the selected-repositories guard)
 
 export const GET_REPOSITORY_FROM_ISSUE_NODE_ID_QUERY = `
   query($nodeId: ID!) {
@@ -290,6 +361,14 @@ export const GET_REPOSITORY_FROM_PROJECT_ITEM_ID_QUERY = `
       ... on ProjectV2Item {
         content {
           ... on Issue {
+            repository {
+              owner {
+                login
+              }
+              name
+            }
+          }
+          ... on PullRequest {
             repository {
               owner {
                 login

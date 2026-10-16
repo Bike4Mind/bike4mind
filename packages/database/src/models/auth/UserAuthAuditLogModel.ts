@@ -16,6 +16,9 @@ import BaseRepository from '@bike4mind/db-core';
  * hook. They exist so a "user was logged out" report can be answered from one query instead of
  * code archaeology. session_reuse_revoked and session_recovered also emit CloudWatch metrics
  * in Lumina5/AuthSecurity and drive the alarms in infra/alarms.ts.
+ *
+ * `step_up_success` / `step_up_failed` record re-verification for sensitive account changes
+ * (apps/client/pages/api/auth/step-up).
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -35,7 +38,9 @@ export type UserAuthAuditEvent =
   | 'trusted_device_granted'
   | 'trusted_device_used'
   | 'trusted_device_revoked'
-  | 'oauth_grant_revoked';
+  | 'oauth_grant_revoked'
+  | 'step_up_success'
+  | 'step_up_failed';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -56,6 +61,8 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'trusted_device_used',
   'trusted_device_revoked',
   'oauth_grant_revoked',
+  'step_up_success',
+  'step_up_failed',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {
@@ -148,7 +155,11 @@ class UserAuthAuditLogRepository extends BaseRepository<IUserAuthAuditLogDocumen
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
   }
 
-  async findByUserAndEvent(userId: string, event: UserAuthAuditEvent, limit = 50): Promise<IUserAuthAuditLogDocument[]> {
+  async findByUserAndEvent(
+    userId: string,
+    event: UserAuthAuditEvent,
+    limit = 50
+  ): Promise<IUserAuthAuditLogDocument[]> {
     return this.model.find({ userId, event }).sort({ createdAt: -1 }).limit(limit);
   }
 }

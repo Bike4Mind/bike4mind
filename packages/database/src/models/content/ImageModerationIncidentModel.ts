@@ -1,6 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
+import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -43,6 +43,12 @@ const ImageModerationIncidentSchema = new Schema(
     reviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
     // Populated when reviewStatus === 'reported'. The CyberTipline report ID returned by NCMEC.
     ncmecReportId: { type: String, required: false },
+    reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
+    reportedBy: { type: String, required: false },
+    reportedAt: { type: Date, required: false },
+    previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
+    falsePositiveBy: { type: String, required: false },
+    falsePositiveAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -64,6 +70,11 @@ export const ImageModerationIncident =
 
 // A confirmed_csam claim older than this is treated as a stuck submission, not a live one.
 export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
+
+// Incidents awaiting a verdict. reviewStatus is absent on pre-Q3 rows, so `null` matches a
+// missing field too. Shared so claimForNcmecSubmission and recordManualReport cannot diverge:
+// both are the "unreviewed" predicate, and only one of them may win a given race.
+const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_review', null];
 
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
@@ -93,7 +104,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
   async findPendingReview(limit: number): Promise<IImageModerationIncidentDocument[]> {
     return this.model
-      .find({ reviewStatus: { $in: ['pending_review', null] } })
+      .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
@@ -124,15 +135,51 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async claimForNcmecSubmission(id: string): Promise<IImageModerationIncidentDocument | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
       { $set: { reviewStatus: 'confirmed_csam' } },
       { new: true }
     );
   }
 
   /**
-   * Transition an incident to a terminal reviewStatus. `ncmecReportId` is set when
-   * `status === 'reported'`. Returns null if the transition is disallowed:
+   * Record a CyberTip an admin filed by hand on the NCMEC web form. Transitions directly from
+   * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
+   * claimForNcmecSubmission: whichever lands first wins and the other gets null.
+   *
+   * Also overrides a 'false_positive' verdict: the tip already exists at NCMEC, so the record
+   * must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
+   * 'confirmed_csam' (an API submission owns it) or 'reported'.
+   */
+  async recordManualReport(
+    id: string,
+    report: { ncmecReportId: string; reportedBy: string }
+  ): Promise<IImageModerationIncidentDocument | null> {
+    const reported = {
+      reviewStatus: 'reported',
+      ncmecReportId: report.ncmecReportId,
+      reportChannel: 'manual',
+      reportedBy: report.reportedBy,
+      reportedAt: new Date(),
+    };
+    const fromUnreviewed = await this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
+      { $set: reported },
+      { new: true }
+    );
+    if (fromUnreviewed) return fromUnreviewed;
+    // Each write is atomic on its own filter; a row can only match one of the two.
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: 'false_positive' },
+      { $set: { ...reported, previousReviewStatus: 'false_positive' } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and the acting admin
+   * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
+   * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
+   * transition is disallowed:
    * - always blocked when already 'reported' (idempotency)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
@@ -140,10 +187,19 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   async updateReviewStatus(
     id: string,
     status: IncidentReviewStatus,
-    ncmecReportId?: string
+    ncmecReportId?: string,
+    actorId?: string
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
+    if (status === 'reported') {
+      update.reportedAt = new Date();
+      if (actorId) update.reportedBy = actorId;
+    }
+    if (status === 'false_positive') {
+      update.falsePositiveAt = new Date();
+      if (actorId) update.falsePositiveBy = actorId;
+    }
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
@@ -162,11 +218,15 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async resolveConfirmedCsam(
     id: string,
-    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' },
+    target: { status: 'reported'; ncmecReportId: string; reportedBy: string } | { status: 'pending_review' },
     staleAfterMs = STALE_CONFIRMED_CSAM_MS
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: target.status };
-    if (target.status === 'reported') update.ncmecReportId = target.ncmecReportId;
+    if (target.status === 'reported') {
+      update.ncmecReportId = target.ncmecReportId;
+      update.reportedBy = target.reportedBy;
+      update.reportedAt = new Date();
+    }
     const filter: Record<string, unknown> = {
       _id: id,
       reviewStatus: 'confirmed_csam',

@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { UNKNOWN_MODEL_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
@@ -8,6 +12,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
+import { ChatToolModeSchema } from './promptMeta';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -57,7 +62,7 @@ export const SimplifiedChatRequestSchema = z.object({
   // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
   // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
   // tools and supplies the set; absent that too, it falls back to enableTools behavior.
-  toolMode: z.enum(['fast', 'smart']).optional(),
+  toolMode: ChatToolModeSchema.optional(),
   // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
   // intent to enable tools, so no companion toolMode/enableTools is required - the array
   // used to be dropped in silence without one. Unknown ids are filtered by the handler
@@ -186,7 +191,7 @@ export const ChatAckSchema = z.object({
   tools: z
     .object({
       // Absent when the caller named tools without sending a mode.
-      toolMode: z.enum(['fast', 'smart']).optional(),
+      toolMode: ChatToolModeSchema.optional(),
       // Smart mode only: what the prompt-based recommender picked.
       autoSelectedTools: z.array(z.string()).optional(),
       effectiveTools: z.array(z.string()),
@@ -359,4 +364,12 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .array(z.string())
     .optional()
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
+
+/**
+ * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
+ * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ */
+export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
 });

@@ -19,6 +19,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import imageLogger from '@server/utils/imageLogger';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -75,6 +76,7 @@ export const getImageGeneration = (): ImageGenerationService => {
       logEvent: logEvent,
       storage: getGeneratedImageStorage(),
       fabFileStorage: getFilesStorage(),
+      saveGeneratedAsset: saveGeneratedAssetToFiles,
       abilityGetter: defineAbilitiesFor,
       invokeSessionAutoNaming: async (sessionId: string, userId: string) => {
         await SessionEvents.AutoName.publish({

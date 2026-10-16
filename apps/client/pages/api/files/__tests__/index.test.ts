@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -109,7 +110,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ bucket: 'files', getSignedUrl: vi.fn(), delete: vi.fn() }),
+  getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
   getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
@@ -134,6 +135,27 @@ function invokeGet(query: Record<string, unknown> = {}) {
 }
 
 describe('GET /api/files', () => {
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { req, res } = invokeGet();
+      await mockRefs.getHandler!(req, res);
+      const adapter = mockRefs.searchArgs?.[2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
+
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
   });
@@ -281,7 +303,8 @@ describe('DELETE /api/files', () => {
 
   // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the
   // file's own notebook look like another's, so every notebook-linked chat copy would be kept.
-  it('selects the notebook link the generated-copy fork guard needs', async () => {
+  // `versions` carries the retained AI-edit keys, which would otherwise be orphaned.
+  it('selects the notebook link the generated-copy fork guard needs, and the retained versions', async () => {
     const { req, res } = invokeDelete();
 
     await mockRefs.deleteHandler!(req, res);
@@ -290,7 +313,10 @@ describe('DELETE /api/files', () => {
     expect(storedObjectProjection).toEqual(
       expect.arrayContaining([
         'filePath',
+        'versions',
         'moderationStatus',
+        // Without it an unscannable-format block reads as a content block and its bytes are kept forever.
+        'blockReason',
         'sourceMetadata.generatedCopyKey',
         'sourceMetadata.sessionId',
       ])
@@ -314,3 +340,5 @@ describe('DELETE /api/files', () => {
     expect(mockRefs.deleteManyArgs).toBeUndefined();
   });
 });
+
+afterEach(() => vi.unstubAllEnvs());

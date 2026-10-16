@@ -4,6 +4,7 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import MFAModal from '@client/app/components/common/MFAModal';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
@@ -43,7 +44,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isPending: setupMFAIsPending,
     data: setupMFAData,
     isError: setupMFAIsError,
+    error: setupMFAError,
   } = setupMFA;
+  // Dismissing the verification prompt is a choice, not a failure: offer to continue instead.
+  const setupVerificationCancelled = setupMFAIsError && isStepUpCancelled(setupMFAError);
   const verifyMFASetup = useVerifyMFASetup();
 
   // Shared by the auto-start effect and the manual retry button (see the enforced-block
@@ -56,6 +60,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         toast.info('Please complete MFA setup to continue');
       },
       onError: (error: any) => {
+        if (isStepUpCancelled(error)) return;
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
@@ -242,7 +247,16 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           access the application.
         </Alert>
 
-        {setupMFAIsError ? (
+        {setupVerificationCancelled ? (
+          <>
+            <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+              Confirm it&apos;s you to start MFA setup.
+            </Typography>
+            <Button data-testid="mfa-enforcement-continue-btn" onClick={startMfaSetup} loading={setupMFAIsPending}>
+              Continue MFA setup
+            </Button>
+          </>
+        ) : setupMFAIsError ? (
           // A failed setup used to dead-end here on "please wait" forever (the auto-retry
           // guard intentionally won't re-fire, and the only signal was a toast that has
           // faded). Give the user an explicit way back in.

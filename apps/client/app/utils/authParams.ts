@@ -21,7 +21,17 @@ export interface AuthParams {
   isNewUser?: boolean;
   /** OAuth strategy that created the account (e.g. "google"); set with isNewUser. */
   signupMethod?: string;
+  /**
+   * Set instead of `token` when the sign-in still owes a second factor: `token` here is an
+   * mfaPending token for the MFA challenge, never a session. Built by mfaHandoffFragment
+   * in server/auth/authSuccessRedirect.ts.
+   */
+  mfa?: { token: string; mode: 'verify' | 'setup'; passkeyAvailable: boolean };
 }
+
+const MFA_MODES = ['verify', 'setup'] as const;
+const isMfaMode = (value: string | null): value is (typeof MFA_MODES)[number] =>
+  (MFA_MODES as readonly (string | null)[]).includes(value);
 
 /**
  * Parse auth parameters from a hash fragment string.
@@ -52,6 +62,17 @@ export function parseHashParams(hash: string): AuthParams | null {
       token,
       userId,
       error: error || undefined,
+      isNewUser: hashParams.get('isNewUser') === '1' || undefined,
+      signupMethod: hashParams.get('signupMethod') || undefined,
+    };
+  }
+
+  const mfaToken = hashParams.get('mfaToken');
+  const mfaMode = hashParams.get('mfa');
+  if (mfaToken && userId && isMfaMode(mfaMode)) {
+    return {
+      userId,
+      mfa: { token: mfaToken, mode: mfaMode, passkeyAvailable: hashParams.get('passkey') === '1' },
       isNewUser: hashParams.get('isNewUser') === '1' || undefined,
       signupMethod: hashParams.get('signupMethod') || undefined,
     };

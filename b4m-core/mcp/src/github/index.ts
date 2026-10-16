@@ -10,42 +10,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-// Tool registrations
-import { registerUserTools } from './tools/user.js';
-import { registerIssueTools } from './tools/issues.js';
-import { registerSearchTools } from './tools/search.js';
-import { registerRepoTools } from './tools/repos.js';
-import { registerPullTools } from './tools/pulls.js';
-import { registerBranchTools } from './tools/branches.js';
-import { registerContentsTools } from './tools/contents.js';
-import { registerCommitTools } from './tools/commits.js';
-import { registerIssueTypeTools } from './tools/issue-types.js';
-import { registerProjectTools } from './tools/projects.js';
-import { registerLabelTools } from './tools/labels.js';
-import { registerMilestoneTools } from './tools/milestones.js';
-import { registerWorkflowTools } from './tools/workflows.js';
-import { registerReviewTools } from './tools/reviews.js';
+import { registerGitHubTools } from './registerTools.js';
+import { getRepositoryFromIssueNodeId, getRepositoryFromProjectItemId } from './helpers/whitelist.js';
 
 const server = new McpServer({
   name: 'github-mcp',
   version: '1.0.0',
 });
 
-// Register all tools
-registerUserTools(server);
-registerIssueTools(server);
-registerSearchTools(server);
-registerRepoTools(server);
-registerPullTools(server);
-registerBranchTools(server);
-registerContentsTools(server);
-registerCommitTools(server);
-registerIssueTypeTools(server);
-registerProjectTools(server);
-registerLabelTools(server);
-registerMilestoneTools(server);
-registerWorkflowTools(server);
-registerReviewTools(server);
+registerGitHubTools(server, {
+  fromIssueNodeId: getRepositoryFromIssueNodeId,
+  fromProjectItemId: getRepositoryFromProjectItemId,
+});
 
 // Start the MCP server
 const transport = new StdioServerTransport();

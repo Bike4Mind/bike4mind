@@ -22,24 +22,13 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const CURSOR_SCOPE = 'v1.video-generations';
-
-const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
-
-const readIdempotencyKey = (header: string | string[] | undefined): string | undefined => {
-  if (header === undefined) return undefined;
-  if (typeof header !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(header)) {
-    throw new UnprocessableEntityError('Idempotency-Key must be 1-255 printable ASCII characters', {
-      errorCode: 'invalid_idempotency_key',
-    });
-  }
-  return header;
-};
 
 // Omitted fields take the model's catalog defaults; createVideoJob then validates against its capabilities.
 const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationRequest => {
@@ -74,8 +63,8 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.
-  const organizationId = await resolveBillingOrgId(req, req.validated.organization_id);
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {

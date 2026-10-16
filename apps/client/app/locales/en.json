@@ -285,7 +285,7 @@
       "registrationFailed": "Registration failed. Please try again later.",
       "validation": {
         "generic": "Invalid input",
-        "invalidUsername": "Username can only contain letters, numbers, underscores, periods, and dashes",
+        "invalidUsername": "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters).",
         "passwordMismatch": "Passwords do not match",
         "passwordRequirements": "Password must be at least 8 characters, with upper and lower case letters, a number, and a special character"
       }
@@ -409,6 +409,7 @@
     "failed_to_load_data": "Failed to load data. Please try again later."
   },
   "integrations": {
+    "title": "Integrations",
     "atlassian": {
       "reconnect_required": "Your Atlassian connection has expired. Please reconnect your account."
     }
@@ -591,6 +592,22 @@
     "save": "Save",
     "update_success": "Updated system priority for \"{{fileName}}\".",
     "update_error": "Failed to update system priority."
+  },
+  "media_player": {
+    "load_failed": "This file could not be played",
+    "retry": "Retry",
+    "download_failed": "Failed to download file",
+    "open_video": "Open {{name}}"
+  },
+  "generated_filter": {
+    "label": "Generated"
+  },
+  "generation_details": {
+    "title": "Generation details",
+    "model": "Model",
+    "duration": "Length",
+    "prompt": "Prompt",
+    "lyrics": "Lyrics"
   },
   "file_actions": {
     "notes": "Notes",

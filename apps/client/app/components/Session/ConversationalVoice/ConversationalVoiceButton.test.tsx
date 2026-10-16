@@ -16,9 +16,12 @@ vi.mock('@client/app/components/subscription/CreditsModal', () => ({
 }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 
-const storeState = { phase: 'idle', errorMessage: null, start: vi.fn(), end: vi.fn() };
+const storeState = { phase: 'idle', mode: null as string | null, errorMessage: null, start: vi.fn(), end: vi.fn() };
 vi.mock('./useConversationalVoice', () => ({
   useConversationalVoiceStore: (selector: (s: typeof storeState) => unknown) => selector(storeState),
+  isCallActivePhase: (phase: string) =>
+    ['requesting-session', 'connecting', 'connected', 'reconnecting'].includes(phase),
+  getCallFrequencyData: () => null,
 }));
 
 import ConversationalVoiceButton from './ConversationalVoiceButton';
@@ -34,6 +37,7 @@ const renderButton = () =>
 describe('ConversationalVoiceButton cost hint', () => {
   beforeEach(() => {
     storeState.phase = 'idle';
+    storeState.mode = null;
     storeState.start.mockClear();
     settings.enforceCredits = true;
     userState.currentUser = { currentCredits: 1_000_000 };
@@ -119,5 +123,27 @@ describe('ConversationalVoiceButton cost hint', () => {
     renderButton();
 
     expect(screen.getByTestId('conversational-voice-btn')).toHaveAccessibleName('End voice call');
+  });
+
+  it('shows no status pill before a call', () => {
+    renderButton();
+    expect(screen.queryByTestId('conversational-voice-status')).toBeNull();
+  });
+
+  it('says who is talking in the status pill', () => {
+    storeState.phase = 'connected';
+    storeState.mode = 'listening';
+    const { unmount } = renderButton();
+    expect(screen.getByTestId('conversational-voice-status')).toHaveTextContent('Listening');
+    unmount();
+    storeState.mode = 'speaking';
+    renderButton();
+    expect(screen.getByTestId('conversational-voice-status')).toHaveTextContent('Speaking');
+  });
+
+  it('says it is connecting while the call starts', () => {
+    storeState.phase = 'connecting';
+    renderButton();
+    expect(screen.getByTestId('conversational-voice-status')).toHaveTextContent('Connecting');
   });
 });
