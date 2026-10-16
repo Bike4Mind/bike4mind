@@ -846,6 +846,23 @@ const failedFileFields = (errorMessage: string): { error: string; isVectorizing:
   isVectorizing: false,
 });
 
+/**
+ * One arm of "a rebuild was stamped and has not committed": `in-flight`, for a stamp inside
+ * REBUILD_PENDING_STALE_MS (countRebuildingFilesByScope), and `stale`, for an older one
+ * (findConvergencePausedFilesByScope's STALE-PENDING arm). Both also require an empty `error`, which
+ * is what splits them from countFailedFilesByScope. One predicate because the two arms are
+ * complements by construction, and that complementarity is the whole reason the three counts can be
+ * read side by side: two hand-written copies 150 lines apart are free to drift.
+ *
+ * Each caller computes its own `cutoff`, so the arms are cut at slightly different instants - a file
+ * landing in the milliseconds between them is counted by both once, and by the stale arm alone on
+ * every read after that.
+ */
+const rebuildPendingArm = (cutoff: Date, arm: 'in-flight' | 'stale') => ({
+  chunkRebuildRequestedAt: arm === 'in-flight' ? { $gte: cutoff } : { $lt: cutoff },
+  error: { $in: [null, ''] },
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -2832,6 +2849,28 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  // Unindexed on embeddingModel; callers reach it only when a keyless substitution fires.
+  async hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean> {
+    const hit = await this.fabFileModel.exists({
+      embeddingModel,
+      vectorizedChunkCount: { $gt: 0 },
+      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with an
+      // explicit null stamp, and a non-final vectorize message raises the count while leaving the
+      // label and the stamp alone - so an in-flight file (explicit null stamp) must not match its own
+      // substitution, or it would refuse every later message on the keyless stage the fallback exists
+      // for. A file completed before the stamp field existed carries NO stamp at all, yet its label
+      // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
+      // excludes. The completion stamp writes the real label and this timestamp in one transaction,
+      // and re-chunking rewrites the label to the requested model and clears the stamp.
+      $or: [
+        { chunkEmbeddingModelStampedAt: { $ne: null } },
+        { chunkEmbeddingModelStampedAt: { $exists: false } },
+      ],
+      deletedAt: null,
+    });
+    return hit !== null;
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
@@ -2873,10 +2912,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
-            {
-              chunkRebuildRequestedAt: { $lt: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
-              error: { $in: [null, ''] },
-            },
+            rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'stale'),
           ],
           // Keeps a REPAIRED file out of the wave. `$not: {$gt: 0}` deliberately also matches a null
           // or absent count, so a legacy file carrying the marker is offered the repair rather than
@@ -3024,6 +3060,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       status: { $ne: 'pending' },
       chunkCount: { $lte: 0 },
       error: { $nin: [null, ''] },
+    });
+  }
+
+  async countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
+    // Reset, not yet committed, and not past REBUILD_PENDING_STALE_MS: older stamps are reported by
+    // findConvergencePausedFilesByScope and errored ones by countFailedFilesByScope, so the three
+    // counts never overlap.
+    return this.fabFileModel.countDocuments({
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: null,
+      archivedAt: null,
+      ...rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'in-flight'),
     });
   }
 

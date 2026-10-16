@@ -106,34 +106,43 @@ describe('math_evaluate', () => {
   });
 
   describe('error handling', () => {
-    it('should return error string with the expression on invalid input', async () => {
-      const result = await evaluate({ expression: '???invalid' });
-      expect(result).toContain('Error: Failed to evaluate math expression');
-      expect(result).toContain('???invalid');
+    // Failures throw so the adapters record the tool call as failed; the message still reaches the model.
+    const failure = async (expression: string): Promise<string> => {
+      const error = await evaluate({ expression }).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect(error).toBeInstanceOf(Error);
+      return (error as Error).message;
+    };
+
+    it('throws with the expression on invalid input', async () => {
+      const message = await failure('???invalid');
+      expect(message).toContain('Failed to evaluate math expression');
+      expect(message).toContain('???invalid');
     });
 
-    it('should return error string for natural language input', async () => {
-      const result = await evaluate({ expression: 'no. of days' });
-      expect(result).toContain('Error: Failed to evaluate math expression');
-      expect(result).toContain('no. of days');
+    it('throws for natural language input', async () => {
+      const message = await failure('no. of days');
+      expect(message).toContain('Failed to evaluate math expression');
+      expect(message).toContain('no. of days');
     });
 
-    it('returns the generic hint for input with no resolvable symbol', async () => {
-      const result = await evaluate({ expression: '???invalid' });
-      expect(result).toContain('valid mathematical expression');
+    it('gives the generic hint for input with no resolvable symbol', async () => {
+      expect(await failure('???invalid')).toContain('valid mathjs expression');
     });
 
     // LLM generates expression with unclosed parenthesis
     it('detects unclosed opening parenthesis (#7825)', async () => {
-      const result = await evaluate({ expression: '(2 + 3' });
-      expect(result).toContain('Unbalanced parentheses');
-      expect(result).toContain('unclosed opening parenthesis');
+      const message = await failure('(2 + 3');
+      expect(message).toContain('Unbalanced parentheses');
+      expect(message).toContain('unclosed opening parenthesis');
     });
 
     it('detects unexpected closing parenthesis', async () => {
-      const result = await evaluate({ expression: '2 + 3)' });
-      expect(result).toContain('Unbalanced parentheses');
-      expect(result).toContain('unexpected closing parenthesis');
+      const message = await failure('2 + 3)');
+      expect(message).toContain('Unbalanced parentheses');
+      expect(message).toContain('unexpected closing parenthesis');
     });
 
     it('still evaluates valid nested parentheses', async () => {
@@ -144,22 +153,30 @@ describe('math_evaluate', () => {
     // LLM references a variable it never assigned (e.g. forgot the
     // "cashPrior = ..." statement). Surface a targeted, self-correctable message that names
     // the symbol instead of the misleading generic "numbers and operators only" hint.
-    it('returns a targeted message naming the undefined symbol (#8626)', async () => {
-      const result = await evaluate({
-        expression:
-          'shortDebtRecent = 5782931; currentRatioPrior = (cashPrior + 547390) / shortDebtRecent; currentRatioPrior',
-      });
-      expect(result).toContain('Error: Failed to evaluate math expression');
-      expect(result).toContain('cashPrior');
-      expect(result).toContain('never assigned a value');
+    it('throws a targeted message naming the undefined symbol (#8626)', async () => {
+      const message = await failure(
+        'shortDebtRecent = 5782931; currentRatioPrior = (cashPrior + 547390) / shortDebtRecent; currentRatioPrior'
+      );
+      expect(message).toContain('Failed to evaluate math expression');
+      expect(message).toContain('cashPrior');
+      expect(message).toContain('never assigned a value');
       // Should NOT fall back to the misleading natural-language hint
-      expect(result).not.toContain('no natural language');
+      expect(message).not.toContain('no natural language');
     });
 
     it('names the undefined symbol for a bare unassigned variable', async () => {
-      const result = await evaluate({ expression: 'foo + 1' });
-      expect(result).toContain('foo');
-      expect(result).toContain('never assigned a value');
+      const message = await failure('foo + 1');
+      expect(message).toContain('foo');
+      expect(message).toContain('never assigned a value');
+    });
+
+    // The shape a model looped on in QA: a list then max() of it.
+    it('evaluates a list assignment followed by max()', async () => {
+      expect(await evaluate({ expression: 'values = [3, 9, 4]; max(values)' })).toBe('9');
+    });
+
+    it('throws for JavaScript spread syntax', async () => {
+      expect(await failure('values = [3, 9, 4]; max(...values)')).toContain('Failed to evaluate math expression');
     });
   });
 });

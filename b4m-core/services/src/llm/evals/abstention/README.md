@@ -4,7 +4,7 @@ Measures what the abstention block in [`forcedRetrievalAbstention.ts`](../../for
 
 ## Why this is an eval and not a unit test
 
-The block is injected on **every** ungrounded forced-retrieval turn. The code-level skips are exactly two - an empty prompt, and a turn carrying attached files. Everything else gets the block and is trusted to no-op it via the wording ("For any part of the answer that depends on that library ..."). Forced retrieval is a per-session toggle on ordinary chats, so the residual risk is a trivial follow-up ("thanks") drawing an unprompted apology about library coverage.
+The block is injected on **every** forced-retrieval turn that found no passage. The code-level skips are four - an empty prompt, a turn carrying attached files in a chat with no chosen lake, a session scoped to no lake, and a session whose corpus is personal files only. Everything else gets the block and is trusted to no-op it via the wording ("For any part of the answer that depends on that library ..."). Forced retrieval is a per-session toggle on ordinary chats, so the residual risk is a trivial follow-up ("thanks") drawing an unprompted apology about library coverage.
 
 That the wording holds is a claim about model behaviour, so it wants a measurement rather than an argument. Two kinds of case:
 

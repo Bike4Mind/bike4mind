@@ -2974,12 +2974,14 @@ describe('createDataLake', () => {
 
   it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
-    // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
-    // second free. `lake()` uses prefix `lk:`, which cannot collide with this lake's `xy:`.
-    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    // Call order: the tag-prefix availability check, then the slug probes (first slug taken,
+    // second free), then the tag probe for the free one. `lake()` uses prefix `lk:`, which cannot
+    // collide with this lake's `xy:`. The default answers every later probe.
+    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValue([]);
     const db = { dataLakes: { create, find } };
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
+    expect(find).toHaveBeenCalledWith({ datalakeTag: 'datalake:orgA:xy-1' });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
   });
 

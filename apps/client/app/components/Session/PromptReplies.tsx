@@ -60,6 +60,7 @@ import {
 } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
+import { RetrievalFloorBanner } from './RetrievalFloorBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -1586,6 +1587,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           of fact - the output is less complete than it looks. */}
       {promptMeta?.retrievalCoverage?.partial && (
         <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+      )}
+
+      {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
+      {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
+        <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
       )}
 
       {showSyntaxHighlight ? (

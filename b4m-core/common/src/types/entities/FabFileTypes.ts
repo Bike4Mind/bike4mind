@@ -1971,6 +1971,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
@@ -2020,6 +2022,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

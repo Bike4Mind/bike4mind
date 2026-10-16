@@ -154,10 +154,12 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findFileIdsWithPositiveVectorizedCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
   findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
+  hasVectorizedFileInEmbeddingSpace: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),
+  countRebuildingFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
@@ -309,6 +311,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findPlanHolderOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),
   });
 

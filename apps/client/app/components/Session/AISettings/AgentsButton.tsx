@@ -59,11 +59,15 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
       }}
     >
       <MenuButton
+        data-testid="session-agents-dropdown-toggle"
         variant="outlined"
         aria-label={iconOnly ? 'Agents' : undefined}
         sx={{
           display: 'flex',
           borderRadius: '6px',
+          // Holds its width so the row overflows and collapses to icons rather than squeezing the
+          // label under the count (see ToolsButton).
+          flexShrink: 0,
           px: 1,
           ...fixedHeight,
           ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),

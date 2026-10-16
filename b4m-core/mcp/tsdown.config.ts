@@ -3,7 +3,13 @@ import { defineConfig } from 'tsdown';
 export default defineConfig([
   // Library exports (ESM + CJS with type declarations)
   {
-    entry: ['src/index.ts', 'src/atlassian/constants.ts', 'src/github/constants.ts', 'src/notion/constants.ts'],
+    entry: [
+      'src/index.ts',
+      'src/remote/index.ts',
+      'src/atlassian/constants.ts',
+      'src/github/constants.ts',
+      'src/notion/constants.ts',
+    ],
     format: ['esm', 'cjs'],
     dts: true,
     outDir: 'dist',
