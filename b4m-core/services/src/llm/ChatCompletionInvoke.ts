@@ -230,7 +230,6 @@ export class ChatCompletionInvoke {
     // Start sessions.update early (will await later in parallel with admin settings)
     const sessionUpdatePromise = this.db.sessions.update({
       id: sessionId,
-      lastUsedModel: model.id,
       lastUpdated: now,
       updatedAt: now,
     });
@@ -523,6 +522,12 @@ export class ChatCompletionInvoke {
       if (this.invokeLambda && this.questStartParams) {
         this.logger.info('🌍 [SERVER] invokeLambda start:', new Date().toISOString());
         await this.invokeLambda(this.questStartParams);
+        // Pinned only after the access check and dispatch: a model that cannot run must not stick to the session.
+        if (session.lastUsedModel !== model.id) {
+          await this.db.sessions
+            .update({ id: sessionId, lastUsedModel: model.id })
+            .catch(error => this.logger.warn(`Failed to pin ${model.id} to session ${sessionId}`, error));
+        }
       } else {
         throw new InternalServerError('No invokeLambda function provided');
       }
@@ -540,11 +545,13 @@ export class ChatCompletionInvoke {
       };
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       await this.db.quests.update({
         id: quest.id,
         promptMeta: quest.promptMeta,
         type: quest.type,
+        status: quest.status,
         reply: quest.reply,
       });
     }
