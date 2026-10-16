@@ -1,6 +1,6 @@
 import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 
@@ -39,7 +39,9 @@ export async function resolveDeepAgentBackend(
   // abuse attribution. Present on the user-triggered first-wake path; the
   // recurring cron-wake path (deepAgentWake.ts -> wakeHandler) does not yet source
   // the owner (charter.identity.ownerUserId) at enqueue time - follow-up.
-  endUserId?: string
+  endUserId?: string,
+  /** Reserve and settle every wake LLM call against the mission owner (see ./wakeMetering). */
+  meter?: CompletionMeter
 ): Promise<ResolvedBackend | null> {
   const apiKeyTable = await buildSystemApiKeyTable(logger);
   const models = await getAvailableModels(apiKeyTable);
@@ -53,5 +55,5 @@ export async function resolveDeepAgentBackend(
     logger.warn('deep agent wake: failed to init LLM backend', { modelId });
     return null;
   }
-  return { llm, modelId: modelInfo.id };
+  return { llm: meter ? meterCompletionBackend(llm, meter, modelInfo, models) : llm, modelId: modelInfo.id };
 }

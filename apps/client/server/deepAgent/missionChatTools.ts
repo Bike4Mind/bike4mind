@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { enrollMissionForAgent, findAgentsByName, formatMissionStatusReport, listMissionsForAgent } from './missions';
+import { canCreateMissions } from './missionAccess';
 import { MongoDeepAgentStore } from './store';
 import { runMissionFirstWake } from './firstWake';
 
@@ -61,12 +62,20 @@ export const missionChatTools: Record<string, ToolDefinition> = {
         if (!params?.agentName || !params?.goal) {
           throw new Error('create_mission: agentName and goal are required');
         }
+        if (!canCreateMissions(context.user)) {
+          return 'Missions are currently available to admins and developers only.';
+        }
         const resolved = await resolveAgentByName(context.userId, params.agentName);
         if ('error' in resolved) return resolved.error;
         const { agent } = resolved;
         const store = new MongoDeepAgentStore();
         const { missionId } = await enrollMissionForAgent(
-          { b4mAgentId: agent.id, callerUserId: context.userId, goal: params.goal },
+          {
+            b4mAgentId: agent.id,
+            callerUserId: context.userId,
+            callerIsAdmin: Boolean(context.user.isAdmin),
+            goal: params.goal,
+          },
           store
         );
         const outcome = await runMissionFirstWake(missionId, {

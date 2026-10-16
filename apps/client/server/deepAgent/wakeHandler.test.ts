@@ -12,7 +12,10 @@ import {
   type WakeDeps,
   type WakeSteps,
 } from '@bike4mind/agents';
+import { insufficientCreditsError, type ModelInfo } from '@bike4mind/common';
+import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
+import { MISSION_NEEDS_CREDITS_BLOCKER } from './wakeMetering';
 
 const NEUTRAL: DriveVector = {
   curiosity: 0.5,
@@ -158,5 +161,44 @@ describe('processWake', () => {
       'deep agent wake complete',
       expect.objectContaining({ agentId: 'agent-1', wakeCount: 1, episodeId: 'ep-1' })
     );
+  });
+
+  it('pauses the mission without calling the provider when the owner cannot cover the wake', async () => {
+    const store = new FakeStore();
+    store.charters.set('agent-1', charter());
+    store.handoffs.set('agent-1', {
+      agentId: 'agent-1',
+      wakeCount: 3,
+      lastWakeAt: ISO,
+      lastActionSummary: 'did a thing',
+      nextIntendedAction: 'next',
+      nextWakeIntervalMs: 60_000,
+      openBlockers: [],
+      updatedAt: ISO,
+    });
+    const provider = { complete: vi.fn() };
+    const llm = meterCompletionBackend(
+      provider,
+      async () => {
+        throw insufficientCreditsError('out of credits');
+      },
+      { id: 'haiku' } as ModelInfo
+    );
+    const steps: WakeSteps = {
+      ...STEPS,
+      async orient() {
+        await llm.complete('haiku', [], {}, async () => {});
+        return POLICY;
+      },
+    };
+
+    await processWake({ agentId: 'agent-1' }, new Logger(), { deps: { ...fakeDeps(store), steps } });
+
+    expect(provider.complete).not.toHaveBeenCalled();
+    expect(store.episodes).toHaveLength(0);
+    const handoff = store.handoffs.get('agent-1')!;
+    expect(handoff.nextWakeIntervalMs).toBeUndefined();
+    expect(handoff.openBlockers).toEqual([MISSION_NEEDS_CREDITS_BLOCKER]);
+    expect(handoff.wakeCount).toBe(3);
   });
 });

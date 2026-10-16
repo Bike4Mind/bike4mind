@@ -10,6 +10,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
 import { enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
+import { canCreateMissions } from '@server/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@server/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 
@@ -80,10 +81,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'no authenticated user' });
 
-    const hasAccess =
-      req.user?.isAdmin ||
-      (req.user?.tags ?? []).map(t => t.toLowerCase()).some(t => ['developer', 'dev', 'developers'].includes(t));
-    if (!hasAccess) return res.status(403).json({ error: 'admin/developer access required' });
+    if (!canCreateMissions(req.user!)) return res.status(403).json({ error: 'admin/developer access required' });
 
     const b4mAgentId = String(req.query.id || '');
     if (!b4mAgentId) return res.status(400).json({ error: 'agent id required' });

@@ -17,6 +17,8 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from './missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from './resolveBackend';
+import { isInsufficientCredits, missionWakeMeter, pauseMissionForCredits } from './wakeMetering';
+import type { CompletionMeter } from '@bike4mind/services';
 
 /**
  * Deep-agent wake trigger. One SQS message -> one wake cycle for one agent.
@@ -52,6 +54,7 @@ export interface BuildWakeDepsOptions {
    * precedence over `enableTools`.
    */
   buildTools?: ToolMaterializer;
+  meter?: CompletionMeter;
 }
 
 /** Assemble the production wake deps: Mongo store + LLM-backed steps. */
@@ -60,7 +63,7 @@ export async function buildDefaultWakeDeps(
   logger: Logger,
   options?: BuildWakeDepsOptions
 ): Promise<WakeDeps> {
-  const resolved = await resolveDeepAgentBackend(modelId ?? DEFAULT_WAKE_MODEL_ID, logger);
+  const resolved = await resolveDeepAgentBackend(modelId ?? DEFAULT_WAKE_MODEL_ID, logger, undefined, options?.meter);
   if (!resolved) {
     throw new Error(`deep agent wake: could not resolve model ${modelId ?? DEFAULT_WAKE_MODEL_ID}`);
   }
@@ -97,8 +100,20 @@ export async function processWake(
   logger: Logger,
   overrides?: ProcessWakeOverrides
 ): Promise<void> {
-  const deps = overrides?.deps ?? (await buildDefaultWakeDeps(payload.modelId, logger));
-  const outcome = await runWakeCycle(payload.agentId, deps);
+  const store = new MongoDeepAgentStore();
+  const deps =
+    overrides?.deps ??
+    (await buildDefaultWakeDeps(payload.modelId, logger, {
+      meter: await missionWakeMeter(store, payload.agentId, logger),
+    }));
+  let outcome: Awaited<ReturnType<typeof runWakeCycle>>;
+  try {
+    outcome = await runWakeCycle(payload.agentId, deps);
+  } catch (err) {
+    if (!isInsufficientCredits(err)) throw err;
+    await pauseMissionForCredits(deps.store, payload.agentId, logger);
+    return;
+  }
   // Mission log: fire-and-forget - never fails the wake.
   void bridgeWakeToSession(outcome, logger);
   logger.info('deep agent wake complete', {
