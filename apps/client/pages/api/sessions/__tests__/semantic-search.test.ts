@@ -39,10 +39,17 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   sessionRepository: { find: vi.fn(async () => []) },
+  organizationRepository: {},
+  usageEventRepository: {},
+  creditTransactionRepository: {},
+  userRepository: {},
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: async () => undefined }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ lean: async () => [] })) } }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
+  // Metering is covered in semantic-search.metering.test.ts.
+  recordOperationalUsage: vi.fn(async () => undefined),
 }));
 vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
   // Query expansion is best-effort behind a try/catch; throwing exercises its keyword fallback

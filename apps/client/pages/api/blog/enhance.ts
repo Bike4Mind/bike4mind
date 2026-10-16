@@ -1,8 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserDocument } from '@bike4mind/common';
+import { IUserDocument, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  latchUsage,
+  reserveCompletionCredits,
+  settleCompletion,
+  type CompletionUsage,
+} from '@server/billing/meterPlatformCompletion';
 
 interface BlogEnhanceParams {
   content: string;
@@ -19,6 +27,7 @@ interface BlogEnhanceResponse {
 }
 
 async function enhanceContent(
+  req: Parameters<typeof reserveCompletionCredits>[0],
   user: IUserDocument,
   params: BlogEnhanceParams,
   logger: Logger
@@ -39,6 +48,37 @@ async function enhanceContent(
       throw new Error(`Could not create backend for ${operationsModelInfo.backend}/${operationsModelInfo.id}`);
     }
 
+    // Reserve the call's ceiling, then settle the reported usage (the ceiling when none is reported).
+    const meteredComplete = async (messages: IMessage[], maxTokens: number): Promise<string> => {
+      const ceilingUsd = completionCeilingUsd(operationsModelInfo, messages, maxTokens);
+      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'blog enhancement');
+      let text = '';
+      const usage: CompletionUsage = {};
+      try {
+        await llmBackend.complete(
+          operationsModelInfo.id,
+          messages,
+          { temperature: 0.7, maxTokens, stream: false },
+          async (textParts: (string | null | undefined)[], info) => {
+            text += textParts.filter(Boolean).join('');
+            latchUsage(usage, info);
+          }
+        );
+      } catch (error) {
+        await reservation.refund();
+        throw error;
+      }
+      const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+      await settleCompletion(reservation, req, {
+        model: operationsModelInfo.id,
+        provider: operationsModelInfo.backend,
+        usd: reported ? completionUsd(operationsModelInfo, usage) : ceilingUsd,
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      });
+      return text;
+    };
+
     if (params.enhancementType === 'title') {
       // Generate title from content
       const prompt = `You are a professional blog title writer. Based on the following blog post content, generate a compelling, SEO-friendly title that accurately captures the main topic and hooks the reader.
@@ -58,21 +98,7 @@ Instructions:
 
 Title:`;
 
-      const messages = [{ role: 'user' as const, content: prompt }];
-
-      let enhancedTitle = '';
-
-      await llmBackend.complete(
-        operationsModelInfo.id,
-        messages,
-        { temperature: 0.7, maxTokens: 150, stream: false },
-        async (textParts: (string | null | undefined)[]) => {
-          const fullText = textParts.filter(Boolean).join('');
-          if (fullText) {
-            enhancedTitle += fullText;
-          }
-        }
-      );
+      const enhancedTitle = await meteredComplete([{ role: 'user', content: prompt }], 150);
 
       return {
         success: true,
@@ -96,21 +122,7 @@ Instructions:
 
 Summary:`;
 
-      const messages = [{ role: 'user' as const, content: prompt }];
-
-      let enhancedSummary = '';
-
-      await llmBackend.complete(
-        operationsModelInfo.id,
-        messages,
-        { temperature: 0.7, maxTokens: 200, stream: false },
-        async (textParts: (string | null | undefined)[]) => {
-          const fullText = textParts.filter(Boolean).join('');
-          if (fullText) {
-            enhancedSummary += fullText;
-          }
-        }
-      );
+      const enhancedSummary = await meteredComplete([{ role: 'user', content: prompt }], 200);
 
       return {
         success: true,
@@ -141,10 +153,12 @@ const handler = baseApi().post(async (req, res) => {
       });
     }
 
-    const result = await enhanceContent(req.user, params, req.logger);
+    const result = await enhanceContent(req, req.user, params, req.logger);
 
     return res.json(result);
   } catch (error) {
+    // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
+    if (error instanceof UnprocessableEntityError) throw error;
     console.error('Blog enhance error:', error);
     return res.status(500).json({
       success: false,

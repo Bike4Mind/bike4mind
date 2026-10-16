@@ -1,4 +1,4 @@
-import { Permission } from '@bike4mind/common';
+import { Permission, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -6,6 +6,14 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  latchUsage,
+  reserveCompletionCredits,
+  settleCompletion,
+  type CompletionUsage,
+} from '@server/billing/meterPlatformCompletion';
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -110,7 +118,7 @@ const handler = baseApi()
         }
 
         // Get the operations model (optimized for fast operations like gpt-4o-mini)
-        const { llm, modelId } = await OperationsModelService.getOperationsModel();
+        const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel();
 
         // Get file extension to preserve it (including compound extensions like .tar.gz, .test.ts)
         const getFileExtension = (filename: string): string => {
@@ -178,17 +186,24 @@ Return only the filename (without extension) in kebab-case:`;
 
         console.log(`[Auto-Rename API] Invoking model: ${modelId}`);
 
+        const messages: IMessage[] = [{ role: 'user', content: prompt }];
+        const maxTokens = 100;
+        const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+        const reservation = await reserveCompletionCredits(req, ceilingUsd, 'automatic file renaming');
+
         // Add timeout handling for LLM request
         let suggestedName = '';
+        const usage: CompletionUsage = {};
         const llmPromise = llm.complete(
           modelId,
-          [{ role: 'user', content: prompt }],
+          messages,
           {
             temperature: 0.3,
-            maxTokens: 100,
+            maxTokens,
           },
-          async (chunks: (string | null | undefined)[]) => {
+          async (chunks: (string | null | undefined)[], info) => {
             suggestedName += chunks.filter(Boolean).join('');
+            latchUsage(usage, info);
           }
         );
 
@@ -200,11 +215,22 @@ Return only the filename (without extension) in kebab-case:`;
         try {
           await Promise.race([llmPromise, timeoutPromise]);
         } catch (error) {
+          await reservation.refund();
           if (error instanceof Error && error.message.includes('timed out')) {
             throw new InternalServerError('AI request timed out. Please try again.');
           }
           throw error;
         }
+
+        // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
+        const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+        await settleCompletion(reservation, req, {
+          model: modelId,
+          provider: modelInfo.backend,
+          usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+        });
 
         // Clean up the response
         suggestedName = suggestedName.trim().toLowerCase();
@@ -288,6 +314,8 @@ Return only the filename (without extension) in kebab-case:`;
           model: modelId,
         });
       } catch (error) {
+        // The credit reservation keeps its own 422.
+        if (error instanceof UnprocessableEntityError) throw error;
         console.error('Auto-rename error:', error);
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to auto-rename file');
       }

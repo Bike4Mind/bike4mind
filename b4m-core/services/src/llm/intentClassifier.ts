@@ -12,7 +12,11 @@ import {
 import { extractJSON } from './smallLLMHelpers';
 import { type IntentClassifierCache, getSharedIntentCache } from './intentClassifier.cache';
 
-const DEFAULT_MAX_TOKENS = 300;
+/** Exported so a metering caller can size its credit hold (one call's output ceiling). */
+export const INTENT_CLASSIFIER_MAX_TOKENS = 300;
+/** Most provider calls one cascade model can make (the first try plus BEST_EFFORT_RETRIES). */
+export const INTENT_CLASSIFIER_CALLS_PER_MODEL = 2;
+const DEFAULT_MAX_TOKENS = INTENT_CLASSIFIER_MAX_TOKENS;
 const DEFAULT_TEMPERATURE = 0;
 /**
  * Per-attempt timeouts are staggered so worst-case cascade wall time stays
@@ -42,7 +46,7 @@ const FALLBACK_TIMEOUT_MS = 3000;
  */
 const EARLY_EXIT_GRACE_MS = 500;
 /** Best-effort backends sometimes emit prose around the JSON; one retry with a stricter ask is enough. */
-const BEST_EFFORT_RETRIES = 1;
+const BEST_EFFORT_RETRIES = INTENT_CLASSIFIER_CALLS_PER_MODEL - 1;
 
 export const IntentDecisionSchema = z.object({
   useAgent: z.boolean(),
@@ -52,6 +56,13 @@ export const IntentDecisionSchema = z.object({
 });
 
 export type IntentDecisionPayload = z.infer<typeof IntentDecisionSchema>;
+
+/** Token usage of one provider call; fields are undefined when the backend reported none (e.g. an aborted stream). */
+export interface IntentClassifierCallUsage {
+  modelId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
 
 export interface IntentDecision extends IntentDecisionPayload {
   /** Model id that produced the decision (after cascade resolution). */
@@ -64,6 +75,19 @@ export interface IntentDecision extends IntentDecisionPayload {
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
   /** True when the streaming parser aborted after `useAgent` resolved. */
   earlyExited: boolean;
+  /**
+   * Every provider call this classification made, failed cascade attempts and retries included,
+   * so a caller on platform keys can bill them. Empty on a cache hit.
+   */
+  usage: IntentClassifierCallUsage[];
+}
+
+/** The messages one classification sends; exported so a metering caller can price its input. */
+export function buildIntentClassifierMessages(input: IntentPromptContext) {
+  return [
+    { role: 'system' as const, content: buildIntentSystemPrompt() },
+    { role: 'user' as const, content: buildIntentUserPrompt(input) },
+  ];
 }
 
 export interface IntentClassifierInput extends IntentPromptContext {
@@ -129,6 +153,7 @@ export async function classifyIntent(
       latencyMs: Date.now() - startedAt,
       responseFormatMode: undefined,
       earlyExited: false,
+      usage: [],
     };
   }
 
@@ -139,6 +164,7 @@ export async function classifyIntent(
   }
 
   const attempts: Array<{ modelId: string; error: string }> = [];
+  const usage: IntentClassifierCallUsage[] = [];
 
   for (let i = 0; i < cascade.length; i++) {
     const modelId = cascade[i];
@@ -171,9 +197,9 @@ export async function classifyIntent(
     }
 
     try {
-      const decision = await classifyWithBackend(backend, modelInfo, input, adapters.logger, timeoutMs);
+      const decision = await classifyWithBackend(backend, modelInfo, input, adapters.logger, timeoutMs, usage);
       cache.set(cacheKey, decision);
-      return { ...decision, latencyMs: Date.now() - startedAt };
+      return { ...decision, latencyMs: Date.now() - startedAt, usage };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       attempts.push({ modelId, error: msg });
@@ -189,8 +215,9 @@ async function classifyWithBackend(
   modelInfo: ModelInfo,
   input: IntentClassifierInput,
   logger: Logger,
-  timeoutMs: number
-): Promise<IntentDecision> {
+  timeoutMs: number,
+  usage: IntentClassifierCallUsage[]
+): Promise<Omit<IntentDecision, 'usage'>> {
   const responseFormat: ResponseFormat = {
     type: 'json_schema',
     json_schema: {
@@ -201,12 +228,9 @@ async function classifyWithBackend(
     },
   };
 
-  const baseMessages = [
-    { role: 'system' as const, content: buildIntentSystemPrompt() },
-    { role: 'user' as const, content: buildIntentUserPrompt(input) },
-  ];
+  const baseMessages = buildIntentClassifierMessages(input);
 
-  let attemptResult = await runOnce(backend, modelInfo, baseMessages, responseFormat, logger, timeoutMs);
+  let attemptResult = await runOnce(backend, modelInfo, baseMessages, responseFormat, logger, timeoutMs, usage);
 
   // Best-effort backends (Gemini, Bedrock, xAI, Ollama) can return prose-wrapped
   // or schema-violating JSON. One stricter retry catches the common case.
@@ -228,7 +252,7 @@ async function classifyWithBackend(
           'Your previous response was not valid JSON matching the schema. Respond with ONLY the JSON object, starting with `{"useAgent":` — no prose, no markdown fences.',
       },
     ];
-    attemptResult = await runOnce(backend, modelInfo, stricterMessages, responseFormat, logger, timeoutMs);
+    attemptResult = await runOnce(backend, modelInfo, stricterMessages, responseFormat, logger, timeoutMs, usage);
   }
 
   const validation = attemptResult.validation;
@@ -261,9 +285,13 @@ async function runOnce(
   messages: Array<{ role: 'system' | 'user'; content: string }>,
   responseFormat: ResponseFormat,
   logger: Logger,
-  timeoutMs: number
+  timeoutMs: number,
+  usage: IntentClassifierCallUsage[]
 ): Promise<RunResult> {
   const startedAt = Date.now();
+  // Pushed before the call so a call that throws or times out is still on record.
+  const callUsage: IntentClassifierCallUsage = { modelId: modelInfo.id };
+  usage.push(callUsage);
   const controller = new AbortController();
   let accumulated = '';
   let earlyExited = false;
@@ -296,6 +324,8 @@ async function runOnce(
       if (completionInfo?.responseFormatMode) {
         responseFormatMode = completionInfo.responseFormatMode;
       }
+      if (completionInfo?.inputTokens) callUsage.inputTokens = completionInfo.inputTokens;
+      if (completionInfo?.outputTokens) callUsage.outputTokens = completionInfo.outputTokens;
       // Streaming early-exit with a small grace window:
       //  - If the full JSON is already parseable, abort immediately (fast path).
       //  - Otherwise, once `useAgent` resolves, schedule the abort

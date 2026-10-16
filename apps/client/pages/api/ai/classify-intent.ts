@@ -2,10 +2,22 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
-import { classifyIntent, CascadeExhaustedError } from '@bike4mind/services/llm/intentClassifier';
+import {
+  buildIntentClassifierMessages,
+  classifyIntent,
+  CascadeExhaustedError,
+  INTENT_CLASSIFIER_CALLS_PER_MODEL,
+  INTENT_CLASSIFIER_MAX_TOKENS,
+} from '@bike4mind/services/llm/intentClassifier';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { IntentClassifierConfigSchema } from '@bike4mind/common';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  reserveCompletionCredits,
+  settleCompletion,
+} from '@server/billing/meterPlatformCompletion';
 import { z } from 'zod';
 
 /**
@@ -64,22 +76,36 @@ const handler = baseApi()
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
     const availableModels = await getAvailableModels(apiKeyTable);
 
-    try {
-      const decision = await classifyIntent(
-        {
-          userId,
-          message: parsed.data.message,
-          hasFileAttachments: parsed.data.hasFileAttachments,
-          hasAgentMention: parsed.data.hasAgentMention,
-        },
-        { apiKeyTable, availableModels, logger: req.logger, config: classifierConfig }
-      );
+    const input = {
+      userId,
+      message: parsed.data.message,
+      hasFileAttachments: parsed.data.hasFileAttachments,
+      hasAgentMention: parsed.data.hasAgentMention,
+    };
+    // Hold the worst case: every cascade model runs, each with its best-effort retry.
+    const messages = buildIntentClassifierMessages(input);
+    const modelCeilingUsd = (modelId: string) => {
+      const modelInfo = availableModels.find(m => m.id === modelId);
+      return modelInfo
+        ? completionCeilingUsd(modelInfo, messages, INTENT_CLASSIFIER_MAX_TOKENS) * INTENT_CLASSIFIER_CALLS_PER_MODEL
+        : 0;
+    };
+    const ceilingUsd = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels].reduce(
+      (sum, modelId) => sum + modelCeilingUsd(modelId),
+      0
+    );
+    const reservation = await reserveCompletionCredits(req, ceilingUsd, 'intent classification');
 
-      return res.status(200).json({
-        decision,
-        shadowMode: classifierConfig.shadowMode,
+    let result: Awaited<ReturnType<typeof classifyIntent>>;
+    try {
+      result = await classifyIntent(input, {
+        apiKeyTable,
+        availableModels,
+        logger: req.logger,
+        config: classifierConfig,
       });
     } catch (err) {
+      await reservation.refund();
       if (err instanceof CascadeExhaustedError) {
         req.logger.error('[classify-intent] cascade exhausted', { attempts: err.attempts });
         return res.status(503).json({ error: 'cascade exhausted', attempts: err.attempts });
@@ -88,6 +114,28 @@ const handler = baseApi()
       req.logger.error('[classify-intent] failed', { error: msg });
       return res.status(500).json({ error: msg });
     }
+
+    const { usage, ...decision } = result;
+    // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
+    const usd = usage.reduce((sum, call) => {
+      const modelInfo = availableModels.find(m => m.id === call.modelId);
+      if (!modelInfo) return sum;
+      return call.inputTokens || call.outputTokens
+        ? sum + completionUsd(modelInfo, call)
+        : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
+    }, 0);
+    await settleCompletion(reservation, req, {
+      model: decision.classifierModel,
+      provider: availableModels.find(m => m.id === decision.classifierModel)?.backend ?? 'unknown',
+      usd,
+      inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
+      outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+    });
+
+    return res.status(200).json({
+      decision,
+      shadowMode: classifierConfig.shadowMode,
+    });
   });
 
 export const config = {
