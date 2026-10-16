@@ -48,6 +48,7 @@ beforeEach(async () => {
     file('both-orgs-sourced', ['datalake:new', 'datalake:old'], { sourceLakeId: String(newLakeId) }),
     file('stamped-other', ['datalake:new'], { organizationId: 'org-z' }),
     file('soft-deleted', ['datalake:old'], { deletedAt: new Date() }),
+    file('left-the-lake', ['topic:x'], { organizationId: 'org-a' }),
   ]);
 });
 
@@ -71,13 +72,29 @@ describe('backfillFabFileOwnerOrganization', () => {
     expect(report).toMatchObject({ orgLakes: 2, updated: 4, alreadyOwned: 0 });
     expect(report.ambiguous.map(row => row.chosen).sort()).toEqual(['org-a', 'org-b']);
     expect(report.conflicts).toEqual([expect.objectContaining({ stored: 'org-z', resolved: 'org-b' })]);
+    expect(report.stale).toEqual([expect.objectContaining({ stored: 'org-a' })]);
+    expect(await ownerOf('left-the-lake')).toBe('org-a');
+  });
+
+  it('keeps an owner a create door stamps between the scan and the write', async () => {
+    const bulkWrite = FabFile.collection.bulkWrite.bind(FabFile.collection);
+    const spy = vi.spyOn(FabFile.collection, 'bulkWrite').mockImplementationOnce(async (...args) => {
+      await FabFile.collection.updateOne({ fileName: 'org-only' }, { $set: { organizationId: 'org-race' } });
+      return bulkWrite(...args);
+    });
+
+    const report = await backfillFabFileOwnerOrganization({ dryRun: false, log: silent });
+    spy.mockRestore();
+
+    expect(await ownerOf('org-only')).toBe('org-race');
+    expect(report.updated).toBe(3);
   });
 
   it('writes nothing in a dry run but reports the same counts', async () => {
     const report = await backfillFabFileOwnerOrganization({ dryRun: true, log: silent });
 
     expect(report.updated).toBe(4);
-    expect(await FabFile.collection.countDocuments({ organizationId: { $exists: true } })).toBe(1);
+    expect(await FabFile.collection.countDocuments({ organizationId: { $exists: true } })).toBe(2);
   });
 
   it('is a no-op on re-run', async () => {

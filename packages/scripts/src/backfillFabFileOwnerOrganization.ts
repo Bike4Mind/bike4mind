@@ -25,12 +25,19 @@ export interface OwnerConflict {
   resolved: string;
 }
 
+/** A file stamped with an org although it is in no org lake now (e.g. it left the lake). Never cleared. */
+export interface StaleOwner {
+  fileId: string;
+  stored: string;
+}
+
 export interface BackfillFabFileOwnerOrganizationReport {
   orgLakes: number;
   updated: number;
   alreadyOwned: number;
   ambiguous: AmbiguousOwner[];
   conflicts: OwnerConflict[];
+  stale: StaleOwner[];
 }
 
 const WRITE_BATCH_SIZE = 500;
@@ -84,6 +91,7 @@ export async function backfillFabFileOwnerOrganization(
     alreadyOwned: 0,
     ambiguous: [],
     conflicts: [],
+    stale: [],
   };
   const pending: Array<{ _id: mongo.ObjectId; organizationId: string }> = [];
 
@@ -97,6 +105,16 @@ export async function backfillFabFileOwnerOrganization(
     if (entry.organizationId === resolved) report.alreadyOwned++;
     else if (entry.organizationId) report.conflicts.push({ fileId, stored: entry.organizationId, resolved });
     else pending.push({ _id: entry._id, organizationId: resolved });
+  }
+
+  const stamped = FabFile.collection.find(
+    { organizationId: { $exists: true } },
+    { projection: { _id: 1, organizationId: 1 } }
+  );
+  for await (const file of stamped) {
+    if (!candidatesByFile.has(String(file._id))) {
+      report.stale.push({ fileId: String(file._id), stored: String(file.organizationId) });
+    }
   }
 
   if (dryRun) {
@@ -118,13 +136,16 @@ export async function backfillFabFileOwnerOrganization(
   log(
     `[backfill-fabfile-owner-organization] ${report.orgLakes} org lake(s); ` +
       `${dryRun ? 'would stamp' : 'stamped'} ${report.updated} file(s); ${report.alreadyOwned} already owned; ` +
-      `${report.ambiguous.length} ambiguous; ${report.conflicts.length} conflict(s)`
+      `${report.ambiguous.length} ambiguous; ${report.conflicts.length} conflict(s); ${report.stale.length} stale`
   );
   for (const row of report.ambiguous) {
     log(`  ambiguous ${row.fileId}: lakes of [${row.candidates.join(', ')}] -> ${row.chosen}`);
   }
   for (const row of report.conflicts) {
     log(`  conflict ${row.fileId}: stored ${row.stored}, lakes resolve ${row.resolved} (left as stored)`);
+  }
+  for (const row of report.stale) {
+    log(`  stale ${row.fileId}: stored ${row.stored}, in no org lake (left as stored)`);
   }
   return report;
 }

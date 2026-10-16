@@ -262,9 +262,10 @@ export interface IFabFile {
 
   /**
    * The organization that OWNS this file for storage accounting and file-owner scoped settings
-   * (scopeForFileOwner); absent means the uploading user owns it. Derived server-side from the
-   * org-owned lakes the file joins (resolveFabFileOwnerOrganization) - never from a caller-supplied
-   * or "currently selected" org, which is a display preference, not ownership.
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 

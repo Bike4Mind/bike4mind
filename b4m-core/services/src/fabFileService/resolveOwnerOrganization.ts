@@ -2,8 +2,12 @@ import type { IDataLakeDocument } from '@bike4mind/common';
 
 export type OwnerCandidateLake = Pick<IDataLakeDocument, 'id' | 'organizationId' | 'createdAt'>;
 
+// A missing createdAt sorts last; NaN in the subtraction would make the order input-dependent.
+const createdAtMs = (lake: OwnerCandidateLake): number =>
+  lake.createdAt ? new Date(lake.createdAt).getTime() : Number.POSITIVE_INFINITY;
+
 const oldestFirst = (a: OwnerCandidateLake, b: OwnerCandidateLake): number =>
-  new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.id.localeCompare(b.id);
+  createdAtMs(a) - createdAtMs(b) || a.id.localeCompare(b.id);
 
 /**
  * The org that owns a file belonging to `lakes`, or undefined when none of them is org-owned (the
