@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import PageFrame from '@client/app/components/common/PageFrame';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import ApiTabContent from '@client/app/components/ProfileModal/ApiTabContent';
@@ -10,7 +11,9 @@ import { integrationsRoute, type ConnectionsTab } from '@client/app/router';
 
 /** /integrations ("Connections"): the integrations gallery and the API keys, as two tabs. */
 const IntegrationsPage = () => {
-  useMobileHeader('Connections');
+  const { t } = useTranslation();
+  const title = t('connections.title', 'Connections');
+  useMobileHeader(title);
   const { source, tab } = integrationsRoute.useSearch();
   const activeTab: ConnectionsTab = tab ?? 'integrations';
   const navigate = useNavigate();
@@ -32,10 +35,10 @@ const IntegrationsPage = () => {
   return (
     <PageFrame testId="integrations-page">
       <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
-        Connections
+        {title}
       </Typography>
       <Tabs
-        aria-label="Connections sections"
+        aria-label={t('connections.sections', 'Connections sections')}
         value={activeTab}
         onChange={(_, value) =>
           void navigate({
@@ -48,10 +51,10 @@ const IntegrationsPage = () => {
       >
         <TabList sx={pageTabListSx}>
           <PageTab value="integrations" data-testid="connections-tab-integrations">
-            <Typography sx={{ color: 'text.primary' }}>Integrations</Typography>
+            <Typography sx={{ color: 'text.primary' }}>{t('integrations.title', 'Integrations')}</Typography>
           </PageTab>
           <PageTab value="api-keys" data-testid="connections-tab-api-keys">
-            <Typography sx={{ color: 'text.primary' }}>API Keys</Typography>
+            <Typography sx={{ color: 'text.primary' }}>{t('apiKeys.title', 'API Keys')}</Typography>
           </PageTab>
         </TabList>
         {/* keepMounted, but only after the first visit: the gallery records the page view on mount, so
