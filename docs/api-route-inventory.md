@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-903 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
+918 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -123,7 +123,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | security | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 28 | 2 | 0 | 0 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
+| skills | 18 | 0 | 3 | 15 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 15 | 0 | 7 | 1 | 0 | 7 | 7 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
@@ -1318,6 +1318,21 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills` | GET, POST | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
 | `/api/skills/[id]` | GET, PUT, DELETE | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
 | `/api/skills/[id]/share` | PUT | jwt+key | - | no | - | 1: `hooks/data/skills.ts` |
+| `/api/skills/market` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]` | GET, DELETE | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/import` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/moderate` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/rating` | PUT | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/report` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/[id]/versions` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/by-token/[token]` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/me` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/mine` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/publish` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/recommended` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/review-queue` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/versions/[vid]/rescan` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/versions/[vid]/review` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 
 ### sky-greeting
 
