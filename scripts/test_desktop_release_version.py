@@ -53,7 +53,7 @@ class DesktopVersionTest(unittest.TestCase):
         self.assertEqual((version, publish), ('0.2.0', True))
         self.assertEqual(previous, self.git('rev-parse', 'HEAD'))
         self.assertNotIn('desktop-v0.2.0', self.git('tag', '--list').splitlines())
-        self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo'))
+        self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo', 'example/dist'))
         self.commit('fix(desktop): another fix')
         with self.assertRaises(ValueError):
             select_version(self.releases, '0.1.0')
@@ -65,7 +65,7 @@ class DesktopVersionTest(unittest.TestCase):
         version, publish, previous = select_version(releases, '0.1.0')
         self.assertEqual((version, publish), ('0.1.0', True))
         self.assertEqual(self.git('tag', '--list'), '')
-        self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo'))
+        self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo', 'example/dist'))
 
     def test_distribution_draft_wins_over_source_tag_reservation(self):
         self.releases.append({'tag_name': 'desktop-v0.1.0', 'prerelease': False,
@@ -215,8 +215,9 @@ class DesktopVersionTest(unittest.TestCase):
     def test_release_notes_are_scoped_and_explain_bump(self):
         self.commit('feat(web): unrelated', 'apps/client/page.tsx')
         self.commit('feat(desktop): add feature')
-        notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo')
+        notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo', 'example/dist')
         self.assertIn('Version selection: minor', notes)
+        self.assertIn('https://github.com/example/dist/releases/latest/download/install.sh', notes)
         self.assertIn('feat(desktop): add feature', notes)
         self.assertNotIn('feat(web): unrelated', notes)
         self.assertIn('https://github.com/example/repo/commit/', notes)

@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold, incrementCredits, connectDB } = vi.hoisted(() => ({
+const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction, connectDB } = vi.hoisted(() => ({
   findStaleVoiceHolds: vi.fn(),
   claimVoiceHold: vi.fn(),
-  restoreVoiceHold: vi.fn(),
   incrementCredits: vi.fn(),
+  createTransaction: vi.fn(),
   connectDB: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
-  sessionRepository: { findStaleVoiceHolds, claimVoiceHold, restoreVoiceHold },
+  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  sessionRepository: { findStaleVoiceHolds, claimVoiceHold },
   userRepository: { incrementCredits },
+  creditTransactionRepository: { createTransaction },
 }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -61,7 +63,7 @@ describe('voiceHoldSweep', () => {
     vi.clearAllMocks();
     findStaleVoiceHolds.mockResolvedValue([]);
     claimVoiceHold.mockResolvedValue({ billedCredits: null });
-    restoreVoiceHold.mockResolvedValue(true);
+    createTransaction.mockImplementation(async (_type: string, row: object) => ({ id: 'tx', ...row }));
   });
 
   it('only asks for holds older than the longest call plus the safety margin, bounded per run', async () => {
@@ -165,14 +167,13 @@ describe('voiceHoldSweep', () => {
     expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED);
   });
 
-  it('restores a hold whose refund failed so the next run retries it', async () => {
+  it('counts a hold whose refund failed as failed, for the next run to retry', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
     incrementCredits.mockRejectedValueOnce(new Error('db blip'));
 
     const result = await runVoiceHoldSweep(NOW);
 
-    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED, expect.anything());
-    expect(result).toMatchObject({ settled: 0, failed: 1 });
+    expect(result).toMatchObject({ settled: 0, refundedCredits: 0, failed: 1 });
   });
 
   it('connects to the stage database before sweeping', async () => {

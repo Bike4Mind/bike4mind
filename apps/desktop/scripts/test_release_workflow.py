@@ -32,17 +32,18 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('private-key: ${{ secrets.DESKTOP_RELEASE_APP_PRIVATE_KEY }}', publish)
         self.assertNotIn('GH_TOKEN: ${{ github.token }}', publish)
         self.assertLess(publish.index('if [ -z "$GH_TOKEN" ]; then'), publish.index('publish-release.sh'))
+        self.assertLess(publish.index('distribution.py prune installers'), publish.index('sha256sum --check'))
         self.assertNotIn('create-github-app-token', WORKFLOW.split('\n  publish:\n', 1)[0])
 
     def test_signing_default_denies_distribution(self):
-        guard = next(line.strip().removeprefix('run: ') for line in WORKFLOW.splitlines()
-                     if 'test "$SIGNING" = true' in line)
-        for value in ('', 'false', 'TRUE', 'true'):
-            result = subprocess.run(['bash', '-ec', guard], env={**os.environ, 'SIGNING': value}, capture_output=True)
-            self.assertEqual(result.returncode == 0, value == 'true')
-        self.assertIn("if: matrix.platform != 'mac' || github.event_name == 'pull_request'", WORKFLOW)
+        self.assertIn('mac-mode: ${{ steps.mac-policy.outputs.mode }}', job('version'))
+        self.assertIn('ADHOC_BETA: ${{ vars.DESKTOP_MAC_ADHOC_BETA }}', job('version'))
+        self.assertIn('python3 apps/desktop/scripts/mac_release_policy.py', job('publish'))
+        self.assertIn("if: matrix.platform != 'mac' || needs.version.outputs.mac-mode == 'adhoc'", WORKFLOW)
         self.assertIn('grep -q \'^Authority=Developer ID Application:\'', WORKFLOW)
         self.assertIn('B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}', WORKFLOW)
+        self.assertIn("B4M_UPDATE_FEED_URL='' pnpm build", job('build'))
+        self.assertIn('EXPECTED_MAC_MODE: ${{ needs.version.outputs.mac-mode }}', job('publish'))
 
     def test_embedded_blockmap_checks_run_after_linux_packaging(self):
         build = job('build')

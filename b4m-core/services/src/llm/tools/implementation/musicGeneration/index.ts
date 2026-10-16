@@ -29,6 +29,67 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// Providers refuse prompts that name real artists, so catch "style of <Name>" shapes before a job exists.
+const STYLE_PHRASE = /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?/gi;
+// A dot joins letters inside a word ("D.J.") or follows a lone-capital initial ("J. Example"), continuing the run;
+// any other dot ends it at a sentence boundary rather than swallowing the next sentence.
+const CAPITALIZED_RUN = /^(?:\p{Lu}\.(?=[ \t]\p{Lu})[ \t]*|\p{Lu}(?:[\p{L}\p{N}'-]|\.(?=\p{L}))*[ \t]?)+/u;
+
+const STYLE_WORDS = new Set([
+  'latin',
+  'spanish',
+  'motown',
+  'celtic',
+  'nashville',
+  'delta',
+  'baroque',
+  'gospel',
+  'jazz',
+  'blues',
+  'african',
+  'brazilian',
+  'cuban',
+  'irish',
+  'french',
+  'german',
+  'italian',
+  'asian',
+  'caribbean',
+  'appalachian',
+  'memphis',
+  'chicago',
+  'detroit',
+  'classical',
+  'romantic',
+  'medieval',
+  'renaissance',
+  'american',
+  'british',
+  'western',
+]);
+
+// A run can end a sentence or carry a possessive ("in the style of Motown.", "Nashville's"), so strip both before lookup.
+const toStyleWordKey = (word: string): string =>
+  word
+    .toLowerCase()
+    .replace(/[.'-]+$/, '')
+    .replace(/'s$/, '');
+
+export const ARTIST_REFERENCE_REFUSAL =
+  'Music generation failed (artist_reference): the prompt appears to name a real artist or band. ' +
+  'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
+
+export const namesArtistReference = (prompt: string): boolean =>
+  Array.from(prompt.matchAll(STYLE_PHRASE)).some(match => {
+    const run = prompt.slice(match.index + match[0].length).match(CAPITALIZED_RUN)?.[0];
+    if (run === undefined) return false;
+    // A hyphen joins two style words ("Celtic-Irish") and a lone letter ("A minor") is never a name.
+    return run.split(/[-\s]+/).some(word => {
+      const key = toStyleWordKey(word);
+      return key.length > 1 && !STYLE_WORDS.has(key);
+    });
+  });
+
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
 const toRequest = (args: MusicToolArgs): MusicGenerationRequest => ({
   model: args.model,
@@ -44,9 +105,16 @@ export const musicGenerationTool: ToolDefinition = {
   implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
     if (!isMusicToolConfig(config)) return buildUnavailableTool('music_generation', 'Music generation');
     const { schema, description } = buildMusicToolSchema(config.usableModels);
+    // The guard is a heuristic, so it refuses once per built tool instance: a false positive such as
+    // "inspired by Example Soloist" costs one rephrase instead of looping until the tool-call cap with no song.
+    let artistRefusalSent = false;
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
+        if (!artistRefusalSent && namesArtistReference(args.prompt)) {
+          artistRefusalSent = true;
+          return ARTIST_REFERENCE_REFUSAL;
+        }
         const request = toRequest(args);
         const result = await config.createJob({
           user: { id: context.userId, organizationId: context.organizationId ?? null },

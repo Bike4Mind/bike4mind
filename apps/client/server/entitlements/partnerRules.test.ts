@@ -56,6 +56,12 @@ describe('partnerRules resolver', () => {
     expect([...grant.entitlements]).toEqual(['optihashi:pro']);
   });
 
+  it('signup grant identifies the matched rule by id and normalized domain', async () => {
+    mockFindActiveRules.mockResolvedValue([{ ...RULE, domain: 'Partner.COM' }]);
+    const grant = await partnerSignupGrantForEmail('a@partner.com', true);
+    expect(grant).toMatchObject({ matched: true, ruleId: 'rule-1', domain: 'partner.com' });
+  });
+
   it('signup grant reports matched=false for a non-matching domain (env fallback signal)', async () => {
     const grant = await partnerSignupGrantForEmail('a@other.com', true);
     expect(grant.matched).toBe(false);

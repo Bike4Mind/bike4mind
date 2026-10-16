@@ -85,6 +85,24 @@ describe('sessionExport', () => {
       expect(assistantMessages.reduce((sum, m) => sum + (m.creditsUsed ?? 0), 0)).toBe(0.25);
     });
 
+    it('labels a redirected reply with the model that answered, and the prompt with the one requested', () => {
+      const redirectedTurn = [
+        {
+          id: 'msg-redirect',
+          timestamp: new Date('2024-01-15T11:00:00Z'),
+          type: 'user',
+          prompt: 'hello',
+          replies: ['hi'],
+          promptMeta: { model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } },
+        },
+      ] as unknown as typeof mockChatHistory;
+
+      const messages = toExportableSession(mockSession, redirectedTurn).messages;
+
+      expect(messages.find(m => m.role === 'user')?.model).toBe('gemini-2.5-pro');
+      expect(messages.find(m => m.role === 'assistant')?.model).toBe('gemini-3.5-flash');
+    });
+
     it('emits no assistant message for a turn that only produced thinking', () => {
       const thinkOnlyTurn = [
         {

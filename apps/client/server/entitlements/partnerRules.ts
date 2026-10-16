@@ -21,10 +21,9 @@ import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { BadRequestError } from '@server/utils/errors';
 
-/** Resolved rule shape held in the cache (domain is the Map key). */
+/** Resolved rule shape held in the cache (keyed by its normalized domain). */
 type ResolvedRule = {
   id: string;
-  /** Normalized domain; carried so a grant can name the rule that produced it. */
   domain: string;
   entitlements: EntitlementKey[];
   signupCredits: number;
@@ -155,6 +154,26 @@ export async function partnerEntitlementsForEmail(
   return new Set(rule?.entitlements ?? []);
 }
 
+export type PartnerSignupGrant =
+  | {
+      matched: false;
+      entitlements: Set<EntitlementKey>;
+      signupCredits: 0;
+      organizationId: null;
+      tags: [];
+      subscription: null;
+    }
+  | {
+      matched: true;
+      ruleId: string;
+      domain: string;
+      entitlements: Set<EntitlementKey>;
+      signupCredits: number;
+      organizationId: string | null;
+      tags: string[];
+      subscription: { priceId: string; durationMonths: number } | null;
+    };
+
 /**
  * The one-time signup grant for a verified email, resolved from the DB rule.
  * `matched` distinguishes "a rule set credits to 0" (a valid config - grant
@@ -165,16 +184,7 @@ export async function partnerEntitlementsForEmail(
 export async function partnerSignupGrantForEmail(
   email: string | null | undefined,
   emailVerified: boolean | null | undefined
-): Promise<{
-  matched: boolean;
-  entitlements: Set<EntitlementKey>;
-  signupCredits: number;
-  organizationId: string | null;
-  tags: string[];
-  ruleId: string | null;
-  domain: string | null;
-  subscription: { priceId: string; durationMonths: number } | null;
-}> {
+): Promise<PartnerSignupGrant> {
   const rule = await ruleForEmail(email, emailVerified);
   if (!rule) {
     return {
@@ -183,8 +193,6 @@ export async function partnerSignupGrantForEmail(
       signupCredits: 0,
       organizationId: null,
       tags: [],
-      ruleId: null,
-      domain: null,
       subscription: null,
     };
   }
