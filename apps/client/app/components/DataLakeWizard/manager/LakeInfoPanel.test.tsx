@@ -479,6 +479,17 @@ describe('LakeInfoPanel - files mid-rebuild', () => {
     renderPanel();
     expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
   });
+
+  it('stays hidden for a caller who can neither rebuild nor manage the lake', () => {
+    // The same gate the sibling "to rebuild" and "failed" chips carry: the panel is reachable by a
+    // member who can do neither, and the count comes from the rebuild-status query, so without the
+    // gate they would see progress they cannot act on.
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 3, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel({ ...baseLake, canRebuild: false, canManage: false });
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
+  });
 });
 
 describe('LakeInfoPanel - unresolvable embedding space', () => {
