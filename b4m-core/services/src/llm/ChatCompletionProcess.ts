@@ -2339,9 +2339,9 @@ export class ChatCompletionProcess {
         models,
         enforceCredits: this.getDefaultSettingValue('enforceCredits', defaultAdminSettings),
       });
-      // A remapped successor was never admitted: /api/chat admits it in ChatCompletionInvoke, but the
-      // quest/Slack queue handlers and the rapid-reply test construct this class directly.
-      if (modelInfo.id !== model) await this.modelAdmission.assert(modelInfo.id);
+      // Always the final id, remapped or not: /api/chat admits the requested model in
+      // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.
+      await this.modelAdmission.assert(modelInfo.id);
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -3053,6 +3053,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        modelAdmission: this.modelAdmission,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({

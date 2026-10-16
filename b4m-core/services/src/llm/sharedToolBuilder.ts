@@ -27,6 +27,7 @@ import type {
   SubagentHandoffSignal,
   SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from './modelAdmission';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
@@ -171,6 +172,12 @@ export interface ToolBuilderDeps {
    * `ServerOrchestratorDeps.toolPermissions`. Omitted by ungated callers.
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /**
+   * The user's model admission, forwarded to `delegate_to_agent` and `coordinate_task` so an
+   * in-process subagent's model is admitted; see `ServerOrchestratorDeps.modelAdmission`.
+   */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -603,6 +610,7 @@ export function buildSharedTools(
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
     toolPermissions: deps.toolPermissions,
+    modelAdmission: deps.modelAdmission,
   });
   tools.push(delegateTool);
 
@@ -632,6 +640,7 @@ export function buildSharedTools(
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
       toolPermissions: deps.toolPermissions,
+      modelAdmission: deps.modelAdmission,
     });
     tools.push(coordinateTool);
   }

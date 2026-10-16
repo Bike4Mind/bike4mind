@@ -144,7 +144,10 @@ const handler = baseApi()
         ChatModels.GEMINI_2_5_FLASH,
         ChatModels.GPT4o_MINI,
       ];
-      const candidates = [...preferredModels.flatMap(id => models.filter(m => m.id === id)), ...models];
+      const candidates = [
+        ...preferredModels.flatMap(id => models.filter(m => m.id === id)),
+        ...models.filter(m => m.type === 'text'),
+      ];
       if (candidates.length === 0) {
         throw new BadRequestError('No AI model available. Please check your API keys.');
       }

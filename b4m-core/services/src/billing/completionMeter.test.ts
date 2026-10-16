@@ -35,7 +35,7 @@ describe('meterCompletionBackend', () => {
     });
     const seen: string[] = [];
     await metered.complete('m', [], { maxTokens: 100 }, async (t: string[]) => void seen.push(...t));
-    expect(meter).toHaveBeenCalledWith(modelInfo, [], 100, undefined);
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 100, undefined, 1);
     expect(meter.mock.invocationCallOrder[0]).toBeLessThan(llm.complete.mock.invocationCallOrder[0]);
     expect(settle).toHaveBeenCalledExactlyOnceWith({ inputTokens: 10, outputTokens: 5 });
     expect(refund).not.toHaveBeenCalled();
@@ -45,7 +45,7 @@ describe('meterCompletionBackend', () => {
   it('caps the provider at the reserved output budget when the caller names none', async () => {
     const { llm, meter, metered } = setup(async () => {});
     await metered.complete('m', [], {}, async () => {});
-    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined);
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined, 1);
     expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4096 });
   });
 
@@ -56,6 +56,30 @@ describe('meterCompletionBackend', () => {
     const reserved = meter.mock.calls[0][2];
     expect(reserved).toBe(64_000);
     expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: reserved });
+  });
+
+  it('holds the model output cap for a model whose adapter sends no cap', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 65_536 } as ModelInfo;
+    const { llm, meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(65_536);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 2000 });
+  });
+
+  it('keeps the requested budget for a Gemini model that honors the cap', async () => {
+    const flash = { id: 'f', backend: 'gemini', can_think: false, max_tokens: 8192 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [flash]);
+    await metered.complete('f', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(2000);
+  });
+
+  it('holds one turn per tool round-trip the adapter may run, plus the final turn', async () => {
+    const { meter, metered } = setup(async () => {});
+    const tools = [{ toolSchema: { name: 't' } }] as never;
+    await metered.complete('m', [], { maxTokens: 100, tools }, async () => {});
+    await metered.complete('m', [], { maxTokens: 100, tools, _internal: { maxToolCalls: 3 } } as never, async () => {});
+    await metered.complete('m', [], { maxTokens: 100, tools, executeTools: false }, async () => {});
+    expect(meter.mock.calls.map(call => call[4])).toEqual([11, 4, 1]);
   });
 
   it('never calls the provider when the reservation is refused', async () => {
@@ -90,7 +114,7 @@ describe('meterCompletionBackend', () => {
     const other = { id: 'o', backend: 'openai' } as ModelInfo;
     const { meter, metered } = setup(async () => {}, [modelInfo, other]);
     await metered.complete('o', [], { maxTokens: 10 }, async () => {});
-    expect(meter).toHaveBeenCalledWith(other, [], 10, [modelInfo, other]);
+    expect(meter).toHaveBeenCalledWith(other, [], 10, [modelInfo, other], 1);
   });
 
   it('refuses a model id outside the bound model set without reserving or calling the provider', async () => {

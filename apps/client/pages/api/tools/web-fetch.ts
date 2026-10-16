@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope } from '@bike4mind/common';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
 import { runAuditedTool } from '@server/cli/runAuditedTool';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { firecrawlFetch, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
@@ -13,10 +13,10 @@ const WebFetchBodySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 });
 
-// Same 100/hour budget as ai/v1/tools.ts, shared across the three /api/tools/* routes. Embed
+// One hourly budget shared across the three /api/tools/* routes (see toolRoutesRateLimit). Embed
 // (confined) keys hold neither scope, so they are refused.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
-  .use(rateLimit({ limit: 100, windowMs: 60 * 60 * 1000, bucket: 'tools' }))
+  .use(toolRoutesRateLimit())
   .post(async (req, res) =>
     runAuditedTool('web_fetch', req.user!.id, req.logger, async () => {
       const { url, offset } = WebFetchBodySchema.parse(req.body);

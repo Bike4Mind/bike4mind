@@ -2,6 +2,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { getQuestErrorCode } from '@bike4mind/common';
 import {
+  discardEnrolledMission,
   enrollMissionForAgent,
   findAgentsByName,
   formatMissionStatusReport,
@@ -96,6 +97,12 @@ export const missionChatTools: Record<string, ToolDefinition> = {
           logger,
           timeoutMs: CHAT_FIRST_WAKE_STEP_TIMEOUT_MS,
           userId: context.userId,
+        }).catch(async (error: unknown) => {
+          // The charter exists but the mission never went live (e.g. 422 credits or a refusal).
+          await discardEnrolledMission(missionId).catch((cleanupError: unknown) =>
+            logger.error('create_mission: failed to discard mission after first-wake failure', cleanupError as Error)
+          );
+          throw error;
         });
         return [
           `🚀 Mission launched for **${agent.name}**.`,

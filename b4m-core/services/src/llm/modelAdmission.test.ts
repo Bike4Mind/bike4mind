@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMModelConfig, ModelInfo } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { createModelAdmission, isUnpricedTextModel, loadModelConfigurations } from './modelAdmission';
 
 const priced = {
@@ -91,5 +92,19 @@ describe('loadModelConfigurations', () => {
     await expect(loadModelConfigurations({ findOne: () => Promise.reject(new Error('x')) } as any)).resolves.toEqual(
       []
     );
+  });
+});
+
+describe('loadModelConfigurations failure logging', () => {
+  it('warns with the error and still returns no configs on a rejected read', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const failure = new Error('db down');
+    await expect(
+      loadModelConfigurations({ findOne: () => Promise.reject(failure) } as unknown as Parameters<
+        typeof loadModelConfigurations
+      >[0])
+    ).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('read failed'), failure);
+    warn.mockRestore();
   });
 });

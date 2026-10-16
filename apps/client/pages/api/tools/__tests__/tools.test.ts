@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * /api/tools/* posture: drives the real baseApi chain (same approach as
- * api/__tests__/identify.test.ts) to pin the shared 100/hour rate limit, the API-key scope gate
+ * api/__tests__/identify.test.ts) to pin the shared hourly rate limit, the API-key scope gate
  * and the per-execution audit record.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -75,20 +75,36 @@ vi.mock('@server/auth/auth', async orig => {
 
 import webSearch from '../web-search';
 import weather from '../weather';
+import { TOOL_ROUTES_HOURLY_LIMIT } from '@server/middlewares/toolRoutesRateLimit';
 
 const VALID_KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
+const SHARED_IP = '203.0.113.7';
 
 // any: next-connect handlers take Express req/res; node-mocks-http mocks are not structurally those.
-async function call(handler: (req: any, res: any) => unknown, url: string, body: object, apiKey?: string) {
+async function call(
+  handler: (req: any, res: any) => unknown,
+  url: string,
+  body: object,
+  apiKey?: string,
+  user?: typeof USER
+) {
   const { req, res } = createMocks(
-    { method: 'POST', url, headers: apiKey ? { 'x-api-key': apiKey } : {}, body },
+    {
+      method: 'POST',
+      url,
+      headers: { 'x-forwarded-for': SHARED_IP, ...(apiKey ? { 'x-api-key': apiKey } : {}) },
+      body,
+    },
     { eventEmitter: EventEmitter }
   );
+  // Otherwise the auth stub below signs the request in as USER.
+  if (user) req.user = user;
   await handler(req, res);
   return res;
 }
 
-const search = (apiKey?: string) => call(webSearch, '/api/tools/web-search', { query: 'q' }, apiKey);
+const search = (apiKey?: string, user?: typeof USER) =>
+  call(webSearch, '/api/tools/web-search', { query: 'q' }, apiKey, user);
 
 function keyWithScopes(scopes: ApiKeyScope[]) {
   mockValidate.mockResolvedValue({
@@ -131,13 +147,25 @@ describe('/api/tools/*', () => {
     );
   });
 
-  it('429s the 101st call in an hour, counted across all the tool routes', async () => {
-    for (let i = 0; i < 99; i++) expect((await search())._getStatusCode()).toBe(200);
+  it('429s the call past the hourly limit, counted across all the tool routes', async () => {
+    for (let i = 0; i < TOOL_ROUTES_HOURLY_LIMIT - 1; i++) expect((await search())._getStatusCode()).toBe(200);
     expect((await call(weather, '/api/tools/weather', { lat: 1, lon: 2 }))._getStatusCode()).not.toBe(429);
 
     const res = await search();
     expect(res._getStatusCode()).toBe(429);
-    expect(mockSearch).toHaveBeenCalledTimes(99);
+    expect(mockSearch).toHaveBeenCalledTimes(TOOL_ROUTES_HOURLY_LIMIT - 1);
+  });
+
+  it('keys the limit by user, so two users behind one IP do not share a bucket', async () => {
+    const otherUser = { ...USER, id: 'user-2', _id: 'user-2', username: 'kim' };
+    for (let i = 0; i < TOOL_ROUTES_HOURLY_LIMIT; i++) await search();
+    expect((await search())._getStatusCode()).toBe(429);
+
+    mockUserFindById.mockResolvedValue(otherUser);
+    const res = await search(undefined, otherUser);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAuditCreate).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user-2' }));
   });
 
   it('403s an embed-scoped API key', async () => {

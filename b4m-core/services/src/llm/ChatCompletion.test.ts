@@ -710,6 +710,22 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
     });
 
+    it('refuses an unadmitted primary model with no remap before any provider call', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape, as elsewhere in this file
+      mockDb.adminSettings.findOne = vi.fn().mockResolvedValue({
+        settingValue: [{ id: ChatModels.GPT4, enabled: true, allowedEntitlements: ['pro'] }],
+      });
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(resolveDeprecatedModelId).toHaveReturnedWith(ChatModels.GPT4);
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
+    });
+
     it('runs a remapped successor for an admin', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };

@@ -134,11 +134,13 @@ export async function settleCompletion(
     sessionId?: string;
   }
 ): Promise<number> {
-  const requestId = charge.sessionId ?? randomUUID();
+  // Per call, never the session id: UsageEvent rollups group by requestId, so one id shared across a
+  // session's calls would merge them.
+  const requestId = randomUUID();
   const source = req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined;
   const creditsCharged = await reservation.settle(usdToCreditsStochastic(charge.usd), {
     type: 'completion_api_usage',
-    sessionId: requestId,
+    sessionId: charge.sessionId ?? requestId,
     model: charge.model,
     apiKeyId: req.apiKeyInfo?.keyId,
     // Web JWT calls keep the ledger's 'web' default; resolveRequestUsageSource would label them 'api'.
@@ -199,17 +201,18 @@ export function createRequestCompletionMeter(
   featureLabel: string,
   opts: CompletionMeterOptions = {}
 ): CompletionMeter {
-  return async (modelInfo, messages, maxTokens, models) => {
+  return async (modelInfo, messages, maxTokens, models, turns = 1) => {
     await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
-    const reservation = await reserveCompletionCredits(req, ceilingUsd, featureLabel, opts.organizationId);
+    const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, opts.organizationId);
     return {
       refund: () => reservation.refund(),
       settle: usage =>
         settleCompletion(reservation, req, {
           model: modelInfo.id,
           provider: modelInfo.backend,
-          // No reported usage means the adapter could not count it; charge the hold rather than nothing.
+          // No reported usage means the adapter could not count it; charge one turn's ceiling rather than
+          // nothing (not the whole multi-turn hold, which assumes every tool round-trip ran).
           usd:
             usage.inputTokens || usage.outputTokens || usage.turnUsage?.length
               ? completionUsd(modelInfo, usage)

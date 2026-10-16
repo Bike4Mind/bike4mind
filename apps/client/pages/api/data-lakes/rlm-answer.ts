@@ -209,8 +209,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       const preferred = models.find(m => m.id === DEFAULT_MODEL);
       const candidates = [
         ...(preferred ? [preferred] : []),
-        ...models.filter(m => m !== preferred && /sonnet/i.test(m.id)),
-        ...models.filter(m => m !== preferred && !/sonnet/i.test(m.id)),
+        ...models.filter(m => m !== preferred && m.type === 'text' && /sonnet/i.test(m.id)),
+        ...models.filter(m => m !== preferred && m.type === 'text' && !/sonnet/i.test(m.id)),
       ];
       if (candidates.length === 0) {
         return res.status(500).json({ error: 'No model available for data-lake answers' });

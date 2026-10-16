@@ -77,7 +77,11 @@ vi.mock('@client/services/operationsModelService', () => ({
     getOperationsModel: async () => ({ modelId: MODEL.id, modelInfo: MODEL, llm: { complete: m.complete } }),
   },
 }));
-vi.mock('@bike4mind/llm-adapters', () => ({ getLlmByModel: () => ({ complete: m.complete }) }));
+// Partial: the metered backend sizes its hold with the real llm-adapters output-budget helpers.
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getLlmByModel: () => ({ complete: m.complete }),
+}));
 
 const { default: handler } = await import('@pages/api/blog/generate-image-prompt');
 

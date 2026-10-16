@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { randomUUID } from 'crypto';
 import { ImageModels, ModelInfo, UnprocessableEntityError, usdToCredits } from '@bike4mind/common';
-import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
@@ -14,7 +14,7 @@ import {
   estimateImageCredits,
   UnsupportedImageModelError,
 } from '@bike4mind/services/imageCost';
-import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission, isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 
 interface GenerateFeaturedImageRequest {
@@ -69,6 +69,8 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
             `Image model "${userImageModel}" not available or is not an image model. Please select a valid image model.`
           );
         }
+
+        await (await createModelAdmission(req.user!, models)).assert(imageModelInfo.id);
 
         imageModelId = userImageModel;
         imageLogger.info(`[Blog Image] Using user-selected image model: ${imageModelId}`);
@@ -236,7 +238,14 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
       });
     } catch (error) {
       // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
-      if (error instanceof UnprocessableEntityError) throw error;
+      // Model admission refusals (disabled / not accessible / unpriced) keep their own status too.
+      if (
+        error instanceof UnprocessableEntityError ||
+        error instanceof ForbiddenError ||
+        error instanceof BadRequestError
+      ) {
+        throw error;
+      }
       imageLogger.error('[Blog Image] Error generating featured image:', error);
 
       let errorMessage = 'Failed to generate featured image. Please try again.';

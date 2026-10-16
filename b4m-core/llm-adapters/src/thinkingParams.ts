@@ -2,6 +2,7 @@ import {
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  ModelBackend,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
@@ -180,6 +181,19 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
   if (REASONS_WITHIN_OUTPUT_BUDGET_IDS.has(modelInfo.id)) return true;
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
+}
+
+/**
+ * True when the adapter sends no output cap for this model, so a requested maxTokens bounds
+ * nothing: Gemini thinking models (geminiBackend getGenerationConfig) omit maxOutputTokens,
+ * because thinking counts against it and a caller's small cap would starve the reply. A credit
+ * hold for such a call must cover the model's own output cap, not the requested budget.
+ */
+export function ignoresRequestedOutputCap(modelInfo: ModelInfo): boolean {
+  const servedByGemini = modelInfo.adapterFamily
+    ? modelInfo.adapterFamily === 'gemini'
+    : modelInfo.backend === ModelBackend.Gemini;
+  return servedByGemini && modelInfo.can_think === true;
 }
 
 /**

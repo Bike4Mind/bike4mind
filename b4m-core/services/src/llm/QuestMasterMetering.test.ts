@@ -90,7 +90,7 @@ describe('QuestMasterFeature metering', () => {
     const { run } = setup(meter);
 
     await expect(run()).resolves.toEqual({ shouldContinue: false });
-    expect(meter).toHaveBeenCalledWith(modelInfo, [{ role: 'user', content: 'plan' }], 1000, undefined);
+    expect(meter).toHaveBeenCalledWith(modelInfo, [{ role: 'user', content: 'plan' }], 1000, undefined, 1);
     expect(settle).toHaveBeenCalledOnce();
     expect(settle).toHaveBeenCalledWith({ inputTokens: 100, outputTokens: 20 });
     expect(refund).not.toHaveBeenCalled();

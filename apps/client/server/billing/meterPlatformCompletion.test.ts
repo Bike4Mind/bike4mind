@@ -44,6 +44,7 @@ import {
   completionUsd,
   assertOwnerCanAfford,
   createModelAdmission,
+  createRequestCompletionMeter,
   reserveCompletionCredits,
   settleCompletion,
 } from './meterPlatformCompletion';
@@ -189,6 +190,35 @@ describe('meterPlatformCompletion credits', () => {
     expect(m.recordUsageEvent).toHaveBeenCalledWith(
       expect.objectContaining({ cachedInputTokens: 300, cacheWriteTokens: 40 })
     );
+  });
+
+  it('gives each settled call its own requestId while keeping the session id', async () => {
+    for (let i = 0; i < 2; i++) {
+      const reservation = await reserveCompletionCredits(req(), 0.1, 'QuestMaster planning');
+      await settleCompletion(reservation, req(), {
+        model: 'sonnet',
+        provider: 'anthropic',
+        usd: 0.001,
+        inputTokens: 10,
+        outputTokens: 5,
+        sessionId: 's1',
+      });
+    }
+    const [first, second] = m.recordUsageEvent.mock.calls.map(call => call[0]);
+    expect(first.sessionId).toBe('s1');
+    expect(second.sessionId).toBe('s1');
+    expect(first.requestId).not.toBe(first.sessionId);
+    expect(first.requestId).not.toBe(second.requestId);
+  });
+
+  it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {
+    m.findBySettingName.mockResolvedValue(null);
+    const messages = [{ role: 'user' as const, content: 'x'.repeat(250) }];
+    const oneTurnCredits = Math.ceil(completionCeilingUsd(model, messages, 1000) * CREDITS_PER_USD_COST);
+    const metered = await createRequestCompletionMeter(req(), 'proactive messages')(model, messages, 1000, [model], 3);
+    expect(1000 - balance).toBeGreaterThanOrEqual(3 * oneTurnCredits - 2);
+    await metered.settle({});
+    expect(1000 - balance).toBeLessThanOrEqual(oneTurnCredits + 1);
   });
 });
 

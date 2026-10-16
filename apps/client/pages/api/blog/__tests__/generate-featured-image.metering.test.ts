@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ForbiddenError } from '@bike4mind/utils';
 import { insufficientCreditsError, usdToCredits } from '@bike4mind/common';
 import { computeImageUsdCostPerImage } from '@bike4mind/services/imageCost';
 
@@ -16,6 +17,7 @@ const m = vi.hoisted(() => ({
   settleHold: vi.fn(),
   generate: vi.fn(),
   record: vi.fn(async () => undefined),
+  assertAdmission: vi.fn(),
 }));
 
 vi.mock('@client/server/middlewares/baseApi', () => ({
@@ -41,7 +43,10 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({ openai: 'sk-test' }) },
   latchUsage: () => undefined,
 }));
-vi.mock('@bike4mind/services/llm/modelAdmission', () => ({}));
+vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
+  loadModelConfigurations: async () => [],
+  createModelAdmission: () => ({ admits: async () => true, assert: m.assertAdmission }),
+}));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({
@@ -72,6 +77,7 @@ beforeEach(() => {
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 500 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.generate.mockResolvedValue(['https://provider.example/image.png']);
+  m.assertAdmission.mockResolvedValue(undefined);
 });
 
 describe('POST /api/blog/generate-featured-image metering', () => {
@@ -79,6 +85,15 @@ describe('POST /api/blog/generate-featured-image metering', () => {
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.generate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a model admission rejects before reserving or calling the provider', async () => {
+    m.assertAdmission.mockRejectedValue(new ForbiddenError('Model "gpt-image-1" is not accessible'));
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.assertAdmission).toHaveBeenCalledWith('gpt-image-1');
+    expect(m.hold).not.toHaveBeenCalled();
     expect(m.generate).not.toHaveBeenCalled();
   });
 

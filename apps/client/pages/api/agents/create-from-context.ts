@@ -12,7 +12,14 @@ import {
   projectRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { IAgent, IChatHistoryItemDocument, IFabFileDocument, Permission, isImageAttachment } from '@bike4mind/common';
+import {
+  IAgent,
+  IChatHistoryItemDocument,
+  IFabFileDocument,
+  Permission,
+  UnprocessableEntityError,
+  isImageAttachment,
+} from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
@@ -20,7 +27,8 @@ import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -117,6 +125,7 @@ async function extractFileContents(fabFiles: IFabFileDocument[], logger: Logger)
  * This includes personality traits, system prompt, and all metadata
  */
 async function generateAgentFromContext(
+  req: Parameters<typeof createRequestCompletionMeter>[0],
   agentName: string,
   messages: IChatHistoryItemDocument[],
   fabFiles: IFabFileDocument[],
@@ -167,10 +176,16 @@ async function generateAgentFromContext(
 
   logger.info(`Using model ${modelInfo.id} for agent generation`);
 
-  const llm = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: userId });
-  if (!llm) {
+  const llmBackend = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: userId });
+  if (!llmBackend) {
     throw new Error('Failed to initialize LLM backend for agent generation. Please check your API key configuration.');
   }
+  // The platform picks the model (admin setting or catalog fallback), so picker access rules do not apply.
+  const llm = meterCompletionBackend(
+    llmBackend,
+    createRequestCompletionMeter(req, 'agent generation from context', { systemModel: true }),
+    modelInfo
+  );
 
   // Prepare context from messages and files
   // Use all messages - let the LLM's context window be the limit
@@ -435,7 +450,14 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         : [];
 
     // Generate the agent from context
-    const agentData = await generateAgentFromContext(agentName, messages, fabFiles, authenticatedUserId, req.logger);
+    const agentData = await generateAgentFromContext(
+      req,
+      agentName,
+      messages,
+      fabFiles,
+      authenticatedUserId,
+      req.logger
+    );
 
     // Always create a dedicated project for this agent. Per-user project names are
     // unique (userId_1_name_1), so generating a second agent with the same name would
@@ -502,6 +524,8 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       message: `Agent "${agentName}" created successfully!`,
     });
   } catch (error: any) {
+    // The credit reservation and model admission keep their own statuses rather than collapsing into the generic 500.
+    if (error instanceof UnprocessableEntityError) throw error;
     req.logger.error(`Error creating agent from context:`, error);
 
     return res.status(500).json({

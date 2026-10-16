@@ -51,7 +51,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn(async () => [
-    { id: 'global.anthropic.claude-sonnet-4-6', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+    { id: 'global.anthropic.claude-sonnet-4-6', type: 'text', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
   ]),
   getLlmByModel: vi.fn(() => ({})),
 }));
@@ -314,7 +314,7 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
   it('skips a refused default and runs the next admitted fallback', async () => {
     vi.mocked(getAvailableModels).mockResolvedValueOnce([
       { id: MODEL, pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
-      { id: 'other-sonnet', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+      { id: 'other-sonnet', type: 'text', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
     ] as never);
     meter.denied.add(MODEL);
 
@@ -324,10 +324,21 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     expect(res.body?.model).toBe('other-sonnet');
   });
 
+  it('never falls back to a non-text model', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: MODEL, type: 'text', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+      { id: 'an-image-model', type: 'image' },
+    ] as never);
+    meter.denied.add(MODEL);
+
+    await expect(call({ authorization: 'Bearer t' })).rejects.toMatchObject({ statusCode: 403 });
+    expect(meter.reserve).not.toHaveBeenCalled();
+  });
+
   it('403s only when no fallback candidate is admitted', async () => {
     vi.mocked(getAvailableModels).mockResolvedValueOnce([
       { id: MODEL, pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
-      { id: 'other-sonnet', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+      { id: 'other-sonnet', type: 'text', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
     ] as never);
     meter.denied.add(MODEL);
     meter.denied.add('other-sonnet');

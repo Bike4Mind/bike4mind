@@ -82,7 +82,7 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
   };
 });
 
-const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
+const MODEL = { id: 'ops-model', type: 'text', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [MODEL],
   getLlmByModel: () => ({ complete: m.complete }),

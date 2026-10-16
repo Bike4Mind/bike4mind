@@ -41,7 +41,8 @@ vi.mock('@server/deepAgent/wakeMetering', () => ({
 
 const enrollMissionForAgent = vi.hoisted(() => vi.fn());
 const listMissionsForAgent = vi.hoisted(() => vi.fn());
-vi.mock('@server/deepAgent/missions', () => ({ enrollMissionForAgent, listMissionsForAgent }));
+const discardEnrolledMission = vi.hoisted(() => vi.fn());
+vi.mock('@server/deepAgent/missions', () => ({ enrollMissionForAgent, listMissionsForAgent, discardEnrolledMission }));
 vi.mock('@server/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
 vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));
@@ -190,6 +191,25 @@ describe('POST /api/agents/[id]/missions', () => {
     await run();
     expect(res._getStatusCode()).toBe(404);
     expect(res._getJSONData()).toEqual(NOT_FOUND_BODY);
+  });
+
+  it('discards the enrolled mission when its first wake fails, keeping the error mapping', async () => {
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    discardEnrolledMission.mockResolvedValue(undefined);
+    runMissionFirstWake.mockRejectedValue(new Error('model exploded'));
+    const { res, run } = invoke('POST', developer);
+    await run();
+    expect(discardEnrolledMission).toHaveBeenCalledWith('m1');
+    expect(res._getStatusCode()).toBe(500);
+  });
+
+  it('keeps the first-wake error when discarding the mission also fails', async () => {
+    enrollMissionForAgent.mockResolvedValue({ missionId: 'm1' });
+    discardEnrolledMission.mockRejectedValue(new Error('db down'));
+    runMissionFirstWake.mockRejectedValue(new Error('model exploded'));
+    const { res, run } = invoke('POST', developer);
+    await run();
+    expect(res._getStatusCode()).toBe(500);
   });
 
   it('answers an unrelated enroll failure with a 500', async () => {

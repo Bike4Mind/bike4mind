@@ -169,6 +169,37 @@ describe('ServerSubagentOrchestrator', () => {
     });
   });
 
+  describe('delegateToAgent - model admission', () => {
+    const GATED_ID = 'claude-opus-5';
+
+    it('refuses a built-in agent whose pinned model the user is not admitted to, before any work', async () => {
+      const llm = makeLlm();
+      const tracker = makeTracker();
+      const resolveBackend = vi.fn((modelId: string) => makeLlm(modelId));
+      const assert = vi.fn(async (modelId: string) => {
+        if (modelId === GATED_ID) throw new Error(`Model "${modelId}" is not accessible and no fallback available`);
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm,
+        logger: makeLogger(),
+        parentTools: [],
+        tracker,
+        resolveBackend,
+        modelAdmission: { assert },
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: GATED_ID }) })
+      ).rejects.toThrow(`Model "${GATED_ID}" is not accessible`);
+
+      expect(assert).toHaveBeenCalledWith(GATED_ID);
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(tracker.onStart).not.toHaveBeenCalled();
+    });
+  });
+
   describe('delegateToAgent \u2014 per-member credit cap gate', () => {
     it('throws before any tracker/LLM work when checkMemberCreditCap returns true', async () => {
       const llm = makeLlm();

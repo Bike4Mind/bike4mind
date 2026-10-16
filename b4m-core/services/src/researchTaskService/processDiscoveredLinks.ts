@@ -47,6 +47,10 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
 // TODO: move BATCH_SIZE / CONCURRENCY_LIMIT to admin settings so they're adjustable.
 const BATCH_SIZE = 50;
 const CONCURRENCY_LIMIT = 3;
+// A batch of BATCH_SIZE links comes back as pretty-printed JSON, which runs past a 4096-token default
+// with long URLs and is cut off mid-array. Finite on purpose: the metered backend sizes its credit hold
+// from it (clamped to the model's own output cap), and a non-finite value reads as "no budget".
+const LINK_EXTRACTION_MAX_TOKENS = 16_384;
 
 // No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
 export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
@@ -234,7 +238,7 @@ export const processDiscoveredLinks = async (
               await llm.complete(
                 llm.currentModel,
                 linkExtractionPrompt,
-                { stream: false, temperature: 0.2, topP: 0.1, maxTokens: Infinity },
+                { stream: false, temperature: 0.2, topP: 0.1, maxTokens: LINK_EXTRACTION_MAX_TOKENS },
                 async text => {
                   if (text && text[0]) {
                     extractedLinks = text[0];

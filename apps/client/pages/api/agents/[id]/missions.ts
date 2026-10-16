@@ -11,7 +11,7 @@ import { assertAgentAccess, type AgentAccess, type AgentAccessShape } from '@ser
 import { rateLimit } from '@server/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
-import { enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
+import { discardEnrolledMission, enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
 import { canCreateMissions } from '@server/deepAgent/missionAccess';
 import { MongoDeepAgentStore } from '@server/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
@@ -129,6 +129,12 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         modelId: input.modelId,
         enableTools: input.enableTools,
         userId,
+      }).catch(async (error: unknown) => {
+        // The charter exists but the mission never went live (e.g. 422 credits or a refusal).
+        await discardEnrolledMission(missionId).catch((cleanupError: unknown) =>
+          logger.error('create_mission: failed to discard mission after first-wake failure', cleanupError as Error)
+        );
+        throw error;
       });
 
       return res.json({

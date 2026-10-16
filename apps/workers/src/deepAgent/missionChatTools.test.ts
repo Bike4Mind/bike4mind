@@ -5,11 +5,13 @@ const m = vi.hoisted(() => ({
   enrollMissionForAgent: vi.fn(),
   runMissionFirstWake: vi.fn(),
   assertOwnerCanAfford: vi.fn(),
+  discardEnrolledMission: vi.fn(),
 }));
 
 vi.mock('@server/deepAgent/missions', () => ({
   findAgentsByName: m.findAgentsByName,
   enrollMissionForAgent: m.enrollMissionForAgent,
+  discardEnrolledMission: m.discardEnrolledMission,
   formatMissionStatusReport: vi.fn(),
   listMissionsForAgent: vi.fn(),
 }));
@@ -30,6 +32,7 @@ describe('create_mission chat tool', () => {
     vi.clearAllMocks();
     m.findAgentsByName.mockResolvedValue([{ id: 'agent-1', name: 'Cerebo' }]);
     m.enrollMissionForAgent.mockResolvedValue({ missionId: 'mission-1' });
+    m.discardEnrolledMission.mockResolvedValue(undefined);
     m.runMissionFirstWake.mockResolvedValue({ handoff: { lastActionSummary: 'woke', nextIntendedAction: 'next' } });
   });
 
@@ -55,5 +58,12 @@ describe('create_mission chat tool', () => {
       expect.anything()
     );
     expect(m.runMissionFirstWake).toHaveBeenCalledOnce();
+  });
+
+  it('discards the just-enrolled mission and surfaces the error when the first wake fails', async () => {
+    const failure = insufficientCreditsError('Insufficient credits');
+    m.runMissionFirstWake.mockRejectedValueOnce(failure);
+    await expect(run({ id: 'u1', tags: ['Developer'] })).rejects.toBe(failure);
+    expect(m.discardEnrolledMission).toHaveBeenCalledWith('mission-1');
   });
 });

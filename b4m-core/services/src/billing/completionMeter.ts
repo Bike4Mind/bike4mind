@@ -1,5 +1,13 @@
 import type { IMessage, ModelInfo } from '@bike4mind/common';
-import { resolveOutputMaxTokens, type CompletionInfo, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  DEFAULT_MAX_TOOL_CALLS,
+  ignoresRequestedOutputCap,
+  resolveOutputMaxTokens,
+  usableTokenCount,
+  type CompletionInfo,
+  type ICompletionBackend,
+  type ICompletionOptions,
+} from '@bike4mind/llm-adapters';
 import { BadRequestError, DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 
 export type CompletionUsage = Pick<
@@ -26,7 +34,9 @@ export type CompletionMeter = (
   modelInfo: ModelInfo,
   messages: IMessage[],
   maxTokens: number,
-  models?: ModelInfo[]
+  models?: ModelInfo[],
+  /** Provider turns the call may run (tool round-trips inside one `complete`); the hold covers each. */
+  turns?: number
 ) => Promise<MeteredCompletion>;
 
 /** Latch each usage field from whichever chunk carries it (same contract as cliCompletions). */
@@ -71,6 +81,15 @@ export async function withMeteredCompletion<T>(
 }
 
 /**
+ * Provider turns one `complete` may run: with tools the adapter executes, each round-trip is another
+ * turn (up to the tool-call ceiling, plus the final turn with tools disabled), all settled at once.
+ */
+function providerTurns(options: Partial<ICompletionOptions>): number {
+  if (!options.tools?.length || options.executeTools === false) return 1;
+  return (options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS) + 1;
+}
+
+/**
  * Meter every top-level `complete` call on `llm`: each one is admitted and reserved before the
  * provider is called, and settled from its reported usage (refunded on a throw before any). For callers
  * that hand one backend to code making many calls (deep-agent wakes, background extraction).
@@ -95,7 +114,11 @@ export function meterCompletionBackend<T extends Pick<ICompletionBackend, 'compl
       modelInfo: callModel,
       modelMaxOutputTokens: callModel.max_tokens,
     });
-    const metered = await meter(callModel, messages, maxTokens, models);
+    // An adapter that sends no cap for this model can return up to the model's own limit.
+    const heldMaxTokens = ignoresRequestedOutputCap(callModel)
+      ? Math.max(maxTokens, usableTokenCount(callModel.max_tokens) ?? maxTokens)
+      : maxTokens;
+    const metered = await meter(callModel, messages, heldMaxTokens, models, providerTurns(options));
     const usage: CompletionUsage = {};
     return withMeteredCompletion(metered, usage, () =>
       llm.complete(model, messages, { ...options, maxTokens }, async (text, info) => {
