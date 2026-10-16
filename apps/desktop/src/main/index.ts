@@ -127,6 +127,7 @@ void app.whenReady().then(async () => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
   });
+  fleet.setModelResolver(async sessionId => (await chat.getSession(sessionId))?.model ?? null);
   closeAgentBrowsers = () => browser.closeAll();
   const terminals = registerTerminals(async sessionId => {
     const session = await chat.getSession(sessionId);

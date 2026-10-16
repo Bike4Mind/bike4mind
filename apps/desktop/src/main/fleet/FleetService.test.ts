@@ -246,6 +246,46 @@ describe('toOtlpLogs', () => {
   });
 });
 
+describe('toOtlpLogs on usage', () => {
+  it('carries the model and counts on the session record as int and string attributes', () => {
+    const batch = {
+      version: 1 as const,
+      consent: true as const,
+      events: [
+        {
+          eventId: 'event-0001',
+          occurredAt: '2026-10-16T12:00:00.000Z',
+          durationMs: 3249,
+          type: 'session' as const,
+          sessionId: 'session-0001',
+          usage: {
+            model: 'claude-opus-5',
+            inputTokens: 1200,
+            outputTokens: 300,
+            cacheReadTokens: 5000,
+            cacheWriteTokens: 40,
+            creditsMilli: 265_400,
+          },
+        },
+      ],
+    };
+    const body = toOtlpLogs(batch, { appVersion: '1.2.3', email: EMAIL, installId: INSTALL_ID }) as {
+      resourceLogs: Array<{
+        scopeLogs: Array<{ logRecords: Array<{ attributes: Array<{ key: string; value: unknown }> }> }>;
+      }>;
+    };
+    const attrs = body.resourceLogs[0].scopeLogs[0].logRecords[0].attributes;
+    expect(attrs.slice(4)).toEqual([
+      { key: 'model', value: { stringValue: 'claude-opus-5' } },
+      { key: 'input_tokens', value: { intValue: '1200' } },
+      { key: 'output_tokens', value: { intValue: '300' } },
+      { key: 'cache_read_tokens', value: { intValue: '5000' } },
+      { key: 'cache_write_tokens', value: { intValue: '40' } },
+      { key: 'credits_milli', value: { intValue: '265400' } },
+    ]);
+  });
+});
+
 describe('FleetService connection', () => {
   it('reports the file state and never puts the key in state', async () => {
     const h = await harness();

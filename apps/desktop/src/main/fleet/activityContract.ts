@@ -15,11 +15,24 @@ const MAX_FUTURE_MS = 5 * 60 * 1000;
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const REPO_PART_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+/** No '#': Fleet joins its per-model counter names with it. */
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
+export const MAX_USAGE_COUNT = 1_000_000_000;
 
 export const TOOL_CATEGORIES = ['shell', 'editor', 'browser', 'mcp', 'agent', 'other'] as const;
 export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
 export const REPOSITORY_ACTIONS = ['view', 'edit', 'commit', 'review'] as const;
 export type RepositoryAction = (typeof REPOSITORY_ACTIONS)[number];
+
+/** What one reply used. Counts only: no message text reaches this. Credits are thousandths of a credit. */
+export interface ReplyUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  creditsMilli: number;
+}
 
 interface BaseEvent {
   eventId: string;
@@ -29,7 +42,7 @@ interface BaseEvent {
 }
 
 export type ActivityEvent =
-  | (BaseEvent & { type: 'session' })
+  | (BaseEvent & { type: 'session'; usage?: ReplyUsage })
   | (BaseEvent & { type: 'repository'; repository: { owner: string; name: string; action: RepositoryAction } })
   | (BaseEvent & { type: 'tool'; tool: { type: ToolCategory } });
 
@@ -40,6 +53,18 @@ export interface ActivityBatch {
 }
 
 export const isActivityId = (value: string): boolean => ID_RE.test(value);
+export const isModelId = (value: string): boolean => MODEL_RE.test(value);
+
+const isCount = (value: number): boolean => Number.isInteger(value) && value >= 0 && value <= MAX_USAGE_COUNT;
+
+function isValidUsage(usage: ReplyUsage): boolean {
+  return (
+    isModelId(usage.model) &&
+    [usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.creditsMilli].every(
+      isCount
+    )
+  );
+}
 export const isRepositoryPart = (value: string): boolean => REPO_PART_RE.test(value);
 
 /** Whether Fleet would accept this event right now. Pure. */
@@ -54,7 +79,8 @@ export function isValidEvent(event: ActivityEvent, nowMs: number): boolean {
     return isRepositoryPart(owner) && isRepositoryPart(name) && REPOSITORY_ACTIONS.includes(action);
   }
   if (event.type === 'tool') return TOOL_CATEGORIES.includes(event.tool.type);
-  return event.type === 'session';
+  if (event.type === 'session') return event.usage === undefined || isValidUsage(event.usage);
+  return false;
 }
 
 /** A duration clamped into what Fleet accepts. */

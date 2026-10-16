@@ -50,6 +50,8 @@ export interface RegisteredFleet {
   observe(event: ChatStreamEvent): void;
   /** Late-bound because chat is built after this; resolves a conversation's working directory. */
   setDirectoryResolver(resolve: (sessionId: string) => Promise<string | null>): void;
+  /** Late-bound like the directory resolver; resolves the model a conversation is on. */
+  setModelResolver(resolve: (sessionId: string) => Promise<string | null>): void;
   dispose(): void;
 }
 
@@ -74,6 +76,7 @@ export function registerFleet(): RegisteredFleet {
   });
 
   let directoryFor: (sessionId: string) => Promise<string | null> = async () => null;
+  let modelOf: (sessionId: string) => Promise<string | null> = async () => null;
   const repositoryAt = createRepositoryResolver();
   const recorder = new ActivityRecorder({
     enabled: () => service.recording(),
@@ -82,6 +85,7 @@ export function registerFleet(): RegisteredFleet {
       const directory = await directoryFor(sessionId);
       return directory ? repositoryAt(directory) : null;
     },
+    modelFor: sessionId => modelOf(sessionId),
   });
 
   ipcMain.handle(IPC_CHANNELS.fleetGetState, () => service.getState());
@@ -98,6 +102,9 @@ export function registerFleet(): RegisteredFleet {
     observe: event => recorder.observe(event),
     setDirectoryResolver: resolve => {
       directoryFor = resolve;
+    },
+    setModelResolver: resolve => {
+      modelOf = resolve;
     },
     dispose: () => {
       clearInterval(refresher);

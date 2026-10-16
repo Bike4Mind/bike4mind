@@ -184,13 +184,16 @@ Integration requests themselves ("request this integration") are product data, n
 
 Bike4Mind Desktop can send aggregate activity to a team's Fleet. It sends nothing until two things are true: Fleet's installer has written `~/.claude/fleet/bike4mind-desktop.json` on the machine (mode 0600; Desktop ignores a copy other users can read), and the user has turned on "Share activity with Fleet" in Desktop's Profile. Turning the switch off deletes everything not yet sent. Desktop posts OTLP/HTTP JSON logs to the Fleet origin in that file, at `/v1/logs`, from the main process, with the team telemetry key the file holds. The key never reaches the renderer and is never logged.
 
-| Data       | Sent as                                                                               | Purpose                                    |
-| ---------- | ------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet    |
-| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools        |
-| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day |
-| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                       |
-| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in       |
+| Data       | Sent as                                                                               | Purpose                                      |
+| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet      |
+| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools          |
+| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day   |
+| Usage      | On the reply record: `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `credits_milli` (credits x 1000) | Which models a person uses and what they use |
+| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                         |
+| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in         |
+
+The model id is the one the conversation is set to, for example `claude-opus-5`. Token counts and credits are the server's own figures for that reply, as the reply shows them. A reply that was resumed reports only what was added since the earlier part. A reply record names one model, so what the `explore` sub-agent spends is counted under the conversation's own model rather than the one that sub-agent ran on. None of it is message content.
 
 The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
 
