@@ -1,7 +1,8 @@
 name: OpenNext Build Guard
 
 # Runs the OpenNext build that sst.aws.Nextjs runs for apps/client, and checks
-# the server bundle against Lambda's 250 MiB unzipped limit.
+# the server bundle against Lambda's 250 MiB unzipped limit, then enforces the
+# 90% budget from check-server-bundle-size.mjs on the same build output.
 #
 # On a deploy this build runs inside `sst deploy`, after the infra the Nextjs
 # component depends on exists, so an infra PR otherwise needs a full preview to
@@ -30,6 +31,8 @@ on:
       - pnpm-lock.yaml
       - scripts/check-opennext-build.mjs
       - scripts/__tests__/check-opennext-build.test.mjs
+      - apps/client/scripts/check-server-bundle-size.mjs
+      - apps/client/scripts/check-server-bundle-size.test.ts
       - .github/workflows/opennext-build-guard.yml
 
 env:
@@ -74,3 +77,6 @@ jobs:
 
       - name: OpenNext build and bundle size
         run: node scripts/check-opennext-build.mjs
+
+      - name: Enforce server bundle budget
+        run: node apps/client/scripts/check-server-bundle-size.mjs --enforce
