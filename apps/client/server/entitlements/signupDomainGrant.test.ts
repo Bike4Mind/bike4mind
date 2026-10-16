@@ -97,6 +97,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: 'org-1',
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(mockAddCredits).toHaveBeenCalledWith(
@@ -129,6 +130,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: null,
       tagsApplied: [],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
@@ -188,6 +190,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: 'org-1',
       tagsApplied: [],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
@@ -250,6 +253,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: null,
       joinedOrganizationId: 'org-1',
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
@@ -266,6 +270,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: 1100,
       joinedOrganizationId: null,
       tagsApplied: ['Partner', 'cohort-a'],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
@@ -282,6 +287,7 @@ describe('applySignupDomainGrant', () => {
       currentCredits: null,
       joinedOrganizationId: null,
       tagsApplied: [],
+      subscriptionCreditsGranted: 0,
       subscriptionGranted: false,
     });
     expect(mockAddCredits).not.toHaveBeenCalled();
@@ -395,6 +401,7 @@ describe('applySignupDomainGrant', () => {
         currentCredits: 1100,
         joinedOrganizationId: 'org-1',
         tagsApplied: ['Partner'],
+        subscriptionCreditsGranted: 0,
         subscriptionGranted: false,
       });
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('rule-1'), expect.any(Error));
@@ -487,6 +494,7 @@ describe('applySignupDomainGrant', () => {
         currentCredits: 1100,
         joinedOrganizationId: 'org-1',
         tagsApplied: ['Partner', 'cohort-a'],
+        subscriptionCreditsGranted: 0,
         subscriptionGranted: false,
       });
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('overlay-grant'), expect.any(Error));
