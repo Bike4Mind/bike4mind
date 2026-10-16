@@ -14,18 +14,21 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const readInfra = (file: string) => readFileSync(path.join(REPO_ROOT, 'infra', file), 'utf8');
+// Strip block comments so a commented-out entry cannot satisfy the assertions below.
+const readInfra = (file: string) =>
+  readFileSync(path.join(REPO_ROOT, 'infra', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
 const cut = (source: string, start: string, end: string) => {
   const from = source.indexOf(start);
   expect(from).toBeGreaterThanOrEqual(0);
-  return source.slice(from, source.indexOf(end, from));
+  const to = source.indexOf(end, from);
+  expect(to).toBeGreaterThan(from);
+  return source.slice(from, to);
 };
 
-const linkOf = (block: string) => cut(block, '  link: [', '\n  ],');
-const environmentOf = (block: string) => cut(block, '  environment: {', '\n  },');
+const linkOf = (block: string) => cut(block, '\n  link: [', '\n  ],');
+const environmentOf = (block: string) => cut(block, '\n  environment: {', '\n  },');
 
-// Both agent executor definitions spread SHARED_AGENT_EXECUTOR_CONFIG, so pinning it covers both.
 const PRODUCERS = [
   {
     name: 'chat completion service',
@@ -44,5 +47,25 @@ describe.each(PRODUCERS)('$name as a generation job producer', ({ block }) => {
 
   it('registers the test generation providers', () => {
     expect(environmentOf(block)).toMatch(/^\s+\.\.\.TEST_GENERATION_PROVIDER_ENVIRONMENT,$/m);
+  });
+});
+
+// Both agent executor definitions spread SHARED_AGENT_EXECUTOR_CONFIG, and a consumer that sets
+// its own link/environment after the spread would silently drop the queue link and test providers.
+const AGENT_EXECUTOR_CONSUMERS = [
+  {
+    name: 'agent executor function',
+    block: cut(readInfra('agentExecutor.ts'), "new sst.aws.Function('AgentExecutor'", '\n});'),
+  },
+  {
+    name: 'continuation queue subscription',
+    block: cut(readInfra('agentExecutor.ts'), 'agentContinuationQueue.subscribe(', '\n);'),
+  },
+];
+
+describe.each(AGENT_EXECUTOR_CONSUMERS)('$name', ({ block }) => {
+  it('spreads SHARED_AGENT_EXECUTOR_CONFIG without overriding link or environment', () => {
+    expect(block).toMatch(/^\s+\.\.\.SHARED_AGENT_EXECUTOR_CONFIG,$/m);
+    expect(block).not.toMatch(/^\s+(link|environment):/m);
   });
 });
