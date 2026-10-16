@@ -577,6 +577,11 @@ export interface ChatCompletionFeature {
     /** Input-window-derived; deliberately NOT the model's output cap. */
     attachedFileTokenBudget: number
   ) => Promise<IMessage[]>;
+  /**
+   * Called when the input budget kept none of the system messages this feature returned, so it can
+   * take back what it published on the strength of them.
+   */
+  onContextDropped?: (quest: IChatHistoryItemDocument) => void;
 }
 
 /**
@@ -2050,6 +2055,8 @@ export function mergeLakeFirstListing<T extends { id: string }>(
   };
 }
 
+const citableKey = (c: CitableSource) => c.id || c.url || c.title;
+
 /**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
@@ -2098,6 +2105,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private readerConsentTags: string[];
   /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
   private includeLibraryFiles: boolean | undefined;
+  /** Keys of the citables this turn's injection added, withdrawn if the block never reaches the model. */
+  private publishedCitableKeys = new Set<string>();
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2795,11 +2804,29 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     });
   }
 
+  /**
+   * The budget dropped the retrieved-context block, so the model saw neither the passages nor the
+   * abstention text. Its chips would credit sources the answer never read, so take them back and
+   * warn that the passages were not used.
+   */
+  onContextDropped(quest: IChatHistoryItemDocument): void {
+    const published = this.publishedCitableKeys;
+    this.publishedCitableKeys = new Set();
+    if (published.size === 0 || !quest.promptMeta) return;
+    quest.promptMeta.citables = (quest.promptMeta.citables ?? []).filter(c => !published.has(citableKey(c)));
+    this.logger.warn('\u{1F512} Forced retrieval: context block dropped by the input budget, citations withdrawn');
+    quest.promptMeta.warnings = [
+      ...(quest.promptMeta.warnings ?? []),
+      "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+    ];
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string
   ): Promise<IMessage[]> {
+    this.publishedCitableKeys = new Set();
     const query = message?.trim();
     if (!query) return [];
 
@@ -3577,7 +3604,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         userId: user.id,
       });
       const existingCitables = quest.promptMeta.citables || [];
-      const citableKey = (c: CitableSource) => c.id || c.url || c.title;
       const withoutCitationIndex = (c: CitableSource): CitableSource => {
         if (c.metadata?.citationIndex === undefined) return c;
         const { citationIndex: _staleIndex, ...metadata } = c.metadata;
@@ -3608,6 +3634,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           })
           .map(withoutCitationIndex);
         quest.promptMeta.citables = [...citables, ...keptExisting];
+        this.publishedCitableKeys = newKeys;
       } else {
         // Named style: legacy order - existing citables first, then de-duplicated new ones.
         const seenKeys = new Set(existingCitables.map(citableKey).filter(Boolean));
@@ -3618,6 +3645,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           return true;
         });
         quest.promptMeta.citables = [...existingCitables, ...newCitables];
+        this.publishedCitableKeys = new Set(newCitables.map(citableKey).filter(Boolean));
       }
       await this.chatCompletion.sendStatusUpdate(quest, 'Grounded in the knowledge base');
 

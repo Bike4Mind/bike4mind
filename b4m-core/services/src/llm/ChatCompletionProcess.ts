@@ -3897,6 +3897,10 @@ export class ChatCompletionProcess {
           `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
         );
       }
+      // Forced retrieval published its citation chips before the budget ran.
+      if (droppedSources.get('knowledgeRetrieval') === false) {
+        this.features.get('knowledgeRetrieval')?.onContextDropped?.(quest);
+      }
 
       const countSystemBlockTokens = (content: string) =>
         calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);

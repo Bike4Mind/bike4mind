@@ -7569,7 +7569,7 @@ describe('ChatCompletionProcess', () => {
         return sum + 1;
       }, 0);
 
-    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+    const runWithLakeSources = async (opts: { withLakes: boolean; dropRetrieval?: boolean }) => {
       mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
       mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
@@ -7601,15 +7601,21 @@ describe('ChatCompletionProcess', () => {
       let builtMessages: IMessage[] = [];
       mockedBuildAndSortMessages.mockImplementation(
         async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
-          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages].filter(
+            message => !(opts.dropRetrieval && message === chunk)
+          );
           return { messages: builtMessages, messageTruncation: null } as any;
         }
       );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
+      const onRetrievalDropped = vi.fn();
       if (opts.withLakes) {
-        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('knowledgeRetrieval', {
+          getContextMessages: async () => [chunk],
+          onContextDropped: onRetrievalDropped,
+        } as any);
         service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
       }
 
@@ -7622,8 +7628,19 @@ describe('ChatCompletionProcess', () => {
       // Re-derive the residual the way the write site does, independently of the promotion:
       // total over the payload it counted, less the user prompt (the only known non-system source).
       const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
-      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual, onRetrievalDropped };
     };
+
+    it('tells forced retrieval when the budget dropped its block', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true, dropRetrieval: true });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      expect(onRetrievalDropped.mock.calls[0][0]).toMatchObject({ id: startQuestParams.questId });
+    });
+
+    it('leaves forced retrieval alone when its block was delivered', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true });
+      expect(onRetrievalDropped).not.toHaveBeenCalled();
+    });
 
     it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
       const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });

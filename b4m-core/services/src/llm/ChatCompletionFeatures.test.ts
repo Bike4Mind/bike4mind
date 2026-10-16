@@ -5064,6 +5064,62 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.surfaces).toEqual(expect.arrayContaining(['lake-memory', 'forced-retrieval']));
     expect(retrieval?.dataLakeTags).toContain('datalake:y');
   });
+
+  describe('when the input budget drops the injected block', () => {
+    const webCitable = {
+      id: 'web-1',
+      type: 'website',
+      title: 'Example',
+      url: 'https://example.com',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      status: 'complete',
+    } as unknown as CitableSource;
+
+    const retrievedTurn = async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+      return { feature, quest };
+    };
+
+    it('withdraws the chips it published and warns that the passages were not used', async () => {
+      const { feature, quest } = await retrievedTurn();
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+
+      feature.onContextDropped(quest);
+
+      // A citable some other surface published is not this feature's to take back.
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('does nothing on a turn that published no chips', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx({ files: [] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+
+      feature.onContextDropped(quest);
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+  });
 });
 
 describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
