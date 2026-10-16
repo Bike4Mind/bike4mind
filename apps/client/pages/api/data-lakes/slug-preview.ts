@@ -20,8 +20,8 @@ import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 // `tagPrefix` (else the name-derived default), or null when that base is unusable - the form's own
 // tagPrefixIssue reports why. Session-only and internal. `slug` says whether a slug is taken in the
 // caller's validated scope. In personal scope that namespace is shared by every user's org-less
-// lakes (the unique datalakeTag), so this does tell a caller that SOME org-less lake holds a slug -
-// never which lake or whose. Create discloses the same through its "-N" suffix, only with the side
+// lakes (the unique datalakeTag), and a lake since moved into an org keeps its tag, so this does
+// tell a caller that SOME lake holds a slug - never which lake or whose. Create discloses the same through its "-N" suffix, only with the side
 // effect of making a lake. `tagPrefix` likewise says that some lake in the caller's prefix scope
 // (their own, or their org's) holds a prefix, never which one - the same thing create's
 // TAG_PREFIX_UNAVAILABLE error reveals.

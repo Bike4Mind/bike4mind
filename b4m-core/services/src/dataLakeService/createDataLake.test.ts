@@ -284,6 +284,19 @@ describe('previewDataLakeSlug', () => {
     expect(db.dataLakes.find).toHaveBeenCalledWith({ organizationId: 'org-1', slug: 'vendor-contracts' });
   });
 
+  it('suffixes past a tag a lake in another scope still carries', async () => {
+    // An org lake moved out to personal keeps its org-qualified tag, so the org scope no longer
+    // holds the slug but the tag a new org lake would mint is taken.
+    const db = {
+      dataLakes: {
+        find: vi.fn(async (filter: { datalakeTag?: string }) =>
+          filter.datalakeTag === 'datalake:org-1:vendor-contracts' ? [{ id: 'moved' }] : []
+        ),
+      },
+    };
+    await expect(previewDataLakeSlug(db as never, 'Vendor Contracts', 'org-1')).resolves.toBe('vendor-contracts-1');
+  });
+
   it('lowercases a mixed-case name, as create does', async () => {
     await expect(previewDataLakeSlug(dbWith([]) as never, 'MiXeD Case')).resolves.toBe('mixed-case');
   });
