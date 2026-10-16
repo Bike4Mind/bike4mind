@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   complete: vi.fn(),
   embed: vi.fn(),
   record: vi.fn(),
+  findOrg: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
@@ -22,7 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
   creditTransactionRepository: {},
-  organizationRepository: { findById: async () => null },
+  organizationRepository: { findById: m.findOrg },
   userRepository: {},
   sessionRepository: {
     findSessionIdsByUserId: async () => ['s1'],
@@ -42,13 +43,13 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({ openai: 'sk-test' }) },
   recordOperationalUsage: m.record,
-}));
-// The shared pre-enqueue gate (unit-tested in meterPlatformCompletion.test.ts), reduced to its contract.
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
-  assertOwnerCanAfford: async (user: { currentCredits?: number }) => {
-    if (m.enforce && !((user.currentCredits ?? 0) > 0)) throw insufficientCreditsError('Insufficient credits');
+  // The balance gate (unit-tested in assertOwnerHasCredits.test.ts), reduced to its contract.
+  assertOwnerHasCredits: (owner: { currentCredits?: number }) => {
+    if (!((owner.currentCredits ?? 0) > 0)) throw insufficientCreditsError('Insufficient credits');
   },
+  creditService: { isMemberAtOrOverCap: () => false, MEMBER_CREDIT_CAP_MESSAGE: 'cap' },
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => m.enforce }));
 
 type Llm = { complete: (...args: unknown[]) => Promise<void> };
 const noop = async () => undefined;
@@ -83,10 +84,10 @@ const { default: handler } = await import('@pages/api/sessions/semantic-search')
 
 const QUERY = 'bike trip';
 
-async function call(currentCredits: number) {
+async function call(currentCredits: number, organizationId?: string) {
   const { req, res } = createMocks({ method: 'POST', body: { query: QUERY, useReRanking: true } });
   Object.assign(req, {
-    user: { id: 'u1', currentCredits },
+    user: { id: 'u1', currentCredits, organizationId },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() },
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
@@ -101,6 +102,7 @@ beforeEach(() => {
   m.enforce = true;
   m.embed.mockResolvedValue([1, 0, 0]);
   m.record.mockResolvedValue(undefined);
+  m.findOrg.mockResolvedValue(null);
   // Expansion reports 100/20 tokens, the re-rank 300/40.
   m.complete
     .mockImplementationOnce(async (_m, _msgs, _o, cb) => cb(['{}'], { inputTokens: 100, outputTokens: 20 }))
@@ -151,6 +153,26 @@ describe('POST /api/sessions/semantic-search metering', () => {
         forceCreditBilling: true,
       }),
     ]);
+  });
+
+  it('reads the org once and gates on its pool', async () => {
+    m.findOrg.mockResolvedValue({ id: 'o1', currentCredits: 0 });
+
+    await expect(call(100, 'o1')).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.findOrg).toHaveBeenCalledOnce();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('tags every event of one search with the same per-request id, distinct across searches', async () => {
+    await call(100);
+    const first = new Set(m.record.mock.calls.map(([p]) => p.requestId));
+    m.complete.mockResolvedValue(undefined);
+    await call(100);
+    const all = new Set(m.record.mock.calls.map(([p]) => p.requestId));
+
+    expect(first.size).toBe(1);
+    expect(first.has('u1')).toBe(false);
+    expect(all.size).toBe(2);
   });
 
   it('does not refuse a zero-credit caller when credits are not enforced', async () => {

@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: async () => undefined }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => false }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ lean: async () => [] })) } }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },

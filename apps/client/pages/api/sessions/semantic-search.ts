@@ -14,8 +14,9 @@
  * with forceCreditBilling, keyed on enforceCredits like the pre-flight.
  */
 
+import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
+import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import {
@@ -33,12 +34,19 @@ import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFall
 import {
   getEmbeddingModelCost,
   getTextModelCost,
+  insufficientCreditsError,
   type ModelInfo,
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
   type SmallLLMAdapters,
 } from '@bike4mind/common';
-import { apiKeyService, recordOperationalUsage, type RecordOperationalUsageParams } from '@bike4mind/services';
+import {
+  apiKeyService,
+  assertOwnerHasCredits,
+  creditService,
+  recordOperationalUsage,
+  type RecordOperationalUsageParams,
+} from '@bike4mind/services';
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -111,7 +119,14 @@ const handler = baseApi().post(
 
     // Same holder deductCreditsWithOrgSupport charges: the org pool when the user has one.
     const billingOrg = req.user.organizationId ? await organizationRepository.findById(req.user.organizationId) : null;
-    await assertOwnerCanAfford(req.user);
+    // assertOwnerCanAfford's gate, inlined so the org read above is the only one.
+    if (await isCreditsEnforced()) {
+      if (billingOrg && creditService.isMemberAtOrOverCap(billingOrg, userId)) {
+        throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
+      }
+      assertOwnerHasCredits(billingOrg ?? req.user);
+    }
+    const requestId = randomUUID();
 
     const recordUsage = (
       usage: Pick<RecordOperationalUsageParams, 'feature' | 'provider' | 'model' | 'inputTokens' | 'costUsd'> & {
@@ -119,7 +134,7 @@ const handler = baseApi().post(
       }
     ) =>
       recordOperationalUsage(
-        { requestId: userId, user: req.user, organization: billingOrg, forceCreditBilling: true, ...usage },
+        { requestId, user: req.user, organization: billingOrg, forceCreditBilling: true, ...usage },
         {
           db: {
             usageEvents: usageEventRepository,
