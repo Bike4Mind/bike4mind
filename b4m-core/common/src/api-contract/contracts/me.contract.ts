@@ -29,8 +29,10 @@ export const getMeContract = defineEndpoint({
     "owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws " +
     'on a pool this number does not describe. Gate on `tier != "free"` for "is this caller paying" and ' +
     'on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ' +
-    "ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with " +
-    'an API key (`b4m_live_`) carrying `me:read`, or a JWT.',
+    "ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's " +
+    "organization) confers that org plan's tier and `subscription`, even when the caller pays nothing " +
+    'personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never ' +
+    'cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.',
   tags: ['Account'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.ME_READ],
