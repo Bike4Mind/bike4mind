@@ -3430,11 +3430,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`;
         // An operator floor above the measured one can empty every turn, so that case warns on every
         // turn it happens and tells the reader; a measured floor emptying a turn is an ordinary miss.
+        // The top candidate always survives the relative and spread cutoffs (see above), so the
+        // configured floor is what emptied the turn exactly when the top score cleared the measured
+        // floor too - below it, clearing the setting would still return nothing.
         const measuredPct =
-          configuredAbsolutePct !== undefined && scoredCount > 0
+          configuredAbsolutePct !== undefined
             ? forcedRetrievalFloorAboveMeasured(configuredAbsolutePct, embeddingModel)
             : undefined;
-        if (configuredAbsolutePct !== undefined && measuredPct !== undefined) {
+        if (configuredAbsolutePct !== undefined && measuredPct !== undefined && topScore >= measuredPct / 100) {
           this.logger.warn(
             `${noneClearedLine}; the configured floor is above the ${measuredPct}% measured for this space, ` +
               'clear forcedRetrievalMinSimilarityPct to use the measured floor'

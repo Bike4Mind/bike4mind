@@ -3624,6 +3624,21 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
   });
 
+  it('treats an operator floor as an ordinary miss when the top score is below the measured floor too', async () => {
+    // A configured 75 on a 3-small corpus, and a top score of 0.3. Clearing the setting would
+    // return nothing either, because 0.3 is below the 58% measured floor - so the configured value
+    // did not empty this turn, and reporting it as the cause would tell the reader to clear the
+    // setting when the real cause is that nothing in the library was relevant.
+    const ctx = makeCtx({
+      scores: [0.3],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
     // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
     // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
