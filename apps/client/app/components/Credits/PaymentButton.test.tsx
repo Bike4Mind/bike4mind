@@ -6,7 +6,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { CreditPurchaseEvents } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import type { ConfirmResult } from './CheckoutForm';
 import PaymentButton from './PaymentButton';
 
@@ -27,21 +29,27 @@ vi.mock('@stripe/stripe-js', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 
-// The modal stands in for Stripe: it exposes the confirm-result and close callbacks as buttons.
+// The modal stands in for Stripe: it exposes the confirm-result, payment and close callbacks as buttons.
 let confirmResult: ConfirmResult = { outcome: 'succeeded' };
 vi.mock('./PaymentModal', () => ({
   default: ({
     isOpen,
     onClose,
     onConfirmResult,
+    onPayment,
+    productName,
   }: {
     isOpen: boolean;
     onClose: () => void;
     onConfirmResult: (result: ConfirmResult) => void;
+    onPayment: () => void;
+    productName: string;
   }) =>
     isOpen ? (
       <div>
+        <span data-testid="payment-modal-title">{productName}</span>
         <button data-testid="payment-modal-confirm-btn" onClick={() => onConfirmResult(confirmResult)} />
+        <button data-testid="payment-modal-pay-btn" onClick={onPayment} />
         <button data-testid="payment-modal-close-btn" onClick={onClose} />
       </div>
     ) : null,
@@ -200,5 +208,34 @@ describe('PaymentButton start-payment requests', () => {
     await waitFor(() => expect(screen.getByTestId('credits-purchase-btn')).not.toBeDisabled());
     expect(apiPost).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('payment-modal-confirm-btn')).not.toBeInTheDocument();
+  });
+
+  it('checks out the pack selected at click time even if the pack changes while start-payment is pending', async () => {
+    let resolveStart: (value: unknown) => void = () => {};
+    apiPost.mockReturnValue(new Promise(resolve => (resolveStart = resolve)));
+    const onPayment = vi.fn();
+    const ui = (packageId: CreditPackageId) => (
+      <TestWrapper>
+        <PaymentButton transactionType={TransactionType.Package} packageId={packageId} onPayment={onPayment} />
+      </TestWrapper>
+    );
+    const { rerender } = render(ui(CreditPackageId.A));
+
+    await userEvent.click(screen.getByTestId('credits-purchase-btn'));
+    rerender(ui(CreditPackageId.C));
+    resolveStart({ data: { clientSecret: 'pi_1_secret_x', publishableKey: 'pk_test', paymentIntentId: 'pi_1' } });
+
+    const packA = CREDIT_PACKAGES[CreditPackageId.A];
+    expect(await screen.findByTestId('payment-modal-title')).toHaveTextContent(
+      `${formatCreditAmount(packA.credits)} Credits Package`
+    );
+    await userEvent.click(screen.getByTestId('payment-modal-pay-btn'));
+
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(apiPost.mock.calls[0][1]).toEqual({
+      transactionType: TransactionType.Package,
+      packageId: CreditPackageId.A,
+    });
+    expect(onPayment).toHaveBeenCalledWith(packA.credits);
   });
 });

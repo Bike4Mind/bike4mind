@@ -197,7 +197,7 @@ export const CreditsSection = ({ transactions, transactionsLoading, onClose }: C
                 defaultValue: 'Buy {{credits}} credits for {{price}}',
               })}
               ariaLabel={purchaseCreditsAriaLabel(selected.credits, selected.price)}
-              onPayment={() => handlePaymentComplete(selected.credits)}
+              onPayment={handlePaymentComplete}
             />
           </Box>
         </Box>
