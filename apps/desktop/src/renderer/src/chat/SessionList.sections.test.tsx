@@ -82,8 +82,9 @@ let host: HTMLElement | null = null;
 let bridge = fakeSidebarBridge({ sections: [], assignments: {} });
 let onCreate = vi.fn<() => void>();
 let onDelete = vi.fn<(id: string) => void>();
+let onDismissSectionError = vi.fn<() => void>();
 
-function Harness({ sessions }: { sessions: ChatSessionSummary[] }) {
+function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; sectionError?: string | null }) {
   const { sections, actions } = useSidebarSections();
   return (
     <SessionList
@@ -106,13 +107,16 @@ function Harness({ sessions }: { sessions: ChatSessionSummary[] }) {
       onRename={() => {}}
       userSections={sections}
       sectionActions={actions}
+      sectionError={sectionError}
+      onDismissSectionError={onDismissSectionError}
     />
   );
 }
 
 async function mount(
   sessions: ChatSessionSummary[],
-  initial: SidebarSectionsState = { sections: [], assignments: {} }
+  initial: SidebarSectionsState = { sections: [], assignments: {} },
+  sectionError: string | null = null
 ) {
   bridge = fakeSidebarBridge(initial);
   (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge };
@@ -122,7 +126,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <Harness sessions={sessions} />
+        <Harness sessions={sessions} sectionError={sectionError} />
       </CssVarsProvider>
     );
   });
@@ -188,6 +192,7 @@ const workAndHome: SidebarSectionsState = {
 beforeEach(() => {
   onCreate = vi.fn();
   onDelete = vi.fn();
+  onDismissSectionError = vi.fn();
 });
 
 afterEach(() => {
@@ -628,5 +633,22 @@ describe('sections in the other mode', () => {
 
     expect(query('chat-sessions-empty')).not.toBeNull();
     expect(all('sidebar-section')).toHaveLength(0);
+  });
+});
+
+describe('a failed section change', () => {
+  it('shows the error and dismisses it on click', async () => {
+    await mount([summary('a', 'Alpha')], undefined, 'Could not save that section change.');
+
+    expect(el('chat-section-error').textContent).toBe('Could not save that section change.');
+    await click(el('chat-section-error'));
+
+    expect(onDismissSectionError).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows nothing without an error', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    expect(query('chat-section-error')).toBeNull();
   });
 });

@@ -57,4 +57,28 @@ describe('useSidebarSections', () => {
     expect(latest?.sections).toEqual(initial);
     expect(error).toHaveBeenCalled();
   });
+
+  it('reports a failed write until it is dismissed or a later one succeeds', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const renameSection = vi
+      .fn<(id: string, name: string) => Promise<SidebarSectionsState>>()
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce(renamed);
+    await mount(renameSection);
+    expect(latest?.error).toBeNull();
+
+    await act(async () => latest?.actions.rename('a', 'Day job'));
+    expect(latest?.error).toBe('Could not save that section change.');
+
+    act(() => latest?.dismissError());
+    expect(latest?.error).toBeNull();
+
+    await act(async () => latest?.actions.rename('a', 'Day job'));
+    expect(latest?.error).not.toBeNull();
+
+    await act(async () => latest?.actions.rename('a', 'Day job'));
+    expect(latest?.error).toBeNull();
+    expect(latest?.sections).toEqual(renamed);
+  });
 });

@@ -14,8 +14,15 @@ export interface SidebarSectionActions {
  * The user's sidebar sections, as main last reported them. Every change answers with the whole
  * state, so there is no optimistic copy here to drift from the file.
  */
-export function useSidebarSections(): { sections: SidebarSectionsState; actions: SidebarSectionActions } {
+export function useSidebarSections(): {
+  sections: SidebarSectionsState;
+  actions: SidebarSectionActions;
+  /** Set when the last change failed to save; cleared by the next one that succeeds. */
+  error: string | null;
+  dismissError: () => void;
+} {
   const [sections, setSections] = useState<SidebarSectionsState>(EMPTY_SIDEBAR_SECTIONS);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -30,11 +37,20 @@ export function useSidebarSections(): { sections: SidebarSectionsState; actions:
     };
   }, []);
 
-  // The sidebar stays usable on a failed write - it just keeps the state it had - so the error
-  // is logged rather than raised into a render.
+  // The sidebar stays usable on a failed write - it just keeps the state it had - so the failure
+  // is logged and surfaced as a dismissible message rather than raised into a render.
   const apply = useCallback((change: Promise<SidebarSectionsState>) => {
-    change.then(setSections).catch((error: unknown) => console.error('Could not update sidebar sections', error));
+    change
+      .then(state => {
+        setSections(state);
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        console.error('Could not update sidebar sections', cause);
+        setError('Could not save that section change.');
+      });
   }, []);
+  const dismissError = useCallback(() => setError(null), []);
 
   const actions = useMemo<SidebarSectionActions>(
     () => ({
@@ -46,5 +62,5 @@ export function useSidebarSections(): { sections: SidebarSectionsState; actions:
     [apply]
   );
 
-  return { sections, actions };
+  return { sections, actions, error, dismissError };
 }

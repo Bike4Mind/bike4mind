@@ -155,7 +155,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     clearRenameError,
     apply,
   } = useSessions();
-  const { sections: userSections, actions: sectionActions } = useSidebarSections();
+  const {
+    sections: userSections,
+    actions: sectionActions,
+    error: sectionError,
+    dismissError: dismissSectionError,
+  } = useSidebarSections();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [remembered] = useState(readLastSession);
   const [mode, setMode] = useState<ChatSessionMode>(remembered?.mode ?? 'chat');
@@ -491,6 +496,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onDismissRenameError={clearRenameError}
         userSections={userSections}
         sectionActions={sectionActions}
+        sectionError={sectionError}
+        onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
           <TurnDot

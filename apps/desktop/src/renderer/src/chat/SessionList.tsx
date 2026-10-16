@@ -622,6 +622,8 @@ export function SessionList({
   onRename,
   renameError,
   onDismissRenameError,
+  sectionError,
+  onDismissSectionError,
   userSections,
   sectionActions,
   customize,
@@ -649,6 +651,8 @@ export function SessionList({
   /** Set when a rename was refused and rolled back; cleared by clicking it. */
   renameError?: string | null;
   onDismissRenameError?: () => void;
+  sectionError?: string | null;
+  onDismissSectionError?: () => void;
   /** The user's own sections and which sessions sit in them; see useSidebarSections. */
   userSections: SidebarSectionsState;
   sectionActions: SidebarSectionActions;
@@ -992,6 +996,18 @@ export function SessionList({
             data-testid="chat-rename-error"
           >
             {renameError}
+          </Alert>
+        )}
+        {sectionError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ cursor: 'pointer', mx: 0.5 }}
+            onClick={onDismissSectionError}
+            data-testid="chat-section-error"
+          >
+            {sectionError}
           </Alert>
         )}
       </Stack>
