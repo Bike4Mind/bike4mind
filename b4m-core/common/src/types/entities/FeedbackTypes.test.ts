@@ -133,14 +133,35 @@ describe('feedbackDeliveryFailed', () => {
     ).toBe(true);
   });
 
-  it('is true when a channel failed even though another one delivered', () => {
-    // `delivered` is true here, so the boolean alone would have called this a clean send.
+  it('is false when a channel failed but another one delivered - the team was still told', () => {
+    // Slack throws, the email goes out: `delivered` is true and someone has seen the report, so
+    // the submitter must not be told otherwise. The dead channel still reaches ops through the
+    // handler's own isIncident alarm.
     expect(
       feedbackDeliveryFailed({
         delivered: true,
         channels: { slack: { outcome: 'delivered' }, email: { outcome: 'failed', reason: 'error' } },
       })
+    ).toBe(false);
+  });
+
+  it('is true when every channel failed', () => {
+    expect(
+      feedbackDeliveryFailed({
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'failed', reason: 'error' } },
+      })
     ).toBe(true);
+  });
+
+  it('is false for the shape the handler sends on a clean send', () => {
+    // Both channels present and delivered - the reply a real successful send produces.
+    expect(
+      feedbackDeliveryFailed({
+        delivered: true,
+        channels: { slack: { outcome: 'delivered' }, email: { outcome: 'delivered' } },
+      })
+    ).toBe(false);
   });
 
   it('is false when a channel delivered', () => {
