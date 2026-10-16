@@ -18,27 +18,33 @@ verification or replacement engine.
 
 Holding `showReadyToInstallAndRelaunch` is not an installation authorization gate:
 
-1. [`SPUUserDriver.h`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUserDriver.h)
+1. [`SPUUserDriver.h`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUserDriver.h#L208-L224)
    explicitly says Sparkle attempts installation if the application terminates.
    Dismiss preserves this behavior; Skip cancels the current installation.
-2. [`SPUCoreBasedUpdateDriver.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUCoreBasedUpdateDriver.m)
+2. [`SPUCoreBasedUpdateDriver.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUCoreBasedUpdateDriver.m#L166-L183)
    calls `extractUpdate:` directly from `downloadDriverDidDownloadUpdate:` after
    the synchronous `didDownloadUpdate:` notification. The inspected interactive
    path has no asynchronous download-complete authorization reply.
-3. [`SPUInstallerDriver.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUInstallerDriver.m)
-   launches the installer in `extractDownloadedUpdate:silently:completion:`.
-   The ready callback follows installer preparation, not just download completion.
-4. [`AppInstaller.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Autoupdate/AppInstaller.m)
+3. [`SPUInstallerDriver.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUInstallerDriver.m#L207-L219)
+   launches the installer in `extractDownloadedUpdate:silently:completion:`. The
+   ready callback follows installer preparation
+   ([`SPUInstallationFinishedStage1` handling](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUInstallerDriver.m#L321-L340)),
+   not just download completion.
+4. [`AppInstaller.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Autoupdate/AppInstaller.m#L392-L415)
    registers a termination listener in `retrieveProcessIdentifierAndStartInstallation`.
    Termination at or after host registration marks the target terminated: if stage 1
-   has already run, `finishInstallationAfterHostTermination` is called immediately;
-   otherwise `startInstallation` calls it on stage-1 completion. Either path proceeds
-   to final installation without requiring the ready reply. The helper also sets
-   `_willCompleteInstallation` during `startInstallation`, allowing the updater
-   connection to disappear without necessarily canceling installation.
-5. [`SPUUpdaterDelegate.h`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUpdaterDelegate.h)
+   has already run, [`finishInstallationAfterHostTermination`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Autoupdate/AppInstaller.m#L765)
+   is called immediately; otherwise [`startInstallation`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Autoupdate/AppInstaller.m#L690-L744)
+   calls it on stage-1 completion. Either path proceeds to final installation without
+   requiring the ready reply. The helper also sets `_willCompleteInstallation` during
+   `startInstallation`, allowing the updater connection to disappear without
+   necessarily canceling installation.
+5. [`SPUUpdaterDelegate.h`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUpdaterDelegate.h#L342-L356)
    offers relaunch postponement, not a documented veto on this helper-side
-   termination path.
+   termination path; its quit-install callback
+   ([source](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUpdaterDelegate.h#L422-L440))
+   states that Sparkle "will always attempt to install the update when the app
+   terminates".
 
 A `before-quit` handler cannot protect against SIGKILL or a main-process crash.
 Immediately replying Skip at ready still leaves the interval between installer
