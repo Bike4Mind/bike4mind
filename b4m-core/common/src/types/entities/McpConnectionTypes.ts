@@ -588,6 +588,7 @@ export interface IMcpOAuthClientRegistration {
   redirectUri: string;
   clientId: string;
   clientSecretEnc?: string;
+  /** Absent means the secret never expires (RFC 7591 `client_secret_expires_at: 0`); past it, lookups miss. */
   clientSecretExpiresAt?: Date;
   registrationAccessTokenEnc?: string;
   tokenEndpointAuthMethod: string;

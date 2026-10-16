@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -72,5 +72,62 @@ describe('McpOAuthClientRegistrationModel', () => {
     const plain = await mcpOAuthClientRegistrationRepository.findById(saved.id);
     expect(plain).not.toHaveProperty('clientSecretEnc');
     expect(plain).not.toHaveProperty('registrationAccessTokenEnc');
+  });
+
+  it('treats a registration whose client secret expired as a miss', async () => {
+    await mcpOAuthClientRegistrationRepository.upsert({
+      issuer: ISSUER,
+      redirectUri: REDIRECT,
+      clientId: 'client-1',
+      clientSecretEnc: 'enc:secret',
+      clientSecretExpiresAt: new Date(Date.now() - 1000),
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+    expect(await mcpOAuthClientRegistrationRepository.findByIssuerAndRedirect(ISSUER, REDIRECT)).toBeNull();
+
+    await mcpOAuthClientRegistrationRepository.upsert({
+      issuer: ISSUER,
+      redirectUri: REDIRECT,
+      clientId: 'client-2',
+      clientSecretEnc: 'enc:secret-2',
+      clientSecretExpiresAt: new Date(Date.now() + 3600_000),
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+    expect((await mcpOAuthClientRegistrationRepository.findByIssuerAndRedirect(ISSUER, REDIRECT))?.clientId).toBe(
+      'client-2'
+    );
+  });
+
+  it('retries an upsert once when a concurrent insert won the unique index', async () => {
+    const spy = vi.spyOn(McpOAuthClientRegistration, 'findOneAndUpdate').mockImplementationOnce(() => {
+      throw Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+    });
+    try {
+      const saved = await mcpOAuthClientRegistrationRepository.upsert({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'client-1',
+        tokenEndpointAuthMethod: 'none',
+      });
+      expect(saved.clientId).toBe('client-1');
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('converges when many first registrations race', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        mcpOAuthClientRegistrationRepository.upsert({
+          issuer: ISSUER,
+          redirectUri: REDIRECT,
+          clientId: `client-${i}`,
+          tokenEndpointAuthMethod: 'none',
+        })
+      )
+    );
+    expect(results).toHaveLength(8);
+    expect(await McpOAuthClientRegistration.countDocuments({})).toBe(1);
   });
 });

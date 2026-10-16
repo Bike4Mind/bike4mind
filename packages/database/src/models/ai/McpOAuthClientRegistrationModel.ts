@@ -13,6 +13,7 @@ const McpOAuthClientRegistrationSchema = new Schema<IMcpOAuthClientRegistrationD
     redirectUri: { type: String, required: true },
     clientId: { type: String, required: true },
     clientSecretEnc: { type: String, select: false },
+    /** Absent means the secret never expires (RFC 7591 `client_secret_expires_at: 0`). */
     clientSecretExpiresAt: { type: Date },
     registrationAccessTokenEnc: { type: String, select: false },
     tokenEndpointAuthMethod: { type: String, required: true },
@@ -44,8 +45,34 @@ class McpOAuthClientRegistrationRepository
   /**
    * Insert or replace the registration for (issuer, redirectUri). Replacing is right when a
    * registration expired or was rejected; two racing first registrations converge on the last one.
+   * Two concurrent upserts of a missing row can both try the insert and one gets E11000; the row
+   * exists by then, so one retry takes the update path.
    */
   async upsert(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument> {
+    try {
+      return await this.upsertOnce(registration);
+    } catch (error) {
+      if ((error as { code?: number })?.code !== 11000) throw error;
+      return this.upsertOnce(registration);
+    }
+  }
+
+  /** A registration whose client secret has expired reads as a miss, so the caller re-registers. */
+  async findByIssuerAndRedirect(
+    issuer: string,
+    redirectUri: string
+  ): Promise<IMcpOAuthClientRegistrationDocument | null> {
+    const result = await this.model
+      .findOne({
+        issuer,
+        redirectUri,
+        $or: [{ clientSecretExpiresAt: null }, { clientSecretExpiresAt: { $gt: new Date() } }],
+      })
+      .select(WITH_CREDENTIALS);
+    return result?.toJSON() ?? null;
+  }
+
+  private async upsertOnce(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument> {
     const { issuer, redirectUri, ...rest } = registration;
     const unset: Record<string, 1> = {};
     if (rest.clientSecretEnc === undefined) unset.clientSecretEnc = 1;
@@ -59,14 +86,6 @@ class McpOAuthClientRegistrationRepository
       )
       .select(WITH_CREDENTIALS);
     return result.toJSON();
-  }
-
-  async findByIssuerAndRedirect(
-    issuer: string,
-    redirectUri: string
-  ): Promise<IMcpOAuthClientRegistrationDocument | null> {
-    const result = await this.model.findOne({ issuer, redirectUri }).select(WITH_CREDENTIALS);
-    return result?.toJSON() ?? null;
   }
 }
 
