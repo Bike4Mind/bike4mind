@@ -1,11 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-
-export type UsableAudioProviders = {
-  speech: VoiceGenerationVendor[];
-  soundEffects: SoundGenerationVendor[];
-};
+// The route answers with the util's own result, so its type is the one source for the response shape.
+import type { UsableAudioProviders } from '@server/utils/listUsableAudioProviders';
 
 export const audioProviderKeys = {
   usable: ['audioProviders', 'usable'] as const,
