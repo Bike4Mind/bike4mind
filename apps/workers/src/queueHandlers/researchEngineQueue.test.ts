@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ResearchTaskStatus } from '@bike4mind/common';
+import { insufficientCreditsError, ResearchTaskStatus } from '@bike4mind/common';
 
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
@@ -10,6 +10,10 @@ const h = vi.hoisted(() => ({
   taskFindById: vi.fn(),
   taskUpdate: vi.fn(),
   getOperationsTextModel: vi.fn(),
+  process: vi.fn(),
+  processDiscoveredLinks: vi.fn(),
+  meter: vi.fn(),
+  complete: vi.fn(),
 }));
 
 // Every export the module reads at import time, declared because this mock replaces the whole module.
@@ -29,7 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   taskScheduleRepository: {},
   fileTagRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ researchTaskService: { process: vi.fn() } }));
+vi.mock('@bike4mind/services', async () => ({
+  meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
+    .meterCompletionBackend,
+  researchTaskService: { process: h.process, processDiscoveredLinks: h.processDiscoveredLinks },
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => h.meter }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
@@ -80,5 +89,46 @@ describe('researchEngineQueue process - failure reset', () => {
     await dispatch(makeEvent('process'), {} as never, logger as never);
 
     expect(h.taskUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('researchEngineQueue metering', () => {
+  const runLlm = async (_a: unknown, _b: unknown, deps: { llm: { complete: (...a: unknown[]) => unknown } }) => {
+    await deps.llm.complete('m', [{ role: 'user', content: 'q' }], {}, async () => {});
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getOperationsTextModel.mockResolvedValue({ modelId: 'm', llm: { complete: h.complete }, modelInfo: { id: 'm' } });
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.taskFindById.mockResolvedValue({ id: 'rt1', status: ResearchTaskStatus.PROCESSING });
+    h.complete.mockImplementation(async (_m, _msgs, _o, cb) => cb(['ok'], { inputTokens: 10, outputTokens: 5 }));
+    h.process.mockImplementation(runLlm);
+    h.processDiscoveredLinks.mockImplementation((a: unknown, deps: Parameters<typeof runLlm>[2]) => runLlm(a, a, deps));
+  });
+
+  it('settles each research LLM call against the task owner', async () => {
+    const settle = vi.fn().mockResolvedValue(1);
+    h.meter.mockResolvedValue({ settle, refund: vi.fn() });
+
+    await dispatch(makeEvent('process'), {} as never, logger as never);
+
+    expect(h.complete).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  it('fails a discovered-links run for an owner out of credits without calling the provider or rethrowing', async () => {
+    h.meter.mockRejectedValue(insufficientCreditsError('Not enough credits'));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'rt1',
+        status: ResearchTaskStatus.FAILED,
+        statusFailedMessage: 'Not enough credits',
+      })
+    );
   });
 });

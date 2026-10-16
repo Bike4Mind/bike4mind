@@ -2,11 +2,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { researchTaskService } from '@bike4mind/services';
 import { researchTaskJobs } from '@server/utils/researchTasks';
+import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 import { researchTaskRepository, withTransaction } from '@bike4mind/database';
 
 const handler = baseApi({ auth: true }).post(
   asyncHandler(async (req, res) => {
     const { taskId } = req.query as any;
+    await assertOwnerCanAfford(req.user);
     const result = await researchTaskService.retry(
       { id: taskId, userId: req.user.id },
       {
