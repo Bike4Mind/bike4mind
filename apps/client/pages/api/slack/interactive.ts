@@ -1767,12 +1767,9 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
 
   // Look up Quest to get attachment data
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
-    (candidate: any) => candidate.id === attachmentId
-  );
-  if (!quest || !questAny?.attachmentList || !attachmentEntry) {
+  const attachmentList = quest?.attachmentList;
+  const attachmentEntry = attachmentList?.attachments.find(candidate => candidate.id === attachmentId);
+  if (!attachmentList || !attachmentEntry) {
     logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
@@ -1780,7 +1777,7 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     };
   }
 
-  const { source } = questAny.attachmentList;
+  const { source, pageId, pageTitle, issueKey } = attachmentList;
   const { filename, emoji } = attachmentEntry;
 
   logger.info('[Slack Interactive] Processing attachment deletion', {
@@ -1815,23 +1812,20 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     }
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
-    if (source === 'confluence' && questAny.attachmentList.pageId) {
+    if (source === 'confluence' && pageId) {
       try {
-        await cleanupConfluencePageContent(envVariables, questAny.attachmentList.pageId, filename, logger);
+        await cleanupConfluencePageContent(envVariables, pageId, filename, logger);
       } catch (cleanupError) {
         logger.warn('[Slack Interactive] Failed to clean up Confluence page content (non-fatal)', {
           error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          pageId: questAny.attachmentList.pageId,
+          pageId,
           filename,
         });
       }
     }
 
-    const confluenceLabel = questAny.attachmentList.pageTitle
-      ? `Confluence page *"${questAny.attachmentList.pageTitle}"*`
-      : `Confluence page *${questAny.attachmentList.pageId || ''}*`;
-    const sourceContext =
-      source === 'jira' ? `Jira ticket *${questAny.attachmentList.issueKey || ''}*` : confluenceLabel;
+    const confluenceLabel = pageTitle ? `Confluence page *"${pageTitle}"*` : `Confluence page *${pageId || ''}*`;
+    const sourceContext = source === 'jira' ? `Jira ticket *${issueKey || ''}*` : confluenceLabel;
 
     return {
       text: `🗑️ ${emoji} *${filename}* has been deleted from ${sourceContext}`,
