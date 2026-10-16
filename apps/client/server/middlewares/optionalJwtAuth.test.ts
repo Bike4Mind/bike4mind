@@ -13,7 +13,7 @@ vi.mock('@server/auth/auth', () => ({
 }));
 vi.mock('@server/auth/ability', () => ({ default: mockAbility }));
 
-// The real admission (auth/mfaEnforcement.ts) runs; only its leaf reads are stubbed. `enforced`
+// The real admission (middlewares/oauthRouteGate.ts) runs; only its leaf reads are stubbed. `enforced`
 // is the admin's enforceMFA toggle.
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
