@@ -2205,8 +2205,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       reasons.push(
         cutAtCandidateCap
           ? `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
-              'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
-              'of the library is never reached'
+              'selected alphabetically by file name (taken in turn from each lake when several are in scope) - so the ' +
+              'same documents are considered on every turn and the rest of the library is never reached'
           : `more than ${coverage.listingLimit} documents matched; only the first ${coverage.listingLimit} by file ` +
               `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
               'so the rest of the library is never reached'
@@ -2962,7 +2962,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    selectForcedRetrievalCandidates); without one the cut is by name (fair across lakes, see below).
       //    The widening cannot wait on index queryability: the embedding model whose index would be
       //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
-      //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
+      //    is the wider listing whenever the setting is on or the scope spans several lakes, even on a
+      //    turn that falls back by name.
       const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
       // A by-name cut over several lakes takes its slots in turn from each lake, so one lake whose
       // names sort first cannot fill the cap alone. That needs a listing wider than the cap to pick from.

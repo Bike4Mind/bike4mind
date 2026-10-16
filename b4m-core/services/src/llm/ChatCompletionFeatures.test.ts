@@ -1338,6 +1338,77 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(10);
     });
 
+    it('keeps library files behind every lake when the by-name cut is fair across lakes and the library is included', async () => {
+      // Library files sort ahead of both lakes; the lake-first listing must still win every slot.
+      const lake = (key: string) => ({
+        id: `lake-${key}`,
+        name: key,
+        slug: key,
+        datalakeTag: `datalake:${key}`,
+        fileTagPrefix: `${key}:`,
+        source: 'dynamic' as const,
+        membership: {
+          kind: 'owned' as const,
+          datalakeTag: `datalake:${key}`,
+          fileTagPrefix: `${key}:`,
+          creatorUserId: 'u1',
+        },
+      });
+      const fileIn = (key: string, i: number, tags: { name: string }[]) => {
+        const n = String(i).padStart(3, '0');
+        return {
+          id: `${key}${n}`,
+          fileName: `${key}-${n}.pdf`,
+          tags,
+          vectorizedChunkCount: 1,
+          chunkEmbeddingModelStampedAt: STAMPED,
+        };
+      };
+      const lakeRows = [
+        ...Array.from({ length: 150 }, (_, i) => fileIn('m', i, [{ name: 'datalake:m' }])),
+        ...Array.from({ length: 10 }, (_, i) => fileIn('n', i, [{ name: 'datalake:n' }])),
+      ];
+      const libraryRows = Array.from({ length: 50 }, (_, i) => fileIn('a', i, []));
+      const ctx = makeCtx({
+        files: lakeRows,
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        const data = restrict ? lakeRows : [...libraryRows, ...lakeRows];
+        return Promise.resolve({ data, hasMore: false, total: data.length });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:m', 'datalake:n'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const lakes = [lake('m'), lake('n')];
+      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
+        lakeViewComplete: true,
+        excludedByAccessCount: 0,
+        dataLakeTags: lakes.map(l => l.datalakeTag),
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: lakes.map(l => l.fileTagPrefix),
+        lakes,
+      });
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.size).toBe(100);
+      expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
+      expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+    });
+
     it('issues no ANN query when the servable set already fits under the cap', async () => {
       const { ctx, annDb } = makeLargeScopeCtx({ vectorSearchEnabled: true });
       const small = lakeFiles.slice(0, 50);
