@@ -16,6 +16,7 @@ vi.mock('@server/utils/storage', () => {
 });
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
 
@@ -34,6 +35,7 @@ vi.mock('@bike4mind/slack', () => {
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import {
@@ -116,14 +118,34 @@ describe('executePendingAction', () => {
       params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://files.example.test/a.txt' },
       ts,
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, statusText: 'Forbidden' }));
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(new Error('URL blocked for security reasons: private'));
 
     const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
     expect(result.success).toBe(false);
     expect(result.message).toContain('Failed to download file');
+    expect(result.message).not.toContain('blocked');
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('downloads the slack file through the SSRF-guarded helper and passes its bytes as base64 content', async () => {
+    const fileBuffer = Buffer.from('x'.repeat(200));
+    vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(fileBuffer);
+    storePendingAction({
+      tool: JIRA_UPLOAD_ATTACHMENT,
+      params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://h.example.com/a' },
+      ts,
+    });
+
+    await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+    expect(downloadAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://h.example.com/a');
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+      content: fileBuffer.toString('base64'),
+    });
   });
 
   it('rejects a button whose action was replaced, without claiming or invoking', async () => {
@@ -193,16 +215,13 @@ describe('executePendingAction', () => {
         moderationStatus: 'pending',
       } as never);
       const slackBytes = Buffer.from('slack-bytes');
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(slackBytes).buffer })
-      );
+      vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(slackBytes);
 
       const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 
       expect(result.success).toBe(true);
       expect(getFilesStorage().download).not.toHaveBeenCalled();
-      expect(fetch).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
       expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
         content: slackBytes.toString('base64'),
       });

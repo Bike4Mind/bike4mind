@@ -244,6 +244,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       headers,
       body: payloadString,
       signal: controller.signal,
+      // Step 1 vetted targetUrl only; following a redirect would let a public host bounce this signed
+      // POST to an address it never checked.
+      redirect: 'manual',
     });
     clearTimeout(timeoutId);
 
@@ -267,6 +270,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       // Reset consecutive failures on success
       await resetConsecutiveFailures(payload.subscriptionId, logger);
+
+      return;
+    }
+
+    // A redirect is never followed (see above), and retrying would get the same answer.
+    if (response.status >= 300 && response.status < 400) {
+      const errorMessage = `HTTP ${response.status}: Redirects are not followed - point the webhook at its final URL`;
+      logger.warn('Redirect response, not following or retrying', {
+        statusCode: response.status,
+        processingDurationMs,
+      });
+
+      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Failed, response.status, errorMessage);
+      await incrementConsecutiveFailures(payload.subscriptionId, logger);
 
       return;
     }
