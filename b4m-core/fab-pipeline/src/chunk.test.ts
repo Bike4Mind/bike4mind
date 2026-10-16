@@ -488,6 +488,28 @@ describe('SmartChunker', () => {
 
       expect(await ranBeforeChunkingFinished()).toBe(false);
     });
+
+    it('yields during the oversized-segment split, where encodeTokens runs on a whole segment', async () => {
+      // splitOversizedSegment is the only caller of encodeTokens, so this is the only yield on that
+      // path. The warm-up sets lastYieldAt, then the stepping clock carries the next call past the
+      // interval, so the queued callback only runs because encodeTokens yields.
+      let now = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => (now += 1_000));
+      const limited = createChunker(50);
+      try {
+        await (limited as any).countTokens('warm up the encoder');
+
+        let ran = false;
+        setImmediate(() => {
+          ran = true;
+        });
+        await (limited as any).splitOversizedSegment('a'.repeat(10_000));
+
+        expect(ran).toBe(true);
+      } finally {
+        limited.freeEncoder();
+      }
+    });
   });
 
   describe('chunkFile with audio', () => {
