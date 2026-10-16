@@ -71,6 +71,7 @@ beforeAll(() => {
         replyAccessoryExport: `${PKG_NAME}/reply-accessory`,
         llmToolsExport: `${PKG_NAME}/tools`,
         systemPromptsExport: `${PKG_NAME}/prompts`,
+        partnerSignupHooksExport: `${PKG_NAME}/signup-hooks`,
         migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
         serverHandlerStubs: [
@@ -118,6 +119,13 @@ describe('hydrated but UNLINKED overlay', () => {
     );
     expect(prompts).not.toContain(PKG_NAME);
     expect(prompts).toContain('premiumSystemPrompts: DefaultSystemPrompt[] = []');
+
+    const signupHooks = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts'),
+      'utf8'
+    );
+    expect(signupHooks).not.toContain(PKG_NAME);
+    expect(signupHooks).toContain('premiumPartnerSignupHooks: PartnerSignupHook[] = []');
 
     const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
     expect(nav).not.toContain(PKG_NAME);
@@ -209,6 +217,12 @@ describe('hydrated AND linked overlay', () => {
       'utf8'
     );
     expect(prompts).toContain(`import { systemPrompts as prompts0 } from '${PKG_NAME}/prompts'`);
+
+    const signupHooks = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts'),
+      'utf8'
+    );
+    expect(signupHooks).toContain(`import { partnerSignupHooks as hooks0 } from '${PKG_NAME}/signup-hooks'`);
 
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);
