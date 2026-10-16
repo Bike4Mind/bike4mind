@@ -270,7 +270,8 @@ describe('createFabFile (upload moderation gate root cause)', () => {
       mockAdapters
     );
 
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put');
+    // Bound to the declared fileSize, so storage refuses a PUT of any other length.
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put', { ContentLength: 2048 });
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
   });
