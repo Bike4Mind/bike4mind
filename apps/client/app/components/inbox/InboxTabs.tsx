@@ -36,9 +36,11 @@ const FeedbackRollupFallback = () => (
   </Box>
 );
 
+// Values are the Tabs indices that `inboxIndex` holds.
 export enum InboxTabList {
-  Messages = 'Messages',
-  Invites = 'Invites',
+  Messages = 0,
+  Invites = 1,
+  Feedback = 2,
 }
 
 const InboxTabs: FC = () => {
@@ -193,16 +195,16 @@ const InboxTabs: FC = () => {
           </Tab>
         </TabList>
 
-        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0 }} value={0}>
+        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0 }} value={InboxTabList.Messages}>
           <Messages />
         </TabPanel>
 
-        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0 }} value={1}>
+        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0 }} value={InboxTabList.Invites}>
           {currentUser && <Invites />}
         </TabPanel>
 
-        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0, overflow: 'auto' }} value={2}>
-          {inboxIndex === 2 && (
+        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0, overflow: 'auto' }} value={InboxTabList.Feedback}>
+          {inboxIndex === InboxTabList.Feedback && (
             <Suspense fallback={<FeedbackRollupFallback />}>
               <FeedbackRollupView {...defaultFeedbackRollupWindow()} showHeading={false} />
             </Suspense>

@@ -10,6 +10,7 @@ import KeyboardTabIcon from '@mui/icons-material/KeyboardTab';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import InboxBadge, { useInboxHasUnread } from '@client/app/components/inbox/Badge';
+import { InboxTabList } from '@client/app/components/inbox/InboxTabs';
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { AspectRatio, Box, IconButton, Tooltip } from '@mui/joy';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
@@ -101,7 +102,7 @@ const SideNavHeader = () => {
             color={'neutral'}
             onClick={() => {
               // The bell is about messages, so it always opens on Messages, not wherever the inbox was left.
-              setInboxIndex(0);
+              setInboxIndex(InboxTabList.Messages);
               setInboxOpen(true);
             }}
           >
