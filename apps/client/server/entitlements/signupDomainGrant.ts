@@ -42,7 +42,8 @@ const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: n
  * grant access with 0 bonus credits without falling through to the env amount.
  *
  * A matched DB rule then runs the overlay partner signup hooks (./partnerSignupHooks.ts), but only
- * when no core step failed: a failed step is retried by a later run, which reaches the hooks then.
+ * when no core step failed. Signup is a one-time edge, so a skip is logged: only a re-verify (e.g. the
+ * admin verify-email route) re-runs this function and reaches the hooks.
  *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. Both the credit grant (stable
@@ -123,8 +124,18 @@ export async function applySignupDomainGrant(params: {
   }
 
   // Before the invalidation push, so the wake-up also covers whatever state a hook wrote.
-  if (partnerRule && !coreStepFailed) {
-    await runPartnerSignupHooks(premiumPartnerSignupHooks, { userId, rule: partnerRule, trigger, logger });
+  if (partnerRule && coreStepFailed) {
+    logger.warn(
+      `Partner signup hooks skipped for user ${userId} (rule ${partnerRule.id}, ${trigger}): a core grant step failed`
+    );
+  } else if (partnerRule) {
+    await runPartnerSignupHooks(premiumPartnerSignupHooks, {
+      userId,
+      rule: partnerRule,
+      joinedOrganizationId: result.joinedOrganizationId,
+      trigger,
+      logger,
+    });
   }
 
   if (domainGrantKeys.size > 0) {

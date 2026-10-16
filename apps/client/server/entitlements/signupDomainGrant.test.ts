@@ -199,6 +199,7 @@ describe('applySignupDomainGrant', () => {
         expect.objectContaining({
           userId: 'user-1',
           rule: { id: 'rule-1', domain: 'partner.example', organizationId: 'org-1' },
+          joinedOrganizationId: 'org-1',
           trigger: 'oauth-signup',
         })
       );
@@ -215,6 +216,7 @@ describe('applySignupDomainGrant', () => {
       await run();
 
       expect(mockHook).toHaveBeenCalledTimes(1);
+      expect(mockHook).toHaveBeenCalledWith(expect.objectContaining({ joinedOrganizationId: null }));
     });
 
     it('does not run when only the env registry matched', async () => {
@@ -232,12 +234,14 @@ describe('applySignupDomainGrant', () => {
       expect(mockHook).not.toHaveBeenCalled();
     });
 
-    it('does not run when the credit grant failed', async () => {
+    it('does not run when the credit grant failed, and logs the skip', async () => {
       mockAddCredits.mockRejectedValue(new Error('ledger down'));
+      const logger = makeLogger();
 
-      await run();
+      await run(logger);
 
       expect(mockHook).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('rule-1'));
     });
 
     it('does not run when the membership write failed', async () => {

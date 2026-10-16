@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
-import { runPartnerSignupHooks, type PartnerSignupHook, type PartnerSignupHookContext } from './partnerSignupHooks';
+import {
+  PARTNER_SIGNUP_HOOK_TIMEOUT_MS,
+  runPartnerSignupHooks,
+  type PartnerSignupHook,
+  type PartnerSignupHookContext,
+} from './partnerSignupHooks';
 
 const makeContext = () => {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const context: PartnerSignupHookContext = {
     userId: 'user-1',
     rule: { id: 'rule-1', domain: 'partner.example', organizationId: null },
+    joinedOrganizationId: null,
     trigger: 'otc-signup',
     // Only error is called.
     logger: logger as unknown as Logger,
@@ -61,6 +67,30 @@ describe('runPartnerSignupHooks', () => {
 
     await expect(runPartnerSignupHooks([syncThrow], context)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('sync-throw'), expect.any(Error));
+  });
+
+  it('logs a hook that never settles once its budget elapses, without holding the others', async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, logger } = makeContext();
+      const healthy = vi.fn().mockResolvedValue(undefined);
+      const pending = runPartnerSignupHooks(
+        [
+          { name: 'stalled', run: () => new Promise<void>(() => {}) },
+          { name: 'healthy', run: healthy },
+        ],
+        context
+      );
+
+      await vi.advanceTimersByTimeAsync(PARTNER_SIGNUP_HOOK_TIMEOUT_MS);
+      await pending;
+
+      expect(healthy).toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('"stalled"'), expect.any(Error));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is a no-op with no hooks registered', async () => {

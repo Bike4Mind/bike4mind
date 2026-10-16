@@ -11,18 +11,23 @@
 import type { Logger } from '@bike4mind/observability';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
 
+/** The email-ownership path that triggered the signup grant. */
+export type SignupGrantTrigger = SeatCeilingRaiseTrigger;
+
 export type PartnerSignupRuleMatch = {
   id: string;
   /** Normalized verified-email domain the rule matched on. */
   domain: string;
-  /** Org the rule auto-adds members to, or null. Set even when the join itself was not applied. */
+  /** Org the rule auto-adds members to, or null. */
   organizationId: string | null;
 };
 
 export type PartnerSignupHookContext = {
   userId: string;
   rule: PartnerSignupRuleMatch;
-  trigger: SeatCeilingRaiseTrigger;
+  /** The rule's org when the user is a member of it now; null when the join was not applied (e.g. at capacity). */
+  joinedOrganizationId: string | null;
+  trigger: SignupGrantTrigger;
   logger: Logger;
 };
 
@@ -32,16 +37,34 @@ export type PartnerSignupHook = {
   run: (context: PartnerSignupHookContext) => Promise<void>;
 };
 
+/** Per-hook budget (ms). Hooks run inside the signup request, so a stalled one must not hold it open. */
+export const PARTNER_SIGNUP_HOOK_TIMEOUT_MS = 10_000;
+
+async function runWithTimeout(hook: PartnerSignupHook, context: PartnerSignupHookContext): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${PARTNER_SIGNUP_HOOK_TIMEOUT_MS}ms`)),
+      PARTNER_SIGNUP_HOOK_TIMEOUT_MS
+    );
+  });
+  try {
+    // async wrapper turns a hook that throws synchronously into a rejection instead of an escape.
+    await Promise.race([(async () => hook.run(context))(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * Run every hook concurrently. Never throws: a failing hook is logged with its name and the
- * others still run, so an overlay can never fail a signup or undo the core grant.
+ * Run every hook concurrently. Never throws: a failing or timed-out hook is logged with its name and
+ * the others still run, so an overlay can never fail a signup or undo the core grant.
  */
 export async function runPartnerSignupHooks(
   hooks: readonly PartnerSignupHook[],
   context: PartnerSignupHookContext
 ): Promise<void> {
-  // async wrapper turns a hook that throws synchronously into a rejection instead of an escape.
-  const outcomes = await Promise.allSettled(hooks.map(async hook => hook.run(context)));
+  const outcomes = await Promise.allSettled(hooks.map(hook => runWithTimeout(hook, context)));
   outcomes.forEach((outcome, index) => {
     if (outcome.status === 'rejected') {
       context.logger.error(
