@@ -4,8 +4,9 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { LAKE_MEMORY_EXTRACTION_LEASE_MS } from '@bike4mind/common';
+import { getQuestErrorCode, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
 import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -13,6 +14,7 @@ import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
 import { createMementoEmbedder } from '@server/memory/mementoEmbedder';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 /**
  * Reserved curator-tag markers that promote a lake document's facts to the `human-reviewed` tier. A
@@ -172,6 +174,13 @@ export async function extractLakeMemoryForBatch(
     const embed = createMementoEmbedder(apiKeyTable, logger);
 
     const extractor = new LakeMemoryExtractionService(logger);
+    // Every extraction call is billed to the lake owner (their org seat when present).
+    const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
+    if (!owner) {
+      logger.warn('[lakeMemory] lake owner not found; skipping extraction', { dataLakeId: params.dataLakeId });
+      return { docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false };
+    }
+    const meter = createCompletionMeter(owner, logger, 'data lake memory extraction');
 
     // Bounded continuation: resume AFTER the last document a prior interrupted run attempted (the
     // persisted cursor), not from the cap boundary - the deadline guard can end a run mid-slice, so the
@@ -321,6 +330,7 @@ export async function extractLakeMemoryForBatch(
           docTitle: doc.fileName ?? doc.fabFileId,
           docText: text,
           endUserId: ownerUserId,
+          meter,
         });
         if (!facts?.length) continue;
 
@@ -346,6 +356,15 @@ export async function extractLakeMemoryForBatch(
         lastCoveredId = doc.fabFileId;
         consecutiveFailures = 0;
       } catch (err) {
+        // Out of credits is not a bad document: every later doc would be refused too. Stop like an
+        // abort, so the cursor stays at the last covered doc and the next finalize resumes there.
+        if (getQuestErrorCode(err) === 'insufficient_credits') {
+          aborted = true;
+          logger.warn(
+            `[lakeMemory] lake ${datalakeTag}: the lake owner is out of credits after ${docsAttempted}/${docs.length} docs; stopping`
+          );
+          break;
+        }
         // One bad document must not abort the whole lake. Without this, a doc that reliably throws in
         // extractor.evaluate aborts the run, SQS redelivers, every earlier doc is re-billed (the LLM call
         // precedes the ledger de-dup), it throws again, and the run DLQs - docs after it never fold. Skip

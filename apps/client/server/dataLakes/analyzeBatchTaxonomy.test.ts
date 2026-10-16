@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   runTaxonomyInference: vi.fn(),
   sendToClient: vi.fn(),
+  meter: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -15,7 +16,10 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findByBatchId: h.fabFindByBatchId },
   apiKeyRepository: {},
   adminSettingsRepository: {},
+  userRepository: { findById: async (id: string) => ({ id }) },
 }));
+vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: async () => [{ id: 'gpt-4o-mini' }] }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => h.meter }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveApiKey: h.getEffectiveApiKey } }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/dataLakes/runTaxonomyInference', () => ({
@@ -46,7 +50,7 @@ describe('analyzeBatchTaxonomy', () => {
   it('returns claimed: false without touching anything else when the guarded claim loses', async () => {
     h.setTaxonomyStatusIfActive.mockResolvedValue(null);
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(result).toEqual({ claimed: false });
     expect(h.fabFindByBatchId).not.toHaveBeenCalled();
@@ -57,7 +61,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
 
-    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] });
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['ready', 'failed'] });
 
     expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(
       1,
@@ -71,7 +75,7 @@ describe('analyzeBatchTaxonomy', () => {
   it('skips the claim when the caller already holds it and finalizes straight to ready', async () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { claimHeldByCaller: true });
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { claimHeldByCaller: true });
 
     expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalledWith(
       'b1',
@@ -106,7 +110,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.fabFindByBatchId.mockResolvedValue([]);
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'failed' }); // fail transition
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(result).toEqual({ claimed: true, outcome: 'failed', error: 'No files found for this batch' });
     expect(h.setTaxonomyStatusIfActive).toHaveBeenLastCalledWith('b1', ['analyzing'], 'failed', {
@@ -124,7 +128,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.getEffectiveApiKey.mockResolvedValue(null);
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'failed' });
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(h.runTaxonomyInference).not.toHaveBeenCalled();
     expect(result).toMatchObject({ outcome: 'failed', error: 'No OpenAI API key configured' });
@@ -135,9 +139,9 @@ describe('analyzeBatchTaxonomy', () => {
     const apiError = new Error('401 Incorrect API key provided: sk-***');
     h.runTaxonomyInference.mockRejectedValue(apiError);
 
-    await expect(analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] })).rejects.toThrow(
-      apiError
-    );
+    await expect(
+      analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['ready', 'failed'] })
+    ).rejects.toThrow(apiError);
     // Left to the caller (queue handler releases the claim for SQS retry; the manual endpoint
     // marks it failed itself) - this function itself never writes taxonomySuggestions here, so
     // neither caller's own handling can clobber a prior-good suggestion set either.
@@ -149,7 +153,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.fabFindByBatchId.mockResolvedValue([]);
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce(null); // fail-transition loses
 
-    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
@@ -158,7 +162,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, {
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, {
       from: ['queued'],
       context: 'legal docs',
     });
@@ -166,6 +170,7 @@ describe('analyzeBatchTaxonomy', () => {
     expect(h.runTaxonomyInference).toHaveBeenCalledWith('sk-test', expect.anything(), {
       existingPrefix: 'acme:',
       context: 'legal docs',
+      reserve: expect.any(Function),
     });
     expect(h.setTaxonomyStatusIfActive).toHaveBeenLastCalledWith(
       'b1',
@@ -195,7 +200,7 @@ describe('analyzeBatchTaxonomy', () => {
       fileAssignments: [],
     });
 
-    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('150 categories - capped to 100'));
   });
@@ -204,7 +209,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'ready' }); // finalize
 
-    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(logger.warn).not.toHaveBeenCalled();
   });
@@ -215,7 +220,7 @@ describe('analyzeBatchTaxonomy', () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce(null); // 'ready' transition loses
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] });
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
 
     expect(result).toEqual({
       claimed: true,
@@ -230,8 +235,37 @@ describe('analyzeBatchTaxonomy', () => {
     const boom = new Error('DB connection reset');
     h.fabFindByBatchId.mockRejectedValue(boom);
 
-    await expect(analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['queued'] })).rejects.toThrow(boom);
+    await expect(analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] })).rejects.toThrow(
+      boom
+    );
     // Only the claim ran - no fail-transition was attempted, since that's the caller's job now.
     expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('bills the inference to the batch user through the reserve hook', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { claimHeldByCaller: true });
+
+    const { reserve } = h.runTaxonomyInference.mock.calls[0][2];
+    await reserve([{ role: 'user', content: 'x' }], 4000);
+    expect(h.meter).toHaveBeenCalledWith({ id: 'gpt-4o-mini' }, [{ role: 'user', content: 'x' }], 4000, [
+      { id: 'gpt-4o-mini' },
+    ]);
+  });
+
+  it('fails the batch without rethrowing when the user is out of credits', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+    h.runTaxonomyInference.mockRejectedValue({
+      statusCode: 422,
+      additionalInfo: { errorCode: 'insufficient_credits' },
+    });
+
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { claimHeldByCaller: true });
+
+    expect(result).toMatchObject({
+      claimed: true,
+      outcome: 'failed',
+      error: 'Not enough credits to analyze this batch',
+    });
   });
 });

@@ -24,6 +24,7 @@ const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
   apiKeyRepository: {},
+  userRepository: { findById: async (id: string) => ({ id }) },
   dataLakeRepository: {
     findById: (...a: unknown[]) => findByIdMock(...a),
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
@@ -53,7 +54,9 @@ vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
   LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
+  getQuestErrorCode: (e: { additionalInfo?: { errorCode?: string } }) => e?.additionalInfo?.errorCode,
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
