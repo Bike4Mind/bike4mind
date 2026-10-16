@@ -12,9 +12,12 @@ const h = vi.hoisted(() => ({
   getOperationsTextModel: vi.fn(),
   process: vi.fn(),
   processDiscoveredLinks: vi.fn(),
+  downloadRelevantLinks: vi.fn(),
   meter: vi.fn(),
   afford: vi.fn(),
   complete: vi.fn(),
+  userRepository: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
+  fabFileRepository: { commitContentRewrite: vi.fn(), findChargeState: vi.fn() },
 }));
 
 // Every export the module reads at import time, declared because this mock replaces the whole module.
@@ -28,16 +31,20 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: {},
   withTransaction: vi.fn(),
   apiKeyRepository: {},
-  userRepository: {},
+  userRepository: h.userRepository,
   User: { findById: h.userFindById },
-  fabFileRepository: {},
+  fabFileRepository: h.fabFileRepository,
   taskScheduleRepository: {},
   fileTagRepository: {},
 }));
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
     .meterCompletionBackend,
-  researchTaskService: { process: h.process, processDiscoveredLinks: h.processDiscoveredLinks },
+  researchTaskService: {
+    process: h.process,
+    processDiscoveredLinks: h.processDiscoveredLinks,
+    downloadRelevantLinks: h.downloadRelevantLinks,
+  },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: () => h.meter,
@@ -53,6 +60,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 }));
 
 import { dispatch } from './researchEngineQueue';
+import { commitContentRewrite } from '../../../../b4m-core/services/src/fabFileService/rewriteStorage';
 
 const logger = {
   info: vi.fn(),
@@ -143,5 +151,27 @@ describe('researchEngineQueue metering', () => {
         statusFailedMessage: 'Not enough credits',
       })
     );
+  });
+});
+
+describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // A re-crawl rewrite commits through these adapters; a hand-built `users` once lacked
+  // incrementCurrentStorage, so the commit threw after the upload and the counter drifted.
+  it('gives the re-crawl commit a users adapter that can move the storage counter', async () => {
+    h.fabFileRepository.commitContentRewrite.mockResolvedValue({
+      userId: 'u1',
+      fileSize: 100,
+      storageChargedAt: new Date(),
+    });
+    h.downloadRelevantLinks.mockImplementation(async (_params, adapters) => {
+      await commitContentRewrite({ fabFileId: 'f1', newSize: 250 }, adapters.db);
+    });
+
+    await dispatch(makeEvent('downloadRelevantLinks'), {} as never, logger as never);
+
+    expect(h.downloadRelevantLinks).toHaveBeenCalledTimes(1);
+    expect(h.userRepository.incrementCurrentStorage).toHaveBeenCalledWith('u1', 150);
   });
 });

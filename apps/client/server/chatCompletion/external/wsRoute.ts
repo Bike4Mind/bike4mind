@@ -4,6 +4,7 @@ import {
   buildSSEEvent,
   IMessage,
   normalizeCompletionRequest,
+  resolveApiCompletionSource,
   resolveRequestClient,
   type CompletionSource,
   type TurnUsage,
@@ -88,10 +89,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: WS_COMPLETIONS_ENDPOINT } });
 
-    // This endpoint is the HTTP->WS completion path - it requires an already-registered
-    // WebSocket connection. Hardcode 'cli' to match the WS-frame handler (cliCompletion.ts);
-    // a matched client such as desktop changes only its rate-limit cap, never this source.
-    const source: CompletionSource = 'cli';
+    // Preserve the legacy WS source except for an explicitly identified Desktop caller.
+    const source: CompletionSource = resolveApiCompletionSource(headers) === 'desktop' ? 'desktop' : 'cli';
 
     let body: z.infer<typeof WsCompletionRequestSchema>;
     let userId: string;

@@ -219,7 +219,7 @@ describe('JWT rate limiting', () => {
 
   it("attributes a b4m-desktop client as source 'desktop' on the completion and its analytics", async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
-    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop', userId: 'u1' }));
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 

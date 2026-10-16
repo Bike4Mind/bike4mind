@@ -2,7 +2,6 @@ import { accessibleBy } from '@casl/mongoose';
 import { IFabFile, IFabFileDocument, Permission } from '@bike4mind/common';
 import { Ability } from '@server/auth/ability';
 import { BadRequestError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
 import { mongoose, FabFile } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { EmbeddingService } from '@bike4mind/fab-pipeline';
@@ -60,67 +59,6 @@ export const createFabFile = async (data: IFabFile, ability: Ability) => {
     throw new BadRequestError('Unauthorized');
   }
   return FabFile.create(data);
-};
-
-/**
- * Updates a FabFile and its corresponding document in S3.
- *
- * @param fabFileId - The ID of the FabFile to update.
- * @param updatedData - The new data for the FabFile.
- * @param ability - CASL Ability for permission checks.
- * @param session - Optional MongoDB transaction session.
- * @returns The updated FabFile.
- */
-export const updateFabFile = async (
-  fabFileId: string,
-  updatedData: Partial<IFabFileDocument>,
-  fileContent: string | null,
-  ability: Ability,
-  session?: mongoose.ClientSession,
-  bypassAbility: boolean = false
-): Promise<IFabFileDocument> => {
-  if (!fabFileId) throw new BadRequestError('Invalid ID');
-
-  const filter = {
-    _id: fabFileId,
-    ...(bypassAbility ? {} : accessibleBy(ability, Permission.update).ofType(FabFile)),
-  };
-
-  const updatedFabFile = await FabFile.findOneAndUpdate(
-    filter,
-    { ...updatedData, updatedAt: new Date() },
-    { new: true, session }
-  ).exec();
-
-  if (!updatedFabFile) throw new BadRequestError('FabFile not found or access denied');
-
-  if (updatedData.filePath && updatedFabFile.filePath === updatedData.filePath) {
-    const fileKey = updatedFabFile.filePath;
-    const newContent = fileContent;
-
-    await getFilesStorage().upload(newContent ?? '', fileKey, {
-      ContentType: updatedFabFile.mimeType,
-    });
-
-    // Get actual file size from S3 after upload
-    try {
-      const metadata = await getFilesStorage().getMetadata(fileKey);
-      if (metadata.size !== undefined) {
-        updatedFabFile.fileSize = metadata.size;
-        // Modified-only: this save intends `fileSize` alone, and mongoose otherwise validates every
-        // path on the hydrated doc. During a staggered deploy that means an old instance loading a row
-        // whose enum-valued field carries a value only the NEW schema lists (e.g. chunkStallReason)
-        // fails validation here and silently drops the size.
-        await updatedFabFile.save({ session, validateModifiedOnly: true });
-      }
-    } catch (error) {
-      // Names this block, not S3: a mongoose ValidationError never reached the network, and blaming
-      // the download sent readers looking in the wrong place.
-      Logger.warn('Failed to record file size from S3 metadata:', error);
-    }
-  }
-
-  return updatedFabFile;
 };
 
 export const getFabFileById = async (

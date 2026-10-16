@@ -179,6 +179,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   listOwnedBeforeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
   summarizeChargedStorageByUserId: vi.fn(),
+  commitContentRewrite: vi.fn(),
+  findChargeState: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({

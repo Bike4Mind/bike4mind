@@ -12,7 +12,7 @@ import {
   apiKeyRepository,
   userRepository,
 } from '@bike4mind/database';
-import { IAdminSettingsRepository, IUserRepository } from '@bike4mind/common';
+import { IAdminSettingsRepository } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { fabFileRepository } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
@@ -264,12 +264,7 @@ const downloadRelevantLinks = async (parameters: { id: string; userId: string },
         researchDatas: researchDataRepository,
         adminSettings: adminSettingsRepository as unknown as IAdminSettingsRepository,
         scopedSettings: scopedSettingsRepository,
-        users: {
-          findById: async (id: string) => {
-            const result = await User.findById(id);
-            return result?.toJSON() ?? null;
-          },
-        } as unknown as IUserRepository,
+        users: userRepository,
         fileTags: fileTagRepository,
         dataLakes: dataLakeRepository,
       },
