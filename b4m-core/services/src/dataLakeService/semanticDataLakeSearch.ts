@@ -376,10 +376,12 @@ export interface SemanticDataLakeSearchParams {
    */
   vectorSearchEnabled?: boolean;
   /**
-   * The caller's resolved lakes, used ONLY to attribute a scoped file back to one lake so
-   * supersession can group per lake (see supersession.ts). Never a second way to resolve access:
-   * this module still takes its scope from `dataLakeTags`/`dataLakeTagPrefixes` exactly as before,
-   * and omitting this simply means nothing is attributable and nothing collapses.
+   * The caller's resolved lakes. Used to attribute a scoped file back to one lake so supersession
+   * can group per lake (see supersession.ts), and to pair a registry lake's open prefix with its
+   * meta-tag so fair ordering gives that lake one share, not two (see lakeFairOrder.ts). Never a
+   * second way to resolve access: this module still takes its scope from
+   * `dataLakeTags`/`dataLakeTagPrefixes` exactly as before. Omitting it means nothing is
+   * attributable, nothing collapses, and a registry lake's prefix arm stays its own bucket.
    */
   lakes?: AttributableLake[];
   /**

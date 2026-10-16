@@ -32,10 +32,18 @@ export interface LakeOrderScope {
   key: string;
   datalakeTag?: string;
   /**
-   * Content-tag prefix arm, for a registry lake whose files carry no `datalake:<slug>` meta-tag -
-   * see attributeAccessedLakes, which reverses attribution the same two ways.
+   * Content-tag prefix arm, for a lake reached by prefix alone (a dynamic lake's membership arm, or
+   * a registry prefix no resolved lake owns) - see attributeAccessedLakes, which reverses
+   * attribution the same two ways. Tested in scope order alongside the meta-tag arms.
    */
   fileTagPrefix?: string;
+  /**
+   * A registry lake's open prefix, paired onto the scope that carries its `datalakeTag` (see
+   * `lakeOrderScopes`) so its prefix-only files share the meta-tagged files' bucket. Tested only
+   * after every other arm of every scope, matching where the unpaired open prefix always ranked:
+   * a file also meta-tagged into another lake stays charged to that lake.
+   */
+  registryPrefix?: string;
 }
 
 /**
@@ -70,6 +78,7 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
     }
     existing.datalakeTag ??= scope.datalakeTag;
     existing.fileTagPrefix ??= scope.fileTagPrefix;
+    existing.registryPrefix ??= scope.registryPrefix;
   };
 
   for (const tag of sources.dataLakeTags) upsert(tag, { datalakeTag: tag });
@@ -86,7 +95,7 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
     const lake = sources.lakes?.find(l => l.fileTagPrefix === prefix);
     // Paired: key on the lake's meta-tag so it merges with its dataLakeTags bucket. Unpaired:
     // namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
-    if (lake) upsert(lake.datalakeTag, { datalakeTag: lake.datalakeTag, fileTagPrefix: prefix });
+    if (lake) upsert(lake.datalakeTag, { datalakeTag: lake.datalakeTag, registryPrefix: prefix });
     else upsert(`prefix:${prefix}`, { fileTagPrefix: prefix });
   }
 
@@ -99,8 +108,8 @@ export const UNATTRIBUTED_LAKE_KEY = '';
 
 /**
  * The lake bucket a file is charged to. A file carrying several lakes' tags is charged to its
- * FIRST matching scope (scope order, which is the caller's own lake order) so it is counted and
- * emitted exactly once - double-emitting it would both duplicate a chunk query and inflate the
+ * FIRST matching scope (scope order, which is the caller's own lake order; registry open prefixes
+ * only after every other arm) so it is counted and emitted exactly once - double-emitting it would both duplicate a chunk query and inflate the
  * lake it appears under twice.
  */
 function bucketFor(fileTags: string[], scopes: LakeOrderScope[]): string {
@@ -108,6 +117,10 @@ function bucketFor(fileTags: string[], scopes: LakeOrderScope[]): string {
   for (const scope of scopes) {
     if (scope.datalakeTag && metaTags.has(scope.datalakeTag)) return scope.key;
     if (scope.fileTagPrefix && fileTags.some(tag => typeof tag === 'string' && tag.startsWith(scope.fileTagPrefix!)))
+      return scope.key;
+  }
+  for (const scope of scopes) {
+    if (scope.registryPrefix && fileTags.some(tag => typeof tag === 'string' && tag.startsWith(scope.registryPrefix!)))
       return scope.key;
   }
   return UNATTRIBUTED_LAKE_KEY;
