@@ -83,7 +83,11 @@ describe('OpenAIBackend Responses stream without a terminal event', () => {
 
   it('still resolves when the terminal event arrives', async () => {
     const backend = buildBackend([delta, { type: 'response.completed', response: terminal }]);
+    const callback = vi.fn(async () => {});
 
-    await expect(complete(backend)).resolves.toBeUndefined();
+    await expect(
+      backend.complete(ChatModels.GPT5, [{ role: 'user', content: 'hi' }], { tools: [sampleTool] }, callback)
+    ).resolves.toBeUndefined();
+    expect(callback).toHaveBeenLastCalledWith([], expect.objectContaining({ inputTokens: 1, outputTokens: 1 }));
   });
 });
