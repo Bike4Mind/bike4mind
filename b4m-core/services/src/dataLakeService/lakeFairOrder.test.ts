@@ -30,6 +30,22 @@ describe('lakeOrderScopes', () => {
     expect(scopes.map(s => s.key)).toEqual(['datalake:a', 'prefix:opti:']);
   });
 
+  it('merges a registry lake tag and its open prefix into one bucket', () => {
+    const scopes = lakeOrderScopes({
+      dataLakeTags: ['datalake:reg', 'datalake:dyn'],
+      dataLakeTagPrefixes: ['reg:'],
+      lakeMemberships: [{ datalakeTag: 'datalake:dyn', fileTagPrefix: 'dyn:' }],
+      lakes: [
+        { datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' },
+        { datalakeTag: 'datalake:dyn', fileTagPrefix: 'dyn:' },
+      ],
+    });
+    expect(scopes).toEqual([
+      { key: 'datalake:reg', datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' },
+      { key: 'datalake:dyn', datalakeTag: 'datalake:dyn', fileTagPrefix: 'dyn:' },
+    ]);
+  });
+
   it('normalizes a null membership prefix rather than keying on it', () => {
     const scopes = lakeOrderScopes({
       dataLakeTags: [],
@@ -113,6 +129,29 @@ describe('orderFilesFairlyAcrossLakes', () => {
     const files = [file('r1', 'opti:type:spec'), file('a1', 'datalake:a')];
     const { filesByLake } = orderFilesFairlyAcrossLakes(files, prefixScopes, tagsOf);
     expect(filesByLake).toEqual({ 'prefix:opti:': 1, 'datalake:a': 1 });
+  });
+
+  it('gives a registry lake one share however its files are tagged, next to a dynamic lake', () => {
+    const regScopes = lakeOrderScopes({
+      dataLakeTags: ['datalake:reg', 'datalake:dyn'],
+      dataLakeTagPrefixes: ['reg:'],
+      lakeMemberships: [],
+      lakes: [{ datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' }],
+    });
+    // Registry files: two meta-tagged, two prefix-only. Dynamic lake: four files.
+    const files = [
+      file('r1', 'datalake:reg'),
+      file('r2', 'datalake:reg'),
+      file('r3', 'reg:x'),
+      file('r4', 'reg:y'),
+      file('d1', 'datalake:dyn'),
+      file('d2', 'datalake:dyn'),
+      file('d3', 'datalake:dyn'),
+      file('d4', 'datalake:dyn'),
+    ];
+    const { ordered, filesByLake } = orderFilesFairlyAcrossLakes(files, regScopes, tagsOf);
+    expect(filesByLake).toEqual({ 'datalake:reg': 4, 'datalake:dyn': 4 });
+    expect(ids(ordered)).toEqual(['r1', 'd1', 'r2', 'd2', 'r3', 'd3', 'r4', 'd4']);
   });
 
   it('gives own/shared files their own bucket instead of starving them', () => {

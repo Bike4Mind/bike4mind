@@ -1646,7 +1646,7 @@ async function lakeScopedSearch(
   // `fileName asc` sort over the union, and the chunk budget below is spent sequentially down
   // this order - so without the interleave a lake sorting late contributes nothing, and adding it
   // to a session leaves retrieval byte-identical. See lakeFairOrder.ts.
-  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships, lakes: params.lakes });
   const { ordered: scopedFiles, filesByLake } = orderFilesFairlyAcrossLakes(
     admitted,
     orderScopes,

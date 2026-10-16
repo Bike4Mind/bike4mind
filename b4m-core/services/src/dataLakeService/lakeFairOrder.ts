@@ -47,6 +47,12 @@ export interface LakeOrderScopeSources {
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   lakeMemberships: { datalakeTag?: string | null; fileTagPrefix?: string | null }[];
+  /**
+   * The resolved lakes, used only to pair an open registry prefix with its lake's meta-tag. A
+   * registry lake reaches the caller as a tag in `dataLakeTags` AND a prefix in
+   * `dataLakeTagPrefixes`; without the pairing those are two buckets and one lake draws two shares.
+   */
+  lakes?: { datalakeTag: string; fileTagPrefix?: string }[];
 }
 
 /**
@@ -76,8 +82,13 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
     if (!key) continue;
     upsert(key, { datalakeTag, fileTagPrefix });
   }
-  // Namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
-  for (const prefix of sources.dataLakeTagPrefixes) upsert(`prefix:${prefix}`, { fileTagPrefix: prefix });
+  for (const prefix of sources.dataLakeTagPrefixes) {
+    const lake = sources.lakes?.find(l => l.fileTagPrefix === prefix);
+    // Paired: key on the lake's meta-tag so it merges with its dataLakeTags bucket. Unpaired:
+    // namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
+    if (lake) upsert(lake.datalakeTag, { datalakeTag: lake.datalakeTag, fileTagPrefix: prefix });
+    else upsert(`prefix:${prefix}`, { fileTagPrefix: prefix });
+  }
 
   return [...byKey.values()];
 }
