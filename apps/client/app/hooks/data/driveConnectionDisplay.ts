@@ -92,7 +92,7 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
           title: `Google Drive folder "${folder}": last sync stopped short - ${connection.lastError}`,
           color: 'warning',
         }
-      : { label: badge.label, title: `Syncing the Google Drive folder "${folder}"`, color: badge.color };
+      : { label: badge.label, title: `Kept in sync with the Google Drive folder "${folder}"`, color: badge.color };
   }
 
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';
