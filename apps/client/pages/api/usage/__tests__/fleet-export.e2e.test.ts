@@ -9,7 +9,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { CounterLog, UsageEvent, User } from '@bike4mind/database';
-import { resolveApiCompletionSource } from '@bike4mind/common';
+import { FLEET_USAGE_MAX_ROWS, resolveApiCompletionSource } from '@bike4mind/common';
 import handler from '../fleet-export';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -247,6 +247,25 @@ describe('Fleet export route against real Mongo', () => {
     expect(result.status).toBe(405);
     expect(result.res.getHeader('Allow')).toBe('GET');
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it('exports a null email when the stored account email is malformed instead of failing the pull', async () => {
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(actor) }, { $set: { email: '' } });
+    await UsageEvent.collection.insertOne(event());
+    const { status, body } = await call();
+    expect(status).toBe(200);
+    expect(body.days[0].rows[0]).toMatchObject({ userId: actor, email: null });
+  });
+
+  it('answers 413 with a too-large audit when the grouped row limit is exceeded', async () => {
+    await UsageEvent.collection.insertMany(
+      Array.from({ length: FLEET_USAGE_MAX_ROWS + 1 }, (_, index) => event({ model: `model-${index}` }))
+    );
+    const { status, body } = await call();
+    expect(status).toBe(413);
+    expect(body).not.toHaveProperty('days');
+    expect(await CounterLog.countDocuments({ 'metadata.outcome': 'too-large' })).toBe(1);
+    expect(await CounterLog.countDocuments({ 'metadata.outcome': 'allow' })).toBe(0);
   });
 
   it('never releases invalid accounting or data whose audit write failed', async () => {

@@ -1,9 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { connectDB, CounterLog } from '@bike4mind/database';
-import { FleetUsageExportQuerySchema } from '@bike4mind/common';
+import { FleetUsageExportQuerySchema, type FleetUsageExport } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
-import { authorizeFleetUsageExport, readFleetUsageExport } from '@server/usage/fleetUsageExport';
+import {
+  authorizeFleetUsageExport,
+  FleetUsageExportTooLargeError,
+  readFleetUsageExport,
+} from '@server/usage/fleetUsageExport';
 
 // Dedicated machine auth only: sessions and general API keys cannot enter this route.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -42,11 +46,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .status(422)
         .json({ error: 'Expected from/to UTC dates spanning at most 31 days', request_id: requestId });
     }
-    const snapshot = await readFleetUsageExport(scope, parsed.data);
-    const body = JSON.stringify(snapshot);
-    if (Buffer.byteLength(body, 'utf8') > 4_000_000) {
+    const tooLarge = async () => {
       await audit('too-large', parsed.data);
       return res.status(413).json({ error: 'Snapshot too large; request fewer days', request_id: requestId });
+    };
+    let snapshot: FleetUsageExport;
+    try {
+      snapshot = await readFleetUsageExport(scope, parsed.data);
+    } catch (error) {
+      if (error instanceof FleetUsageExportTooLargeError) return await tooLarge();
+      throw error;
+    }
+    const body = JSON.stringify(snapshot);
+    if (Buffer.byteLength(body, 'utf8') > 4_000_000) {
+      return await tooLarge();
     }
     // An export is not released unless its access record has been persisted.
     await audit('allow', parsed.data);

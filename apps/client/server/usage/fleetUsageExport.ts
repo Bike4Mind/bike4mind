@@ -12,6 +12,14 @@ import {
   type FleetUsageExportScope,
 } from '@bike4mind/common';
 
+/** A snapshot exceeded an event or row limit; the caller should request fewer days. */
+export class FleetUsageExportTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FleetUsageExportTooLargeError';
+  }
+}
+
 export function authorizeFleetUsageExport(
   authorization: string | undefined,
   env: { FLEET_USAGE_EXPORT_TOKEN?: string; FLEET_USAGE_EXPORT_SCOPE?: string }
@@ -71,7 +79,8 @@ export async function readFleetUsageExport(
   let events = 0;
   try {
     for await (const event of cursor) {
-      if (++events > 100_000) throw new Error('Snapshot event limit exceeded; request fewer days');
+      if (++events > 100_000)
+        throw new FleetUsageExportTooLargeError('Snapshot event limit exceeded; request fewer days');
       const date = event.createdAt.toISOString().slice(0, 10);
       const row = FleetUsageExportRowSchema.parse({
         userId: event.userId,
@@ -107,7 +116,8 @@ export async function readFleetUsageExport(
       ]);
       const existing = groups.get(key);
       if (!existing) {
-        if (groups.size >= FLEET_USAGE_MAX_ROWS) throw new Error('Snapshot row limit exceeded; request fewer days');
+        if (groups.size >= FLEET_USAGE_MAX_ROWS)
+          throw new FleetUsageExportTooLargeError('Snapshot row limit exceeded; request fewer days');
         groups.set(key, { date, row });
       } else {
         for (const field of sumFields) existing.row[field] += row[field];
@@ -126,7 +136,13 @@ export async function readFleetUsageExport(
   const accounts = await User.find({ _id: { $in: actorIds.filter(id => /^[a-f\d]{24}$/i.test(id)) } })
     .select('_id email')
     .lean();
-  const emails = new Map(accounts.map(account => [String(account._id), account.email]));
+  // Account emails are unvalidated free text; one malformed address must not fail the whole pull.
+  const emails = new Map(
+    accounts.map(account => [
+      String(account._id),
+      FleetUsageExportRowSchema.shape.email.safeParse(account.email).data ?? null,
+    ])
+  );
   for (const [, { date, row }] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     row.email = emails.get(row.userId) ?? null;
     days[(Date.parse(date) - start) / FLEET_USAGE_DAY_MS].rows.push(row);
