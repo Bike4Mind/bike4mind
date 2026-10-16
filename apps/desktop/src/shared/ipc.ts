@@ -46,6 +46,14 @@ import type {
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SkillsState } from './skills';
+import type {
+  TerminalAttachment,
+  TerminalCreateRequest,
+  TerminalCreateResult,
+  TerminalDataEvent,
+  TerminalInfo,
+  TerminalsChangedEvent,
+} from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 
@@ -248,6 +256,22 @@ export const IPC_CHANNELS = {
   prGetSummaries: 'pr:get-summaries',
   /** main -> renderer push; one conversation's sidebar PR icon changed. */
   prSummaryChanged: 'pr:summary-changed',
+  /**
+   * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
+   * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
+   */
+  terminalList: 'terminal:list',
+  terminalCreate: 'terminal:create',
+  terminalAttach: 'terminal:attach',
+  terminalDetach: 'terminal:detach',
+  terminalInput: 'terminal:input',
+  terminalResize: 'terminal:resize',
+  terminalRestart: 'terminal:restart',
+  terminalClose: 'terminal:close',
+  /** main -> renderer push, batched; only to a window attached to that terminal. */
+  terminalData: 'terminal:data',
+  /** main -> renderer push; one conversation's tab list changed. */
+  terminalsChanged: 'terminal:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -704,6 +728,26 @@ export interface DesktopApi {
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
     onSummaryChanged(listener: (event: PrSummaryEvent) => void): () => void;
+  };
+  /**
+   * The user's own terminals. Reached from the terminal panel and from nowhere else; the agent
+   * has no tool on this surface. See @shared/terminal.
+   */
+  terminal: {
+    list(sessionId: string): Promise<TerminalInfo[]>;
+    /** Spawns the conversation's login shell in its working directory, or home with none. */
+    create(request: TerminalCreateRequest): Promise<TerminalCreateResult>;
+    /** Start receiving one terminal's output; answers with what it already printed. */
+    attach(terminalId: string): Promise<TerminalAttachment | null>;
+    detach(terminalId: string): void;
+    write(terminalId: string, data: string): void;
+    resize(terminalId: string, cols: number, rows: number): void;
+    /** A fresh shell in the same tab; the old one is ended first. */
+    restart(terminalId: string): Promise<TerminalInfo | null>;
+    /** Ends the shell and drops the tab. */
+    close(terminalId: string): Promise<void>;
+    onData(listener: (event: TerminalDataEvent) => void): () => void;
+    onChanged(listener: (event: TerminalsChangedEvent) => void): () => void;
   };
   shell: {
     /**

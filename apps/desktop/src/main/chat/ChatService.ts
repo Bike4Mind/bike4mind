@@ -378,6 +378,13 @@ export interface ChatServiceDeps {
    * sidebar in a window that has the conversation closed. Absent in tests.
    */
   summaryChanged?(summary: ChatSessionSummary): void;
+  /**
+   * A session was archived or deleted, by any path - the sidebar, the agent's host tools, or a
+   * spawned child being cleaned up. A notification only: it is how the user's terminals
+   * (main/terminal) end with their session without the service, and so the agent, ever holding
+   * them.
+   */
+  sessionClosed?(sessionId: string): void;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -642,6 +649,7 @@ export class ChatService {
     this.webSearches.forget(sessionId);
     // Its tabs are live renderer processes; nothing is lost, since tabs never outlive the app either.
     void this.deps.browser?.closeSession(sessionId).catch(() => undefined);
+    this.deps.sessionClosed?.(sessionId);
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -1143,6 +1151,7 @@ export class ChatService {
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     await this.deps.background?.killSession(sessionId);
+    this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
     // The generated media goes with it: nothing else references those files once the
@@ -2672,12 +2681,7 @@ export class ChatService {
         // A failed call is not a quiet one: an MCP server puts its error in the result body, and
         // `toolResultContent` sends that text to the model like any other, so only a call the
         // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          readsUntrusted(request.name)
-        ) {
+        if (!abandoned && scope.directories && !scope.directories.untrusted && readsUntrusted(request.name)) {
           scope.directories.untrusted = request.name;
         }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
