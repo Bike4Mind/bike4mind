@@ -37,7 +37,7 @@ export async function loadModelConfigurations(
 
 /** A text model with no usable per-token price settles at $0, so it cannot run while credits are enforced. */
 export function isUnpricedTextModel(model: ModelInfo): boolean {
-  return model.type === 'text' && getTextModelCreditsPer1M(model) === null;
+  return model.type === 'text' && !model.freeToRun && getTextModelCreditsPer1M(model) === null;
 }
 
 /**

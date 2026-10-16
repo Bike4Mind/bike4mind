@@ -77,6 +77,7 @@ describe('isUnpricedTextModel', () => {
     expect(isUnpricedTextModel({ ...priced, pricing: { 1: { input: 0, output: 0 } } } as ModelInfo)).toBe(true);
     expect(isUnpricedTextModel(priced)).toBe(false);
     expect(isUnpricedTextModel(free)).toBe(false);
+    expect(isUnpricedTextModel({ id: 'local', type: 'text', freeToRun: true } as unknown as ModelInfo)).toBe(false);
     expect(isUnpricedTextModel(image)).toBe(false);
   });
 });
