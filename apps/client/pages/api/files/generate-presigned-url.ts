@@ -11,7 +11,9 @@ import { BARE_UPLOAD_MIME_TYPE } from '@server/files/generateUploadMarker';
 import { assertBareGenerateUploadBody } from '@server/files/bareGenerateUpload';
 
 // An ai:generate key without files:write may only stage a bare PNG (the image-edit flow), marked so
-// GET /api/files/{id} can later serve it back to that key alone.
+// GET /api/files/{id} can later serve it back to that key alone. Its PUT must send
+// `Content-Type: image/png`, `Content-Length` equal to the declared fileSize and `If-None-Match: *`,
+// all signed into the URL, or S3 rejects it.
 // SPA-internal door. The public API-key door is POST /api/v1/files (same admission logic).
 const handler = baseApi({ requiredScopes: FILES_WRITE_OR_GENERATE_SCOPES }).post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(

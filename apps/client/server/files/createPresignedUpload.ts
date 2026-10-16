@@ -180,7 +180,13 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   );
 
   const expiresIn = provenance ? BARE_PRESIGNED_UPLOAD_EXPIRES_IN : PRESIGNED_UPLOAD_EXPIRES_IN;
-  const url = await getSignedUrl(s3Client, command, { expiresIn });
+  // The presigner leaves content-type unsigned by default, so it must be opted in for the bound
+  // type above to hold.
+  const url = await getSignedUrl(
+    s3Client,
+    command,
+    provenance ? { expiresIn, signableHeaders: new Set(['content-type']) } : { expiresIn }
+  );
 
   await logEvent(
     {

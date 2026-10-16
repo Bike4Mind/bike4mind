@@ -120,6 +120,8 @@ describe('POST /api/files/generate-presigned-url - ai:generate-only key', () => 
   it('binds the presigned PUT to image/png and the declared length', async () => {
     await run(png({ fileSize: 2048 }), generateOnly);
     expect(signedInput()).toMatchObject({ ContentType: 'image/png', ContentLength: 2048 });
+    const options = h.getSignedUrl.mock.calls[0][2] as { signableHeaders?: Set<string> };
+    expect(options.signableHeaders?.has('content-type')).toBe(true);
   });
 
   it('makes the presigned PUT create-only', async () => {
