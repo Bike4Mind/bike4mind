@@ -1140,6 +1140,18 @@ export const CustomMcpPolicySchema = z.object({
 
 export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
 
+/**
+ * Effective enablement: the platform `EnableCustomMcpConnectors` flag (operator master switch, never
+ * org-settable) AND the resolved org `customMcpPolicy.mode` not being `off`. An org can only close
+ * custom connectors for its members, never open them past a platform off.
+ */
+export function isCustomMcpEnabled(
+  platformFlag: boolean | undefined,
+  orgPolicy: Pick<CustomMcpPolicy, 'mode'> | undefined
+): boolean {
+  return platformFlag === true && orgPolicy?.mode !== 'off';
+}
+
 export const CustomMcpBlockedHostsSchema = z.object({
   hosts: z.array(z.string()).default([]),
 });
@@ -3862,23 +3874,23 @@ export const settingsMap = {
     name: 'Enable Custom MCP Connectors',
     defaultValue: false,
     description:
-      'Let users connect remote MCP servers by URL (beta). Off: no custom connector tools are offered ' +
-      'and new connections cannot be created; existing ones can still be disconnected. An org can ' +
-      'turn it on for its members only.',
+      'Platform master switch for custom remote MCP connectors (beta). Off: no custom connector tools ' +
+      'are offered and new connections cannot be created; existing ones can still be disconnected. ' +
+      'Orgs cannot override it; an org closes connectors for its members with customMcpPolicy mode off.',
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 8,
     dependsOn: 'EnableMCPServer',
     // The Integrations page derives the custom connector card's status from it.
     userReadable: true,
-    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   customMcpPolicy: makeObjectSetting({
     key: 'customMcpPolicy',
     name: 'Custom MCP Connector Policy',
     defaultValue: CustomMcpPolicySchema.parse({}),
     description:
-      'Which custom MCP servers members may connect. mode: off, presets_only (catalog presets only), ' +
+      'Which custom MCP servers members may connect. mode: off (org kill switch; ANDed with the platform ' +
+      'flag), presets_only (catalog presets only), ' +
       'allowlist (allowedHostPatterns only) or any. blockedHostPatterns apply in every mode. ' +
       'allowUnauthenticated permits servers with no sign-in; allowWriteTools false hides tools not ' +
       'marked read-only; requireApprovalForAll asks before every tool call. Overridable per org.',
@@ -3899,7 +3911,7 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 10,
-    dependsOn: 'EnableCustomMcpConnectors',
+    // No dependsOn: the operator kill switch must stay visible and editable while the flag is off.
     schema: CustomMcpBlockedHostsSchema,
   }),
   customMcpPresetClients: makeStringSetting({
@@ -3912,7 +3924,6 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 11,
-    dependsOn: 'EnableCustomMcpConnectors',
     isSensitive: true,
   }),
   customMcpAllowPrivateNetworks: makeObjectSetting({
