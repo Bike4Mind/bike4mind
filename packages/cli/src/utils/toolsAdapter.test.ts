@@ -17,6 +17,9 @@ import {
   deriveGrantDirectory,
   persistToolTrust,
   wrapTools,
+  buildCliToolList,
+  generateCliTools,
+  type CliToolListInput,
   type HookWrapperContext,
 } from './toolsAdapter.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
@@ -738,7 +741,7 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       needsPermission: vi.fn(() => false),
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
-    const agentContext = { currentAgent: null, observationQueue: [] };
+    const agentContext = { currentAgent: null };
     const wrapped = wrapToolWithPermission(tool, {
       permissionManager,
       showPermissionPrompt: noopPrompt,
@@ -856,7 +859,7 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       needsPermission: vi.fn(() => needsPermission),
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
-    const agentContext = { currentAgent: null, observationQueue: [] };
+    const agentContext = { currentAgent: null };
     const wrapped = wrapFn(createMockTool('bash_execute', toolFn), {
       permissionManager,
       showPermissionPrompt: noopPrompt,
@@ -962,7 +965,7 @@ describe('wrapToolWithPermission file-change notification', () => {
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
     const onFileChanged = vi.fn();
-    const agentContext = { currentAgent: null, observationQueue: [], onFileChanged };
+    const agentContext = { currentAgent: null, onFileChanged };
     const wrapped = wrapToolWithPermission(tool, {
       permissionManager,
       showPermissionPrompt: noopPrompt,
@@ -1010,12 +1013,149 @@ describe('wrapTools with the real tool router', () => {
     const [wrapped] = wrapTools([mcpTool], {
       permissionManager: { needsPermission: () => false, isDenied: () => false } as unknown as PermissionManager,
       showPermissionPrompt: vi.fn(),
-      agentContext: { observationQueue: [] } as never,
+      agentContext: {} as never,
       configStore: {} as ConfigStore,
       apiClient: {} as ApiClient,
       allowedDirectories: [process.cwd()],
     });
     await expect(wrapped.toolFn({})).resolves.toBe('pong');
     expect(mcpTool.toolFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('buildCliToolList', () => {
+  // An earlier test calls vi.resetModules(), so the wrapper's lazy store import can resolve
+  // to a fresh instance; set the mode on the instance the wrapper actually reads.
+  async function setLiveMode(mode: 'plan' | 'normal'): Promise<void> {
+    const { useCliStore: liveStore } = await import('../store/index.js');
+    liveStore.getState().setInteractionMode(mode);
+  }
+  afterEach(() => setLiveMode('normal'));
+
+  function makeDeps() {
+    const prompt = vi.fn(async () => ({ action: 'allow-once' as const }));
+    const wrapDeps = {
+      permissionManager: new PermissionManager([], undefined, []),
+      showPermissionPrompt: prompt,
+      agentContext: { currentAgent: null },
+      configStore: {} as ConfigStore,
+      apiClient: {} as ApiClient,
+    };
+    return { prompt, wrapDeps };
+  }
+
+  function makeTools(overrides: Partial<CliToolListInput> = {}): CliToolListInput {
+    return {
+      agentDelegateTool: createMockTool('agent_delegate'),
+      backgroundTools: [createMockTool('check_agent_status')],
+      resumeAgentTool: createMockTool('resume_agent'),
+      writeTodosTool: createMockTool('write_todos'),
+      findDefinitionTool: createMockTool('find_definition'),
+      getFileStructureTool: createMockTool('get_file_structure'),
+      ...overrides,
+    };
+  }
+
+  function inOrder(input: CliToolListInput): ICompletionOptionTools[] {
+    return [
+      ...(input.toolSearchTool ? [input.toolSearchTool] : []),
+      input.agentDelegateTool,
+      ...input.backgroundTools,
+      input.resumeAgentTool,
+      input.writeTodosTool,
+      ...(input.decisionLogTool ? [input.decisionLogTool] : []),
+      ...(input.blockerTools ?? []),
+      ...(input.reviewGateTool ? [input.reviewGateTool] : []),
+      input.findDefinitionTool,
+      input.getFileStructureTool,
+      ...(input.workItemTools ?? []),
+      ...(input.skillTool ? [input.skillTool] : []),
+      ...(input.dynamicAgentTool ? [input.dynamicAgentTool] : []),
+      ...(input.coordinateTaskTool ? [input.coordinateTaskTool] : []),
+    ];
+  }
+
+  it('wraps every tool it returns, in the order the entry point passed them', () => {
+    const raw = makeTools({
+      toolSearchTool: createMockTool('tool_search'),
+      decisionLogTool: createMockTool('log_decision'),
+      blockerTools: [createMockTool('track_blocker')],
+      reviewGateTool: createMockTool('request_review_gate'),
+      workItemTools: [createMockTool('work_item_create')],
+      skillTool: createMockTool('skill'),
+      dynamicAgentTool: createMockTool('create_dynamic_agent'),
+      coordinateTaskTool: createMockTool('coordinate_task'),
+    });
+    const expected = inOrder(raw);
+
+    const wrapped = buildCliToolList(raw, makeDeps().wrapDeps);
+
+    expect(wrapped.map(t => t.toolSchema.name)).toEqual(expected.map(t => t.toolSchema.name));
+    // A wrapped tool's toolFn is a new function; an unwrapped one still is the original.
+    wrapped.forEach((tool, i) => expect(tool.toolFn).not.toBe(expected[i].toolFn));
+  });
+
+  it('omits every optional group the entry point did not pass', () => {
+    const wrapped = buildCliToolList(makeTools(), makeDeps().wrapDeps);
+
+    expect(wrapped.map(t => t.toolSchema.name)).toEqual([
+      'agent_delegate',
+      'check_agent_status',
+      'resume_agent',
+      'write_todos',
+      'find_definition',
+      'get_file_structure',
+    ]);
+  });
+
+  it('blocks a writing tool in plan mode, proving the whole list is wrapped', async () => {
+    await setLiveMode('plan');
+    const wrapped = buildCliToolList(makeTools({ skillTool: createMockTool('skill') }), makeDeps().wrapDeps);
+
+    const skill = wrapped.find(t => t.toolSchema.name === 'skill');
+    expect(await skill!.toolFn({})).toMatch(/blocked while plan mode is active/);
+  });
+
+  it('runs an auto-approved tool in plan mode without prompting', async () => {
+    await setLiveMode('plan');
+    const { prompt, wrapDeps } = makeDeps();
+    const wrapped = buildCliToolList(makeTools(), wrapDeps);
+
+    const delegate = wrapped.find(t => t.toolSchema.name === 'agent_delegate');
+    expect(await delegate!.toolFn({})).toBe('tool result');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateCliTools checkpoint wiring', () => {
+  afterEach(() => useCliStore.setState({ interactionMode: 'normal' }));
+
+  it('snapshots an approved file write through the checkpoint store', async () => {
+    useCliStore.setState({ interactionMode: 'auto-accept' });
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-gen-'));
+    const createCheckpoint = vi.fn().mockResolvedValue(undefined);
+
+    const { tools } = await generateCliTools(
+      'user-1',
+      {} as never, // llm: not exercised while tool schemas are built
+      'test-model',
+      new PermissionManager([], undefined, []),
+      vi.fn(async () => ({ action: 'allow-once' as const })),
+      { currentAgent: null },
+      {} as ConfigStore,
+      {} as ApiClient,
+      undefined, // toolFilter
+      undefined, // showUserQuestion
+      { createCheckpoint } as never, // checkpointStore
+      undefined, // sandboxOrchestrator
+      [dir]
+    );
+
+    const createFile = tools.find(t => t.toolSchema.name === 'create_file');
+    expect(createFile).toBeDefined();
+    const target = path.join(dir, 'made.txt');
+    await createFile!.toolFn({ path: target, content: 'hello' });
+
+    expect(createCheckpoint).toHaveBeenCalledWith('create_file', [target], 'before-create_file-made.txt');
   });
 });

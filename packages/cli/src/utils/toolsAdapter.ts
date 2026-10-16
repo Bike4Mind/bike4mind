@@ -127,9 +127,6 @@ class CliLogger extends Logger {
  */
 interface AgentContext {
   currentAgent: any | null; // ReActAgent instance
-  /** Shared with ReActAgent's private queue (bootstrap/wireAgentEvents.ts). Nothing in the CLI
-   *  writes to it: the agent only drains entries keyed by tool-use id, which the wrapper never had. */
-  observationQueue: Array<{ toolName: string; result: unknown }>;
   /** Called (synchronously, must not block) after a file-writing tool succeeds, with the path as the tool received it. */
   onFileChanged?: (filePath: string) => void;
 }
@@ -487,6 +484,58 @@ export interface WrapToolDeps {
  */
 export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
   return tools.map(tool => wrapToolWithPermission(tool, deps));
+}
+
+/**
+ * The CLI-built tools in the order they are offered to the model. The optional groups are
+ * absent when their config gate is off, so each entry point passes only what it built.
+ */
+export interface CliToolListInput {
+  /** `tool_search`, when deferred tool schemas exist. Offered ahead of the rest of the list. */
+  toolSearchTool?: ICompletionOptionTools | null;
+  agentDelegateTool: ICompletionOptionTools;
+  backgroundTools: ICompletionOptionTools[];
+  resumeAgentTool: ICompletionOptionTools;
+  writeTodosTool: ICompletionOptionTools;
+  /** Durable decision / blocker / review-gate tools (interactive only). */
+  decisionLogTool?: ICompletionOptionTools | null;
+  blockerTools?: ICompletionOptionTools[];
+  reviewGateTool?: ICompletionOptionTools | null;
+  findDefinitionTool: ICompletionOptionTools;
+  getFileStructureTool: ICompletionOptionTools;
+  /** Persistent work-item tools, off unless the config opts in. */
+  workItemTools?: ICompletionOptionTools[];
+  skillTool?: ICompletionOptionTools | null;
+  dynamicAgentTool?: ICompletionOptionTools | null;
+  /** `coordinate_task`, when coordinator mode is on. */
+  coordinateTaskTool?: ICompletionOptionTools | null;
+}
+
+/**
+ * Assemble the CLI-built tool list and route it through the ONE permission wrapper (plan-mode
+ * gate, deny list, output redaction and cap). Every entry point - interactive, headless and ACP
+ * - builds its list here so no CLI-built tool, `tool_search` included, can skip the gate.
+ */
+export function buildCliToolList(input: CliToolListInput, wrapDeps: WrapToolDeps): ICompletionOptionTools[] {
+  return wrapTools(
+    [
+      ...(input.toolSearchTool ? [input.toolSearchTool] : []),
+      input.agentDelegateTool,
+      ...input.backgroundTools,
+      input.resumeAgentTool,
+      input.writeTodosTool,
+      ...(input.decisionLogTool ? [input.decisionLogTool] : []),
+      ...(input.blockerTools ?? []),
+      ...(input.reviewGateTool ? [input.reviewGateTool] : []),
+      input.findDefinitionTool,
+      input.getFileStructureTool,
+      ...(input.workItemTools ?? []),
+      ...(input.skillTool ? [input.skillTool] : []),
+      ...(input.dynamicAgentTool ? [input.dynamicAgentTool] : []),
+      ...(input.coordinateTaskTool ? [input.coordinateTaskTool] : []),
+    ],
+    wrapDeps
+  );
 }
 
 /**

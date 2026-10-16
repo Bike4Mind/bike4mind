@@ -51,7 +51,7 @@ import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
-  wrapTools,
+  buildCliToolList,
   resolveApiEndpoint,
   requireApiUrl,
   ApiEndpointUnconfiguredError,
@@ -870,7 +870,6 @@ function CliApp() {
       // Per-agent state shared with the tool wrappers
       const agentContext: AgentContext = {
         currentAgent: null,
-        observationQueue: [],
         onFileChanged: filePath => postEditDiagnosticsRef.current.enqueue(filePath),
       };
 
@@ -1001,28 +1000,45 @@ function CliApp() {
         ? createWorkItemTools(new WorkItemsClient(apiClient))
         : [];
 
+      // Holder so the tool_search closure can resolve to the agent's live
+      // context.tools array (assigned below after the agent is constructed).
+      // Pushing into context.tools makes newly-loaded schemas callable in
+      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
+      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+      const toolSearchTool =
+        deferredToolRegistry.size() > 0
+          ? createToolSearchTool(() => {
+              if (!agentToolsRef.current) {
+                throw new Error('tool_search invoked before agent context was wired');
+              }
+              return agentToolsRef.current;
+            })
+          : null;
+
       // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
       // Assembled before the feature registry so their names can be reserved against
       // plugin tool-name collisions (a duplicate tool name would 400 every completion).
-      const cliTools = wrapTools(
-        [
+      const cliTools = buildCliToolList(
+        {
+          toolSearchTool,
           agentDelegateTool,
-          ...backgroundTools,
+          backgroundTools,
           resumeAgentTool,
           writeTodosTool,
           decisionLogTool,
-          ...blockerTools,
+          blockerTools,
           reviewGateTool,
-          createFindDefinitionTool(additionalDirectories),
-          createGetFileStructureTool(additionalDirectories),
-          ...workItemTools,
-          ...(skillTool ? [skillTool] : []),
-          ...(dynamicAgentTool ? [dynamicAgentTool] : []),
+          findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+          getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+          workItemTools,
+          skillTool,
+          dynamicAgentTool,
           // coordinate_task is gated by a config flag
-          ...(config.preferences.enableCoordinatorMode === true
-            ? [createCoordinateTaskTool(orchestrator, agentStore, newSession.id)]
-            : []),
-        ],
+          coordinateTaskTool:
+            config.preferences.enableCoordinatorMode === true
+              ? createCoordinateTaskTool(orchestrator, agentStore, newSession.id)
+              : null,
+        },
         cliWrapDeps
       );
 
@@ -1038,7 +1054,8 @@ function CliApp() {
         descriptors: pluginDescriptors,
         config,
         logger,
-        // 'tool_search' is added later but its name is fixed; reserve it too.
+        // 'tool_search' is fixed-named; cliTools carries it when deferred schemas exist,
+        // but reserve the name unconditionally so a plugin can never claim it.
         reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
       });
 
@@ -1054,26 +1071,7 @@ function CliApp() {
       }
 
       const featureTools = featureRegistry.getAllTools();
-      // Holder so the tool_search closure can resolve to the agent's live
-      // context.tools array (assigned below after the agent is constructed).
-      // Pushing into context.tools makes newly-loaded schemas callable in
-      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
-      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-      const toolSearchTool =
-        deferredToolRegistry.size() > 0
-          ? wrapTools(
-              [
-                createToolSearchTool(() => {
-                  if (!agentToolsRef.current) {
-                    throw new Error('tool_search invoked before agent context was wired');
-                  }
-                  return agentToolsRef.current;
-                }),
-              ],
-              cliWrapDeps
-            )[0]
-          : null;
-      const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools, ...featureTools];
+      const allTools = [...loadedB4mTools, ...cliTools, ...featureTools];
 
       startupLog.push(`📂 Working directory: ${process.cwd()}`);
       if (additionalDirectories.length > 0) {
@@ -1099,7 +1097,7 @@ function CliApp() {
         startupLog.push(`⚠️ Plugins skipped: ${skippedPlugins.map(s => s.name).join(', ')} (see debug log)`);
       }
       logger.debug(
-        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature + ${toolSearchTool ? 1 : 0} tool_search, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
+        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
       );
 
       if (contextResult.globalContext) {
@@ -1145,7 +1143,7 @@ function CliApp() {
 
       // Wire the agent's step events to the UI store and tavern transcript,
       // and mirror them onto delegated subagents via the orchestrator callbacks.
-      wireAgentEvents({ agent, agentContext, orchestrator });
+      wireAgentEvents({ agent, orchestrator });
 
       setState((prev: CliState) => ({
         ...prev,

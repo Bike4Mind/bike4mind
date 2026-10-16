@@ -27,7 +27,7 @@ import { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
 import { ApiClient } from '../auth/ApiClient';
-import { requireApiUrl, wrapTools, type AgentContext } from '../utils';
+import { requireApiUrl, buildCliToolList, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
@@ -561,7 +561,7 @@ export class AcpServer {
     });
 
     const additionalDirectories = await this.resolveAdditionalDirectories();
-    const agentContext: AgentContext = { currentAgent: null, observationQueue: [] };
+    const agentContext: AgentContext = { currentAgent: null };
 
     const { agentStore, contextResult, loadedB4mTools, orchestrator, backgroundManager, historyStore, mcpManager } =
       await buildSupportingStores({
@@ -592,6 +592,15 @@ export class AcpServer {
         : llm;
     const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
 
+    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+    const toolSearchTool =
+      deferredToolRegistry.size() > 0
+        ? createToolSearchTool(() => {
+            if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
+            return agentToolsRef.current;
+          })
+        : null;
+
     const cliTools = this.buildCliTools({
       config,
       orchestrator,
@@ -604,30 +613,10 @@ export class AcpServer {
       apiClient,
       sandboxOrchestrator: sandboxOrchestrator ?? undefined,
       allowedDirectories: additionalDirectories,
+      toolSearchTool,
     });
 
-    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-    const toolSearchTool =
-      deferredToolRegistry.size() > 0
-        ? wrapTools(
-            [
-              createToolSearchTool(() => {
-                if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-                return agentToolsRef.current;
-              }),
-            ],
-            {
-              permissionManager,
-              showPermissionPrompt: this.promptFn,
-              agentContext,
-              configStore: this.configStore,
-              apiClient,
-              sandboxOrchestrator: sandboxOrchestrator ?? undefined,
-              allowedDirectories: additionalDirectories,
-            }
-          )[0]
-        : null;
-    const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools];
+    const allTools = [...loadedB4mTools, ...cliTools];
 
     const { agent, buildPromptForMode } = buildAgent({
       config,
@@ -669,6 +658,7 @@ export class AcpServer {
     apiClient: ApiClient;
     sandboxOrchestrator?: SandboxOrchestrator;
     allowedDirectories: string[];
+    toolSearchTool?: ICompletionOptionTools | null;
   }): ICompletionOptionTools[] {
     const {
       config,
@@ -682,6 +672,7 @@ export class AcpServer {
       apiClient,
       sandboxOrchestrator,
       allowedDirectories,
+      toolSearchTool,
     } = input;
 
     // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
@@ -694,32 +685,32 @@ export class AcpServer {
       sandboxOrchestrator,
       allowedDirectories,
     };
-    const coordinateTools =
-      config.preferences.enableCoordinatorMode === true
-        ? [createCoordinateTaskTool(orchestrator, agentStore, sessionId)]
-        : [];
-    return wrapTools(
-      [
-        createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
-        ...createBackgroundAgentTools(backgroundManager),
-        createResumeAgentTool(orchestrator, historyStore, backgroundManager),
-        createWriteTodosTool(createTodoStore()),
-        createFindDefinitionTool(allowedDirectories),
-        createGetFileStructureTool(allowedDirectories),
-        ...(config.preferences.enableSkillTool !== false
-          ? [
-              createSkillTool({
+    return buildCliToolList(
+      {
+        toolSearchTool,
+        agentDelegateTool: createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
+        backgroundTools: createBackgroundAgentTools(backgroundManager),
+        resumeAgentTool: createResumeAgentTool(orchestrator, historyStore, backgroundManager),
+        writeTodosTool: createWriteTodosTool(createTodoStore()),
+        findDefinitionTool: createFindDefinitionTool(allowedDirectories),
+        getFileStructureTool: createGetFileStructureTool(allowedDirectories),
+        skillTool:
+          config.preferences.enableSkillTool !== false
+            ? createSkillTool({
                 customCommandStore: this.customCommandStore,
                 subagentOrchestrator: orchestrator,
                 sessionId,
                 // Gate skill lifecycle hook shell commands through permission.
                 permission: { permissionManager, promptFn: this.promptFn },
                 allowedDirectories,
-              }),
-            ]
-          : []),
-        ...coordinateTools,
-      ],
+              })
+            : null,
+        // coordinate_task is gated by a config flag
+        coordinateTaskTool:
+          config.preferences.enableCoordinatorMode === true
+            ? createCoordinateTaskTool(orchestrator, agentStore, sessionId)
+            : null,
+      },
       cliWrapDeps
     );
   }

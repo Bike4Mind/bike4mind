@@ -153,7 +153,7 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
 
   // Empty observation queue per sandbox; the runner doesn't share queues
   // across tasks because each task gets a fresh ReActAgent.
-  const agentContext = { currentAgent: null, observationQueue: [] };
+  const agentContext = { currentAgent: null };
 
   const toolFactory: EvalToolFactory = async sandboxDir => {
     const { tools } = await generateCliTools(

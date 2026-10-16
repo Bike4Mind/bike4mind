@@ -21,6 +21,7 @@ vi.mock('../llm/ToolRouter', async importOriginal => {
 
 import { wrapToolWithPermission } from './toolsAdapter.js';
 import { PermissionManager } from './PermissionManager.js';
+import { PermissionDeniedError } from '@bike4mind/common';
 import { useCliStore } from '../store/index.js';
 import { executeTool } from '../llm/ToolRouter';
 import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
@@ -35,7 +36,7 @@ function tool(name: string, fn?: (args: any) => Promise<string>): ICompletionOpt
 // No sandboxOrchestrator, no allowedDirectories: the tool runs unsandboxed and
 // the path-grant retry is disabled - exactly the case criterion 3 targets.
 function wrap(t: ICompletionOptionTools, prompt: any, pm: PermissionManager): ICompletionOptionTools {
-  const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+  const agentContext = { currentAgent: null };
   return wrapToolWithPermission(t, {
     permissionManager: pm,
     showPermissionPrompt: prompt,
@@ -135,7 +136,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     return realTool(editDef, allowedDirectories);
   }
   function wrapEdit(prompt: any, pm: PermissionManager, dirs: string[]): ICompletionOptionTools {
-    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const agentContext = { currentAgent: null };
     return wrapToolWithPermission(realEditTool(dirs), {
       permissionManager: pm,
       showPermissionPrompt: prompt,
@@ -320,7 +321,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     // No allowedDirectories passed to the wrapper => the runtime grant flow is off,
     // and the temp file is outside cwd, so authorization rejects it.
-    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const agentContext = { currentAgent: null };
     const wrapped = wrapToolWithPermission(realEditTool([]), {
       permissionManager: pm,
       showPermissionPrompt: prompt,
@@ -343,7 +344,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     useCliStore.getState().setInteractionMode('normal');
     const { file } = await fuzzyFile();
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
-    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const agentContext = { currentAgent: null };
     // Untrusted + no allowedDirectories: the file is outside cwd, so it is denied,
     // but a prompt is still shown first (this is where the preview is built).
     const wrapped = wrapToolWithPermission(realEditTool([]), {
@@ -374,7 +375,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     const { dir, file } = await fuzzyFile();
     const dirs: string[] = []; // shared live allow-list; the grant pushes onto it
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
-    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const agentContext = { currentAgent: null };
     const wrapped = wrapToolWithPermission(realEditTool(dirs), {
       permissionManager: pm,
       showPermissionPrompt: prompt,
@@ -408,7 +409,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const freshDef = (await freshGetCli()).edit_local_file as any;
     const t = freshDef.implementation({ logger, allowedDirectories: [dir] });
-    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const agentContext = { currentAgent: null };
     const wrapped = freshWrap(t, {
       permissionManager: new FreshPM([], undefined, []),
       showPermissionPrompt: prompt,
@@ -470,7 +471,7 @@ describe('wrapToolWithPermission: create_file / delete_file preview guard', () =
 
 // An earlier test calls vi.resetModules(), so the wrapper's lazy store import can resolve to a
 // fresh instance; set the mode on the instance the wrapper actually reads.
-async function setLiveMode(mode: 'plan' | 'normal'): Promise<void> {
+async function setLiveMode(mode: 'plan' | 'normal' | 'auto-accept'): Promise<void> {
   const { useCliStore: liveStore } = await import('../store/index.js');
   liveStore.getState().setInteractionMode(mode);
 }
@@ -482,7 +483,7 @@ describe('checkpoint before a file write', () => {
     const wrapped = wrapToolWithPermission(t, {
       permissionManager: new PermissionManager([], undefined, []),
       showPermissionPrompt: prompt,
-      agentContext: { currentAgent: null, observationQueue: [] },
+      agentContext: { currentAgent: null },
       configStore: {},
       apiClient: {} as any,
       checkpointStore: { createCheckpoint } as any,
@@ -511,13 +512,12 @@ describe('checkpoint before a file write', () => {
     expect(createCheckpoint).toHaveBeenCalledWith('create_file', ['src/a.ts'], 'before-create_file-a.ts');
   });
 
-  it('takes no checkpoint for a denied write', async () => {
-    const { wrapped, createCheckpoint } = checkpointing(
-      tool('delete_file'),
-      vi.fn().mockResolvedValue({ action: 'deny' })
-    );
+  it('takes no checkpoint for a denied write, and still shows the prompt', async () => {
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const { wrapped, createCheckpoint } = checkpointing(tool('delete_file'), prompt);
 
-    await expect(wrapped.toolFn({ path: 'src/a.ts' })).rejects.toThrow();
+    await expect(wrapped.toolFn({ path: 'src/a.ts' })).rejects.toThrow(PermissionDeniedError);
+    expect(prompt).toHaveBeenCalledTimes(1);
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 
@@ -530,6 +530,28 @@ describe('checkpoint before a file write', () => {
 
     expect(result).toMatch(/blocked while plan mode is active/);
     expect(write).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('snapshots a write the auto-accept mode approves without a prompt', async () => {
+    await setLiveMode('auto-accept');
+    const prompt = vi.fn();
+    const { wrapped, createCheckpoint } = checkpointing(tool('create_file'), prompt);
+
+    await wrapped.toolFn({ path: 'src/a.ts', content: 'x' });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(createCheckpoint).toHaveBeenCalledWith('create_file', ['src/a.ts'], 'before-create_file-a.ts');
+  });
+
+  it.each([[{ path: '' }], [{ path: 42 }]])('takes no checkpoint for an unusable path (%o)', async args => {
+    const { wrapped, createCheckpoint } = checkpointing(
+      tool('create_file'),
+      vi.fn().mockResolvedValue({ action: 'allow-once' })
+    );
+
+    await wrapped.toolFn(args);
+
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 

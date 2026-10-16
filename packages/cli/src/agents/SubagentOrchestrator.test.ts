@@ -434,11 +434,34 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
       parentSessionId: 'session-1',
       agentDefinition: inlineAgent(),
       additionalTools: [decompose],
+      parentInteractionMode: 'plan',
     });
 
     const call = vi.mocked(wrapTools).mock.calls.find(([tools]) => tools.includes(decompose));
     expect(call).toBeDefined();
-    expect(call![1].interactionModeOverride).toBeDefined();
+    expect(call![1].interactionModeOverride).toBe('plan');
+  });
+
+  it('routes declared shared-context tools through the permission wrapper', async () => {
+    vi.mocked(wrapTools).mockClear();
+    const { orchestrator } = createHookOrchestrator('allow-once');
+    const sharedContext = { get: () => undefined, getAll: () => ({}), set: () => undefined };
+
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: { ...inlineAgent()!, sharedContext: ['read', 'write'] },
+      sharedContext: sharedContext as never,
+      parentInteractionMode: 'plan',
+    });
+
+    const call = vi
+      .mocked(wrapTools)
+      .mock.calls.find(([tools]) => tools.some(t => t.toolSchema.name === 'shared_context_write'));
+    expect(call).toBeDefined();
+    expect(call![0].map(t => t.toolSchema.name)).toEqual(['shared_context_read', 'shared_context_write']);
+    expect(call![1].interactionModeOverride).toBe('plan');
   });
 
   it('advertises the model-reachable command set (not getAllCommands) in the skills prompt', async () => {

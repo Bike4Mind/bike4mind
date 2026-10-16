@@ -20,6 +20,7 @@ import { buildSystemPrompt } from '../core/prompts';
 import {
   generateCliTools,
   wrapTools,
+  buildCliToolList,
   PermissionManager,
   type AgentContext,
   type PermissionPromptKind,
@@ -333,7 +334,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // Per-agent state shared with the tool wrappers
     const agentContext: AgentContext = {
       currentAgent: null,
-      observationQueue: [],
     };
 
     // Generate tools
@@ -430,21 +430,22 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       : null;
 
     // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
-    const cliTools = wrapTools(
-      [
+    const cliTools = buildCliToolList(
+      {
         agentDelegateTool,
-        ...backgroundTools,
+        backgroundTools,
         resumeAgentTool,
         writeTodosTool,
-        createFindDefinitionTool(additionalDirectories),
-        createGetFileStructureTool(additionalDirectories),
-        ...workItemTools,
-        ...(skillTool ? [skillTool] : []),
+        findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+        getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+        workItemTools,
+        skillTool,
         // coordinate_task is gated by a config flag
-        ...(config.preferences.enableCoordinatorMode === true
-          ? [createCoordinateTaskTool(orchestrator, agentStore, session.id)]
-          : []),
-      ],
+        coordinateTaskTool:
+          config.preferences.enableCoordinatorMode === true
+            ? createCoordinateTaskTool(orchestrator, agentStore, session.id)
+            : null,
+      },
       cliWrapDeps
     );
 
@@ -477,8 +478,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     });
 
     agentContext.currentAgent = agent;
-
-    (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
 
     // Set up step streaming for stream-json format (emitter created above).
     if (streaming) {

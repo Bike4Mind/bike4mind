@@ -308,7 +308,6 @@ export class SubagentOrchestrator {
     // Generate tools and apply filter
     const agentContext: AgentContext = {
       currentAgent: null,
-      observationQueue: [],
     };
 
     const { tools: allTools, agentContext: updatedContext } = await generateCliTools(
@@ -342,6 +341,7 @@ export class SubagentOrchestrator {
       sandboxOrchestrator: this.deps.sandboxOrchestrator,
       allowedDirectories: this.deps.additionalDirectories,
       interactionModeOverride: effectiveInteractionMode,
+      checkpointStore: this.deps.checkpointStore,
     };
 
     // Inject additional tools (e.g., decompose_task for coordinator agent)
