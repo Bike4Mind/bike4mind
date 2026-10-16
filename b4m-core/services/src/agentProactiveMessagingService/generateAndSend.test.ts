@@ -25,4 +25,12 @@ describe('generateAndSendProactiveMessage tool deps', () => {
     // The whole repo would enable incrementImageCount for images no quest of this run holds.
     expect(source).not.toMatch(/sessions: db\.sessions,/);
   });
+
+  it('meters the message completion but leaves tool-internal calls on the raw backend', () => {
+    expect(source).toMatch(
+      /const llm = meter \? meterCompletionBackend\(backend, meter, modelInfo, models\) : backend;/
+    );
+    expect(source).toMatch(/\.complete\(model, messages, completionOptions/);
+    expect(source).toMatch(/\n\s+backend,\n\s+\{ web_search:/);
+  });
 });

@@ -1,9 +1,15 @@
 import { randomUUID } from 'crypto';
 import type { IncomingHttpHeaders } from 'http';
 import { getTextModelCost, getTurnsCost, type IMessage, type IUserDocument, type ModelInfo } from '@bike4mind/common';
-import { adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
+import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
-import { latchUsage, type CompletionMeter, type CompletionUsage } from '@bike4mind/services';
+import {
+  assertOwnerHasCredits,
+  creditService,
+  latchUsage,
+  type CompletionMeter,
+  type CompletionUsage,
+} from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission as createSharedModelAdmission,
@@ -172,4 +178,18 @@ export function createCompletionMeter(
         }),
     };
   };
+}
+
+/**
+ * Pre-enqueue gate for queued platform-key work billed later through createCompletionMeter: refuses
+ * (422 insufficient_credits) when the billing owner - the org seat when present, else the user - has
+ * no credits or the member is at their org cap. A no-op when enforceCredits is off.
+ */
+export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
+  if (!(await isCreditsEnforced())) return;
+  const org = user.organizationId ? await organizationRepository.findById(String(user.organizationId)) : null;
+  if (org && creditService.isMemberAtOrOverCap(org, user.id)) {
+    throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
+  }
+  assertOwnerHasCredits(org ?? user);
 }

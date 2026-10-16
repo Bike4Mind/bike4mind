@@ -27,6 +27,8 @@ vi.mock('@bike4mind/services', async () => {
   const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember },
+    assertOwnerHasCredits: services.assertOwnerHasCredits,
+    latchUsage: services.latchUsage,
     creditService: { ...creditService, deductCreditsWithOrgSupport: m.deductCredits },
   };
 });
@@ -40,6 +42,7 @@ vi.mock('@server/entitlements', () => ({ getUserEntitlements: m.getUserEntitleme
 import {
   completionCeilingUsd,
   completionUsd,
+  assertOwnerCanAfford,
   createModelAdmission,
   reserveCompletionCredits,
   settleCompletion,
@@ -203,5 +206,32 @@ describe('createModelAdmission', () => {
     expect(await admission.admits('unlisted')).toBe(true);
     m.getUserEntitlements.mockRejectedValue(new Error('db down'));
     expect(await (await createModelAdmission(user())).admits('gated')).toBe(false);
+  });
+});
+
+describe('assertOwnerCanAfford', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.enforceCredits = true;
+  });
+
+  it('refuses a user with no credits and admits one with credits', async () => {
+    await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 0 } as never)).rejects.toMatchObject({
+      statusCode: 422,
+      additionalInfo: { errorCode: 'insufficient_credits' },
+    });
+    await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 5 } as never)).resolves.toBeUndefined();
+  });
+
+  it('checks the org pool, not the user, for an org seat', async () => {
+    m.orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 0, userDetails: [], users: [{ userId: 'u1' }] });
+    await expect(
+      assertOwnerCanAfford({ id: 'u1', organizationId: 'o1', currentCredits: 500 } as never)
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('admits anyone when credits are not enforced', async () => {
+    m.enforceCredits = false;
+    await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 0 } as never)).resolves.toBeUndefined();
   });
 });
