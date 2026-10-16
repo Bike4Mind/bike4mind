@@ -130,7 +130,8 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     assertAccountStateUsable(user);
 
     // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
-    // ForbiddenError so the Function-URL adapter answers 403 with this message, not a generic 401.
+    // ForbiddenError so a transport that maps error classes (the Function-URL adapter, the
+    // ws-completions JWT catch) answers 403 with this message rather than a generic 401.
     if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
       throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
