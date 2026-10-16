@@ -3672,6 +3672,8 @@ const DispatchedNotificationSchema = new Schema<{ channel: string; at: Date }>(
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
+    // Owning org (see IFabFile.organizationId); absent = personal, owned by userId.
+    organizationId: { type: String },
     fileName: { type: String, required: true },
     fileSize: { type: Number },
     // Extracted TEXT length, not bytes; see IFabFile. Absent until something extracts the file.

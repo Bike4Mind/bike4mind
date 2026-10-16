@@ -641,3 +641,56 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 });
+
+describe('createFabFile - owning organization', () => {
+  const orgLake = {
+    id: 'lake-1',
+    datalakeTag: 'datalake:team',
+    createdByUserId: 'u1',
+    organizationId: 'org-1',
+    createdAt: new Date('2026-01-01'),
+  };
+
+  function ownerAdapters(): CreateFabFileAdapters {
+    return {
+      db: {
+        // any: only the fields prepareFabFile reads are stubbed.
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1' } as any) },
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn(async (tag: string) => (tag === orgLake.datalakeTag ? (orgLake as any) : null)),
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://signed'), upload: vi.fn() },
+    };
+  }
+
+  const file = { ...base, fileName: 'notes.txt', mimeType: 'text/plain' };
+
+  it('persists the org of the org-owned lake the file joins', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+
+  // The request's organizationId is the user's selected org, which is a display preference: a file
+  // uploaded with an org selected stays personal unless it joins one of that org's lakes.
+  it('never persists the caller-supplied organizationId', async () => {
+    const created = await createFabFile('u1', { ...file, organizationId: 'org-from-request' }, ownerAdapters());
+    expect(created).not.toHaveProperty('organizationId');
+  });
+
+  it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, organizationId: 'org-from-request', tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+});

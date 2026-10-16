@@ -2790,7 +2790,7 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
     const db = makeDb(null);
     await expect(
       assertCanWriteDataLakeTags({ userId: 'anyone', isAdmin: false }, ['acme:sales', 'notes'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([]);
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
@@ -2798,14 +2798,14 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
     const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
     await expect(
       assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['datalake:lake'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([expect.objectContaining({ datalakeTag: 'datalake:lake' })]);
   });
 
   it('allows an admin to apply the lake meta-tag', async () => {
     const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
     await expect(
       assertCanWriteDataLakeTags({ userId: 'other', isAdmin: true }, ['datalake:lake'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([expect.objectContaining({ datalakeTag: 'datalake:lake' })]);
   });
 
   it('rejects a read-only member injecting into a lake they do not own', async () => {
@@ -2829,7 +2829,7 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
       assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, [null, undefined, 42, {}, 'notes'] as unknown[], {
         db,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([]);
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 

@@ -261,7 +261,10 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Derived server-side from the
+   * org-owned lakes the file joins (resolveFabFileOwnerOrganization) - never from a caller-supplied
+   * or "currently selected" org, which is a display preference, not ownership.
    */
   organizationId?: string;
 

@@ -150,6 +150,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
+    // MB; no schema default so an unset limit keeps tracking DEFAULT_STORAGE_LIMIT_MB.
+    storageLimit: { type: Number, min: 0 },
+    // Bytes owned by the org; written only through incrementCurrentStorage.
+    currentStorageSize: { type: Number, min: 0 },
     /**
      * Organization-wide system prompt applied to all team-member conversations. Lets
      * enterprise customers set domain-specific context that overrides model training
@@ -227,6 +231,16 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  async incrementCurrentStorage(organizationId: string, bytes: number): Promise<void> {
+    await this.organizationModel.findByIdAndUpdate(organizationId, [
+      {
+        $set: {
+          currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, bytes] }] },
+        },
+      },
+    ]);
   }
 
   /**

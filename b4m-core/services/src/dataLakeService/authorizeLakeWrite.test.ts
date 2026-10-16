@@ -77,7 +77,7 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
   it('accepts the lake creator', async () => {
     await expect(
       assertCanWriteDataLakeTags({ userId: 'lake-creator', isAdmin: false }, [LAKE.datalakeTag], dbWith(LAKE))
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([LAKE]);
   });
 
   it('rejects a meta-tag that resolves to no lake', async () => {
@@ -110,7 +110,7 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
           ['datalake:opti-knowledge'],
           adapters as never
         )
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual([]);
       expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
     });
 
@@ -186,13 +186,13 @@ describe('assertCanWriteDataLakeTags unattended arm', () => {
   it('allows an unattended write to a connector-fed lake', async () => {
     await expect(
       assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db: dbFor('connector-fed'), unattended: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('allows a human write to a curated lake (flag omitted)', async () => {
     await expect(
       assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db: dbFor('curated') })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('resolves no setting at all when the flag is omitted', async () => {
@@ -207,7 +207,7 @@ describe('assertCanWriteDataLakeTags unattended arm', () => {
     const db = dbFor('curated', { EnforceLakeOriginOnIngest: 'false' });
     await expect(
       assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db, unattended: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('lets an unattended write through when EnforceLakeOriginOnIngest is overridden off at the LAKE rung', async () => {
@@ -217,7 +217,7 @@ describe('assertCanWriteDataLakeTags unattended arm', () => {
     const db = dbFor('curated', {}, [originOverrideForLake('lake-1', 'false')]);
     await expect(
       assertCanWriteDataLakeTags(ADMIN, ['datalake:acme-docs'], { db, unattended: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toHaveLength(1);
   });
 
   it('keeps checking after the first lake is exempted, refusing on a later curated lake', async () => {
