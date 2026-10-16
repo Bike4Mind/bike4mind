@@ -9,7 +9,7 @@ export interface LakeScopeForcedRetrievalInput {
 
 /**
  * Whether a session born scoped to a lake should also be born with forced retrieval on. updateSession
- * applies the same rule when a lake scope is set on an existing session, whatever the stored flag.
+ * applies the same rule to an existing session whose flag was never set, leaving a stored one alone.
  *
  * A caller that declared a lake scope has already said where its answers come from, but with the
  * flag left unset the search was left to the model's own discretion - it fired on roughly a quarter
