@@ -906,6 +906,11 @@ export class AnthropicBackend implements ICompletionBackend {
     const accumTurnUsage = options._internal?.accumTurnUsage;
     const accumReasoningTokens = options._internal?.accumReasoningTokens;
 
+    // Running reasoning total plus this turn's count, spread-ready for a CompletionInfo.
+    // Every emit and recursion site uses this so the shape can't drift between them.
+    const reasoningSoFar = (usage: unknown) =>
+      reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)));
+
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
@@ -1781,9 +1786,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // degenerate turn is the worst case for an estimate: real output is large.
                   inputTokens: accumInputTokens + (degenerateUsage?.input_tokens ?? 0),
                   outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens ?? 0),
-                  ...reasoningTokensField(
-                    addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(degenerateUsage))
-                  ),
+                  ...reasoningSoFar(degenerateUsage),
                   cacheReadInputTokens: totalCacheTokens(
                     accumCacheReadTokens,
                     degenerateUsage?.cache_read_input_tokens
@@ -1834,9 +1837,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     stopReason: STREAM_ABORTED_STOP_REASON,
                     inputTokens: accumInputTokens + (abortedUsage?.input_tokens ?? 0),
                     outputTokens: accumOutputTokens + (abortedUsage?.output_tokens ?? 0),
-                    ...reasoningTokensField(
-                      addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(abortedUsage))
-                    ),
+                    ...reasoningSoFar(abortedUsage),
                     cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, abortedUsage?.cache_read_input_tokens),
                     cacheCreationInputTokens: totalCacheTokens(
                       accumCacheWriteTokens,
@@ -1962,7 +1963,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   cacheStats,
                   inputTokens: accumInputTokens + (usage?.input_tokens || 0),
                   outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
-                  ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage))),
+                  ...reasoningSoFar(usage),
                   // Accumulated across tool turns: the provider bills cache per API call.
                   cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCache?.cache_read_input_tokens),
                   cacheCreationInputTokens: totalCacheTokens(
@@ -2028,9 +2029,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     stopReason: DEGENERATE_STREAM_STOP_REASON,
                     inputTokens: accumInputTokens + (degenerateUsage?.input_tokens || 0),
                     outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens || 0),
-                    ...reasoningTokensField(
-                      addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(degenerateUsage))
-                    ),
+                    ...reasoningSoFar(degenerateUsage),
                     cacheReadInputTokens: totalCacheTokens(
                       accumCacheReadTokens,
                       degenerateUsage?.cache_read_input_tokens
@@ -2329,9 +2328,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 toolsUsed,
                 inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
                 outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
-                ...reasoningTokensField(
-                  addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(streamingTurnUsage))
-                ),
+                ...reasoningSoFar(streamingTurnUsage),
                 cacheReadInputTokens: totalCacheTokens(
                   accumCacheReadTokens,
                   streamingTurnUsage?.cache_read_input_tokens
@@ -2408,9 +2405,7 @@ export class AnthropicBackend implements ICompletionBackend {
               thinking: thinkingBlocks,
               inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
-              ...reasoningTokensField(
-                addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(streamingTurnUsage))
-              ),
+              ...reasoningSoFar(streamingTurnUsage),
               cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, streamingTurnUsage?.cache_read_input_tokens),
               cacheCreationInputTokens: totalCacheTokens(
                 accumCacheWriteTokens,
@@ -2542,7 +2537,7 @@ export class AnthropicBackend implements ICompletionBackend {
           toolsUsed: toolsUsed,
           ...(isTerminalTurn
             ? {
-                ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage))),
+                ...reasoningSoFar(usage),
                 // Accumulated across tool turns: the provider bills cache per API call.
                 cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
                 cacheCreationInputTokens: totalCacheTokens(
@@ -2778,7 +2773,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 toolsUsed,
                 inputTokens: accumInputTokens + (usage?.input_tokens || 0),
                 outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
-                ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage))),
+                ...reasoningSoFar(usage),
                 cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
                 cacheCreationInputTokens: totalCacheTokens(
                   accumCacheWriteTokens,
@@ -2848,7 +2843,7 @@ export class AnthropicBackend implements ICompletionBackend {
             await cb([null], {
               inputTokens: accumInputTokens + (usage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
-              ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage))),
+              ...reasoningSoFar(usage),
               cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
               cacheCreationInputTokens: totalCacheTokens(
                 accumCacheWriteTokens,
