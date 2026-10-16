@@ -1,5 +1,8 @@
 import type { ModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 import type { ServerAgentDefinition } from '@bike4mind/agents';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { component: 'agentExecutor.modelAdmission' } });
 
 /**
  * Keep only the models of a user/org agent definition the caller may run (preferred model first,
@@ -16,7 +19,13 @@ export async function admitAgentDefinitions(
     for (const id of [definition.model, ...(definition.fallbackModels ?? [])]) {
       if (await admission.admits(id)) models.push(id);
     }
-    if (models.length === 0) continue;
+    if (models.length === 0) {
+      logger.warn('agent executor: dropped agent with no admitted model', {
+        agent: definition.name,
+        model: definition.model,
+      });
+      continue;
+    }
     admitted.push({
       ...definition,
       model: models[0],
