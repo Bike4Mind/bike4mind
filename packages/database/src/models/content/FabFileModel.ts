@@ -1278,6 +1278,47 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return aggregate.exec();
   }
 
+  async findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+    const row = await this.fabFileModel
+      .findOne({ _id: id, deletedAt: null }, { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 })
+      .lean();
+    return row
+      ? {
+          userId: String(row.userId),
+          fileSize: row.fileSize,
+          storageChargedAt: row.storageChargedAt,
+          status: row.status,
+          createdAt: row.createdAt,
+        }
+      : null;
+  }
+
+  async commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter: Record<string, unknown> = {}
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+    // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
+    const pre = await this.fabFileModel
+      .findOneAndUpdate(
+        { ...filter, _id: id, deletedAt: null },
+        { $set: { ...set, storageChargedAt: new Date() } },
+        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 } }
+      )
+      .lean();
+    return pre
+      ? {
+          userId: String(pre.userId),
+          fileSize: pre.fileSize,
+          storageChargedAt: pre.storageChargedAt,
+          status: pre.status,
+          createdAt: pre.createdAt,
+        }
+      : null;
+  }
+
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());

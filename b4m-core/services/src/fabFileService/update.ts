@@ -8,6 +8,7 @@ import {
   IFabFileRepository,
   IScopedSettingsRepository,
   IUserDocument,
+  IUserRepository,
   KnowledgeType,
   LakeAuditPrincipal,
   isImageServeable,
@@ -16,6 +17,7 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
@@ -52,8 +54,16 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipA
     LakeMembershipAuditAdapters['db'] & {
       fabFiles: Pick<
         IFabFileRepository,
-        'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+        | 'shareable'
+        | 'update'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'computeDataLakeStats'
+        | 'commitContentRewrite'
+        | 'findChargeState'
       >;
+      /** Charges a content rewrite to the file's OWNER, who may not be `user` (an update share). */
+      users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
       // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
@@ -120,6 +130,9 @@ export const updateFabFile = async (
     const ext = mime.extension(mimeType) || null;
     const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
 
+    let fileSize = Buffer.byteLength(fileContent, 'utf8');
+    await assertRewriteFits(fabFile, fileSize, db, user);
+
     await storage.upload(filePath, fileContent, {
       ContentType: mimeType,
     });
@@ -129,11 +142,18 @@ export const updateFabFile = async (
       try {
         const metadata = await storage.getMetadata(filePath);
         if (metadata.size !== undefined) {
-          contentChanges.fileSize = metadata.size;
+          fileSize = metadata.size;
         }
       } catch (error) {
         Logger.globalInstance.warn('Failed to retrieve file metadata from S3:', error);
       }
+    }
+    contentChanges.fileSize = fileSize;
+    if (!fabFile.filePath) contentChanges.filePath = filePath;
+    const committed = await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
+    if (!committed) {
+      // The row vanished (soft-deleted) after it was read: the bytes are uploaded but nothing was charged.
+      Logger.globalInstance.warn(`Content rewrite of FabFile ${fabFile.id} matched no live row; storage not charged`);
     }
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);

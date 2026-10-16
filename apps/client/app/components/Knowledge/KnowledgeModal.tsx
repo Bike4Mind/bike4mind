@@ -45,6 +45,7 @@ import { userCanUpdateDoc } from '@client/app/utils/userPermission';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import { useParams } from '@tanstack/react-router';
 import rehypeSanitize from 'rehype-sanitize';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
@@ -393,8 +394,8 @@ const KnowledgeModal: React.FC = () => {
       }
 
       setFileContent(editedContent);
-    } catch {
-      toast.error('Failed to save file content');
+    } catch (error) {
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to save file content');
     } finally {
       setSavingEditedContent(false);
     }

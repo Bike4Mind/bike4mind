@@ -19,3 +19,4 @@ export * from './reconcileLakeTags';
 export * from './toggleTags';
 export * from './edit';
 export * from './documentDate';
+export * from './rewriteStorage';

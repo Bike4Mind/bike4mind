@@ -259,6 +259,7 @@ export const handler = withEventContext(async (event, logger) => {
           {
             db: {
               fabFiles: fabFileRepository,
+              users: userRepository,
               dataLakes: dataLakeRepository,
               adminSettings: adminSettingsRepository,
               scopedSettings: scopedSettingsRepository,
@@ -373,7 +374,7 @@ export const handler = withEventContext(async (event, logger) => {
   } catch (error) {
     if (isStorageLimitError(error) && error.info.errorCode !== 'file_too_large') {
       logger.warn(
-        `Storage limit exceeded for user ${user.id} — summary saved to session but FabFile not created for RAG indexing`
+        `Storage limit exceeded for user ${user.id} - summary saved to session; knowledge file not created or updated for RAG indexing`
       );
     } else {
       throw error;

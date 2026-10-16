@@ -1149,6 +1149,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
 
   /**
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
+   */
+  findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
+   * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
+   * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
+   * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.
+   */
+  commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter?: Record<string, unknown>
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
    * Find a file by its ID and the user's ID.
    * @param id - The ID of the file.
    * @param userId - The ID of the user.
