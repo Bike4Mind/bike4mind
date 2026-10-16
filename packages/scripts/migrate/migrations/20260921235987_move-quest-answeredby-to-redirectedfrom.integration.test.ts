@@ -63,6 +63,28 @@ describe('move-quest-answeredby-to-redirectedfrom migration (real DB)', () => {
     expect(doc?.promptMeta).toEqual({ redirectedFrom: 'original', model: { name: 'final' } });
   });
 
+  it('does not invent a redirectedFrom when a fallback left name equal to answeredBy', async () => {
+    const q3 = newId();
+    await quests().insertOne({
+      _id: q3,
+      promptMeta: { model: { name: 'fallback-model', answeredBy: 'fallback-model' } },
+    });
+
+    await migration.up();
+
+    const doc = await find(q3);
+    expect(doc?.promptMeta).toEqual({ model: { name: 'fallback-model' } });
+  });
+
+  it('leaves a null answeredBy untouched', async () => {
+    const q4 = { _id: newId(), promptMeta: { model: { name: 'gpt-null', answeredBy: null } } };
+    await quests().insertOne(q4);
+
+    await migration.up();
+
+    expect(await find(q4._id)).toEqual(q4);
+  });
+
   it('leaves quests without answeredBy untouched', async () => {
     const plain = { _id: newId(), promptMeta: { model: { name: 'gpt-x' } } };
     const noMeta = { _id: newId() };
