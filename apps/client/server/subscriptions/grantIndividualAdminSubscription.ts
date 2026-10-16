@@ -27,8 +27,8 @@ export type GrantIndividualAdminSubscriptionResult =
  * The already-active check is a plain read before the transaction, so concurrent callers can race;
  * `creditTransactionId` is what keeps the credits from double-applying.
  *
- * - `skipIfAnyActiveIndividual`: also report `already_active` when the user has an active
- *   individual subscription for ANY price (Stripe or admin grant), so an automated grant never
+ * - `skipIfAnyActiveIndividual`: also report `already_active` when the user has a non-terminal
+ *   (e.g. active, trialing, past_due) individual subscription for ANY price (Stripe or admin grant), so an automated grant never
  *   stacks a second plan. The admin route leaves it off and keeps its per-price check.
  * - `creditTransactionId`: stable id forwarded to `addCredits` as `transactionId` (idempotency key).
  */
@@ -47,12 +47,15 @@ export async function grantIndividualAdminSubscription(params: {
   const planDetail = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
   if (!planDetail) return { status: 'unknown_plan' };
 
-  // Both queries are active-only.
+  // Per-price check is active-only; the any-price check covers every non-terminal status.
   const existingSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, userId);
   if (existingSubscription) return { status: 'already_active' };
   if (skipIfAnyActiveIndividual) {
-    const activeSubscriptions = await subscriptionRepository.findActiveUserSubscriptions(userId);
-    if (activeSubscriptions.length > 0) return { status: 'already_active' };
+    const nonTerminalSubscriptions = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+      SubscriptionOwnerType.User,
+      userId
+    );
+    if (nonTerminalSubscriptions.length > 0) return { status: 'already_active' };
   }
 
   const now = dayjs();

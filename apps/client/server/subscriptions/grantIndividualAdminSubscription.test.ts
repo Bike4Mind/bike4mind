@@ -14,12 +14,12 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockCreate = vi.fn();
 const mockFindByPriceId = vi.fn();
-const mockFindActiveUserSubs = vi.fn();
+const mockFindNonTerminalSubs = vi.fn();
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockCreate(...a),
     findUserSubscriptionByPriceId: (...a: unknown[]) => mockFindByPriceId(...a),
-    findActiveUserSubscriptions: (...a: unknown[]) => mockFindActiveUserSubs(...a),
+    findNonTerminalSubscriptionsByOwner: (...a: unknown[]) => mockFindNonTerminalSubs(...a),
   },
 }));
 
@@ -41,7 +41,7 @@ describe('grantIndividualAdminSubscription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindByPriceId.mockResolvedValue(null);
-    mockFindActiveUserSubs.mockResolvedValue([]);
+    mockFindNonTerminalSubs.mockResolvedValue([]);
     mockCreate.mockResolvedValue({ id: 'sub-1' });
     mockAddCredits.mockResolvedValue({ currentCredits: 500 });
   });
@@ -105,14 +105,14 @@ describe('grantIndividualAdminSubscription', () => {
   });
 
   it('ignores other active plans by default (the admin route keeps its per-price check)', async () => {
-    mockFindActiveUserSubs.mockResolvedValue([{ priceId: 'price_other', status: 'active' }]);
+    mockFindNonTerminalSubs.mockResolvedValue([{ priceId: 'price_other', status: 'active' }]);
 
     expect((await grantIndividualAdminSubscription(params)).status).toBe('granted');
-    expect(mockFindActiveUserSubs).not.toHaveBeenCalled();
+    expect(mockFindNonTerminalSubs).not.toHaveBeenCalled();
   });
 
   it('with skipIfAnyActiveIndividual, reports already_active for an active subscription on any price', async () => {
-    mockFindActiveUserSubs.mockResolvedValue([{ priceId: 'price_other', status: 'active' }]);
+    mockFindNonTerminalSubs.mockResolvedValue([{ priceId: 'price_other', status: 'active' }]);
 
     expect(await grantIndividualAdminSubscription({ ...params, skipIfAnyActiveIndividual: true })).toEqual({
       status: 'already_active',
@@ -120,6 +120,19 @@ describe('grantIndividualAdminSubscription', () => {
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
+
+  it.each(['trialing', 'past_due'])(
+    'with skipIfAnyActiveIndividual, reports already_active for a %s subscription',
+    async status => {
+      mockFindNonTerminalSubs.mockResolvedValue([{ priceId: 'price_other', status }]);
+
+      expect(await grantIndividualAdminSubscription({ ...params, skipIfAnyActiveIndividual: true })).toEqual({
+        status: 'already_active',
+      });
+      expect(mockFindNonTerminalSubs).toHaveBeenCalledWith(SubscriptionOwnerType.User, params.userId);
+      expect(mockCreate).not.toHaveBeenCalled();
+    }
+  );
 
   it('reports unknown_plan without writing anything', async () => {
     expect(await grantIndividualAdminSubscription({ ...params, priceId: 'price_nope' })).toEqual({
