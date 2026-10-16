@@ -84,6 +84,12 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/sessionDisabledTools: mcpSessionDisabledTools\(\s*sessionDeniedTools\(session\),/);
   });
 
+  // The Lattice opt-in pool is granted from a subagent's own `allowedTools`, bypassing the parent's
+  // `enabledTools` filter, so the session denials have to be applied to it on their own.
+  it('filters both subagent Lattice opt-in pools by the session denials', () => {
+    expect(source.match(/buildSubagentLatticeToolPool\([^)]*sessionDeniedTools\(session\)/g)).toHaveLength(2);
+  });
+
   it('gates the profile tool resolution on whether the connection has an approver', () => {
     expect(source).toMatch(
       /resolveInvocationEnabledTools\(\{[^}]*hasApprover: hasApprover\(execution\.connectionId\),/

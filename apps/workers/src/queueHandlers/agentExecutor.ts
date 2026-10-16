@@ -1913,11 +1913,15 @@ async function processExecution(
     // even when the parent run didn't enable it — and Lattice never leaks into the
     // parent's own toolbelt because this pool is kept out of `tools`. See
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
+    //
+    // The pool is granted from a subagent's own `allowedTools`, so it never passes through this
+    // run's `enabledTools` filter above - the session denials have to travel with it.
     const subagentLatticeTools = buildSubagentLatticeToolPool(
       toolDeps,
       toolCallbacks,
       subagentToolConfig,
-      toolAvailability
+      toolAvailability,
+      sessionDeniedTools(session)
     );
 
     // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
@@ -3657,7 +3661,8 @@ async function processSubagentDispatch(
       toolDeps,
       toolCallbacks,
       subagentToolConfig,
-      toolAvailability
+      toolAvailability,
+      [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])]
     );
 
     // Created here rather than alongside its watchdog below because the tools built on the next
