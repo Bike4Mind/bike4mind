@@ -3,7 +3,7 @@ import {
   IMcpConnectionRepository,
   IMcpConnectionSummary,
   IMcpConnectionTool,
-  IMcpConnectionLastError,
+  McpConnectionLastErrorInput,
   IMongoDocument,
   McpConnectionOwner,
   McpConnectionProtectedFieldError,
@@ -18,6 +18,7 @@ import {
   RepositoryUpdateOptions,
   MCP_API_KEY_SCHEMES,
   MCP_CONNECTION_AUTH_KINDS,
+  MCP_CONNECTION_ERROR_CODES,
   MCP_CONNECTION_OWNER_TYPES,
   MCP_CONNECTION_SECRET_PATHS,
   MCP_CONNECTION_SLUG_PATTERN,
@@ -134,7 +135,7 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     lastError: {
       type: new Schema(
         {
-          code: String,
+          code: { type: String, enum: MCP_CONNECTION_ERROR_CODES, required: true },
           message: { type: String, maxlength: MCP_CONNECTION_LIMITS.lastErrorMessageLength },
           at: Date,
           requiredScope: { type: String, maxlength: MCP_CONNECTION_LIMITS.requiredScopeLength },
@@ -434,12 +435,20 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  /** `connected` clears `lastError`; any other status records it when given. */
+  setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
+  setStatus(
+    id: string,
+    status: 'error' | 'needs_reconnect',
+    lastError: McpConnectionLastErrorInput
+  ): Promise<IMcpConnectionDocument | null>;
   async setStatus(
     id: string,
     status: McpConnectionStatus,
-    lastError?: Omit<IMcpConnectionLastError, 'at'>
+    lastError?: McpConnectionLastErrorInput
   ): Promise<IMcpConnectionDocument | null> {
+    if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
+      throw new Error(`setStatus(${status}) requires a lastError`);
+    }
     const update =
       status === 'connected'
         ? { $set: { status }, $unset: { lastError: 1 } }
@@ -457,7 +466,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
                 : {}),
             },
           };
-    const result = await this.model.findByIdAndUpdate(id, update, { new: true });
+    const result = await this.model.findByIdAndUpdate(id, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
   }
 

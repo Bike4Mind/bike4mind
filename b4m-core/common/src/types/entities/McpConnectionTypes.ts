@@ -129,8 +129,27 @@ export interface IMcpConnectionTool {
 /** Without the input schema: what the manage list, org views and sweeps read. */
 export type IMcpConnectionToolSummary = Omit<IMcpConnectionTool, 'inputSchema'>;
 
+/**
+ * `RemoteMcpErrorCode` from `@bike4mind/mcp` (b4m-core/mcp/src/remote/errors.ts, which asserts at
+ * compile time that its codes stay a subset of this list) plus the codes the app tier adds.
+ */
+export const MCP_CONNECTION_ERROR_CODES = [
+  'invalid_url',
+  'ssrf_blocked',
+  'timeout',
+  'auth_required',
+  'auth_failed',
+  'protocol',
+  'size_cap',
+  'upstream_5xx',
+  'policy_blocked',
+  'invalid_grant',
+  'insufficient_scope',
+] as const;
+export type McpConnectionErrorCode = (typeof MCP_CONNECTION_ERROR_CODES)[number];
+
 export interface IMcpConnectionLastError {
-  code: string;
+  code: McpConnectionErrorCode;
   message: string;
   at: Date;
   /** Scope a 403 `insufficient_scope` asked for; reconnecting requests it (step-up). */
@@ -402,6 +421,8 @@ export function isValidMcpConnectionSlug(slug: string): boolean {
   return McpConnectionSlugSchema.safeParse(slug).success;
 }
 
+export type McpConnectionLastErrorInput = Omit<IMcpConnectionLastError, 'at'>;
+
 export interface McpConnectionOwner {
   ownerType: McpConnectionOwnerType;
   ownerKey: string;
@@ -493,10 +514,13 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * overwriting the review choices that discovery merged.
    */
   updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
+  /** `connected` clears any stale `lastError`; `pending_auth` leaves it as the reason to reconnect. */
+  setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
+  /** A failure status always records why. */
   setStatus(
     id: string,
-    status: McpConnectionStatus,
-    lastError?: Omit<IMcpConnectionLastError, 'at'>
+    status: 'error' | 'needs_reconnect',
+    lastError: McpConnectionLastErrorInput
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.

@@ -452,6 +452,20 @@ describe('McpConnectionModel', () => {
       ).rejects.toThrow(/status/);
     });
 
+    it('setStatus requires a lastError for a failure status and refuses an unknown code', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const setStatus = mcpConnectionRepository.setStatus.bind(mcpConnectionRepository) as (
+        id: string,
+        status: string,
+        lastError?: { code: string; message: string }
+      ) => Promise<unknown>;
+
+      await expect(setStatus(created.id, 'error')).rejects.toThrow(/requires a lastError/);
+      await expect(setStatus(created.id, 'needs_reconnect')).rejects.toThrow(/requires a lastError/);
+      await expect(setStatus(created.id, 'error', { code: 'kaboom', message: 'x' })).rejects.toThrow(/code/);
+      expect((await mcpConnectionRepository.findById(created.id))?.status).toBe('connected');
+    });
+
     it('setStatus records lastError and clears it on connected', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const failed = await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', {
