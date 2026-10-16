@@ -15,7 +15,7 @@ import type { Connections } from './galleryModel';
  * Whether the viewer has connected each integration, read from the same sources the
  * Profile > Integrations tab reads (the user document, the GitHub status probe, the MCP
  * server list, the blog-integration query). Integrations with no per-user connection
- * (Google Calendar, history import, Claude Code, MCP via CLI) are simply absent.
+ * (history import, Claude Code, MCP via CLI) are simply absent.
  */
 export function useIntegrationConnections(): Connections {
   const currentUser = useUser(s => s.currentUser);

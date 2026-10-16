@@ -106,7 +106,6 @@ export const INTEGRATION_LOGO_KEYS = [
   'jupyter',
   'blog',
   'history-import',
-  'google-calendar',
   'okta',
   'claude-code',
   'mcp-cli',

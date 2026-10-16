@@ -416,12 +416,6 @@ export const SettingKeySchema = z.enum([
   'lowCreditsThreshold',
   'syntheticUserEmailDomains',
 
-  // GOOGLE CALENDAR SETTINGS
-  'enableGoogleCalendar',
-  'googleCalendarServiceAccountEmail',
-  'googleCalendarServiceAccountSecret',
-  'googleCalendarOrganizerEmail',
-
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
   'WeatherUnits',
@@ -749,7 +743,6 @@ export const CategoryOrder = [
   'Communications',
   'Slack',
   'Tools',
-  'Calendar',
 ] as const;
 
 export type Category = (typeof CategoryOrder)[number];
@@ -793,7 +786,7 @@ export const SETTING_TABS = {
     id: 'externalIntegrations',
     name: 'External Integrations',
     description: 'Configure external service integrations',
-    categories: ['Tools', 'Calendar', 'Slack'] as Category[],
+    categories: ['Tools', 'Slack'] as Category[],
     icon: 'Extension', // Puzzle piece icon
   },
   FEATURES: {
@@ -1829,18 +1822,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'WolframAlphaKey', order: 4 },
       { key: 'FmpApiKey', order: 5 },
       { key: 'PotionQuestApiKey', order: 6 },
-    ],
-  },
-  CALENDAR: {
-    id: 'calendarAPIService',
-    name: 'Google Calendar',
-    description: 'Google Calendar integration settings',
-    icon: 'CalendarMonth',
-    settings: [
-      { key: 'enableGoogleCalendar', order: 1 },
-      { key: 'googleCalendarServiceAccountEmail', order: 2 },
-      { key: 'googleCalendarServiceAccountSecret', order: 3 },
-      { key: 'googleCalendarOrganizerEmail', order: 4 },
     ],
   },
   FEEDBACK: {
@@ -3266,45 +3247,6 @@ export const settingsMap = {
     defaultValue: 20,
     description: 'The default number of seats for new organizations.',
     category: 'Users',
-  }),
-  enableGoogleCalendar: makeBooleanSetting({
-    key: 'enableGoogleCalendar',
-    name: 'Enable Google Calendar Integration',
-    defaultValue: false,
-    description: 'Whether to enable scheduling of briefing/advisory using google calendar',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 1,
-    // The Integrations page derives the Google Calendar card's status from it.
-    userReadable: true,
-  }),
-  googleCalendarServiceAccountEmail: makeStringSetting({
-    key: 'googleCalendarServiceAccountEmail',
-    name: 'Service Account Email',
-    defaultValue: '',
-    description: 'The service account email address that has access to google calendar API.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 2,
-  }),
-  googleCalendarServiceAccountSecret: makeStringSetting({
-    key: 'googleCalendarServiceAccountSecret',
-    name: 'Service Account Secret',
-    defaultValue: '',
-    description: 'The base64 encoded service account secret that is associated with the service account email.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 3,
-    isSensitive: true,
-  }),
-  googleCalendarOrganizerEmail: makeStringSetting({
-    key: 'googleCalendarOrganizerEmail',
-    name: 'Organizer Email',
-    defaultValue: '',
-    description: 'The organizer email for creating events.',
-    category: 'Calendar',
-    group: API_SERVICE_GROUPS.CALENDAR.id,
-    order: 4,
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',

@@ -51,7 +51,7 @@ describe('groupIntegrations', () => {
   it('files a flagged-off entry under the roadmap for a non-admin', () => {
     const groups = groupIntegrations(deriveGallery(viewer({ flags: [] }), {}));
     expect(ids(groups.find(g => g.key === 'coming-soon')!.rows)).toEqual(
-      expect.arrayContaining(['notion', 'linkedin', 'google-calendar', 'hubspot'])
+      expect.arrayContaining(['notion', 'linkedin', 'hubspot'])
     );
   });
 });
@@ -83,7 +83,6 @@ describe('filterIntegrations', () => {
 
 describe('counts', () => {
   it('counts live entries, models and the roadmap for the count line', () => {
-    // Google Calendar's flag is off for this viewer, so it joins the 18 planned entries.
     const counts = galleryCounts(deriveGallery(viewer(), {}));
     expect(counts).toEqual({ integrations: 12, models: MODEL_PROVIDERS.length, roadmap: 19 });
     expect(countLine(counts)).toBe(`12 integrations, ${MODEL_PROVIDERS.length} models, 19 on the roadmap`);
