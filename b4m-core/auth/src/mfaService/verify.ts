@@ -1,5 +1,6 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import { verifyTOTPToken, verifyBackupCode, clearFailedAttempts } from './utils';
+import { verifyBackupCode, clearFailedAttempts } from './utils';
+import { claimTOTPCode, MfaAttemptRejectedError, reserveMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface VerifyMFARequest {
   user: IUserDocument;
@@ -13,33 +14,27 @@ export interface VerifyMFAResponse {
 }
 
 /**
- * Verify MFA token (TOTP or backup code) for a user during login
+ * Verify MFA token (TOTP or backup code) for a user during login. The attempt is counted toward
+ * the lockout before the code is compared; a refusal throws MfaAttemptRejectedError.
  */
 export async function verifyMFA(
   { user, token }: VerifyMFARequest,
-  userRepository: Pick<IUserRepository, 'update'>
+  userRepository: Pick<IUserRepository, 'update'> & MfaAttemptRepository
 ): Promise<VerifyMFAResponse> {
   if (!user.mfa || !user.mfa.totpEnabled) {
     throw new Error('MFA is not enabled for this user.');
   }
 
+  const attemptState = await reserveMfaAttempt(user.id, userRepository);
+
   let usedBackupCode: string | undefined;
-  let isValid = false;
-
-  // Try TOTP first
-  if (verifyTOTPToken(user.mfa.totpSecret, token)) {
-    isValid = true;
-  } else {
-    // Try backup codes
+  const totpStep = await claimTOTPCode(user.id, user.mfa.totpSecret, token, userRepository);
+  if (totpStep === null) {
     const backupResult = verifyBackupCode(user.mfa.backupCodes, token);
-    if (backupResult.isValid) {
-      isValid = true;
-      usedBackupCode = backupResult.usedBackupCode;
+    if (!backupResult.isValid) {
+      throw new MfaAttemptRejectedError('Invalid TOTP or backup code.', attemptState);
     }
-  }
-
-  if (!isValid) {
-    throw new Error('Invalid TOTP or backup code.');
+    usedBackupCode = backupResult.usedBackupCode;
   }
 
   // Build the write from `user` (loaded via findByIdWithMfaSecrets, so it carries the
@@ -49,6 +44,8 @@ export async function verifyMFA(
   // omit - and thus `$set`-replace-wipe - the plaintext secrets, permanently bricking MFA.
   const updatedMFA = clearFailedAttempts(user.mfa);
   updatedMFA.lastUsedAt = new Date();
+  // This write replaces the whole subdocument, so it must carry the step just claimed.
+  if (totpStep !== null) updatedMFA.lastTotpStep = totpStep;
 
   // Remove used backup code if applicable
   if (usedBackupCode) {

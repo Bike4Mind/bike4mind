@@ -104,10 +104,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
           user: redactUserSecretsForSelf(result.user),
         };
       } catch (error: unknown) {
-        // Atomically increment the failed-attempt counter (mirrors mfa/verify.ts) - a
-        // read-modify-write lets concurrent requests each read the same count and all write
-        // count+1, letting an attacker batch requests to defeat the 3-strike lockout.
-        const updatedUser = await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
+        // A rejected code was already counted, atomically and before it was compared (see
+        // mfaService.reserveMfaAttempt); any other failure here is counted now.
+        const updatedUser =
+          error instanceof mfaService.MfaAttemptRejectedError
+            ? error.attemptState
+            : await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
 
         if (updatedUser && mfaService.isUserLockedOut(updatedUser)) {
           const remainingMinutes = mfaService.getLockoutTimeRemaining(updatedUser);

@@ -36,8 +36,11 @@ const mockStartRegistration = vi.fn();
 const mockVerifyTOTP = vi.fn();
 vi.mock('@bike4mind/services', async () => {
   const { MFA_MAX_FAILED_ATTEMPTS } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  const { MfaAttemptRejectedError } =
+    await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     mfaService: {
+      MfaAttemptRejectedError,
       resolvePasskeyRelyingParty: () => RP,
       finishPasskeyAuthentication: (...a: any[]) => mockFinishAuthentication(...a),
       finishPasskeyRegistration: (...a: any[]) => mockFinishRegistration(...a),

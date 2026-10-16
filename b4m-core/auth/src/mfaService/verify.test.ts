@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
 import { verifyMFA } from './verify';
+import { MfaAttemptRejectedError } from './attempt';
 import { hashBackupCode } from './utils';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -21,8 +22,21 @@ const makeUser = (mfaOverride: Record<string, unknown> = {}): IUserDocument =>
     },
   }) as unknown as IUserDocument;
 
-// update echoes back the merged user so verifyMFA can return it
-const makeRepo = () => ({ update: vi.fn(async (u: unknown) => u as IUserDocument) });
+const reservedUser = { id: 'user-1', mfa: { failedAttempts: 1 } } as unknown as IUserDocument;
+const lockedUser = {
+  id: 'user-1',
+  mfa: { failedAttempts: 3, lockedUntil: new Date(Date.now() + 60_000) },
+} as unknown as IUserDocument;
+
+// update echoes back the merged user so verifyMFA can return it. Reserve/claim default to success.
+const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean } = {}) => {
+  const { reserved = true, claimed = true } = overrides;
+  return {
+    update: vi.fn(async (u: unknown) => u as IUserDocument),
+    atomicReserveMfaAttempt: vi.fn(async () => ({ reserved, user: reserved ? reservedUser : lockedUser })),
+    atomicClaimTotpStep: vi.fn(async () => claimed),
+  };
+};
 
 const currentToken = () => speakeasy.totp({ secret: SECRET, encoding: 'base32' });
 
@@ -36,6 +50,72 @@ describe('verifyMFA', () => {
   it('rejects an invalid code', async () => {
     // 'badtok' is neither a valid TOTP (non-numeric) nor a stored backup code.
     await expect(verifyMFA({ user: makeUser(), token: 'badtok' }, makeRepo())).rejects.toThrow(/Invalid/);
+  });
+
+  it('rejects an invalid code with MfaAttemptRejectedError carrying the reserved user, and never writes', async () => {
+    const repo = makeRepo();
+    const error = await verifyMFA({ user: makeUser(), token: 'badtok' }, repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+    expect(repo.atomicClaimTotpStep).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('reserves the attempt before comparing the code', async () => {
+    const repo = makeRepo();
+    await verifyMFA({ user: makeUser(), token: currentToken() }, repo);
+    expect(repo.atomicReserveMfaAttempt).toHaveBeenCalledWith('user-1');
+    expect(repo.atomicReserveMfaAttempt.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.atomicClaimTotpStep.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('throws MfaAttemptRejectedError with the locked user, and never claims or updates, when locked out', async () => {
+    const repo = makeRepo({ reserved: false });
+    const error = await verifyMFA({ user: makeUser(), token: currentToken() }, repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(lockedUser);
+    expect(repo.atomicClaimTotpStep).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('locked out: a valid backup code is not accepted either', async () => {
+    const repo = makeRepo({ reserved: false });
+    await expect(verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo)).rejects.toBeInstanceOf(
+      MfaAttemptRejectedError
+    );
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('treats a replayed TOTP step as invalid', async () => {
+    const repo = makeRepo({ claimed: false });
+    const error = await verifyMFA({ user: makeUser(), token: currentToken() }, repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('falls through to a backup code when the TOTP step was already claimed', async () => {
+    const repo = makeRepo({ claimed: false });
+    const result = await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo);
+    expect(result.usedBackupCode).toBe(hashBackupCode('ABCDE12345'));
+    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.mfa!.lastTotpStep).toBeUndefined();
+  });
+
+  it('writes the claimed step as lastTotpStep on TOTP success', async () => {
+    const repo = makeRepo();
+    await verifyMFA({ user: makeUser(), token: currentToken() }, repo);
+    const claimedStep = repo.atomicClaimTotpStep.mock.calls[0][1] as number;
+    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.mfa!.lastTotpStep).toBe(claimedStep);
+  });
+
+  it('does not write lastTotpStep on backup-code success', async () => {
+    const repo = makeRepo();
+    await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo);
+    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.mfa!.lastTotpStep).toBeUndefined();
   });
 
   it('accepts a backup code (case-insensitive) and consumes it', async () => {

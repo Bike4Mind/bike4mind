@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { InternalServerError } from '@bike4mind/common';
+import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
 
 const { mockFindWithSecrets, mockRecordFailed, mockVerifyMFA, mockCompleteMfaLogin } = vi.hoisted(() => ({
   mockFindWithSecrets: vi.fn(),
@@ -22,14 +23,19 @@ vi.mock('@bike4mind/database', () => ({
     atomicRecordMfaFailedAttempt: (...a: unknown[]) => mockRecordFailed(...a),
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  mfaService: {
-    verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
-    isUserLockedOut: () => false,
-    getLockoutTimeRemaining: () => 0,
-    MAX_FAILED_ATTEMPTS: 3,
-  },
-}));
+vi.mock('@bike4mind/services', async () => {
+  const { MfaAttemptRejectedError } =
+    await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
+  return {
+    mfaService: {
+      verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
+      isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) => !!user?.mfa?.lockedUntil,
+      getLockoutTimeRemaining: () => 15,
+      MfaAttemptRejectedError,
+      MAX_FAILED_ATTEMPTS: 3,
+    },
+  };
+});
 vi.mock('@server/auth/completeMfaLogin', () => ({
   completeMfaLogin: (...a: unknown[]) => mockCompleteMfaLogin(...a),
 }));
@@ -71,6 +77,31 @@ describe('POST /api/auth/mfa/verify - response boundary', () => {
     expect(mockCompleteMfaLogin).toHaveBeenCalled();
     expect(mockRecordFailed).not.toHaveBeenCalled();
     expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('responds from attemptState for a rejected code and does not book the attempt again', async () => {
+    mockVerifyMFA.mockRejectedValue(
+      new MfaAttemptRejectedError('Invalid TOTP or backup code.', { id: 'u1', mfa: { failedAttempts: 1 } } as never)
+    );
+    const { res, promise } = run();
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 2 });
+    expect(mockRecordFailed).not.toHaveBeenCalled();
+  });
+
+  it('answers 423 from attemptState when the rejection came from an active lockout', async () => {
+    const lockedUntil = new Date(Date.now() + 60_000);
+    mockVerifyMFA.mockRejectedValue(
+      new MfaAttemptRejectedError('Too many failed attempts.', {
+        id: 'u1',
+        mfa: { failedAttempts: 3, lockedUntil },
+      } as never)
+    );
+    const { res, promise } = run();
+    await promise;
+    expect(res._getStatusCode()).toBe(423);
+    expect(mockRecordFailed).not.toHaveBeenCalled();
   });
 
   it('still books a failed attempt when the MFA check itself fails', async () => {

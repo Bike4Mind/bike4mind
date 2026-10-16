@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { clearFailedAttempts, userHasMFAConfigured } from './utils';
+import speakeasy from 'speakeasy';
+import { clearFailedAttempts, matchTOTPStep, userHasMFAConfigured } from './utils';
 import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
 const user = (mfa: unknown) => ({ mfa }) as unknown as IUserDocument;
@@ -39,5 +40,35 @@ describe('clearFailedAttempts', () => {
     expect(result.totpSecret).toBe('SECRET');
     expect(result.backupCodes).toEqual(['h1', 'h2']);
     expect(mfa.failedAttempts).toBe(3);
+  });
+});
+
+describe('matchTOTPStep', () => {
+  const secret = speakeasy.generateSecret().base32;
+  // Mid-step instant so +/-1 second never crosses a step boundary.
+  const nowMs = 1_700_000_015_000;
+  const currentStep = Math.floor(nowMs / 1000 / 30);
+  const codeAt = (offsetSeconds: number) =>
+    speakeasy.totp({ secret, encoding: 'base32', time: Math.floor(nowMs / 1000) + offsetSeconds });
+
+  it('returns the current step for a fresh code', () => {
+    expect(matchTOTPStep(secret, codeAt(0), 1, nowMs)).toBe(currentStep);
+  });
+
+  it('returns the previous step for a code from 30s ago', () => {
+    expect(matchTOTPStep(secret, codeAt(-30), 1, nowMs)).toBe(currentStep - 1);
+  });
+
+  it('returns the next step for a code 30s ahead (clock drift)', () => {
+    expect(matchTOTPStep(secret, codeAt(30), 1, nowMs)).toBe(currentStep + 1);
+  });
+
+  it('returns null for a wrong code', () => {
+    const wrong = codeAt(0) === '000000' ? '000001' : '000000';
+    expect(matchTOTPStep(secret, wrong, 1, nowMs)).toBeNull();
+  });
+
+  it('returns null for a code 2 steps old', () => {
+    expect(matchTOTPStep(secret, codeAt(-60), 1, nowMs)).toBeNull();
   });
 });

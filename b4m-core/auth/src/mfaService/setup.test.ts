@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import speakeasy from 'speakeasy';
 import { verifyMFASetup } from './setup';
+import { MfaAttemptRejectedError } from './attempt';
 import { hashBackupCode } from './utils';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -22,8 +23,21 @@ const makePendingUser = (mfaOverride: Record<string, unknown> = {}): IUserDocume
     },
   }) as unknown as IUserDocument;
 
-// update echoes back its argument so the service can return it.
-const makeRepo = () => ({ update: vi.fn(async (u: unknown) => u as IUserDocument) });
+const reservedUser = { id: 'user-1', mfa: { failedAttempts: 1 } } as unknown as IUserDocument;
+const lockedUser = {
+  id: 'user-1',
+  mfa: { failedAttempts: 3, lockedUntil: new Date(Date.now() + 60_000) },
+} as unknown as IUserDocument;
+
+// update echoes back its argument so the service can return it. Reserve/claim default to success.
+const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean } = {}) => {
+  const { reserved = true, claimed = true } = overrides;
+  return {
+    update: vi.fn(async (u: unknown) => u as IUserDocument),
+    atomicReserveMfaAttempt: vi.fn(async () => ({ reserved, user: reserved ? reservedUser : lockedUser })),
+    atomicClaimTotpStep: vi.fn(async () => claimed),
+  };
+};
 
 const currentToken = () => speakeasy.totp({ secret: SECRET, encoding: 'base32' });
 
@@ -35,6 +49,48 @@ describe('verifyMFASetup', () => {
 
   it('rejects an invalid TOTP code without enabling MFA', async () => {
     await expect(verifyMFASetup(makePendingUser(), '000000', makeRepo())).rejects.toThrow(/Invalid/);
+  });
+
+  it('rejects an invalid code with MfaAttemptRejectedError carrying the reserved user', async () => {
+    const repo = makeRepo();
+    const error = await verifyMFASetup(makePendingUser(), '000000', repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('reserves the attempt before claiming the code', async () => {
+    const repo = makeRepo();
+    await verifyMFASetup(makePendingUser(), currentToken(), repo);
+    expect(repo.atomicReserveMfaAttempt).toHaveBeenCalledWith('user-1');
+    expect(repo.atomicReserveMfaAttempt.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.atomicClaimTotpStep.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('throws MfaAttemptRejectedError with the locked user, and never claims or updates, when locked out', async () => {
+    const repo = makeRepo({ reserved: false });
+    const error = await verifyMFASetup(makePendingUser(), currentToken(), repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(lockedUser);
+    expect(repo.atomicClaimTotpStep).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a replayed TOTP step with the reserved user as attemptState', async () => {
+    const repo = makeRepo({ claimed: false });
+    const error = await verifyMFASetup(makePendingUser(), currentToken(), repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('writes the claimed step as lastTotpStep in the enable write', async () => {
+    const repo = makeRepo();
+    await verifyMFASetup(makePendingUser(), currentToken(), repo);
+    const claimedStep = repo.atomicClaimTotpStep.mock.calls[0][1] as number;
+    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.mfa!.lastTotpStep).toBe(claimedStep);
   });
 
   // Regression: enrolling MFA must not lose the secret. The endpoint used to clear failed

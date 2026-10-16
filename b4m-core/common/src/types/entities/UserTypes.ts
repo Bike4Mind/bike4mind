@@ -80,6 +80,8 @@ export interface IMFAConfig {
   failedAttempts?: number;
   lastFailedAttempt?: Date;
   lockedUntil?: Date;
+  /** Last accepted TOTP time step; a code at or below it is rejected as a replay. */
+  lastTotpStep?: number;
 }
 
 /**
@@ -710,6 +712,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByIdWithNotionToken: (id: string) => Promise<IUserDocument | null>;
   findByIdWithMfaSecrets: (id: string) => Promise<IUserDocument | null>;
   atomicRecordMfaFailedAttempt: (userId: string) => Promise<IUserDocument | null>;
+  atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
+  atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the

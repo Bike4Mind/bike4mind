@@ -6,6 +6,7 @@ import {
   userEligibleForMFA,
   clearFailedAttempts,
 } from './utils';
+import { claimTOTPCode, MfaAttemptRejectedError, reserveMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface SetupMFARequest {
   user: IUserDocument;
@@ -77,7 +78,7 @@ export async function setupMFA(
 export async function verifyMFASetup(
   user: IUserDocument,
   token: string,
-  userRepository: Pick<IUserRepository, 'update'>
+  userRepository: Pick<IUserRepository, 'update'> & MfaAttemptRepository
 ): Promise<{ success: boolean; user: IUserDocument }> {
   if (!user.mfa || !user.mfa.totpSecret) {
     throw new Error('No MFA setup in progress for this user.');
@@ -87,11 +88,10 @@ export async function verifyMFASetup(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  // Import the verification function here to avoid circular dependencies
-  const { verifyTOTPToken } = await import('./utils');
-
-  if (!verifyTOTPToken(user.mfa.totpSecret, token)) {
-    throw new Error('Invalid TOTP code.');
+  const attemptState = await reserveMfaAttempt(user.id, userRepository);
+  const totpStep = await claimTOTPCode(user.id, user.mfa.totpSecret, token, userRepository);
+  if (totpStep === null) {
+    throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
   }
 
   // Enable MFA. `user` came from findByIdWithMfaSecrets and carries the select:false
@@ -102,6 +102,7 @@ export async function verifyMFASetup(
   const updatedMFA = clearFailedAttempts(user.mfa);
   updatedMFA.totpEnabled = true;
   updatedMFA.lastUsedAt = new Date();
+  updatedMFA.lastTotpStep = totpStep;
 
   const updatedUser = await userRepository.update({
     id: user.id,

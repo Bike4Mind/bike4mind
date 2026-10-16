@@ -13,7 +13,8 @@ type LoginAsParameters = z.infer<typeof loginAsSchema>;
 
 type LoginAsAdapters = {
   db: {
-    users: Pick<IUserRepository, 'findById' | 'findByIdWithMfaSecrets' | 'update' | 'atomicRecordMfaFailedAttempt'>;
+    users: Pick<IUserRepository, 'findById' | 'findByIdWithMfaSecrets' | 'update' | 'atomicRecordMfaFailedAttempt'> &
+      mfaService.MfaAttemptRepository;
   };
   notify: {
     send: (targetUser: IUserDocument) => Promise<void>;
@@ -55,11 +56,13 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   // return value) would wipe the admin's select:false MFA secrets.
   try {
     await mfaService.verifyMFA({ user: freshAdmin, token: mfaToken }, db.users);
-  } catch {
-    // Atomically record the failed attempt (mirrors mfa/verify.ts) - a read-modify-write
-    // lets concurrent requests each read the same count and all write count+1, undercounting
-    // failures and defeating the 3-strike lockout.
-    const updatedAdmin = await db.users.atomicRecordMfaFailedAttempt(freshAdmin.id);
+  } catch (error) {
+    // A rejected code was already counted, atomically and before it was compared (see
+    // mfaService.reserveMfaAttempt); any other failure here is counted now.
+    const updatedAdmin =
+      error instanceof mfaService.MfaAttemptRejectedError
+        ? error.attemptState
+        : await db.users.atomicRecordMfaFailedAttempt(freshAdmin.id);
 
     if (updatedAdmin && mfaService.isUserLockedOut(updatedAdmin)) {
       throw new ForbiddenError('MFA locked — too many failed attempts');
