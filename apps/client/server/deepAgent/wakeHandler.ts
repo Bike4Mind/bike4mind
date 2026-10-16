@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
+import { ForbiddenError } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   createReActRunAct,
@@ -17,7 +18,13 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from './missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from './resolveBackend';
-import { isInsufficientCredits, missionWakeMeter, pauseMissionForCredits } from './wakeMetering';
+import {
+  isInsufficientCredits,
+  MISSION_MODEL_REFUSED_BLOCKER,
+  MISSION_NEEDS_CREDITS_BLOCKER,
+  missionWakeMeter,
+  pauseMission,
+} from './wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
 
 /**
@@ -110,8 +117,14 @@ export async function processWake(
   try {
     outcome = await runWakeCycle(payload.agentId, deps);
   } catch (err) {
-    if (!isInsufficientCredits(err)) throw err;
-    await pauseMissionForCredits(deps.store, payload.agentId, logger);
+    // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
+    const blocker = isInsufficientCredits(err)
+      ? MISSION_NEEDS_CREDITS_BLOCKER
+      : err instanceof ForbiddenError
+        ? MISSION_MODEL_REFUSED_BLOCKER
+        : null;
+    if (!blocker) throw err;
+    await pauseMission(deps.store, payload.agentId, blocker, logger);
     return;
   }
   // Mission log: fire-and-forget - never fails the wake.

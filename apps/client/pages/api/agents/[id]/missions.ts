@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { agentRepository } from '@bike4mind/database';
+import { agentRepository, userRepository } from '@bike4mind/database';
+import type { IUserDocument } from '@bike4mind/common';
+import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -98,6 +100,10 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     if (denial === 'forbidden') {
       return res.status(403).json({ error: "You don't have permission to create missions for this agent" });
     }
+
+    // Refuse before enrolling: a first wake refused for credits would leave an orphan charter behind.
+    const owner = agent!.userId && agent!.userId !== userId ? await userRepository.findById(agent!.userId) : req.user!;
+    if (owner) await assertOwnerCanAfford(owner as IUserDocument);
 
     const logger = new Logger({ metadata: { component: 'agent-missions', b4mAgentId } });
     const t0 = Date.now();

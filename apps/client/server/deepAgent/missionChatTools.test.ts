@@ -4,6 +4,7 @@ const m = vi.hoisted(() => ({
   findAgentsByName: vi.fn(),
   enrollMissionForAgent: vi.fn(),
   runMissionFirstWake: vi.fn(),
+  assertOwnerCanAfford: vi.fn(),
 }));
 
 vi.mock('./missions', () => ({
@@ -14,7 +15,9 @@ vi.mock('./missions', () => ({
 }));
 vi.mock('./store', () => ({ MongoDeepAgentStore: class {} }));
 vi.mock('./firstWake', () => ({ runMissionFirstWake: m.runMissionFirstWake }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford: m.assertOwnerCanAfford }));
 
+import { insufficientCreditsError } from '@bike4mind/common';
 import { missionChatTools } from './missionChatTools';
 
 const run = (user: { id: string; isAdmin?: boolean; tags?: string[] }) =>
@@ -33,6 +36,14 @@ describe('create_mission chat tool', () => {
   it('refuses a caller who is neither admin nor developer, before enrolling or waking', async () => {
     const reply = await run({ id: 'u1', tags: [] });
     expect(reply).toMatch(/admins and developers only/);
+    expect(m.enrollMissionForAgent).not.toHaveBeenCalled();
+    expect(m.runMissionFirstWake).not.toHaveBeenCalled();
+  });
+
+  it('tells an out-of-credits caller no mission started, before enrolling or waking', async () => {
+    m.assertOwnerCanAfford.mockRejectedValueOnce(insufficientCreditsError('Insufficient credits'));
+    const reply = await run({ id: 'u1', tags: ['Developer'] });
+    expect(reply).toMatch(/out of credits/);
     expect(m.enrollMissionForAgent).not.toHaveBeenCalled();
     expect(m.runMissionFirstWake).not.toHaveBeenCalled();
   });

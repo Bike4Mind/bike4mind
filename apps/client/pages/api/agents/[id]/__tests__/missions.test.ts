@@ -28,7 +28,13 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 
 const agentFindById = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database', () => ({ agentRepository: { findById: agentFindById } }));
+const userFindById = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({
+  agentRepository: { findById: agentFindById },
+  userRepository: { findById: userFindById },
+}));
+const assertOwnerCanAfford = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ assertOwnerCanAfford }));
 
 const enrollMissionForAgent = vi.hoisted(() => vi.fn());
 const listMissionsForAgent = vi.hoisted(() => vi.fn());
@@ -188,6 +194,17 @@ describe('POST /api/agents/[id]/missions', () => {
     const { res, run } = invoke('POST', developer);
     await run();
     expect(res._getStatusCode()).toBe(500);
+  });
+
+  it('refuses an out-of-credits agent owner before enrolling, so no orphan mission is left', async () => {
+    agentFindById.mockResolvedValue(SHARED_AGENT);
+    userFindById.mockResolvedValue({ id: 'owner' });
+    assertOwnerCanAfford.mockRejectedValueOnce(Object.assign(new Error('Insufficient credits'), { statusCode: 422 }));
+    const { run } = invoke('POST', { id: 'admin', isAdmin: true });
+    await expect(run()).rejects.toMatchObject({ statusCode: 422 });
+    expect(assertOwnerCanAfford).toHaveBeenCalledWith({ id: 'owner' });
+    expect(enrollMissionForAgent).not.toHaveBeenCalled();
+    expect(runMissionFirstWake).not.toHaveBeenCalled();
   });
 
   it('rejects a shared viewer with 403 before enrolling', async () => {

@@ -6,6 +6,7 @@ import type { DeepAgentStore } from '@bike4mind/agents';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 export const MISSION_NEEDS_CREDITS_BLOCKER = 'needs credits: the mission owner is out of credits';
+export const MISSION_MODEL_REFUSED_BLOCKER = 'model unavailable: the mission model is not available to its owner';
 
 /** Bills each wake LLM call to the mission owner (their org seat when present). */
 export async function missionWakeMeter(
@@ -23,20 +24,23 @@ export async function missionWakeMeter(
 export const isInsufficientCredits = (err: unknown): boolean => getQuestErrorCode(err) === 'insufficient_credits';
 
 /**
- * Stop scheduling a mission whose owner cannot pay for its next wake: clearing the interval clears
- * nextWakeAt, so the wake cron never claims it again, and the blocker shows on the dossier.
+ * Stop scheduling a mission whose next wake cannot run (owner out of credits, model no longer
+ * admitted): clearing the interval clears nextWakeAt, so the wake cron never claims it again, and
+ * the blocker shows on the dossier.
  */
-export async function pauseMissionForCredits(store: DeepAgentStore, agentId: string, logger: Logger): Promise<void> {
+export async function pauseMission(
+  store: DeepAgentStore,
+  agentId: string,
+  blocker: string,
+  logger: Logger
+): Promise<void> {
   const handoff = await store.loadHandoff(agentId);
   if (!handoff) return;
   await store.saveHandoff({
     ...handoff,
     nextWakeIntervalMs: undefined,
-    openBlockers: [
-      ...handoff.openBlockers.filter(b => b !== MISSION_NEEDS_CREDITS_BLOCKER),
-      MISSION_NEEDS_CREDITS_BLOCKER,
-    ],
+    openBlockers: [...handoff.openBlockers.filter(b => b !== blocker), blocker],
     updatedAt: new Date().toISOString(),
   });
-  logger.warn('deep agent wake: paused mission, owner has insufficient credits', { agentId });
+  logger.warn('deep agent wake: paused mission', { agentId, blocker });
 }
