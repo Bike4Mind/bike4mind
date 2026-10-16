@@ -907,7 +907,8 @@ export class AnthropicBackend implements ICompletionBackend {
     const accumReasoningTokens = options._internal?.accumReasoningTokens;
 
     // Running reasoning total plus this turn's count, spread-ready for a CompletionInfo.
-    // Every emit and recursion site uses this so the shape can't drift between them.
+    // Every emit site uses this so the shape can't drift between them. The two tool-loop
+    // handoffs add the turn in directly, since they need the running number itself.
     const reasoningSoFar = (usage: unknown) =>
       reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)));
 
