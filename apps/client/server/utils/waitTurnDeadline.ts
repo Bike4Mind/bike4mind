@@ -1,8 +1,10 @@
 /**
- * Budget for an inline `wait: true` turn (pages/api/chat.ts), counted from the request's start.
- * Must stay below the server Lambda timeout (infra/web.ts, 60s) with room left for
- * WAIT_TURN_WIND_DOWN_MS and the settle + 504 that follow, or the Lambda dies first and the quest
- * is left `running` for questTimeoutSweep. chatContract's description quotes it as about 45s.
+ * Budget for an inline `wait: true` turn (pages/api/chat.ts), counted from handler entry - auth
+ * and rate-limit middleware time is not counted, so the true ceiling is the Lambda timeout minus
+ * that pre-handler time. Must stay below the server Lambda timeout (infra/web.ts, 60s) with room
+ * left for WAIT_TURN_WIND_DOWN_MS and the settle + 504 that follow, or the Lambda dies first and
+ * the quest is left `running` for questTimeoutSweep. chatContract's description quotes it as
+ * about 45s.
  */
 export const WAIT_TURN_BUDGET_MS = 45_000;
 
