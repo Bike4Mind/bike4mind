@@ -157,9 +157,11 @@ export async function saveGeneratedAsset(
 }
 
 function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMetadata {
+  const prompt = generation.prompt.slice(0, MAX_STORED_TEXT_CHARS);
   return {
     ...generation,
-    prompt: generation.prompt.slice(0, MAX_STORED_TEXT_CHARS),
+    prompt,
+    ...(prompt.length < generation.prompt.length && { promptTruncated: true }),
     ...(generation.lyrics !== undefined && { lyrics: generation.lyrics.slice(0, MAX_STORED_TEXT_CHARS) }),
   };
 }

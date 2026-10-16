@@ -42,8 +42,14 @@ const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
 
   const reuseSettings = (reused: GeneratedAssetMetadata) => {
     applySettings(settingsFromGeneration(reused));
-    setText(mode, reused.prompt);
-    toast.success('Settings copied into the form above.');
+    // Saving keeps only a prefix of a long prompt, so restoring it would quietly send a script that
+    // stops mid-sentence - and the user pays for the clip. Settings alone are still worth copying.
+    if (!reused.promptTruncated) setText(mode, reused.prompt);
+    toast.success(
+      reused.promptTruncated
+        ? 'Settings copied. The text was too long to keep, so paste it in again.'
+        : 'Settings copied into the form above.'
+    );
   };
 
   return (

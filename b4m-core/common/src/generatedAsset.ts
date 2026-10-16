@@ -35,6 +35,12 @@ export const GeneratedAssetMetadataSchema = z.object({
   /** Set for job-backed generations; the save is idempotent per job. */
   jobId: z.string().optional(),
   prompt: z.string(),
+  /**
+   * Storing caps `prompt` at a prefix of what was generated (sourceMetadata rides every metadata-only
+   * listing). Set when that happened, so a surface that lets the user reuse the text can tell it is
+   * incomplete rather than silently generating from half a script.
+   */
+  promptTruncated: z.boolean().optional(),
   lyrics: z.string().optional(),
   durationSeconds: z.number().positive().optional(),
   // The audio settings the caller picked, so Studio's "use these settings again" can restore them.

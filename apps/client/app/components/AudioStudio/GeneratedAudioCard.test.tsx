@@ -4,9 +4,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { setOpen } = vi.hoisted(() => ({ setOpen: vi.fn() }));
+const { setOpen, toastSuccess } = vi.hoisted(() => ({ setOpen: vi.fn(), toastSuccess: vi.fn() }));
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a) } }));
 vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
   useFileBrowser: (select: (state: { setOpen: typeof setOpen }) => unknown) => select({ setOpen }),
 }));
@@ -71,6 +71,15 @@ describe('GeneratedAudioCard', () => {
     renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile(generation)} />);
     fireEvent.click(screen.getByTestId('generated-audio-card-open-files-btn'));
     expect(setOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('copies only the settings from a file whose text was too long to keep', () => {
+    renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile({ ...generation, promptTruncated: true })} />);
+    fireEvent.click(screen.getByTestId('generated-audio-card-reuse-btn'));
+
+    expect(useAudioGenSettings.getState()).toMatchObject({ ttsProvider: 'elevenlabs', format: 'opus' });
+    expect(useAudioStudioDraft.getState().text.tts).toBe('');
+    expect(toastSuccess).toHaveBeenCalledWith('Settings copied. The text was too long to keep, so paste it in again.');
   });
 
   it('still plays a file with no recorded generation, without offering to reuse it', () => {
