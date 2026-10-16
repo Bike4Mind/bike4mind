@@ -16,6 +16,7 @@ function createModelInfo(overrides: Partial<ModelInfo> & { id: string; backend: 
 
 const BEDROCK_HAIKU_45 = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 const bedrockHaiku = createModelInfo({ id: BEDROCK_HAIKU_45, backend: ModelBackend.Bedrock });
+const bedrockHaiku55 = createModelInfo({ id: 'global.anthropic.claude-haiku-5-5', backend: ModelBackend.Bedrock });
 const directHaiku = createModelInfo({ id: 'claude-haiku-4-5-20251001', backend: ModelBackend.Anthropic });
 
 describe('findRottedRapidModelIds', () => {
@@ -41,11 +42,11 @@ describe('findRottedRapidModelIds', () => {
   });
 
   it('treats a sunset id whose successor is live as healthy', () => {
-    // anthropic.claude-3-haiku-20240307-v1:0 -> us.anthropic.claude-haiku-4-5-20251001-v1:0.
+    // anthropic.claude-3-haiku-20240307-v1:0 -> global.anthropic.claude-haiku-5-5.
     // The request lands on the successor, so the row needs no operator attention.
     const rotted = findRottedRapidModelIds(
       [{ rapidModelId: 'anthropic.claude-3-haiku-20240307-v1:0' }],
-      [bedrockHaiku, directHaiku]
+      [bedrockHaiku, bedrockHaiku55, directHaiku]
     );
 
     expect(rotted).toEqual([]);
