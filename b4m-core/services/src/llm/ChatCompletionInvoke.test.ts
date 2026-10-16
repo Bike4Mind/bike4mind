@@ -267,6 +267,30 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
   });
 
+  it('a hidden-model redirect records the requested model and the model that answered', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(mockDb.quests.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMeta: expect.objectContaining({
+          model: expect.objectContaining({ name: HIDDEN_ID, answeredBy: SUCCESSOR_ID, contextWindow: 1000 }),
+        }),
+      })
+    );
+  });
+
+  it('records no answeredBy when the requested model runs as-is', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await makeInvoke().invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    const created = mockDb.quests.create.mock.calls[0][0];
+    expect(created.promptMeta.model.name).toBe(SUCCESSOR_ID);
+    expect(created.promptMeta.model).not.toHaveProperty('answeredBy');
+  });
+
   it('checks the successor, not the retired id, against model access configuration', async () => {
     mockedGetAvailableModels.mockResolvedValue([successor] as any);
     modelConfigs([
