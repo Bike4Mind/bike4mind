@@ -489,6 +489,18 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 
+  it('says it was signed out elsewhere when the vault empties under a refresh', async () => {
+    const { service } = await signedIn(vi.fn().mockRejectedValue(new NotAuthenticatedError('not logged in')));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+    });
+    service.dispose();
+  });
+
   it('shows signed-out when the client clears the tokens on a request 401, instead of staying signed-in', async () => {
     const { service, accepted, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(400)));
     // The access token lapses server-side and locally before the proactive timer runs.

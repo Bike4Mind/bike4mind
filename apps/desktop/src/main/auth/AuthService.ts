@@ -72,6 +72,7 @@ export interface AuthServiceDeps {
 
 /** What the panel says when the session ended without the user signing out. */
 const SESSION_EXPIRED_MESSAGE = 'This session has expired. Sign in again.';
+const SIGNED_OUT_ELSEWHERE_MESSAGE = 'You were signed out in another window. Sign in again.';
 
 /**
  * Owns the whole device-authorization flow and every token, in the main process.
@@ -498,7 +499,7 @@ export class AuthService {
       if (err instanceof SessionRevokedError) return;
       if (err instanceof NotAuthenticatedError) {
         // The vault emptied under this refresh - a sign-out in another instance sharing it.
-        this.endSession('the stored tokens were removed by another process');
+        this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
         return;
       }
 
@@ -518,7 +519,7 @@ export class AuthService {
   }
 
   /** Show signed-out after the session ended on its own, rather than staying signed-in over an empty vault. */
-  private endSession(reason: string): void {
+  private endSession(reason: string, message: string = SESSION_EXPIRED_MESSAGE): void {
     this.deps.logger.warn(`AUTH: signed out: ${reason}`);
     this.clearRefreshTimer();
     // A device flow already under way is the way back in; leave it to finish.
@@ -530,7 +531,7 @@ export class AuthService {
       busy: 'idle',
       user: undefined,
       pending: undefined,
-      error: { message: SESSION_EXPIRED_MESSAGE, remedy: 'retry-sign-in' },
+      error: { message, remedy: 'retry-sign-in' },
     });
   }
 
