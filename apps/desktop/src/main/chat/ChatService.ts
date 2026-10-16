@@ -75,6 +75,7 @@ import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
+import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
@@ -342,6 +343,8 @@ export interface ChatServiceDeps {
    * is known; the approval gate feeds it the other half.
    */
   activity?: SessionActivity;
+  /** The user's sidebar sections, which drop a deleted session. Absent in tests that do not exercise them. */
+  sidebarSections?: Pick<SidebarSectionStore, 'forgetSession'>;
   /**
    * Messages typed during a live turn. Absent in tests that never send one mid-reply, which
    * then get the old behaviour: a send during a reply is refused outright.
@@ -1162,6 +1165,11 @@ export class ChatService {
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
+    await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
+      this.deps.logger.warn(
+        `CHAT: could not drop ${sessionId} from the sidebar sections: ${err instanceof Error ? err.message : err}`
+      );
+    });
     this.promoted.delete(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a

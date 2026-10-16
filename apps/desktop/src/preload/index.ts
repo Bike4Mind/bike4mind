@@ -216,6 +216,16 @@ const api: DesktopApi = {
       }
     },
   },
+  sidebar: {
+    getSections: () => ipcRenderer.invoke(IPC_CHANNELS.sidebarGetSections),
+    createSection: (name: string, sessionId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarCreateSection, name, sessionId),
+    renameSection: (sectionId: string, name: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarRenameSection, sectionId, name),
+    deleteSection: (sectionId: string) => ipcRenderer.invoke(IPC_CHANNELS.sidebarDeleteSection, sectionId),
+    moveSession: (sessionId: string, sectionId: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sidebarMoveSession, sessionId, sectionId),
+  },
   mcp: {
     getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
     addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
