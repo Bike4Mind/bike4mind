@@ -165,6 +165,31 @@ describe('TokenVault', () => {
     });
   });
 
+  it('keeps its cached tokens when a reload fails to decrypt, but a cold read still clears', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    let failDecrypt = false;
+    const cipher = fakeCipher();
+    const flaky: SecretCipher = {
+      ...cipher,
+      decryptString: encrypted => {
+        if (failDecrypt) throw new Error('keychain hiccup');
+        return cipher.decryptString(encrypted);
+      },
+    };
+    const file = memoryFile();
+    const vault = new TokenVault(flaky, file, logger);
+    await vault.setTokens('https://b4m.example.com', TOKENS);
+
+    failDecrypt = true;
+
+    expect(await vault.reloadTokens('https://b4m.example.com')).toEqual(TOKENS);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('keeping the copy in memory'));
+    expect(JSON.parse(file.contents ?? '{}').tokens['https://b4m.example.com']).toBeTruthy();
+
+    const cold = new TokenVault(flaky, file, logger);
+    expect(await cold.getTokens('https://b4m.example.com')).toBeNull();
+  });
+
   it('logs why it clears a blob it cannot decrypt', async () => {
     const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const file = memoryFile(

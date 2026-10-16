@@ -99,7 +99,7 @@ export class TokenVault {
    */
   async reloadTokens(envUrl: string): Promise<AuthTokens | null> {
     if (this.storageStatus() === 'unavailable') return this.cache.get(normalizeEnvKey(envUrl)) ?? null;
-    return this.decryptInto(envUrl, await this.load({ fromDisk: true }));
+    return this.decryptInto(envUrl, await this.load({ fromDisk: true }), { keepCachedOnFailure: true });
   }
 
   async setTokens(envUrl: string, tokens: AuthTokens): Promise<void> {
@@ -134,8 +134,15 @@ export class TokenVault {
     };
   }
 
-  /** Decrypt one environment's blob out of `document` and make it the cached copy. */
-  private async decryptInto(envUrl: string, document: VaultDocument): Promise<AuthTokens | null> {
+  /**
+   * Decrypt one environment's blob out of `document` and make it the cached copy. With
+   * `keepCachedOnFailure`, a decrypt failure keeps the copy already in memory instead of clearing.
+   */
+  private async decryptInto(
+    envUrl: string,
+    document: VaultDocument,
+    { keepCachedOnFailure = false }: { keepCachedOnFailure?: boolean } = {}
+  ): Promise<AuthTokens | null> {
     const key = normalizeEnvKey(envUrl);
     const blob = document.tokens[key];
     if (!blob) {
@@ -149,6 +156,13 @@ export class TokenVault {
       this.cache.set(key, parsed);
       return parsed;
     } catch (err) {
+      const cached = this.cache.get(key);
+      if (keepCachedOnFailure && cached) {
+        this.logger.warn(
+          `AUTH: vault decrypt failed on reload for ${key}, keeping the copy in memory (${err instanceof Error ? err.name : 'unknown'})`
+        );
+        return cached;
+      }
       // A blob written under a different OS user, a rotated keychain entry, or a truncated
       // write. Drop it rather than wedging the app in a state it can never leave.
       this.logger.warn(
