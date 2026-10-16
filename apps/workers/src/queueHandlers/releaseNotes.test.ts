@@ -207,6 +207,16 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).not.toContain('Failure');
   });
 
+  it('names both drafts denylist hits when the rewrite and the earlier draft both fail', async () => {
+    setConfig({ ...enabledConfig, denylist: ['acme', 'globex'] });
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft('Built for Globex'));
+    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(
+      /the headline must not mention "globex"; the headline must not mention "acme"/
+    );
+    expect(h.upsertGenerated).not.toHaveBeenCalled();
+    expect(metricNames()).toEqual(['Failure']);
+  });
+
   it('keeps the earlier generic draft when the rewrite introduces a denylist hit', async () => {
     setConfig(enabledConfig);
     h.writeReleaseNotes

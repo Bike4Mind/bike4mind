@@ -122,9 +122,9 @@ async function postToSlack(
 
 /**
  * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
- * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the first draft did
- * not have, in which case the first draft is finalized instead (with its generic headline replaced). Only a
- * denylist hit that is present in both drafts can still fail.
+ * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the previous draft
+ * did not have, in which case the previous draft is finalized instead (with its generic headline replaced).
+ * Fails only when both the rewrite and the previous draft hit the denylist.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
@@ -145,16 +145,19 @@ async function generateAndStore(
 
     const lastAttempt = attempt === MAX_EDITORIAL_ATTEMPTS - 1;
     let result = finalizeReleaseNote(generated.draft, payload, config, logger, { lastAttempt });
+    feedback = result.kind === 'repair' ? result.reasons : [];
     // The rewrite can hit the denylist even though the earlier draft did not. Keep the earlier draft
     // (finalized with the generic-headline fallback) rather than losing the note it could have produced.
     if (result.kind === 'repair' && lastAttempt && previousDraft) {
+      const rewriteReasons = result.reasons;
       result = finalizeReleaseNote(previousDraft, payload, config, logger, { lastAttempt: true });
+      // Name both drafts' hits: the rewrite's are what sent us back to the earlier one.
+      if (result.kind === 'repair') feedback = [...rewriteReasons, ...result.reasons];
     }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
       return { note: preserved ? note : result.note, preserved, usage, modelId };
     }
-    feedback = result.reasons;
     previousDraft = generated.draft;
   }
   throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
