@@ -14,25 +14,36 @@ vi.mock('@client/app/components/common/PageFrame', () => ({
   ),
 }));
 vi.mock('@client/app/hooks/useMobileHeader', () => ({ useMobileHeader: vi.fn() }));
+const gallery = vi.hoisted(() => ({ mounts: [] as string[] }));
 vi.mock('@client/app/components/integrations/IntegrationsGallery', () => ({
-  default: ({ source }: { source: string }) => <div data-testid="gallery-stub">{source}</div>,
+  // Models the real gallery: one page view per mount, from the source it first sees.
+  default: function GalleryStub({ source }: { source?: string }) {
+    const seen = React.useRef(false);
+    React.useEffect(() => {
+      if (seen.current) return;
+      seen.current = true;
+      gallery.mounts.push(source ?? 'direct');
+    }, [source]);
+    return <div data-testid="gallery-stub">{source}</div>;
+  },
 }));
 vi.mock('@client/app/components/ProfileModal/ApiTabContent', () => ({
   default: () => <div data-testid="api-keys-stub" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderPage = () =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <IntegrationsPage />
-    </CssVarsProvider>
-  );
+const pageElement = () => (
+  <CssVarsProvider theme={appTheme}>
+    <IntegrationsPage />
+  </CssVarsProvider>
+);
+const renderPage = () => render(pageElement());
 
 describe('IntegrationsPage tabs', () => {
   beforeEach(() => {
     router.search = {};
     router.navigate.mockClear();
+    gallery.mounts = [];
   });
 
   it('is headed Connections and opens on the Integrations tab by default', () => {
@@ -43,12 +54,12 @@ describe('IntegrationsPage tabs', () => {
     expect(screen.queryByTestId('api-keys-stub')).not.toBeInTheDocument();
   });
 
-  it('selects the API Keys tab for ?tab=api-keys', () => {
+  it('selects the API Keys tab for ?tab=api-keys, keeping the gallery mounted', () => {
     router.search = { tab: 'api-keys' };
     renderPage();
     expect(screen.getByTestId('connections-tab-api-keys')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('api-keys-stub')).toBeInTheDocument();
-    expect(screen.queryByTestId('gallery-stub')).not.toBeInTheDocument();
+    expect(screen.getByTestId('gallery-stub').closest('[role="tabpanel"]')).toHaveAttribute('hidden');
   });
 
   it('writes the chosen tab to the URL when switching', () => {
@@ -68,5 +79,18 @@ describe('IntegrationsPage tabs', () => {
     router.search = { source: 'profile_menu', tab: 'api-keys' };
     renderPage();
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { tab: 'api-keys' }, replace: true });
+    // The entry point reaches the gallery even though the URL opened on the API Keys tab.
+    expect(screen.getByTestId('gallery-stub')).toHaveTextContent('profile_menu');
+  });
+
+  it('counts one visit with the real entry point when the URL opens on API Keys', () => {
+    router.search = { tab: 'api-keys', source: 'profile_menu' };
+    const view = renderPage();
+    expect(gallery.mounts).toEqual(['profile_menu']);
+
+    // Switching to Integrations reuses the mounted gallery, so the visit is not counted again.
+    router.search = { tab: 'integrations' };
+    view.rerender(pageElement());
+    expect(gallery.mounts).toEqual(['profile_menu']);
   });
 });

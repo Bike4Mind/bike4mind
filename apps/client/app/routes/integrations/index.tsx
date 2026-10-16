@@ -47,8 +47,10 @@ const IntegrationsPage = () => {
             <Typography sx={{ color: 'text.primary' }}>API Keys</Typography>
           </PageTab>
         </TabList>
-        <TabPanel value="integrations" sx={{ p: 0, pt: '16px' }}>
-          {activeTab === 'integrations' && <IntegrationsGallery source={source ?? 'direct'} showHeading={false} />}
+        {/* keepMounted: the gallery records the page view on mount, so remounting it on every tab
+            switch would count the visit again. */}
+        <TabPanel value="integrations" keepMounted sx={{ p: 0, pt: '16px' }}>
+          <IntegrationsGallery source={source ?? 'direct'} showHeading={false} />
         </TabPanel>
         <TabPanel value="api-keys" sx={{ p: 0, pt: '16px' }}>
           {activeTab === 'api-keys' && <ApiTabContent />}
