@@ -143,6 +143,24 @@ describe('runModelDiscovery', () => {
     expect(result.metrics).toMatchObject({ ModelsDiscovered: 1, ModelsPromoted: 1, ModelsBlockedByDispatch: 0 });
   });
 
+  it('does not promote on a provider price the price plan refuses to write', async () => {
+    const dissenting = (name: string) =>
+      stubSource({
+        name,
+        kind: 'aggregator',
+        records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 20, outputPerMTok: 80 } }],
+      });
+    const refused = harness([openaiSource(), dissenting('models.dev'), dissenting('litellm')]);
+
+    const result = await runModelDiscovery(refused.adapters, refused.options);
+
+    // Every mirror dissents, so no price row lands; promoting would leave an
+    // active text model with nothing in force to bill it by.
+    expect(refused.prices.rows).toEqual([]);
+    expect(result.metrics.ModelsPromoted).toBe(0);
+    expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6', promoted: false, blockedBy: ['no-trusted-price'] });
+  });
+
   it('appends nothing on a second run over identical source data', async () => {
     await runModelDiscovery(bench.adapters, bench.options);
     bench.advance(60_000);
@@ -952,6 +970,34 @@ describe('runModelDiscovery', () => {
         expect(bench.catalog.rows[1].patch).toMatchObject({
           lifecycle: { status: 'deprecated', deprecationDate: '2026-07-30' },
         });
+      });
+
+      const litellmSunset = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+        });
+
+      it('queues a lone aggregator sunset of a listed model instead of writing it', async () => {
+        const result = await secondRun(bench, [openaiSource([gpt6]), litellmSunset('litellm')]);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+        expect(result.lifecycle.suggestions).toEqual([
+          expect.objectContaining({ modelId: 'gpt-6', status: 'deprecated', source: 'litellm' }),
+        ]);
+      });
+
+      it('writes an aggregator sunset both aggregators agree on', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([gpt6]),
+          litellmSunset('litellm'),
+          litellmSunset('models.dev'),
+        ]);
+
+        expect(result.lifecycle.transitions[0]).toMatchObject({ modelId: 'gpt-6', to: 'deprecated' });
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
 
       it('drops a docs signal whose parser row count moved more than 20%', async () => {

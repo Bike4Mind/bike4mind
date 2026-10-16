@@ -573,6 +573,20 @@ type Consensus =
  * With no provider price, nothing here changed: the aggregators are all we have,
  * so they must agree with each other and there must be at least two of them.
  */
+/**
+ * Models whose source quotes this run reach a trusted consensus, which is exactly
+ * the set planPriceWrites can write a first price row for. planCatalogWrites reads
+ * it so promotion never counts a quote this planner refuses ("applied neither")
+ * as a price: a provider price every mirror dissents from writes no row.
+ */
+export function consensusPricedModelIds(contributions: readonly SourceContribution[]): Set<string> {
+  const priced = new Set<string>();
+  for (const [modelId, observations] of collectObservations(contributions)) {
+    if (reachConsensus(observations).kind === 'trusted') priced.add(modelId);
+  }
+  return priced;
+}
+
 function reachConsensus(observations: readonly PriceObservation[]): Consensus {
   const providers = observations.filter(observation => observation.kind === 'provider');
   const aggregators = observations.filter(observation => observation.kind === 'aggregator');

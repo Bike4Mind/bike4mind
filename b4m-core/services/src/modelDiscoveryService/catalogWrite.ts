@@ -122,6 +122,12 @@ export interface CatalogWriteInput {
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
+  /**
+   * pricePlan's consensusPricedModelIds over the same contributions. When given it
+   * REPLACES the source-quote half of hasTrustedPrice, so a model promotes only on
+   * a price row that is in force or that this run's price plan will write.
+   */
+  consensusPricedModelIds?: ReadonlySet<string>;
   /** Models the build's adapter tables price in any unit; changes the denial wording only, never a verdict. */
   buildPricedModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
@@ -591,7 +597,7 @@ function planOne(
       record,
       policy: input.policy,
       credentials: input.credentials,
-      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds, input.consensusPricedModelIds),
       awaitingPrice: input.buildPricedModelIds?.has(candidate.modelId)
         ? 'build-literal'
         : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
@@ -930,12 +936,16 @@ export function claimedGroups(
  * agreement band, or a price row in force or an adapter price literal (both
  * arriving as `knownPricedModelIds`). A lone
  * aggregator is a flag, not a price; promotion words that denial separately.
+ * With `consensusPricedModelIds` the source-quote clauses defer to pricePlan's
+ * consensus, which also refuses a provider quote no mirror corroborates.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
-  knownPricedModelIds?: ReadonlySet<string>
+  knownPricedModelIds?: ReadonlySet<string>,
+  consensusPricedModelIds?: ReadonlySet<string>
 ): boolean {
   if (knownPricedModelIds?.has(candidate.modelId)) return true;
+  if (consensusPricedModelIds) return consensusPricedModelIds.has(candidate.modelId);
   if (candidate.pricesByKind.some(entry => entry.kind === 'provider')) return true;
 
   const aggregated = candidate.pricesByKind.filter(entry => entry.kind === 'aggregator').map(entry => entry.price);

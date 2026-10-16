@@ -25,7 +25,13 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => mockGetEffectiveLLMApiKeys(...a) },
 }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+// Credits off, so every listed model reaches the parity rows; the unpriced-text filter is
+// covered in server/utils/callerModelList.test.ts.
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsByNames: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: vi.fn(() => false),
+}));
 
 // Strip the middleware chain (DB connect, auth, logging) so the test exercises
 // the route body, matching the other pages/api suites.

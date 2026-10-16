@@ -151,6 +151,102 @@ describe('planLifecycleSignals', () => {
     expect(signals.contributions[0].records[0]).toBe(record);
   });
 
+  describe('aggregator sunsets of a held model', () => {
+    const aggregatorSunset = (name: string) =>
+      aggregator(name, [
+        {
+          modelId: 'gpt-5',
+          patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-01-01' } },
+          lifecycleEvidence: 'typed',
+        },
+      ]);
+    const listed = provider('openai', [{ modelId: 'gpt-5', patch: { contextWindow: 400_000 } }]);
+    const held = new Set(['gpt-5']);
+    const lifecycleFrom = (signals: ReturnType<typeof planLifecycleSignals>, name: string) =>
+      signals.contributions.find(contribution => contribution.name === name)?.records[0].patch.lifecycle;
+
+    it('withholds a lone aggregator sunset while the provider still lists the model', () => {
+      const signals = planLifecycleSignals({
+        contributions: [listed, aggregatorSunset('litellm')],
+        catalogModelIds: held,
+      });
+
+      expect(lifecycleFrom(signals, 'litellm')).toBeUndefined();
+      expect(signals.aggregatorSunsets.get('gpt-5')).toMatchObject({
+        source: 'litellm',
+        lifecycle: { status: 'deprecated', deprecationDate: '2026-01-01' },
+      });
+    });
+
+    it('fails closed when the catalog ids are not supplied', () => {
+      const signals = planLifecycleSignals({ contributions: [listed, aggregatorSunset('models.dev')] });
+
+      expect(lifecycleFrom(signals, 'models.dev')).toBeUndefined();
+      expect(signals.aggregatorSunsets.has('gpt-5')).toBe(true);
+    });
+
+    it('writes it when both aggregators agree', () => {
+      const signals = planLifecycleSignals({
+        contributions: [listed, aggregatorSunset('litellm'), aggregatorSunset('models.dev')],
+        catalogModelIds: held,
+      });
+
+      expect(lifecycleFrom(signals, 'litellm')).toMatchObject({ status: 'deprecated' });
+      expect(lifecycleFrom(signals, 'models.dev')).toMatchObject({ status: 'deprecated' });
+      expect(signals.aggregatorSunsets.size).toBe(0);
+    });
+
+    it('writes it when the provider sunsets the model too', () => {
+      const signals = planLifecycleSignals({
+        contributions: [
+          provider('openai', [
+            { modelId: 'gpt-5', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' },
+          ]),
+          aggregatorSunset('litellm'),
+        ],
+        catalogModelIds: held,
+      });
+
+      expect(lifecycleFrom(signals, 'litellm')).toMatchObject({ status: 'deprecated' });
+      expect(signals.aggregatorSunsets.size).toBe(0);
+    });
+
+    it('leaves a model the catalog does not hold yet alone', () => {
+      const signals = planLifecycleSignals({
+        contributions: [listed, aggregatorSunset('litellm')],
+        catalogModelIds: new Set(),
+      });
+
+      expect(lifecycleFrom(signals, 'litellm')).toMatchObject({ status: 'deprecated' });
+      expect(signals.aggregatorSunsets.size).toBe(0);
+    });
+
+    it('queues the withheld sunset as a suggestion rather than a transition', () => {
+      const signals = planLifecycleSignals({
+        contributions: [listed, aggregatorSunset('litellm')],
+        catalogModelIds: held,
+      });
+      const base = new Map([active('gpt-5')]);
+
+      const result = plan({
+        catalogPlan: catalogPlan(signals.contributions, base),
+        base,
+        aggregatorSunsets: signals.aggregatorSunsets,
+      });
+
+      expect(result.transitions).toEqual([]);
+      expect(result.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+      expect(result.suggestions).toEqual([
+        expect.objectContaining({
+          modelId: 'gpt-5',
+          status: 'deprecated',
+          deprecationDate: '2026-01-01',
+          source: 'litellm',
+        }),
+      ]);
+    });
+  });
+
   describe('providerUndated', () => {
     const active = (patch: Record<string, unknown> = {}, evidence?: 'typed' | 'docs'): DiscoveredModel => ({
       modelId: 'claude-x',

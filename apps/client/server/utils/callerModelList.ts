@@ -1,7 +1,8 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
+import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { getImageModelCapabilities, isImageModel, type ModelInfo, type SupersededModelInfo } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
@@ -37,13 +38,21 @@ async function buildCallerModelList(userId: string | null): Promise<CallerModelL
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
-  const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
-  const models = listedModels.map(withImageCapabilities);
+  const [listedModels, settings] = await Promise.all([
+    getAvailableModels(apiKeys, modelCatalogListingOptions()),
+    getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] }),
+  ]);
+  // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
+  // an unpriced text model settles at $0, so the picker must not offer it either.
+  const offered = getSettingsValue('enforceCredits', settings)
+    ? listedModels.filter(model => !isUnpricedTextModel(model))
+    : listedModels;
+  const models = offered.map(withImageCapabilities);
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.
   // Reads the fan-out getAvailableModels just did, so it costs no extra work.
-  return { models, supersededModels: getSupersededModels(listedModels) };
+  return { models, supersededModels: getSupersededModels(offered) };
 }
 
 export async function getCallerModelList(
