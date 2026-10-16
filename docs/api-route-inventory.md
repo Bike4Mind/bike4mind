@@ -748,7 +748,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/files` | GET, DELETE | jwt+key | `files:read`, `files:write` | no | - | 6: `hooks/agent/useImageBrowser.ts`, `hooks/data/fabFileMutations.ts`, `hooks/data/fabFileQueries.ts` +3 more |
-| `/api/files/[id]` | GET, PUT, DELETE | jwt+key | `files:read`, `files:write` | no | - | 4: `components/admin/SystemPromptsManager.tsx`, `contexts/SessionsContext.tsx`, `hooks/agent/useImageUpload.ts` +1 more |
+| `/api/files/[id]` | GET, PUT, DELETE | jwt+key | `ai:generate`, `files:read`, `files:write` | no | - | 4: `components/admin/SystemPromptsManager.tsx`, `contexts/SessionsContext.tsx`, `hooks/agent/useImageUpload.ts` +1 more |
 | `/api/files/[id]/moderate` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
 | `/api/files/[id]/upload` | PUT | jwt+key | `files:write` | no | - | 0 |
 | `/api/files/bulk-delete` | DELETE | jwt+key | `files:write` | no | - | 1: `hooks/data/fabFileMutations.ts` |
@@ -759,7 +759,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/files/createFabFile` | POST | jwt+key | `files:write` | no | - | 1: `utils/filesAPICalls.ts` |
 | `/api/files/createFabFileURL` | POST | jwt+key | `files:write` | no | - | 2: `hooks/data/fabFileMutations.ts`, `utils/filesAPICalls.ts` |
 | `/api/files/download` | GET | jwt+key | `files:read` | no | - | 3: `components/Files/Browser/ItemActions.tsx`, `components/ProfileModal/SettingsTabContent/GeneralSettingsTab.tsx`, `hooks/data/fabFileMutations.ts` |
-| `/api/files/generate-presigned-url` | POST | jwt+key | `files:write` | no | - | 0 |
+| `/api/files/generate-presigned-url` | POST | jwt+key | `ai:generate`, `files:write` | no | - | 0 |
 | `/api/files/generate-presigned-urls-batch` | POST | jwt+key | `files:write` | no | - | 1: `hooks/data/dataLakeUploadPipeline.ts` |
 | `/api/files/generate-smart-name` | POST | jwt+key | `files:write` | no | - | 1: `utils/generateSmartFileName.ts` |
 | `/api/files/getFabFileNameById` | GET | jwt+key | `files:read` | no | - | 1: `utils/filesAPICalls.ts` |

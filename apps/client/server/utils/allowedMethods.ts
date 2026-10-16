@@ -3,7 +3,7 @@
  * implied by GET (RFC 9110 section 9.3.2), and next-connect's router already serves a HEAD
  * request from the registered GET handler, so a GET route must not 405 it.
  *
- * Shared by both contract transports (middlewares/baseApi.ts, cli/defineLambdaRoute.ts) so the
+ * Shared by both contract transports (middlewares/baseApi.ts, apps/workers/src/cli/defineLambdaRoute.ts) so the
  * 405 that openapi/registerContract.ts documents for every contract holds on each of them.
  */
 export function resolveAllowedMethods(methods: readonly string[]): string[] {
@@ -17,7 +17,7 @@ export type MethodGuardResult = { allowed: true } | { allowed: false; allowHeade
 
 /**
  * The 405 decision every transport makes ahead of auth (middlewares/baseApi.ts,
- * cli/defineLambdaRoute.ts, chatCompletion/external/sseRoute.ts), so the `Allow` value and the
+ * apps/workers/src/cli/defineLambdaRoute.ts, chatCompletion/external/sseRoute.ts), so the `Allow` value and the
  * error wording cannot drift between them. Each transport still shapes its own response.
  */
 export function createMethodGuard(methods: readonly string[]): (method: string | undefined) => MethodGuardResult {

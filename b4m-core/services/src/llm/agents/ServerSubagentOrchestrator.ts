@@ -11,6 +11,7 @@ import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
+import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -37,11 +38,18 @@ export type SubagentToolPermissions = {
  * Wrap each tool so a call the parent's permission gate would not let through is refused
  * instead of run. A child has no approver to pause for, so `needs_approval` is a refusal
  * that tells the model to hand the step back to the parent, whose gate can ask the user.
+ *
+ * Confirming MCP servers' tools (github, atlassian) are the exception, but only for the agent that
+ * claims the server via `exclusiveMcpServers` (`claimedServers`). Those tools are agent-only, so the
+ * parent never holds them and could never take the step back. Their writes only preview and
+ * execute on the user's Confirm click, which is the approval the gate would otherwise ask for.
+ * Custom agents can claim these servers too. A denied tool is still refused.
  */
 export function gateSubagentTools(
   tools: ICompletionOptionTools[],
   permissions: SubagentToolPermissions,
-  logger: Logger
+  logger: Logger,
+  claimedServers: readonly string[] = []
 ): ICompletionOptionTools[] {
   return tools.map(tool => {
     const toolName = tool.toolSchema.name;
@@ -49,7 +57,13 @@ export function gateSubagentTools(
 
     const toolFn: ICompletionOptionTools['toolFn'] = async (parameters, apiKey) => {
       const verdict = classifyToolPermission(toolName, permissions.approvedTools, permissions.deniedTools);
-      if (verdict === 'allowed') return tool.toolFn(parameters, apiKey);
+      const confirmingServer = confirmingServerOf(toolName);
+      const isClaimedConfirmingTool = confirmingServer !== undefined && claimedServers.includes(confirmingServer);
+      if (verdict === 'allowed' || (verdict === 'needs_approval' && isClaimedConfirmingTool)) {
+        const result = await tool.toolFn(parameters, apiKey);
+        // A gated child has no Confirm card, so a write preview must not point the model at one.
+        return confirmingServer ? withoutConfirmPrompt(result) : result;
+      }
 
       logger.warn(`[SubagentOrchestrator] Refused subagent call to "${toolName}" (${verdict})`);
       return verdict === 'denied'
@@ -517,7 +531,12 @@ export class ServerSubagentOrchestrator {
       deniedTools
     );
     const filteredTools = this.deps.toolPermissions
-      ? gateSubagentTools(selectedTools, this.deps.toolPermissions, this.deps.logger)
+      ? gateSubagentTools(
+          selectedTools,
+          this.deps.toolPermissions,
+          this.deps.logger,
+          agentDef.exclusiveMcpServers ?? []
+        )
       : selectedTools;
 
     // Substitute variables in system prompt

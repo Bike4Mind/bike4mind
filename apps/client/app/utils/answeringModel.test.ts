@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { answeringModelId, answeringModelLabel } from './answeringModel';
+import { answeringModelLabel } from './answeringModel';
 
 const names: Record<string, string> = {
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -9,7 +9,7 @@ const displayName = (id: string) => names[id] ?? id;
 
 describe('answeringModelLabel', () => {
   it('reply metadata names the model that answered, and the one it replaced', () => {
-    const promptMeta = { model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } };
+    const promptMeta = { model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' };
 
     expect(answeringModelLabel(promptMeta, displayName)).toEqual({
       label: 'Gemini 3.5 Flash',
@@ -17,27 +17,20 @@ describe('answeringModelLabel', () => {
     });
   });
 
-  it('labels the requested model when nothing replaced it', () => {
+  it('labels the model alone when nothing replaced it', () => {
     expect(answeringModelLabel({ model: { name: 'gemini-2.5-pro' } }, displayName)).toEqual({
       label: 'Gemini 2.5 Pro',
     });
-    expect(
-      answeringModelLabel({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-2.5-pro' } }, displayName)
-    ).toEqual({ label: 'Gemini 2.5 Pro' });
+  });
+
+  it('an error reply names the model alone, without claiming it replaced another', () => {
+    const promptMeta = { model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' };
+
+    expect(answeringModelLabel(promptMeta, displayName, true)).toEqual({ label: 'Gemini 3.5 Flash' });
   });
 
   it('returns null when no model was recorded', () => {
     expect(answeringModelLabel(undefined, displayName)).toBeNull();
     expect(answeringModelLabel({}, displayName)).toBeNull();
-  });
-});
-
-describe('answeringModelId', () => {
-  it('is the model that answered when a redirect replaced the requested one, else the requested model', () => {
-    expect(answeringModelId({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } })).toBe(
-      'gemini-3.5-flash'
-    );
-    expect(answeringModelId({ model: { name: 'gemini-2.5-pro' } })).toBe('gemini-2.5-pro');
-    expect(answeringModelId(undefined)).toBeUndefined();
   });
 });

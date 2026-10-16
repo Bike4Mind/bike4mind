@@ -373,11 +373,15 @@ const gearsRoute = createRoute({
 
 // Integrations - the directory of every integration and model provider, with roadmap requests.
 // Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const CONNECTIONS_TABS = ['integrations', 'api-keys'] as const;
+export type ConnectionsTab = (typeof CONNECTIONS_TABS)[number];
+
 export const integrationsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/integrations',
-  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource } => ({
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource; tab?: ConnectionsTab } => ({
     source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+    tab: CONNECTIONS_TABS.find(t => t === search.tab),
   }),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>

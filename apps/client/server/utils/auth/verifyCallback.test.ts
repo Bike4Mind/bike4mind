@@ -10,6 +10,10 @@ const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
 const mockEndConnections = vi.fn();
 
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...args: unknown[]) => mockFindOne(...args),

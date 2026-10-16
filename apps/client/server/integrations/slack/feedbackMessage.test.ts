@@ -41,14 +41,12 @@ describe('buildPromptMetaSummary', () => {
     expect(summary).toBe('Model: claude-sonnet-5');
   });
 
-  it('names the model that answered a redirected turn beside the requested one', () => {
-    const summary = buildPromptMetaSummary({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
-    expect(summary).toBe('Model: gemini-2.5-pro\nAnswered by: gemini-3.5-flash');
-  });
-
-  it('does not repeat the model name when a fallback hop left answeredBy equal to name', () => {
-    const summary = buildPromptMetaSummary({ model: { name: 'gpt-5', answeredBy: 'gpt-5' } });
-    expect(summary).toBe('Model: gpt-5');
+  it('names the requested model beside the one that answered a redirected turn', () => {
+    const summary = buildPromptMetaSummary({
+      model: { name: 'gemini-3.5-flash' },
+      redirectedFrom: 'gemini-2.5-pro',
+    });
+    expect(summary).toBe('Model: gemini-3.5-flash\nRedirected from: gemini-2.5-pro');
   });
 
   it('returns "none" for an undefined promptMeta', () => {

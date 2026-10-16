@@ -90,6 +90,7 @@ import {
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -108,6 +109,7 @@ import {
   PipelineTimer,
   resolveDeprecatedModelId,
   isTurnEndingTool,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -574,11 +576,11 @@ export function isStreamIdleTimeoutError(error: Error): boolean {
 /**
  * True when a completion failure is a service fault worth counting on the operator
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
- * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
- * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
- * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
- * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
- * embed routes call this; /process does not.
+ * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
+ * context overflow), which resolve the quest without rethrowing and so never reached /process's
+ * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
+ * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
+ * and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -588,6 +590,7 @@ export function isOperatorFault(error: unknown): boolean {
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
     isStreamIdleTimeoutError(error) ||
+    error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
     error.message.startsWith('Your request is too large for')
@@ -1762,6 +1765,12 @@ export class ChatCompletionProcess {
     timer.phase('init');
     logger.info('⏱️ === LLM COMPLETION PROCESS START ===');
 
+    // invoke already saved this turn as failed; running it would answer with a model the caller was refused.
+    if (prefetchedQuest?.type === 'error') {
+      logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
+      return;
+    }
+
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
       parsedBody,
@@ -2333,11 +2342,20 @@ export class ChatCompletionProcess {
       // A remapped successor was never admitted: /api/chat admits it in ChatCompletionInvoke, but the
       // quest/Slack queue handlers and the rapid-reply test construct this class directly.
       if (modelInfo.id !== model) await this.modelAdmission.assert(modelInfo.id);
-      // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
-      // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
-      // turn is not credited to the model it replaced.
-      if (modelInfo.id !== model && quest.promptMeta?.model) {
-        quest.promptMeta.model.answeredBy = modelInfo.id;
+      // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
+      // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
+      if (quest.promptMeta && resolvedModelId !== model) {
+        quest.promptMeta.redirectedFrom ??= model;
+        if (quest.promptMeta.model) {
+          Object.assign(quest.promptMeta.model, buildPromptMetaModel(modelInfo));
+        }
+      }
+      if (quest.promptMeta?.redirectedFrom) {
+        this.sendStatusUpdate(
+          quest,
+          `${quest.promptMeta.redirectedFrom} is unavailable; answering with ${resolvedModelId}`,
+          { statusAt: new Date() }
+        );
       }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
@@ -4644,7 +4662,6 @@ export class ChatCompletionProcess {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
-              if (quest.promptMeta!.model!.answeredBy) quest.promptMeta!.model!.answeredBy = currentModel.id;
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
@@ -4926,7 +4943,7 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError)) {
+            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
@@ -6386,9 +6403,6 @@ export class ChatCompletionProcess {
       quest.status = 'done';
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
-      // Same rule for the redirect record: the successor ran but produced no reply, so the chip must
-      // not credit it as the answering model.
-      if (quest.promptMeta?.model) quest.promptMeta.model.answeredBy = undefined;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.
@@ -6410,6 +6424,15 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
+        setErrorReply('The request was interrupted. Please try sending your message again.');
+        quest.type = 'error';
+        quest.status = 'done';
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof ResponsesStreamTruncatedError) {
+        // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
+        // severity would trip the CloudWatch ERROR alert path.
+        logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';

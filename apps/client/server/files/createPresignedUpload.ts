@@ -32,6 +32,8 @@ const s3Client = createS3Client();
 
 /** Seconds. */
 export const PRESIGNED_UPLOAD_EXPIRES_IN = 600;
+// A bare generate upload is one small PNG PUT straight away; a short window limits how long the URL can be replayed after the scan.
+export const BARE_PRESIGNED_UPLOAD_EXPIRES_IN = 60;
 
 export type PresignedUpload = {
   url: string;
@@ -50,7 +52,8 @@ export type PresignedUpload = {
  */
 export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   req: Request<Params, ResBody, ReqBody, Query>,
-  data: FileGeneratePresignedUrlRequestInputType
+  data: FileGeneratePresignedUrlRequestInputType,
+  provenance?: { sourceMetadata: Record<string, unknown>; contentType: string }
 ): Promise<PresignedUpload> {
   const userId = req.user.id;
 
@@ -139,6 +142,14 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const command = new PutObjectCommand({
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
+    // Bound only for the narrow ai:generate upload: S3 then rejects a PUT whose type or length
+    // differs from what was validated. Every other caller keeps the unbound presign.
+    ...(provenance && {
+      ContentType: provenance.contentType,
+      ContentLength: data.fileSize,
+      // Create-only: the PUT fails if the key exists, so a scanned object cannot be overwritten.
+      IfNoneMatch: '*',
+    }),
   });
 
   // Same owner rule as fabFileService.createFabFile, which this direct create bypasses.
@@ -157,6 +168,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       // could not identify. Mirrors the batch door and the connector/chat-platform doors.
       sourceType: FabFileSourceType.MANUAL_UPLOAD,
       ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
+      ...(provenance && { sourceMetadata: provenance.sourceMetadata }),
       ...(data.contentHash && { contentHash: data.contentHash }),
       ...(data.batchId && { batchId: data.batchId }),
       ...(data.relativePath && { relativePath: data.relativePath }),
@@ -167,15 +179,20 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     req.ability!
   );
 
-  const url = await getSignedUrl(s3Client, command, {
-    expiresIn: PRESIGNED_UPLOAD_EXPIRES_IN,
-  });
+  const expiresIn = provenance ? BARE_PRESIGNED_UPLOAD_EXPIRES_IN : PRESIGNED_UPLOAD_EXPIRES_IN;
+  // The presigner leaves content-type unsigned by default, so it must be opted in for the bound
+  // type above to hold.
+  const url = await getSignedUrl(
+    s3Client,
+    command,
+    provenance ? { expiresIn, signableHeaders: new Set(['content-type']) } : { expiresIn }
+  );
 
   await logEvent(
     {
       userId,
       type: FileEvents.GENERATE_FILE_PRESIGNED_URL,
-      metadata: { id: file.id, url, expiry: PRESIGNED_UPLOAD_EXPIRES_IN },
+      metadata: { id: file.id, url, expiry: expiresIn },
     },
     { ability: req.ability }
   );

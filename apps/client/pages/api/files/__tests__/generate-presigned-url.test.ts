@@ -114,8 +114,8 @@ const tagNamesOf = (callIndex = 0) => {
 };
 
 describe('POST /api/files/generate-presigned-url - scope gate', () => {
-  it('requires files:write at the baseApi route gate', () => {
-    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  it('admits files:write and ai:generate at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'ai:generate'] });
   });
 });
 

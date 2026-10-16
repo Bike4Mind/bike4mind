@@ -1083,6 +1083,9 @@ importers:
       '@casl/mongoose':
         specifier: ^8.0.5
         version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
+      '@slack/web-api':
+        specifier: ^7.19.0
+        version: 7.19.0
       archiver:
         specifier: ^7.0.0
         version: 7.0.1
@@ -1116,6 +1119,9 @@ importers:
       sst:
         specifier: 4.17.1
         version: 4.17.1
+      stripe:
+        specifier: ^22.6.2
+        version: 22.6.2(@types/node@24.12.3)
       uuid:
         specifier: ^14.0.2
         version: 14.0.2

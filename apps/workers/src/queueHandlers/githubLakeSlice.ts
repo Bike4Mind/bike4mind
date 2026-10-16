@@ -38,7 +38,7 @@ import {
   lakeFileMimeType,
   type GitHubLakeCandidate,
 } from '@server/integrations/github/dataLake/lakeFileFilter';
-import { diffGitHubLakeTree } from '@server/integrations/github/dataLake/githubLakeTreeDiff';
+import { diffGitHubLakeTree } from '@workers/integrations/github/dataLake/githubLakeTreeDiff';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,

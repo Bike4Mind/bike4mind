@@ -36,6 +36,24 @@ describe('ChatService sessionClosed', () => {
     expect(closed).toEqual([id]);
   });
 
+  it('drops a deleted session from the sidebar sections, even when that fails', async () => {
+    const forgetSession = vi.fn(() => Promise.reject(new Error('disk full')));
+    const sections = new ChatService({
+      store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-closed-sections-')), 'test-model'),
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: () => undefined,
+      sidebarSections: { forgetSession },
+    });
+    const { id } = await sections.createSession();
+
+    await expect(sections.deleteSession(id)).resolves.toBeUndefined();
+    expect(forgetSession).toHaveBeenCalledWith(id);
+    sections.dispose();
+  });
+
   it('announces an archived session, and not an unarchived one', async () => {
     const { id } = await service.createSession();
     await service.setSessionArchived(id, true);

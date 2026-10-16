@@ -9,7 +9,8 @@ import { FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feed
  * workspace just because the type happens to be structurally compatible.
  */
 export interface FeedbackPromptMetaInput {
-  model?: { name?: string; answeredBy?: string };
+  model?: { name?: string };
+  redirectedFrom?: string;
   tokenUsage?: {
     totalTokens?: number;
     actualTotalTokens?: number;
@@ -105,8 +106,8 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   if (promptMeta.model?.name !== undefined) {
     lines.push(`Model: ${escapeLine(promptMeta.model.name)}`);
   }
-  if (promptMeta.model?.answeredBy && promptMeta.model.answeredBy !== promptMeta.model.name) {
-    lines.push(`Answered by: ${escapeLine(promptMeta.model.answeredBy)}`);
+  if (promptMeta.redirectedFrom) {
+    lines.push(`Redirected from: ${escapeLine(promptMeta.redirectedFrom)}`);
   }
 
   const tokenUsage = promptMeta.tokenUsage;

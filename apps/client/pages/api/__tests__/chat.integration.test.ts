@@ -327,6 +327,42 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
+  describe.each([
+    {
+      name: 'a retired id is swapped for its successor',
+      browser: true,
+      requested: 'retired-model',
+      promptMeta: { model: { name: 'successor-model' }, redirectedFrom: 'retired-model' },
+      answered: 'successor-model',
+    },
+    {
+      name: 'nothing is redirected',
+      browser: false,
+      requested: 'requested-model',
+      promptMeta: { model: { name: 'requested-model' } },
+      answered: 'requested-model',
+    },
+    {
+      name: 'invoke reports no model',
+      browser: false,
+      requested: 'requested-model',
+      promptMeta: undefined,
+      answered: 'requested-model',
+    },
+  ])('response model when $name', ({ browser, requested, promptMeta, answered }) => {
+    it.each([false, true])('names the model that answered (wait: %s)', async wait => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued', promptMeta });
+      const { req, res } = fire({
+        apiKey: browser ? null : VALID_KEY,
+        body: { message: 'hello', sessionId: 'sess-1', model: requested, wait },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().model).toBe(answered);
+    });
+  });
+
   it('hands invoke() a session origin and no key id for a JWT/browser caller', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);
@@ -1063,6 +1099,25 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+  });
+
+  it('surfaces the error quest fields in the wait: true response', async () => {
+    mockInvoke.mockResolvedValue({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      reply: 'You do not have access to this session',
+      replies: [],
+    });
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      response: 'You do not have access to this session',
+    });
   });
 
   it('returns the prompt text when includeSystemPrompt is set', async () => {

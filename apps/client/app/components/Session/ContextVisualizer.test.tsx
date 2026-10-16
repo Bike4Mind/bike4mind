@@ -21,7 +21,8 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 // A redirected turn: the reply was produced by gemini-3.5-flash after the requested
 // gemini-2.5-pro was redirected away.
 const redirectedTurn = (): PromptMeta => ({
-  model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash', contextWindow: 128000 },
+  model: { name: 'gemini-3.5-flash', contextWindow: 128000 },
+  redirectedFrom: 'gemini-2.5-pro',
   tokenUsage: { inputTokens: 1000, outputTokens: 100 },
 });
 

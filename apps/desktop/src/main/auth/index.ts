@@ -30,7 +30,8 @@ function vaultFile(path: string): VaultFile {
       await mkdir(dirname(path), { recursive: true });
       // Write-then-rename: a crash mid-write would otherwise leave a truncated vault, which
       // reads back as corrupt and silently signs the user out of every environment at once.
-      const temporary = `${path}.tmp`;
+      // Per process: two instances sharing this userData must not rename each other's half-written file.
+      const temporary = `${path}.${process.pid}.tmp`;
       await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, path);
     },

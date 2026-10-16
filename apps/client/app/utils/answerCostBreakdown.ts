@@ -1,6 +1,5 @@
 import type { IChatHistoryItem } from '@bike4mind/common';
 import { formatAnswerCostAmount } from './formatCredits';
-import { answeringModelId } from './answeringModel';
 
 export interface AnswerCostPart {
   label: string;
@@ -32,9 +31,7 @@ export function answerCostBreakdown(
 
   const chatCredits = promptMeta?.tokenUsage?.creditsUsed;
   const chat: AnswerCostPart[] =
-    typeof chatCredits === 'number'
-      ? [{ label: 'Chat', credits: chatCredits, model: answeringModelId(promptMeta) }]
-      : [];
+    typeof chatCredits === 'number' ? [{ label: 'Chat', credits: chatCredits, model: promptMeta?.model?.name }] : [];
   return [...chat, ...tools.values()];
 }
 

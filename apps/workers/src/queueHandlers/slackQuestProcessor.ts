@@ -60,7 +60,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import {
   slackToolDefinitions,
   createPendingActionToolDefs,
