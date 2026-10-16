@@ -45,6 +45,13 @@ describe('useFloorAboveMeasuredWarning', () => {
       '70% is above the 58% minimum measured for text-embedding-3-small'
     );
   });
+
+  it('grades a supported stored model against its own floor, not the 3-small fallback', () => {
+    // ada-002's measured floor is 75, so 70 sits below it and must not warn. The fallback is for a
+    // stored value the server cannot recognize only; resolving every model to 3-small would warn
+    // here for a value ada-002's deployment accepts.
+    expect(renderWarning('forcedRetrievalMinSimilarityPct', 70, 'text-embedding-ada-002')).toBeUndefined();
+  });
 });
 
 describe('useUpdateSettings', () => {
