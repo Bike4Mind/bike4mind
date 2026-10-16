@@ -506,6 +506,7 @@ const ProfileMenu = () => {
               icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
               label={t('billing.title', 'Billing')}
               onClick={() => {
+                // Billing also covers plans, so this event now counts every Billing open, not just credit purchases.
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
                 closeToTrigger();
                 // A general open: Billing starts at the top on the balance and plan, not on a section.
