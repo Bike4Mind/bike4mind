@@ -400,6 +400,17 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][1]).toBe('get');
   });
 
+  it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
+    'ignores a caller-chosen %s prefix, so the object stays under a tracked key',
+    async prefix => {
+      const { res } = makeRes();
+      await run(body({ prefix }), res);
+      const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string; prefix?: string };
+      expect(persisted.prefix).toBeUndefined();
+      expect(persisted.filePath).toMatch(/^[0-9a-f-]{36}\.txt$/);
+    }
+  );
+
   it('keeps URL-less uploads on private PUT signing without a browser GET', async () => {
     const { res, json } = makeRes();
     await run(body(), res);
