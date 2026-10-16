@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   process: vi.fn(),
   processDiscoveredLinks: vi.fn(),
   meter: vi.fn(),
+  afford: vi.fn(),
   complete: vi.fn(),
 }));
 
@@ -38,7 +39,10 @@ vi.mock('@bike4mind/services', async () => ({
     .meterCompletionBackend,
   researchTaskService: { process: h.process, processDiscoveredLinks: h.processDiscoveredLinks },
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => h.meter }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: () => h.meter,
+  assertOwnerCanAfford: h.afford,
+}));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
@@ -115,6 +119,15 @@ describe('researchEngineQueue metering', () => {
 
     expect(h.complete).toHaveBeenCalledOnce();
     expect(settle).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  it('fails a task for an owner out of credits before the service scrapes anything', async () => {
+    h.afford.mockRejectedValueOnce(insufficientCreditsError('Not enough credits'));
+
+    await dispatch(makeEvent('process'), {} as never, logger as never);
+
+    expect(h.process).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: ResearchTaskStatus.FAILED }));
   });
 
   it('fails a discovered-links run for an owner out of credits without calling the provider or rethrowing', async () => {

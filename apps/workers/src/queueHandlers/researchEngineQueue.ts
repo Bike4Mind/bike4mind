@@ -27,17 +27,23 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
 
 /**
  * The operations text model with every completion reserved and settled against the task owner's
- * billing owner (org seat when present). Scraping (Firecrawl) has no per-call price and is not billed.
+ * billing owner (org seat when present). Scraping (Firecrawl) has no per-call price and is not billed,
+ * so an out-of-credits owner is refused up front, before the service scrapes anything.
  */
 async function meteredOperationsLlm(user: IUserDocument, logger: Logger) {
+  await assertOwnerCanAfford(user);
   const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel();
   llm.currentModel = modelId;
-  return meterCompletionBackend(llm, createCompletionMeter(user, logger, 'research tasks'), modelInfo);
+  return meterCompletionBackend(
+    llm,
+    createCompletionMeter(user, logger, 'research tasks', { systemModel: true }),
+    modelInfo
+  );
 }
 
 const researchEngineQueuePayload = z.object({
@@ -200,9 +206,9 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
 
   const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
-  const llm = await meteredOperationsLlm(user as IUserDocument, logger);
 
   try {
+    const llm = await meteredOperationsLlm(user as IUserDocument, logger);
     await researchTaskService.processDiscoveredLinks(
       {
         id: researchTaskId,
