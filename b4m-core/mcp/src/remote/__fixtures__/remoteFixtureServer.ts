@@ -7,25 +7,32 @@ import { randomUUID } from 'crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
 import type { AddressInfo, Socket } from 'net';
 import { gzipSync } from 'zlib';
+import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 export const FIXTURE_RESOURCE_METADATA_URL = 'https://auth.fixture.example/.well-known/oauth-protected-resource/mcp';
 export const TEN_MB = 10 * 1024 * 1024;
+/** The session id the `/connect-hang` route hands out before it stops answering. */
+export const CONNECT_HANG_SESSION_ID = 'fixture-connect-session';
 
 export interface FixtureRequest {
   method: string;
   path: string;
   host: string;
   sessionId?: string;
+  authorization?: string;
 }
 
 export interface RemoteFixtureServer {
   port: number;
   /** Every request received, in order. */
   requests: FixtureRequest[];
+  /** Number of `tools/list` calls a paginated route has served; reset between tests. */
+  listToolsCalls: { count: number };
   close(): Promise<void>;
 }
 
@@ -67,6 +74,23 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return text ? JSON.parse(text) : undefined;
 }
 
+/**
+ * A server whose `tools/list` paginates one tool per page. `pages` null means it never stops handing out
+ * a `nextCursor`, which is how the client's own page cap is exercised.
+ */
+function buildPaginatedServer(pages: number | null, onListTools: () => void): McpProtocolServer {
+  const server = new McpProtocolServer({ name: 'fixture', version: '1.0.0' }, { capabilities: { tools: {} } });
+  server.setRequestHandler(ListToolsRequestSchema, request => {
+    onListTools();
+    const page = Number(request.params?.cursor ?? '0');
+    const tools = [
+      { name: `tool_${page}`, description: `page ${page}`, inputSchema: { type: 'object' as const, properties: {} } },
+    ];
+    return pages === null || page + 1 < pages ? { tools, nextCursor: String(page + 1) } : { tools };
+  });
+  return server;
+}
+
 function streamForever(res: ServerResponse, contentType: string): void {
   res.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-cache' });
   const timer = setInterval(() => res.write(': ping\n\n'), 20);
@@ -76,6 +100,7 @@ function streamForever(res: ServerResponse, contentType: string): void {
 /** Starts the fixture on 127.0.0.1 with an ephemeral port. */
 export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
   const requests: FixtureRequest[] = [];
+  const listToolsCalls = { count: 0 };
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const legacySessions = new Map<string, SSEServerTransport>();
   const sockets = new Set<Socket>();
@@ -86,7 +111,13 @@ export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
     const path = url.pathname;
     const sessionHeader = req.headers['mcp-session-id'];
     const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined;
-    requests.push({ method: req.method ?? '', path, host: req.headers.host ?? '', sessionId });
+    requests.push({
+      method: req.method ?? '',
+      path,
+      host: req.headers.host ?? '',
+      sessionId,
+      authorization: req.headers.authorization,
+    });
 
     switch (path) {
       case '/mcp': {
@@ -116,6 +147,19 @@ export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
         // Stateless: a fresh server and transport per request, no session id.
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         await buildMcpServer('many').connect(transport);
+        await transport.handleRequest(req, res, req.method === 'POST' ? await readJson(req) : undefined);
+        return;
+      }
+      case '/paginated': {
+        // Stateless, like /many, but tools/list paginates one tool per page for three pages.
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await buildPaginatedServer(3, () => (listToolsCalls.count += 1)).connect(transport);
+        await transport.handleRequest(req, res, req.method === 'POST' ? await readJson(req) : undefined);
+        return;
+      }
+      case '/paginated-forever': {
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        await buildPaginatedServer(null, () => (listToolsCalls.count += 1)).connect(transport);
         await transport.handleRequest(req, res, req.method === 'POST' ? await readJson(req) : undefined);
         return;
       }
@@ -189,6 +233,13 @@ export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
       case '/forbidden':
         res.writeHead(403).end();
         return;
+      case '/forbidden-scope':
+        res
+          .writeHead(403, {
+            'www-authenticate': `Bearer resource_metadata="${FIXTURE_RESOURCE_METADATA_URL}", scope="tools.write"`,
+          })
+          .end();
+        return;
       case '/broken':
         res.writeHead(502).end();
         return;
@@ -204,6 +255,32 @@ export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
       case '/redirect-loop':
         res.writeHead(307, { location: '/redirect-loop' }).end();
         return;
+      case '/connect-hang': {
+        if (req.method === 'DELETE') {
+          res.writeHead(204).end();
+          return;
+        }
+        const message = (await readJson(req)) as
+          { id?: unknown; method?: string; params?: { protocolVersion?: string } } | undefined;
+        // Issue a session id on initialize, then hang: the client's connect deadline fires with a
+        // session already in hand, so its cleanup path is what the test observes.
+        if (message?.method === 'initialize') {
+          res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': CONNECT_HANG_SESSION_ID });
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: message.params?.protocolVersion,
+                capabilities: {},
+                serverInfo: { name: 'fixture', version: '1.0.0' },
+              },
+            })
+          );
+          return;
+        }
+        return;
+      }
       default:
         res.writeHead(404).end();
     }
@@ -225,6 +302,7 @@ export async function startRemoteFixtureServer(): Promise<RemoteFixtureServer> {
   return {
     port,
     requests,
+    listToolsCalls,
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));

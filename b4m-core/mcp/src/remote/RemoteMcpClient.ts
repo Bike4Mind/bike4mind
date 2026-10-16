@@ -69,6 +69,8 @@ export interface RemoteMcpClientConfig {
 /**
  * TEST ONLY. Deliberately not part of `RemoteMcpClientConfig`, so no stored or deployed config can carry it,
  * and `createPinnedFetch` additionally refuses it outside vitest.
+ *
+ * @internal
  */
 export interface RemoteMcpTestOnlyOptions {
   allowLoopback: true;
@@ -286,8 +288,11 @@ export class RemoteMcpClient {
       try {
         connected = await this.withDeadline(op, this.limits.connectTimeoutMs, 'connect', () => connecting);
       } catch (error) {
-        // The connect can still settle after the deadline; close it if it does.
-        connecting.then(
+        // The connect can still settle after the deadline, and it may already hold a session the server
+        // issued on initialize. Wait for it to settle and close it here, inside the `try`, so the session
+        // DELETE (which travels through the same pinned fetch) is dispatched before the outer `finally`
+        // closes the connection pool out from under it.
+        await connecting.then(
           late => late.close(),
           () => undefined
         );
@@ -327,7 +332,7 @@ export class RemoteMcpClient {
       } else {
         consecutiveRedirects = 0;
       }
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) {
         const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
         op.authChallenge = {
           resourceMetadataUrl: resourceMetadataUrl?.href,
@@ -431,7 +436,8 @@ export class RemoteMcpClient {
 
     const status = httpStatusOf(error);
     if (status === 401) return new RemoteMcpAuthRequiredError(op.authChallenge ?? {});
-    if (status === 403) return new RemoteMcpAuthFailedError('The MCP server refused the credentials');
+    if (status === 403)
+      return new RemoteMcpAuthFailedError('The MCP server refused the credentials', op.authChallenge?.scope);
     if (status !== undefined && status >= 500) return new RemoteMcpUpstreamError(status, { cause: error });
     if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
       return new RemoteMcpTimeoutError('The MCP server did not answer in time', { cause: error });

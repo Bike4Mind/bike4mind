@@ -1,11 +1,17 @@
 import dns from 'dns';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONNECT_HANG_SESSION_ID,
   FIXTURE_RESOURCE_METADATA_URL,
   startRemoteFixtureServer,
   type RemoteFixtureServer,
 } from './__fixtures__/remoteFixtureServer';
-import { RemoteMcpAuthRequiredError, RemoteMcpError, type RemoteMcpErrorCode } from './errors';
+import {
+  RemoteMcpAuthFailedError,
+  RemoteMcpAuthRequiredError,
+  RemoteMcpError,
+  type RemoteMcpErrorCode,
+} from './errors';
 import { RemoteMcpClient, type RemoteMcpClientConfig } from './RemoteMcpClient';
 
 type LookupCallback = (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void;
@@ -57,6 +63,7 @@ beforeEach(() => {
   answers = {};
   lookupCalls.length = 0;
   fixture.requests.length = 0;
+  fixture.listToolsCalls.count = 0;
   vi.spyOn(dns, 'lookup').mockImplementation(fakeLookup as unknown as typeof dns.lookup);
 });
 
@@ -119,6 +126,27 @@ describe('RemoteMcpClient - round trips', () => {
   });
 });
 
+describe('RemoteMcpClient - request headers', () => {
+  it('carries the configured headers on every request, including the session DELETE', async () => {
+    const remote = client('/mcp', { headers: { authorization: 'Bearer t' } });
+    await remote.listTools();
+
+    const requests = fixture.requests.filter(r => r.path === '/mcp');
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every(r => r.authorization === 'Bearer t')).toBe(true);
+    expect(requests.some(r => r.method === 'DELETE' && r.sessionId)).toBe(true);
+  });
+
+  it('carries the configured headers on the legacy SSE GET and the message POSTs', async () => {
+    const remote = client('/legacy', { headers: { authorization: 'Bearer t' } });
+    await remote.listTools();
+
+    const requests = fixture.requests.filter(r => r.path === '/legacy' || r.path === '/legacy/messages');
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every(r => r.authorization === 'Bearer t')).toBe(true);
+  });
+});
+
 describe('RemoteMcpClient - tool list limits', () => {
   it('caps the count, truncates descriptions and drops oversized schemas', async () => {
     const result = await client('/many').listTools();
@@ -133,6 +161,20 @@ describe('RemoteMcpClient - tool list limits', () => {
   it('drops tools once the total schema budget is spent', async () => {
     const result = await client('/many', { limits: { maxTotalSchemaBytes: 2048 } }).listTools();
     expect(result.dropped.some(d => d.reason === 'total_schema_too_large')).toBe(true);
+  });
+
+  it('merges every page of a paginated tools/list', async () => {
+    const result = await client('/paginated').listTools();
+
+    expect(result.tools.map(t => t.name)).toEqual(['tool_0', 'tool_1', 'tool_2']);
+    expect(fixture.listToolsCalls.count).toBe(3);
+  });
+
+  it('stops after the page cap when the server never stops handing out a cursor', async () => {
+    const result = await client('/paginated-forever').listTools();
+
+    expect(result.tools).toHaveLength(20);
+    expect(fixture.listToolsCalls.count).toBe(20);
   });
 });
 
@@ -152,7 +194,9 @@ describe('RemoteMcpClient - SSRF', () => {
     expect(fixture.requests).toHaveLength(0);
   });
 
-  it('refuses a redirect to the metadata address', async () => {
+  it('refuses a cross-origin redirect to the metadata address', async () => {
+    // The SDK refuses this as a cross-origin redirect before any hop validation runs, so it proves the
+    // same-origin policy, not the metadata block. The latter is covered in `pinnedFetch.test.ts`.
     await expectCode(client('/redirect-metadata').listTools(), 'protocol');
     expect(fixture.requests.every(r => r.path === '/redirect-metadata')).toBe(true);
   });
@@ -205,6 +249,12 @@ describe('RemoteMcpClient - caps and timeouts', () => {
     await expectCode(client('/mcp', { limits: { callTimeoutMs: 100 } }).callTool('hang'), 'timeout');
     expect(fixture.requests.some(r => r.method === 'DELETE' && r.sessionId)).toBe(true);
   });
+
+  it('deletes an issued session when the connect phase fails after the session id is issued', async () => {
+    const remote = client('/connect-hang', { limits: { connectTimeoutMs: 300 } });
+    await expectCode(remote.listTools(), 'timeout');
+    expect(fixture.requests.some(r => r.method === 'DELETE' && r.sessionId === CONNECT_HANG_SESSION_ID)).toBe(true);
+  });
 });
 
 describe('RemoteMcpClient - auth and upstream errors', () => {
@@ -218,6 +268,12 @@ describe('RemoteMcpClient - auth and upstream errors', () => {
 
   it('maps a 403 to auth_failed', async () => {
     await expectCode(client('/forbidden').listTools(), 'auth_failed');
+  });
+
+  it('keeps the requested scope from a 403 challenge', async () => {
+    const error = await expectCode(client('/forbidden-scope').listTools(), 'auth_failed');
+    expect(error).toBeInstanceOf(RemoteMcpAuthFailedError);
+    expect((error as RemoteMcpAuthFailedError).scope).toBe('tools.write');
   });
 
   it('maps a 5xx to upstream_5xx', async () => {
