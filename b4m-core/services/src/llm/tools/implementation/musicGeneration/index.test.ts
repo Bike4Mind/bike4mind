@@ -45,7 +45,6 @@ describe('music_generation tool', () => {
     const { tool, statusUpdate } = build(createJob);
     const named = [
       'upbeat pop in the style of Some Singer',
-      'a ballad like Some Band',
       'sounds like The Example Group',
       'inspired by Name Surname, slow tempo',
     ];
@@ -59,6 +58,22 @@ describe('music_generation tool', () => {
     const described = 'upbeat indie pop, jangly guitars, handclaps, 120 bpm, in the style of 2010s radio hits';
     expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt: described })).jobId).toBe('job1');
     expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows genre and regional style words after style phrases', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const prompts = [
+      'a track in the style of Motown',
+      'sounds like Latin jazz with congas',
+      'a ballad like Spanish guitar',
+      'in the vein of Celtic folk, fiddle and whistle',
+      'Like a lullaby, inspired by Delta blues',
+    ];
+    for (const prompt of prompts) {
+      expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    }
+    expect(createJob).toHaveBeenCalledTimes(prompts.length);
   });
 
   it('passes lyrics, instrumental and length through and leaves omitted fields to the job', async () => {

@@ -29,15 +29,55 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
-// Providers refuse prompts that name real artists, so catch the common "style of <Proper Noun>" shapes before a job exists.
+// Providers refuse prompts that name real artists, so catch "style of <Name>" shapes before a job exists.
+// Genre, place and style words are exempt so "in the style of Motown" or "sounds like Latin jazz" pass.
 const ARTIST_REFERENCE =
-  /\b(?:in the style of|in the vein of|style of|sounds? like|sounding like|similar to|reminiscent of|inspired by|a la|like)\s+(?:the\s+)?[A-Z]/;
+  /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?((?:[A-Z][\w'.-]*\s?)+)/g;
+
+const STYLE_WORDS = new Set([
+  'latin',
+  'spanish',
+  'motown',
+  'celtic',
+  'nashville',
+  'delta',
+  'baroque',
+  'gospel',
+  'jazz',
+  'blues',
+  'african',
+  'brazilian',
+  'cuban',
+  'irish',
+  'french',
+  'german',
+  'italian',
+  'asian',
+  'caribbean',
+  'appalachian',
+  'memphis',
+  'chicago',
+  'detroit',
+  'classical',
+  'romantic',
+  'medieval',
+  'renaissance',
+  'american',
+  'british',
+  'western',
+]);
 
 export const ARTIST_REFERENCE_REFUSAL =
   'Music generation failed (artist_reference): the prompt appears to name a real artist or band. ' +
   'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
 
-export const namesArtistReference = (prompt: string): boolean => ARTIST_REFERENCE.test(prompt);
+export const namesArtistReference = (prompt: string): boolean =>
+  Array.from(prompt.matchAll(ARTIST_REFERENCE)).some(match =>
+    match[1]
+      .trim()
+      .split(/\s+/)
+      .some(word => !STYLE_WORDS.has(word.toLowerCase()))
+  );
 
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
 const toRequest = (args: MusicToolArgs): MusicGenerationRequest => ({
