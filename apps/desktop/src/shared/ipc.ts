@@ -57,6 +57,7 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { FleetSettingsInput, FleetState } from './fleet';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -81,6 +82,14 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
   usageGetHistory: 'usage:get-history',
+  fleetGetState: 'fleet:get-state',
+  fleetSave: 'fleet:save',
+  fleetForgetKey: 'fleet:forget-key',
+  fleetSetConsent: 'fleet:set-consent',
+  fleetTestConnection: 'fleet:test-connection',
+  fleetSendNow: 'fleet:send-now',
+  /** main -> renderer push of the integration's state; never carries the key. */
+  fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
@@ -432,6 +441,20 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+  };
+  fleet: {
+    getState(): Promise<FleetState>;
+    /**
+     * Save the Fleet URL, and the key when one is given. The key goes into main here and is
+     * never handed back: the state only says whether one is configured.
+     */
+    save(input: FleetSettingsInput): Promise<{ ok: true; state: FleetState } | { ok: false; error: string }>;
+    forgetKey(): Promise<FleetState>;
+    /** Off empties the unsent queue, and nothing is recorded until it is on again. */
+    setConsent(consent: boolean): Promise<FleetState>;
+    testConnection(): Promise<FleetState>;
+    sendNow(): Promise<FleetState>;
+    onStateChanged(listener: (state: FleetState) => void): () => void;
   };
   chat: {
     /**
