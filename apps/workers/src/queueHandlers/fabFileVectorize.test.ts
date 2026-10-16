@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
   // Empty = nothing embedded yet, the normal first-message case. The space-conflict tests override
   // it to put the file in a space the message's resolved model is not in.
   distinctEmbeddingModelsByFabFileId: vi.fn(async () => [] as string[]),
+  // false = no file on the deployment is in the requested model's space, i.e. a keyless stage.
+  hasVectorizedFileInEmbeddingSpace: vi.fn(async () => false),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   // Echoes the requested model, matching the real helper's no-fallback path. The keyless-arm
   // test overrides this to return a different `model` and asserts the stamp follows.
@@ -90,6 +92,7 @@ vi.mock('@bike4mind/database', () => ({
     update: h.fabFileUpdate,
     advanceVectorizeProgress: h.advanceVectorizeProgress,
     claimIndexNotification: h.claimIndexNotification,
+    hasVectorizedFileInEmbeddingSpace: h.hasVectorizedFileInEmbeddingSpace,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -160,6 +163,15 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
   getProviderFromModel: vi.fn(() => 'openai'),
   resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
+  EmbeddingAuthError: class extends Error {
+    constructor(
+      readonly provider: string,
+      message: string
+    ) {
+      super(message);
+      this.name = 'EmbeddingAuthError';
+    }
+  },
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   // Same mirroring for the space-conflict pair. Only `name` and the operator-detail message matter
@@ -1366,5 +1378,87 @@ describe('fabFileVectorize handler - second embedding space refusal', () => {
       logger: mockLogger,
     });
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - keyless substitute on a deployment that has the requested model', () => {
+  const TITAN = 'amazon.titan-embed-text-v2:0';
+  const lakeFile = { id: 'ff1', batchId: 'batch-1', vectorized: false, chunkCount: 1, vectorizedChunkCount: 0 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
+    h.findAccessibleById.mockResolvedValue(lakeFile);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([]);
+    h.hasVectorizedFileInEmbeddingSpace.mockResolvedValue(false);
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+  });
+
+  it('fails the file instead of embedding it with the substitute', async () => {
+    h.hasVectorizedFileInEmbeddingSpace.mockResolvedValue(true);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      /No credential for text-embedding-3-small/
+    );
+
+    expect(h.hasVectorizedFileInEmbeddingSpace).toHaveBeenCalledWith('text-embedding-3-small');
+    expect(h.getVector).not.toHaveBeenCalled();
+    // The refusal must sit upstream of the cache and the spend gate: a regression that moves it
+    // after enforceEmbeddingSpendGate still throws, but reserves lake spend first.
+    expect(h.getEmbedding).not.toHaveBeenCalled();
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
+      'ff1',
+      'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+    );
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.any(String));
+    expect(sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ action: 'update_file_chunk_vector_status', vectorizeStatus: 'failed' })
+    );
+  });
+
+  it('leaves the file pending on a non-final delivery, so a restored credential can still embed it', async () => {
+    h.hasVectorizedFileInEmbeddingSpace.mockResolvedValue(true);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the substitute on a deployment with no file in the requested model', async () => {
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate.mock.calls[0][0]).toMatchObject({ id: 'c1', embeddingModel: TITAN });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('does not read the corpus when the requested model resolved', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.hasVectorizedFileInEmbeddingSpace).not.toHaveBeenCalled();
   });
 });

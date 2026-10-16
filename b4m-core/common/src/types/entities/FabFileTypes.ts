@@ -1953,6 +1953,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor

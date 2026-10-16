@@ -168,6 +168,62 @@ describe('FabFileRepository.findFilesOutsideEmbeddingSpaceByScope', () => {
   });
 });
 
+describe('FabFileRepository.hasVectorizedFileInEmbeddingSpace', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  const MODEL = 'text-embedding-3-small';
+  // The completion stamp; the label only counts as authoritative once it is set.
+  const STAMPED = new Date();
+
+  it('ignores files that are deleted, unembedded, or labelled with another model', async () => {
+    await FabFile.create([
+      makeFile({
+        embeddingModel: MODEL,
+        vectorizedChunkCount: 3,
+        chunkEmbeddingModelStampedAt: STAMPED,
+        deletedAt: new Date(),
+      }),
+      makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 0, chunkEmbeddingModelStampedAt: STAMPED }),
+      makeFile({
+        embeddingModel: 'text-embedding-ada-002',
+        vectorizedChunkCount: 3,
+        chunkEmbeddingModelStampedAt: STAMPED,
+      }),
+    ]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(false);
+  });
+
+  it('ignores an in-flight file, whose requested label is not yet authoritative', async () => {
+    // Chunking writes the requested model with a null stamp, and a non-final vectorize message
+    // raises the count while leaving the label and stamp alone - so an in-flight file carries this
+    // exact shape. Reading the label as proof of its space makes the file match its own
+    // substitution and refuse every later message on a keyless stage.
+    await FabFile.create([
+      makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 50, chunkEmbeddingModelStampedAt: null }),
+    ]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(false);
+  });
+
+  it('counts a file completed before the stamp field existed, which carries no stamp', async () => {
+    // The stamp field post-dates the corpus: a file embedded before it has a real label and no stamp
+    // at all (only an explicit null marks in-flight). It is settled, so the guard must still see it -
+    // excluding it would restore the silent keyless substitution on the established deployments this
+    // check exists to protect.
+    await FabFile.create([makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3 })]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(true);
+  });
+
+  it('finds a live file with vectors in that model, whatever lake it belongs to', async () => {
+    await FabFile.create([
+      makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3, chunkEmbeddingModelStampedAt: STAMPED, tags: [] }),
+    ]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(true);
+  });
+});
+
 describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
   setupMongoTest();
   beforeEach(async () => {
