@@ -10,7 +10,7 @@ import {
 import { McpServerName } from './McpServerTypes';
 
 describe('McpConnectionSlugSchema', () => {
-  it.each(['ab', 'linear', 'my_server_2', 'a2345678901234567890'])('accepts %s', slug => {
+  it.each(['ab', 'linear', 'my_server_2', 'a2345678901234567890', 'a_b', 'x1_2_3'])('accepts %s', slug => {
     expect(isValidMcpConnectionSlug(slug)).toBe(true);
   });
 
@@ -23,6 +23,10 @@ describe('McpConnectionSlugSchema', () => {
     ['my-server', 'hyphen'],
     ['my server', 'space'],
     ['', 'empty'],
+    ['my__server', 'double underscore (the namespace separator)'],
+    ['linear_', 'trailing underscore'],
+    ['a_', 'trailing underscore at minimum length'],
+    ['a_2345678901234567890', 'too long with underscores'],
   ])('rejects %s (%s)', slug => {
     expect(isValidMcpConnectionSlug(slug)).toBe(false);
   });

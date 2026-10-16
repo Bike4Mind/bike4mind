@@ -290,8 +290,12 @@ export function toMcpConnectionPublic(doc: IMcpConnectionDocument): IMcpConnecti
   };
 }
 
-/** Namespace for the connection's tools (`<slug>__<tool>`), so it must stay short and unambiguous. */
-export const MCP_CONNECTION_SLUG_PATTERN = /^[a-z][a-z0-9_]{1,19}$/;
+/**
+ * Namespace for the connection's tools (`<slug>__<tool>`), so it must stay short and unambiguous:
+ * 2-20 characters, a leading letter, and single underscores between alphanumeric runs. No `__`
+ * (the namespace separator) and no trailing `_`, which would make `<slug>__<tool>` ambiguous.
+ */
+export const MCP_CONNECTION_SLUG_PATTERN = /^(?=.{2,20}$)[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 
 /**
  * Slugs a custom connection may never take: every built-in server name (so `<slug>__<tool>` can
@@ -314,7 +318,8 @@ export const RESERVED_MCP_CONNECTION_SLUGS: ReadonlySet<string> = new Set([
 export const McpConnectionSlugSchema = z
   .string()
   .regex(MCP_CONNECTION_SLUG_PATTERN, {
-    message: 'Slug must start with a lowercase letter and use 2-20 lowercase letters, digits or underscores',
+    message:
+      'Slug must be 2-20 characters: a lowercase letter, then lowercase letters, digits and single underscores, not ending in an underscore',
   })
   .refine(slug => !RESERVED_MCP_CONNECTION_SLUGS.has(slug), { message: 'This slug is reserved' });
 

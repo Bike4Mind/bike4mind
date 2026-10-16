@@ -132,6 +132,11 @@ describe('McpConnectionModel', () => {
       await expect(mcpConnectionRepository.create(baseConnection({ displayName: 'Again' }))).rejects.toThrow(/E11000/);
     });
 
+    it('refuses a slug outside the grammar at the schema level', async () => {
+      await expect(mcpConnectionRepository.create(baseConnection({ slug: 'bad__slug' }))).rejects.toThrow(/slug/);
+      await expect(mcpConnectionRepository.create(baseConnection({ slug: 'trailing_' }))).rejects.toThrow(/slug/);
+    });
+
     it('allows the same slug for a different owner or owner type', async () => {
       await mcpConnectionRepository.create(baseConnection());
       await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-2', userId: 'user-2' }));
