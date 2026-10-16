@@ -16,6 +16,10 @@
  * member of (`getActiveSubscriptionsForUser`) - an org seat confers the org
  * plan's price-derived keys exactly as an owned subscription would. The same
  * row set feeds the rate tier and `/api/v1/me`.
+ *
+ * Note the webhook invalidation fan-out for seats is still separate work: the Stripe handler
+ * (`apps/workers/src/events/stripe/customerSubscriptionUpdated.ts`) skips org owners, so the
+ * client's cached entitlements can lag a seat change until its next refetch.
  */
 import {
   applyImpliedEntitlements,
@@ -25,7 +29,7 @@ import {
 } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
+import { getRequestMembershipOrgIds, type MembershipRequest } from '@server/dataLakes/requestMembership';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -38,10 +42,8 @@ import type { Logger } from '@bike4mind/observability';
  * never surfaces because express types are not imported here at all. Any
  * Express.Request (or Next.js request) is structurally assignable to this.
  */
-export interface EntitlementRequest {
-  user?: IUserDocument;
+export interface EntitlementRequest extends MembershipRequest {
   entitlements?: EntitlementKey[];
-  membershipOrgIds?: string[];
   /** Attached by `baseApi()` early in the middleware chain; optional so a bare test double still fits. */
   logger?: Logger;
 }
@@ -156,6 +158,8 @@ export async function getRequestEntitlements(req: EntitlementRequest): Promise<E
   const active = await getActiveSubscriptionsForUser(req.user.id, {
     membershipOrgIds: await getRequestMembershipOrgIds(req),
   });
+  // The early return above covers the settled case; `??=` covers two callers that both passed
+  // it before either assigned - the first write wins, so both resolve to the same list.
   return (req.entitlements ??= await getUserEntitlements(req.user, active));
 }
 
