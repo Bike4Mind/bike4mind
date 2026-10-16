@@ -30,8 +30,6 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
   value.usableModels.length > 0;
 
 // Providers refuse prompts that name real artists, so catch "style of <Name>" shapes before a job exists.
-// Genre, place and style words are exempt so "in the style of Motown" or "sounds like Latin jazz" pass.
-// The phrase matches in any case (sentence-initial "In the style of"); the name must start with a capital.
 const STYLE_PHRASE = /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?/gi;
 // A dot only joins letters, so the run ends at a sentence boundary instead of swallowing the next sentence.
 const CAPITALIZED_RUN = /^(?:\p{Lu}(?:[\p{L}\p{N}'-]|\.(?=\p{L}))*[ \t]?)+/u;
@@ -106,8 +104,8 @@ export const musicGenerationTool: ToolDefinition = {
   implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
     if (!isMusicToolConfig(config)) return buildUnavailableTool('music_generation', 'Music generation');
     const { schema, description } = buildMusicToolSchema(config.usableModels);
-    // The guard is a heuristic, so it refuses once per built tool (one chat turn or agent run): a false positive such
-    // as "inspired by Shakespeare" costs one rephrase instead of looping until the tool-call cap with no song.
+    // The guard is a heuristic, so it refuses once per built tool instance: a false positive such as
+    // "inspired by Example Soloist" costs one rephrase instead of looping until the tool-call cap with no song.
     let artistRefusalSent = false;
     return {
       toolFn: async (parameters?: unknown) => {

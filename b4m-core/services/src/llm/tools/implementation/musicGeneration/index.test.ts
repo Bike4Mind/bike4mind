@@ -75,7 +75,7 @@ describe('music_generation tool', () => {
   it('refuses an artist-shaped prompt at most once per turn, so a false positive cannot block the song', async () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);
-    const prompt = 'a sonnet set to lute music, inspired by Shakespeare';
+    const prompt = 'a sonnet set to lute music, inspired by Example Soloist';
     expect(await tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
     expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
     expect(createJob).toHaveBeenCalledTimes(1);
