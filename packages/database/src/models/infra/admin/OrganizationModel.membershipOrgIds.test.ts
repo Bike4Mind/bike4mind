@@ -46,6 +46,31 @@ describe('OrganizationRepository.findMembershipOrgIds', () => {
   });
 });
 
+describe('OrganizationRepository.findPlanHolderOrgIds', () => {
+  setupMongoTest();
+
+  it('adds manager and admin orgs without a member row, while findMembershipOrgIds stays narrow', async () => {
+    const owned = await makeOrg('owned', { userId: 'u1' });
+    const member = await makeOrg('member', { users: [{ userId: 'u1', permissions: ['read'] }] });
+    const managed = await makeOrg('managed', { managerId: 'u1' });
+    const administered = await makeOrg('administered', { adminUserIds: ['u1'] });
+    await makeOrg('unrelated', { managerId: 'u2', adminUserIds: ['u3'] });
+
+    const ids = (await organizationRepository.findPlanHolderOrgIds('u1')).sort();
+    expect(ids).toEqual([owned, member, managed, administered].map(o => String(o._id)).sort());
+    expect((await organizationRepository.findMembershipOrgIds('u1')).sort()).toEqual(
+      [owned, member].map(o => String(o._id)).sort()
+    );
+  });
+
+  it('returns each org once and excludes soft-deleted orgs', async () => {
+    const all = await makeOrg('all-arms', { userId: 'u1', managerId: 'u1', adminUserIds: ['u1'] });
+    const deleted = await makeOrg('deleted', { managerId: 'u1' });
+    await Organization.collection.updateOne({ _id: deleted._id }, { $set: { deletedAt: new Date() } });
+    expect(await organizationRepository.findPlanHolderOrgIds('u1')).toEqual([String(all._id)]);
+  });
+});
+
 describe('OrganizationRepository.search - users[] ACL membership arm', () => {
   setupMongoTest();
 

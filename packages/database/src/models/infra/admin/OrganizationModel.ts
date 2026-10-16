@@ -437,6 +437,21 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Membership (owner + users[] ACL) widened with managerId / adminUserIds, so an org manager or
+   * admin without a member row still resolves the org plan. Plan resolution only: deliberately a
+   * separate method so `findMembershipOrgIds` (data access) does not widen. Every arm is indexed.
+   */
+  async findPlanHolderOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel
+      .find(
+        { $or: [...(orgMembershipFilter(userId).$or as object[]), { managerId: userId }, { adminUserIds: userId }] },
+        { _id: 1 }
+      )
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
    * The forward direction of findMembershipOrgIds: who the org's members are, for scoping a report
    * over content those members authored. Reconciles the two populations rather than choosing one -
    * see OrgMemberPopulation for why they differ and what each one-sided list means.

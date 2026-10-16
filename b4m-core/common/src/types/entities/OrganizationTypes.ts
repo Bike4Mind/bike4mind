@@ -168,6 +168,14 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findMembershipOrgIds(userId: string): Promise<string[]>;
 
   /**
+   * IDs of every organization whose plan applies to the user: everything `findMembershipOrgIds`
+   * returns PLUS orgs where the user is the manager (`managerId`) or an appointed admin
+   * (`adminUserIds`) without a member row. For plan/entitlement resolution ONLY - never feed it
+   * into data access (lake scope, `AccessContext.organizationIds`).
+   */
+  findPlanHolderOrgIds(userId: string): Promise<string[]>;
+
+  /**
    * Every user id whose org-stamped content belongs in this org's reports, plus the disagreement
    * between the two populations that define "belongs". See `OrgMemberPopulation`.
    */
