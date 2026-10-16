@@ -2,6 +2,7 @@ import { NotebookCurationEvents } from '@server/utils/eventBus';
 import { sessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 import { NotebookCurateRequestSchema } from '../../../types/api';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
@@ -34,6 +35,8 @@ const handler = baseApi().post(
     }
 
     const { sessionIds, curationType, artifactTypes, exportFormat, customNotebookName } = validatedBody;
+    // Only the executive summary calls an LLM (billed per call in the worker); refuse before enqueueing.
+    if (curationType === 'executive_summary') await assertOwnerCanAfford(req.user!);
 
     try {
       const batchJobId = uuidv4();

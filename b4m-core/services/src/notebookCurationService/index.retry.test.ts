@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CurationType, type CurationOptions } from '@bike4mind/common';
+import { CurationType, insufficientCreditsError, type CurationOptions } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookCurationService, type NotebookCurationAdapters } from './index';
 
@@ -39,9 +39,6 @@ function buildDefaultAdapters() {
       create: vi.fn().mockResolvedValue({ id: 'fab-1', fileName: 'curated.md', fileSize: 1 }),
     },
     fileStorageService: { upload: vi.fn(), generateSignedUrl: vi.fn() },
-    // Only reached if a gate wrongly lets the write through; kept working (rather than
-    // left empty) so that failure mode surfaces as the gate assertions below, not as an
-    // unrelated mock gap further down the success path (credit deduction).
     creditTransactionRepository: { createTransaction: vi.fn().mockResolvedValue(undefined) },
     userRepository: {
       findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 100000, currentStorageSize: 0 }),
@@ -55,21 +52,26 @@ function buildDefaultAdapters() {
   };
 }
 
-describe('curation retry after credit write failure', () => {
-  it('does not advertise an unbilled file as a successful cached completion', async () => {
-    const state: Record<string, unknown> = { ...session };
+describe('curation billing', () => {
+  it('writes no credit transaction itself: the host bills the summary LLM calls', async () => {
     const adapters = buildDefaultAdapters();
-    adapters.sessionRepository.findById.mockImplementation(async () => state as typeof session);
-    adapters.sessionRepository.update.mockImplementation(async value => {
-      Object.assign(state, value);
-    });
-    adapters.fabFileRepository.findById.mockResolvedValue({ id: 'fab-1', fileName: 'curated.md', fileSize: 1 });
-    adapters.creditTransactionRepository.createTransaction.mockRejectedValueOnce(new Error('credit write unavailable'));
     const service = new NotebookCurationService(adapters as unknown as NotebookCurationAdapters);
-    expect((await service.curateNotebook('s1', 'u1', options)).success).toBe(false);
-    const retried = await service.curateNotebook('s1', 'u1', options);
-    expect(retried.success).toBe(true);
-    expect(adapters.userRepository.incrementCredits).toHaveBeenCalledOnce();
+    expect(await service.curateNotebook('s1', 'u1', options)).toMatchObject({ success: true, tokensDeducted: 0 });
+    expect(adapters.creditTransactionRepository.createTransaction).not.toHaveBeenCalled();
+    expect(adapters.userRepository.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('reports an out-of-credits summary as not retryable and persists nothing', async () => {
+    const adapters = buildDefaultAdapters();
+    const service = new NotebookCurationService({
+      ...adapters,
+      llmService: { complete: vi.fn().mockRejectedValue(insufficientCreditsError('Not enough credits')) },
+      llmModelId: 'ops-model',
+    } as unknown as NotebookCurationAdapters);
+    expect(
+      await service.curateNotebook('s1', 'u1', { ...options, curationType: CurationType.EXECUTIVE_SUMMARY })
+    ).toEqual({ success: false, error: 'Not enough credits', retryable: false });
+    expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
   });
 });
 

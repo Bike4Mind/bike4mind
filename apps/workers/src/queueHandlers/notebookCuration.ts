@@ -10,7 +10,7 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
-import { notebookCurationService } from '@bike4mind/services';
+import { meterCompletionBackend, notebookCurationService } from '@bike4mind/services';
 import { CurationOptions } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
 import { createNotebookCommit } from './notebookCurationCommit';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -126,6 +127,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   };
 
   let committed = false;
+  let creditsCharged = 0;
   try {
     // Create LLM service adapter if executive summary is requested
     let llmService: any = undefined;
@@ -137,10 +139,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         const { OperationsModelService } = await import('@client/services/operationsModelService');
         const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
-        // Create adapter that matches the LLMContext interface
-        llmService = {
-          complete: llm.complete.bind(llm),
-        };
+        // Every summary call is reserved and settled against the user's billing owner (org seat when
+        // present); the operations model runs on the platform key.
+        const meter = createCompletionMeter(user, logger, 'notebook curation', { sessionId });
+        llmService = meterCompletionBackend(
+          { complete: llm.complete.bind(llm) },
+          async (...args) => {
+            const metered = await meter(...args);
+            return { ...metered, settle: async usage => (creditsCharged += await metered.settle(usage)) };
+          },
+          modelInfo
+        );
 
         // Store the model ID to pass to the curation service
         llmModelId = modelInfo.id;
@@ -231,7 +240,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       includeResearch: includeAll || artifactSet.has('DEEP_RESEARCH'),
       // IMAGE maps to includeImages
       includeImages: includeAll || artifactSet.has('IMAGE'),
-      tokenBudget: curationType === 'executive_summary' ? 100 : 100, // Base cost (LLM tokens added separately)
       exportFormat: exportFormat || 'markdown',
       customNotebookName,
     };
@@ -277,7 +285,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       artifactCount: result.artifactCount,
       messageCount: result.messageCount,
       tokensProcessed: result.tokensProcessed,
-      tokensDeducted: result.tokensDeducted,
+      tokensDeducted: creditsCharged,
     });
 
     committed = true;
@@ -290,7 +298,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       percentage: 100,
       message: 'Curation completed successfully!',
       curatedFileId: result.curatedFileId,
-      tokensDeducted: result.tokensDeducted,
+      tokensDeducted: creditsCharged,
     });
 
     // Publish completion event with actual values used (not undefined)
