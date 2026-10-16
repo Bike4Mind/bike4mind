@@ -578,10 +578,11 @@ export interface ChatCompletionFeature {
     attachedFileTokenBudget: number
   ) => Promise<IMessage[]>;
   /**
-   * Called when the input budget kept none of the system messages this feature returned, so it can
-   * take back what it published on the strength of them.
+   * Called when the input budget dropped a system message this feature returned, so it can take
+   * back what it published on the strength of the dropped ones. `deliveredMessages` is the final
+   * payload, so a feature can tell which of its own messages survived.
    */
-  onContextDropped?: (quest: IChatHistoryItemDocument) => void;
+  onContextDropped?: (quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>) => void;
 }
 
 /**
@@ -2107,6 +2108,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private includeLibraryFiles: boolean | undefined;
   /** Keys of the citables this turn's injection added, withdrawn if the block never reaches the model. */
   private publishedCitableKeys = new Set<string>();
+  /**
+   * The retrieved-passages message this turn returned, or undefined when it returned none. The lake
+   * prompt is a separate message of the same source, so withdrawal keys on THIS message: a kept lake
+   * prompt must not pass the chips through when the passages behind them were dropped.
+   */
+  private retrievedContextMessage?: IMessage;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2809,10 +2816,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * abstention text. Its chips would credit sources the answer never read, so take them back and
    * warn that the passages were not used.
    */
-  onContextDropped(quest: IChatHistoryItemDocument): void {
+  onContextDropped(quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>): void {
     const published = this.publishedCitableKeys;
     this.publishedCitableKeys = new Set();
-    if (published.size === 0 || !quest.promptMeta) return;
+    const passages = this.retrievedContextMessage;
+    this.retrievedContextMessage = undefined;
+    // The lake prompt can survive the budget while the passages behind it do not, and only the
+    // passages justify the chips - so a delivered passages block keeps them.
+    if (published.size === 0 || !quest.promptMeta || (passages && deliveredMessages.has(passages))) return;
     quest.promptMeta.citables = (quest.promptMeta.citables ?? []).filter(c => !published.has(citableKey(c)));
     this.logger.warn('\u{1F512} Forced retrieval: context block dropped by the input budget, citations withdrawn');
     quest.promptMeta.warnings = [
@@ -2827,6 +2838,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     message: string
   ): Promise<IMessage[]> {
     this.publishedCitableKeys = new Set();
+    this.retrievedContextMessage = undefined;
     const query = message?.trim();
     if (!query) return [];
 
@@ -3751,6 +3763,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
 
+      this.retrievedContextMessage = retrievedContext;
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {
       // A failed search still leaves the turn ungrounded, so it gets the abstention block for the

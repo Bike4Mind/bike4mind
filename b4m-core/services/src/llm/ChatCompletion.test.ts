@@ -7557,6 +7557,7 @@ describe('ChatCompletionProcess', () => {
   // no second count, and a lake block the budget dropped bills nothing.
   describe('lake retrieval promoted out of the system-prompt residual', () => {
     const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const lakePrompt = { role: 'system' as const, content: 'LAKE-OPERATING-PROMPT' };
     const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
 
     // Content-keyed so a message counts the same way in the six source totals and in
@@ -7569,7 +7570,7 @@ describe('ChatCompletionProcess', () => {
         return sum + 1;
       }, 0);
 
-    const runWithLakeSources = async (opts: { withLakes: boolean; dropRetrieval?: boolean }) => {
+    const runWithLakeSources = async (opts: { withLakes: boolean; dropRetrieval?: boolean; lakePrompt?: boolean }) => {
       mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
       mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
@@ -7613,7 +7614,7 @@ describe('ChatCompletionProcess', () => {
       const onRetrievalDropped = vi.fn();
       if (opts.withLakes) {
         service.features.set('knowledgeRetrieval', {
-          getContextMessages: async () => [chunk],
+          getContextMessages: async () => (opts.lakePrompt ? [lakePrompt, chunk] : [chunk]),
           onContextDropped: onRetrievalDropped,
         } as any);
         service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
@@ -7640,6 +7641,17 @@ describe('ChatCompletionProcess', () => {
     it('leaves forced retrieval alone when its block was delivered', async () => {
       const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true });
       expect(onRetrievalDropped).not.toHaveBeenCalled();
+    });
+
+    it('tells forced retrieval when the lake prompt was kept but its passages were dropped', async () => {
+      // The lake prompt and the passages are separate messages of the one source, so a kept prompt
+      // must not stand in for the dropped passages: the chips rest on the passages alone.
+      const { onRetrievalDropped } = await runWithLakeSources({
+        withLakes: true,
+        dropRetrieval: true,
+        lakePrompt: true,
+      });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
     });
 
     it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
