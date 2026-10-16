@@ -198,6 +198,8 @@ import {
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@server/utils/config';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
@@ -1056,6 +1058,23 @@ async function processExecution(
     if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
     llm.currentModel = resolvedModelId;
 
+    // Same admission rule as chat (b4m-core/services/src/llm/modelAdmission.ts), after the remap so the
+    // model that actually runs is the one checked. Admission only: billing stays per-iteration.
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const refusal = await modelAdmission.assert(resolvedModelId).then(
+      () => null,
+      (err: Error) => err
+    );
+    if (refusal) {
+      logger.warn('[ModelAdmission] Refusing agent execution model', {
+        model: resolvedModelId,
+        reason: refusal.message,
+      });
+      await agentExecutionRepository.markFailed(executionId, { message: refusal.message });
+      await sendWs('failed', { executionId, reason: 'model_not_admitted' });
+      return;
+    }
+
     // Pre-flight credit check
     const userCredits = (user as IUserDocument).currentCredits ?? 0;
     const orgCredits = organization?.currentCredits ?? 0;
@@ -1240,7 +1259,10 @@ async function processExecution(
     let orgAgents: ServerAgentDefinition[] = [];
     try {
       const userStored = await agentRepository.listForUser(execution.userId);
-      userAgents = pickRunnableAgents(userStored).map(toServerAgentDefinition);
+      userAgents = await admitAgentDefinitions(
+        pickRunnableAgents(userStored).map(toServerAgentDefinition),
+        modelAdmission
+      );
     } catch (err) {
       // Don't fail execution if user agents can't be loaded - fall back to built-ins + org.
       logger.warn('[AgentStore] Failed to load user agents; continuing without user overlay', {
@@ -1251,7 +1273,10 @@ async function processExecution(
     if (execution.organizationId) {
       try {
         const orgStored = await agentRepository.listForOrganization(execution.organizationId);
-        orgAgents = pickRunnableAgents(orgStored).map(toServerAgentDefinition);
+        orgAgents = await admitAgentDefinitions(
+          pickRunnableAgents(orgStored).map(toServerAgentDefinition),
+          modelAdmission
+        );
       } catch (err) {
         logger.warn('[AgentStore] Failed to load org agents; continuing without org overlay', {
           organizationId: execution.organizationId,
@@ -3430,12 +3455,40 @@ async function processSubagentDispatch(
     if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
     llm.currentModel = child.model;
 
+    const modelAdmission = await createModelAdmission(user as IUserDocument, models);
+    const refusal = await modelAdmission.assert(child.model).then(
+      () => null,
+      (err: Error) => err
+    );
+    if (refusal) {
+      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'model_not_admitted',
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
+
     // Resolve agent definition (built-in + user/org-scoped overlays).
     let userAgents: ServerAgentDefinition[] = [];
     let orgAgents: ServerAgentDefinition[] = [];
     try {
       const userStored = await agentRepository.listForUser(child.userId);
-      userAgents = pickRunnableAgents(userStored).map(toServerAgentDefinition);
+      userAgents = await admitAgentDefinitions(
+        pickRunnableAgents(userStored).map(toServerAgentDefinition),
+        modelAdmission
+      );
     } catch (err) {
       logger.warn('[AgentStore] Failed to load user agents for subagent dispatch', {
         error: err instanceof Error ? err.message : String(err),
@@ -3444,7 +3497,10 @@ async function processSubagentDispatch(
     if (child.organizationId) {
       try {
         const orgStored = await agentRepository.listForOrganization(child.organizationId);
-        orgAgents = pickRunnableAgents(orgStored).map(toServerAgentDefinition);
+        orgAgents = await admitAgentDefinitions(
+          pickRunnableAgents(orgStored).map(toServerAgentDefinition),
+          modelAdmission
+        );
       } catch (err) {
         logger.warn('[AgentStore] Failed to load org agents for subagent dispatch', {
           error: err instanceof Error ? err.message : String(err),

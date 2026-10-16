@@ -313,6 +313,7 @@ Return only the edited content without any markdown code blocks or explanations.
         const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
         await settleCompletion(reservation, req, {
           model: modelInfo.id,
+          provider: modelInfo.backend,
           usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,

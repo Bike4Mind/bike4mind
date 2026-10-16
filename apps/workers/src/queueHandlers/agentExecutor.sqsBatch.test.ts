@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 // The SQS branch of `handler` is exercised here via the depth-guard "terminate"
 // path (checkpointDepth over MAX_CHECKPOINT_DEPTH), which returns before touching
 // the session/user/agent-execution pipeline - so this test only needs to stub the

@@ -129,6 +129,7 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     expect(m.reserve).toHaveBeenCalledBefore(m.complete);
     expect(m.settle).toHaveBeenCalledWith({
       model: 'model-a',
+      provider: 'anthropic',
       usd: 200 * 0.001 + 10 * 0.002,
       inputTokens: 200,
       outputTokens: 10,

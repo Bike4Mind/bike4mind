@@ -371,6 +371,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     await settleCompletion(reservation, req, {
       sessionId,
       model: modelInfo.id,
+      provider: modelInfo.backend,
       usd:
         (rootUsage
           ? completionUsd(modelInfo, {

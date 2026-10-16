@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { IncomingHttpHeaders } from 'http';
 import { getTextModelCost, getTurnsCost, type IMessage, type IUserDocument, type ModelInfo } from '@bike4mind/common';
-import { adminSettingsRepository } from '@bike4mind/database';
-import type { CompletionInfo } from '@bike4mind/llm-adapters/backend';
+import { adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
+import { latchUsage, type CompletionMeter, type CompletionUsage } from '@bike4mind/services';
+import type { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission as createSharedModelAdmission,
   loadModelConfigurations,
@@ -69,19 +70,7 @@ export async function reserveCompletionCredits(
   });
 }
 
-export type CompletionUsage = Pick<
-  CompletionInfo,
-  'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens' | 'turnUsage'
->;
-
-/** Latch each usage field from whichever chunk carries it (same contract as cliCompletions). */
-export function latchUsage(usage: CompletionUsage, info?: CompletionInfo): void {
-  if (info?.inputTokens) usage.inputTokens = info.inputTokens;
-  if (info?.outputTokens) usage.outputTokens = info.outputTokens;
-  if (info?.cacheReadInputTokens) usage.cacheReadInputTokens = info.cacheReadInputTokens;
-  if (info?.cacheCreationInputTokens) usage.cacheCreationInputTokens = info.cacheCreationInputTokens;
-  if (info?.turnUsage?.length) usage.turnUsage = info.turnUsage;
-}
+export { latchUsage, type CompletionUsage };
 
 /** Same pricing rule as cliCompletions' settledUsdCost. */
 export function completionUsd(modelInfo: ModelInfo, usage: CompletionUsage): number {
@@ -96,20 +85,91 @@ export function completionUsd(modelInfo: ModelInfo, usage: CompletionUsage): num
       );
 }
 
-/** Charge `usd` (capped at the hold) with one completion_api_usage row; 0 refunds with no row. */
-export function settleCompletion(
+/**
+ * Charge `usd` (capped at the hold) with one completion_api_usage ledger row (0 refunds with no row),
+ * then record one UsageEvent with the credits actually charged. The event never fails the request.
+ */
+export async function settleCompletion(
   reservation: CreditReservation,
   req: MeteredRequest,
-  charge: { model: string; usd: number; inputTokens: number; outputTokens: number; sessionId?: string }
+  charge: {
+    model: string;
+    provider: string;
+    usd: number;
+    inputTokens: number;
+    outputTokens: number;
+    sessionId?: string;
+  }
 ): Promise<number> {
-  return reservation.settle(usdToCreditsStochastic(charge.usd), {
+  const requestId = charge.sessionId ?? randomUUID();
+  const source = req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined;
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(charge.usd), {
     type: 'completion_api_usage',
-    sessionId: charge.sessionId ?? randomUUID(),
+    sessionId: requestId,
     model: charge.model,
     apiKeyId: req.apiKeyInfo?.keyId,
     // Web JWT calls keep the ledger default; resolveRequestUsageSource would label them 'api'.
-    source: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
+    source,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,
   });
+  await usageEventRepository
+    .record({
+      requestId,
+      userId: req.user!.id,
+      ownerId: reservation.ownerId,
+      ownerType: reservation.ownerType,
+      sessionId: charge.sessionId,
+      feature: 'completion_api',
+      provider: charge.provider,
+      model: charge.model,
+      inputTokens: charge.inputTokens,
+      outputTokens: charge.outputTokens,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      settledBasis: 'local',
+      costUsd: charge.usd,
+      creditsCharged,
+      status: 'ok',
+      source,
+      apiKeyId: req.apiKeyInfo?.keyId,
+    })
+    .catch(err => req.logger.warn('[meterPlatformCompletion] usage event failed', err));
+  return creditsCharged;
+}
+
+/**
+ * A CompletionMeter (b4m-core/services/src/billing/completionMeter.ts) for platform-key work with no
+ * HTTP request (queue workers, crons, mission wakes): admits the model for `user`, reserves the
+ * ceiling against the user's billing owner (their org seat when present), and settles through
+ * settleCompletion. Throws a 422 insufficient_credits when the owner cannot cover the hold.
+ */
+export function createCompletionMeter(
+  user: IUserDocument,
+  logger: Logger,
+  featureLabel: string,
+  opts: { sessionId?: string } = {}
+): CompletionMeter {
+  const req = { user, logger, headers: {} };
+  return async (modelInfo, messages, maxTokens, models) => {
+    await (await createModelAdmission(user, models)).assert(modelInfo.id);
+    const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+    const reservation = await reserveCompletionCredits(req, ceilingUsd, featureLabel);
+    return {
+      refund: () => reservation.refund(),
+      settle: usage =>
+        settleCompletion(reservation, req, {
+          model: modelInfo.id,
+          provider: modelInfo.backend,
+          // No reported usage means the adapter could not count it; charge the hold rather than nothing.
+          usd:
+            usage.inputTokens || usage.outputTokens || usage.turnUsage?.length
+              ? completionUsd(modelInfo, usage)
+              : ceilingUsd,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+          sessionId: opts.sessionId,
+        }),
+    };
+  };
 }

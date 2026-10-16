@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   orgIncrement: vi.fn(),
   findBySettingName: vi.fn(),
   getUserEntitlements: vi.fn(),
+  recordUsageEvent: vi.fn(),
   enforceCredits: true,
 }));
 
@@ -17,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },
   userRepository: { findById: m.userFindById, incrementCredits: m.userIncrement },
+  usageEventRepository: { record: m.recordUsageEvent },
 }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
@@ -56,6 +58,7 @@ describe('meterPlatformCompletion credits', () => {
     vi.clearAllMocks();
     m.enforceCredits = true;
     balance = 1000;
+    m.recordUsageEvent.mockReset().mockResolvedValue(undefined);
     m.userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
     m.userIncrement.mockImplementation(async (_id: string, delta: number) => ({ currentCredits: (balance += delta) }));
   });
@@ -77,6 +80,7 @@ describe('meterPlatformCompletion credits', () => {
     const reservation = await reserveCompletionCredits(req({ keyId: 'k1' }), 0.1, 'Lattice chat');
     const charged = await settleCompletion(reservation, req({ keyId: 'k1' }), {
       model: 'sonnet',
+      provider: 'anthropic',
       usd,
       ...usage,
     });
@@ -99,6 +103,17 @@ describe('meterPlatformCompletion credits', () => {
       expect.anything(),
       expect.anything()
     );
+    expect(m.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        feature: 'completion_api',
+        provider: 'anthropic',
+        model: 'sonnet',
+        costUsd: usd,
+        creditsCharged: charged,
+        apiKeyId: 'k1',
+      })
+    );
   });
 
   it('refunds in full and writes no row on a provider failure', async () => {
@@ -120,6 +135,7 @@ describe('meterPlatformCompletion credits', () => {
     const reservation = await reserveCompletionCredits(orgReq, 0.01, 'Lattice chat');
     const charged = await settleCompletion(reservation, orgReq, {
       model: 'sonnet',
+      provider: 'anthropic',
       usd: 0.005,
       inputTokens: 1,
       outputTokens: 1,
@@ -133,7 +149,13 @@ describe('meterPlatformCompletion credits', () => {
     m.enforceCredits = false;
     balance = 0;
     const reservation = await reserveCompletionCredits(req(), 5, 'Lattice chat');
-    await settleCompletion(reservation, req(), { model: 'sonnet', usd: 5, inputTokens: 1, outputTokens: 1 });
+    await settleCompletion(reservation, req(), {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 5,
+      inputTokens: 1,
+      outputTokens: 1,
+    });
     expect(m.userIncrement).not.toHaveBeenCalled();
     expect(m.deductCredits).not.toHaveBeenCalled();
   });

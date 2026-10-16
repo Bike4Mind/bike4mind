@@ -414,6 +414,7 @@ const handler = baseApi({ auth: true }).post(
     const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
     await settleCompletion(reservation, req, {
       model: modelInfo.id,
+      provider: modelInfo.backend,
       usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,

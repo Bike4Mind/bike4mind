@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
+
 // Drives the real `handler` through a continuation message so the top-level `processExecution`
 // builds its toolDeps, and asserts what it hands `buildSharedTools`. Module mocks mirror
 // agentExecutor.subagentToolDeps.test.ts; buildSharedTools throws once captured to end the run.

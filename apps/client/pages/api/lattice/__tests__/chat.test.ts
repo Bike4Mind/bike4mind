@@ -58,7 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.denied.clear();
   m.models = [
-    { id: ChatModels.CLAUDE_4_6_SONNET, supportsTools: true },
+    { id: ChatModels.CLAUDE_4_6_SONNET, supportsTools: true, backend: 'anthropic' },
     { id: ChatModels.CLAUDE_4_5_SONNET, supportsTools: true },
   ];
   m.reserve.mockResolvedValue({ reservedCredits: 10, refund: m.refund });
@@ -82,6 +82,7 @@ describe('POST /api/lattice/chat metering', () => {
     expect(m.reserve).toHaveBeenCalledBefore(m.complete);
     expect(m.settle).toHaveBeenCalledWith({
       model: ChatModels.CLAUDE_4_6_SONNET,
+      provider: 'anthropic',
       usd: 100 * 0.001 + 50 * 0.002,
       inputTokens: 100,
       outputTokens: 50,
