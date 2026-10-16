@@ -54,7 +54,11 @@ export function SectionNameDialog({
             placeholder="Section name"
             onChange={event => setDraft(event.target.value)}
             // Kept away from SessionList's window-level Cmd shortcuts, the way the rename input is.
-            onKeyDown={event => event.stopPropagation()}
+            // The stop also hides Escape from the Modal's own handler, so Escape closes here.
+            onKeyDown={event => {
+              event.stopPropagation();
+              if (event.key === 'Escape') onClose();
+            }}
             slotProps={{
               input: {
                 maxLength: SIDEBAR_SECTION_NAME_MAX_LENGTH,

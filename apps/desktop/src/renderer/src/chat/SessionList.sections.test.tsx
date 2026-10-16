@@ -242,6 +242,21 @@ describe('the sidebar context menu', () => {
     expect(titlesIn(section)).toEqual([]);
     expect(looseTitles()).toEqual(['Alpha']);
   });
+
+  it('closes the section-name dialog on Escape without creating anything', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+    await click(el('sidebar-context-new-section-btn'));
+    typeName('Work');
+    await act(async () => {
+      el('section-name-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    expect(query('section-name-dialog')).toBeNull();
+    expect(bridge.createSection).not.toHaveBeenCalled();
+  });
 });
 
 describe('moving a session from its menu', () => {
