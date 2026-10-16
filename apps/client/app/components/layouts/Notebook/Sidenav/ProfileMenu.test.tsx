@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { UiNavigationEvents } from '@bike4mind/common';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
@@ -21,6 +22,7 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
   default: ({ children }: { children: React.ReactNode }) => children,
 }));
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
+const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
   useBillingView: () => ({ view: undefined, openView: billing.openView, closeView: vi.fn() }),
 }));
@@ -30,7 +32,7 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
 }));
-vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => billing.creditsEnabled }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetFriendRequests: () => ({ data: [] }),
@@ -201,6 +203,7 @@ describe('ProfileMenu - API Docs', () => {
 describe('ProfileMenu - billing rows open URL-addressable views', () => {
   beforeEach(() => {
     billing.openView.mockClear();
+    analytics.mutate.mockClear();
     billing.creditsEnabled = true;
   });
 
@@ -227,6 +230,7 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
   it('hides the Billing row when enforceCredits is off', () => {
     billing.creditsEnabled = false;
     openMenu();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('profile-menu-billing')).not.toBeInTheDocument();
   });
 
@@ -246,6 +250,7 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-billing'));
     expect(billing.openView).toHaveBeenCalledWith('credits');
+    expect(analytics.mutate).toHaveBeenCalledWith({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
   });
 });
 
