@@ -131,6 +131,7 @@ describe('StudioPage (music)', () => {
     h.musicModels = { data: [{ id: 'test-music', display_name: 'Test' }], isPending: false, isError: false };
     renderPage('music');
     expect(h.useDocumentTitle).toHaveBeenCalledWith('Music Studio');
+    expect(screen.getByRole('heading', { level: 1, name: 'Studio' })).toBeInTheDocument();
     expect(screen.getByTestId('music-studio-page')).toBeInTheDocument();
     expect(screen.getByTestId('studio-tab-music')).toHaveAttribute('aria-selected', 'true');
     screen.getByTestId('music-form-stub').click();

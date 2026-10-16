@@ -163,6 +163,12 @@ describe('MusicJobCard player', () => {
     expect(screen.getByTestId('media-player-stub')).toHaveAttribute('data-file-name', 'song-music-1.wav');
   });
 
+  it('falls back to .mp3 for a content type it does not know', () => {
+    showJob(succeeded(musicOutput({ content_type: 'application/octet-stream' })));
+    render(card());
+    expect(screen.getByTestId('media-player-stub')).toHaveAttribute('data-file-name', 'song-music-1.mp3');
+  });
+
   it('plays a song whose signed url has lapsed through the file, which re-signs itself', () => {
     showJob(succeeded(musicOutput({ url: null, expires_at: null })));
     render(card());
