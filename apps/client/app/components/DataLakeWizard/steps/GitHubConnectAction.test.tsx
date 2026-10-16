@@ -432,7 +432,7 @@ describe('GitHubConnectAction', () => {
       const button = screen.getByTestId('github-ask-about-repo-btn');
       expect(button).toHaveTextContent('Ask about this repo');
       fireEvent.click(button);
-      expect(h.startChatWithLake).toHaveBeenCalledWith('lake1', undefined);
+      expect(h.startChatWithLake).toHaveBeenCalledWith('lake1');
     });
 
     it('hands the created session to a caller-supplied completion instead of navigating', () => {

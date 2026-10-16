@@ -42,7 +42,7 @@ export default function StartLakeChatButton({
     setDraftChatOpen(false);
     setStartingChat(true);
     try {
-      await startChatWithLake(lake.id, onChatStarted ? { onCreated: onChatStarted } : undefined);
+      await (onChatStarted ? startChatWithLake(lake.id, { onCreated: onChatStarted }) : startChatWithLake(lake.id));
     } catch (error) {
       console.error('Start chat failed for lake', lake.id, error);
       toast.error(failureMessage);

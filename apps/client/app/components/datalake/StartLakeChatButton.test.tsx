@@ -57,7 +57,7 @@ describe('StartLakeChatButton', () => {
     renderButton();
     await clickAndSettle();
 
-    expect(h.startChatWithLake).toHaveBeenCalledWith('lake1', undefined);
+    expect(h.startChatWithLake).toHaveBeenCalledWith('lake1');
   });
 
   it('toasts a failure when the start rejects, which a failing completion also does', async () => {
