@@ -197,6 +197,9 @@ describe('generic and hype copy', () => {
     'Search improvements for scanned PDFs',
     'Desktop app updates itself in the background',
     'Fixes for stuck chat spinners',
+    'Calendar sync fixes and Slack improvements',
+    'Bug fixes for PDF export stalls',
+    "See what's new in the Skill Market",
   ])('accepts the specific headline %j', headline => {
     expect(findGenericCopy('headline', headline)).toEqual([]);
   });

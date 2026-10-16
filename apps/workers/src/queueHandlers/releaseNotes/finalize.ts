@@ -19,7 +19,7 @@ const FEAT_OR_FIX_TITLE = /^(?:feat|fix)(?:\([^)]*\))?!?:/i;
 const HYPE_WORDS =
   /\b(?:exciting|excited|amazing|awesome|incredible|thrilled|powerful|seamless(?:ly)?|revolutionary|game[- ]chang\w*|cutting[- ]edge|next[- ]level|supercharg\w*|unleash\w*|delight\w*)\b/i;
 const GENERIC_HEADLINE =
-  /^(?:bug fixes|minor (?:updates|fixes|improvements|changes)|various (?:updates|fixes|improvements|changes)|what'?s new)[.!]?$|\b(?:new features|(?:updates|fixes|improvements|enhancements) and (?:\w+ )?(?:fixes|improvements|enhancements|new features)|latest (?:update|release)|this release|(?:your |our |the )?ai workspace)\b/i;
+  /^(?:bug fixes|minor (?:updates|fixes|improvements|changes)|various (?:updates|fixes|improvements|changes)|what'?s new)[.!]?$|\b(?:new features|(?:updates|fixes|improvements|enhancements) and (?:(?:other|more|minor|general|performance|various) )?(?:bug fixes|fixes|improvements|enhancements|new features)|latest (?:update|release)|this release|(?:your |our |the )?ai workspace)\b/i;
 
 /** Reasons the copy reads as generic or hype; empty when it is specific and plain. */
 export function findGenericCopy(field: 'headline' | 'summary', text: string): string[] {
