@@ -116,14 +116,14 @@ describe('verifyMFA', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
-  it('claims the exact matched time step, not the current one', async () => {
+  it('claims the step of a previous-step token, not the current step', async () => {
     const nowMs = 1_700_000_000_000; // 20s into a 30s step, clear of the boundary
     vi.useFakeTimers();
     vi.setSystemTime(nowMs);
     try {
       const repo = makeRepo();
-      const step = Math.floor(nowMs / 1000 / 30);
-      const token = speakeasy.totp({ secret: SECRET, encoding: 'base32', time: Math.floor(nowMs / 1000) });
+      const step = Math.floor(nowMs / 1000 / 30) - 1;
+      const token = speakeasy.totp({ secret: SECRET, encoding: 'base32', time: Math.floor(nowMs / 1000) - 30 });
       await verifyMFA({ user: makeUser(), token }, repo);
       expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', step);
     } finally {

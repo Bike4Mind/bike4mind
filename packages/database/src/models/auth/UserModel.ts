@@ -453,6 +453,29 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Enable MFA only if the stored secret is still the one just verified (`totpSecret`) and MFA is
+   * still disabled. Two concurrent enrollments can otherwise interleave so that a code checked
+   * against the first secret enables the second: the authenticator holds one secret and the user
+   * is locked out. Matching on the verified secret makes the write refuse instead.
+   */
+  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpSecret': totpSecret, 'mfa.totpEnabled': false },
+      {
+        $set: {
+          'mfa.totpEnabled': true,
+          'mfa.failedAttempts': 0,
+          'mfa.lastUsedAt': new Date(),
+          updatedAt: new Date(),
+        },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+      },
+      { new: true }
+    );
+    return result ? result.toJSON() : null;
+  }
+
   async findByStripeCustomerId(stripeCustomerId: string) {
     const result = await this.model.findOne({ stripeCustomerId });
     return result?.toJSON() ?? null;

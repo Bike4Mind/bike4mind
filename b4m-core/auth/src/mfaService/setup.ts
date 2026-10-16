@@ -80,7 +80,7 @@ export async function setupMFA(
 export async function verifyMFASetup(
   user: IUserDocument,
   token: string,
-  userRepository: Pick<IUserRepository, 'update'> & MfaAttemptRepository
+  userRepository: Pick<IUserRepository, 'atomicEnableMfa'> & MfaAttemptRepository
 ): Promise<{ success: boolean; user: IUserDocument }> {
   if (!user.mfa || !user.mfa.totpSecret) {
     throw new Error('No MFA setup in progress for this user.');
@@ -99,20 +99,13 @@ export async function verifyMFASetup(
     // Field-level write, NOT a whole-`mfa` `$set`: rebuilding the subdocument from `user` (or,
     // worse, from a secret-less echo) risks wiping the select:false totpSecret/backupCodes and
     // would clear attempts reserved since the snapshot. Enabling MFA plus clearing the
-    // attempt/lockout state touches only those fields, leaving the secrets untouched.
-    const updatedUser = await userRepository.update(
-      {
-        id: user.id,
-        'mfa.totpEnabled': true,
-        'mfa.failedAttempts': 0,
-        'mfa.lastUsedAt': new Date(),
-        updatedAt: new Date(),
-      },
-      { unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] }
-    );
+    // attempt/lockout state touches only those fields, leaving the secrets untouched. It is
+    // conditional on the verified secret so a setup that replaced it in the meantime is not
+    // enabled behind the user's back.
+    const updatedUser = await userRepository.atomicEnableMfa(user.id, mfa.totpSecret);
 
     if (!updatedUser) {
-      throw new Error('Failed to enable MFA.');
+      throw new MfaAttemptRejectedError('MFA setup changed. Please restart enrollment.', attemptState);
     }
 
     return { success: true, user: updatedUser };

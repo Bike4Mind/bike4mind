@@ -718,6 +718,12 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
+  /**
+   * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
+   * Returns null when a concurrent setup replaced the secret, so a code verified against a
+   * superseded secret never enables a secret the user's authenticator does not hold.
+   */
+  atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the

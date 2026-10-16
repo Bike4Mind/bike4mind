@@ -157,6 +157,60 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
     });
   });
 
+  describe('atomicEnableMfa', () => {
+    // Setup leaves totpEnabled false until the issued secret is confirmed.
+    const makePending = () => User.updateOne({ _id: userId }, { $set: { 'mfa.totpEnabled': false } });
+
+    it('enables only while the stored secret still matches', async () => {
+      await makePending();
+
+      expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).not.toBeNull();
+      expect((await readMfa()).totpEnabled).toBe(true);
+
+      // Already enabled: the conditional enable no longer matches.
+      expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).toBeNull();
+    });
+
+    it('refuses to enable a secret a concurrent setup replaced, leaving the new one pending', async () => {
+      await makePending();
+      // A second enrollment tab replaces the stored secret while the first tab still holds the old.
+      await userRepository.update({
+        id: userId,
+        mfa: { totpSecret: 'REPLACEDSECRET', totpEnabled: false, backupCodes: ['h2'], setupAt: new Date() },
+      });
+
+      expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).toBeNull();
+
+      const mfa = await readMfa();
+      expect(mfa.totpEnabled).toBe(false);
+      expect(mfa.totpSecret).toBe('REPLACEDSECRET');
+    });
+
+    it('preserves the select:false secrets while clearing the attempt/lockout fields', async () => {
+      await makePending();
+      await User.updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'mfa.failedAttempts': 2,
+            'mfa.lastFailedAttempt': new Date(),
+            'mfa.lockedUntil': new Date(Date.now() + 60_000),
+          },
+        }
+      );
+
+      const enabled = await userRepository.atomicEnableMfa(userId, TOTP_SECRET);
+      expect(enabled?.mfa?.lockedUntil ?? null).toBeNull();
+
+      const mfa = await readMfa();
+      expect(mfa.totpEnabled).toBe(true);
+      expect(mfa.failedAttempts).toBe(0);
+      expect(mfa.lastFailedAttempt ?? null).toBeNull();
+      expect(mfa.totpSecret).toBe(TOTP_SECRET);
+      expect(mfa.backupCodes).toEqual(['h1']);
+    });
+  });
+
   describe('field-level success write', () => {
     it('clears the attempt/lockout fields without touching the secrets or backup codes', async () => {
       await User.updateOne(
@@ -197,6 +251,17 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
       expect(await readTotpLastStep()).toBe(101);
       expect((await readMfa()).totpSecret).toBe(TOTP_SECRET);
       expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(false);
+    });
+
+    it('lets the same step be claimed again once the counter is cleared for a new secret', async () => {
+      expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(true);
+      expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(false);
+
+      // What a re-enrollment writes before issuing a fresh secret.
+      await userRepository.update({ id: userId, totpLastStep: null });
+
+      expect(await readTotpLastStep()).toBeNull();
+      expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(true);
     });
   });
 });
