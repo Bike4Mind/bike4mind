@@ -2,6 +2,7 @@ import { Box, Button, DialogTitle, Modal, ModalClose, ModalDialog, Skeleton, Typ
 import dayjs from 'dayjs';
 import { ReactNode, RefObject, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
@@ -111,6 +112,9 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   const lowCreditsThreshold = useLowCreditsThreshold();
   const noCredits = credits <= 0;
   const isLowCredits = credits < lowCreditsThreshold;
+  // An org balance is topped up by the org, not from these personal packs, so its banner has no action.
+  const { selectedAccount } = useSelectedAccount();
+  const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
 
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
@@ -312,11 +316,13 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
                 >
                   {noCredits ? t('credits_modal.no_credits') : t('credits_modal.low_credits')}.
                 </Box>{' '}
-                {currentSubscription
-                  ? t('billing.low_with_plan', 'Top up to keep working until your allowance renews.')
-                  : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
+                {isOrgAccount
+                  ? t('billing.low_org', 'An organization admin can add credits to this account.')
+                  : currentSubscription
+                    ? t('billing.low_with_plan', 'Top up to keep working until your allowance renews.')
+                    : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
               </Typography>
-              {ready && (
+              {ready && !isOrgAccount && (
                 <Button
                   size="sm"
                   variant="plain"

@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   reducedMotion: false,
   refetch: vi.fn(),
   credits: 5000,
+  account: undefined as { personal: boolean } | undefined,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -36,6 +37,9 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () => ({ isLoading: state.plansLoading }),
 }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 1000 }));
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: () => ({ selectedAccount: state.account }),
+}));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('./CreditsSection', () => ({ CreditsSection: () => <div data-testid="credits-section-body" /> }));
 vi.mock('./PlansSection', () => ({
@@ -90,6 +94,7 @@ describe('BillingModal', () => {
       removeEventListener: vi.fn(),
     })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
+    state.account = undefined;
   });
 
   it('says the plan is unavailable, not Free, when the subscriptions read fails, and retries on demand', () => {
@@ -209,6 +214,15 @@ describe('BillingModal', () => {
     expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('credits_modal.no_credits');
     fireEvent.click(screen.getByTestId('billing-low-balance-action'));
     expect(screen.getByTestId('billing-section-credits-heading')).toHaveFocus();
+  });
+
+  it('offers no dead-end Top up for a low organization balance', () => {
+    state.credits = 0;
+    state.account = { personal: false };
+    state.subscriptions = [subRow()];
+    renderModal();
+    expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('An organization admin can add credits');
+    expect(screen.queryByTestId('billing-low-balance-action')).not.toBeInTheDocument();
   });
 
   it('shows no low-balance banner when the balance is healthy', () => {
