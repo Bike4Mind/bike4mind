@@ -3,8 +3,8 @@ import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWo
 
 /** The session's `disabledTools` plus what its current surface denies; mirrors the server's denylist. */
 export function effectiveDisabledTools(
-  session: { disabledTools?: string[] | null; surface?: string | null } | null | undefined
-): string[] | undefined {
+  session: { disabledTools?: readonly string[] | null; surface?: string | null } | null | undefined
+): readonly string[] | undefined {
   if (!session) return undefined;
   const surfaceDenied = resolveWorkspaceDeniedTools(session.surface, premiumWorkspaceDeniedTools);
   // Hand the stored array back untouched when the surface denies nothing, so its identity is stable
