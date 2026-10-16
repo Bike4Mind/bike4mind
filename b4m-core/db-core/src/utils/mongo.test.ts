@@ -378,6 +378,18 @@ describe('MongoDB Utility Functions', () => {
       });
       let ping: ReturnType<typeof vi.fn>;
 
+      // Captures the delays scheduled by the backoff, and runs them immediately. Recovery from a lost
+      // connection is driven by the ping, not by a wait, so this stays empty on that path.
+      const spyOnRetryDelays = (): number[] => {
+        const delays: number[] = [];
+        vi.spyOn(global, 'setTimeout').mockImplementation((fn: () => void, delay?: number) => {
+          if (delay && delay > 0) delays.push(delay);
+          fn();
+          return 0 as unknown as NodeJS.Timeout;
+        });
+        return delays;
+      };
+
       beforeEach(() => {
         ping = vi.fn(async () => ({ ok: 1 }));
         vi.spyOn(mongoose.connection, 'getClient').mockReturnValue({
@@ -385,7 +397,8 @@ describe('MongoDB Utility Functions', () => {
         } as unknown as ReturnType<typeof mongoose.connection.getClient>);
       });
 
-      it('re-checks the servers and retries when asked to', async () => {
+      it('re-checks the servers and retries without a backoff delay when asked to', async () => {
+        const delays = spyOnRetryDelays();
         mockTransaction.mockRejectedValueOnce(bufferingTimeout).mockResolvedValueOnce('committed');
 
         await expect(withTransaction(async () => 'committed', { retryOnConnectionLoss: true })).resolves.toBe(
@@ -393,6 +406,26 @@ describe('MongoDB Utility Functions', () => {
         );
         expect(ping).toHaveBeenCalledWith({ ping: 1 });
         expect(mockTransaction).toHaveBeenCalledTimes(2);
+        expect(delays).toEqual([]);
+      });
+
+      it('shares the retry budget between a transient error and a lost connection', async () => {
+        const transientError = { code: 112, errorLabels: ['TransientTransactionError'] };
+        const delays = spyOnRetryDelays();
+
+        mockTransaction
+          .mockRejectedValueOnce(transientError)
+          .mockRejectedValueOnce(bufferingTimeout)
+          .mockResolvedValueOnce('committed');
+
+        await expect(withTransaction(async () => 'committed', { retryOnConnectionLoss: true })).resolves.toBe(
+          'committed'
+        );
+
+        // Three attempts is the default budget; only the transient error waits out a backoff.
+        expect(mockTransaction).toHaveBeenCalledTimes(3);
+        expect(delays).toHaveLength(1);
+        expect(ping).toHaveBeenCalledTimes(1);
       });
 
       it('still retries when the ping itself fails', async () => {
