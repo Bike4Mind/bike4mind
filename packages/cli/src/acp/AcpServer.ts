@@ -705,7 +705,6 @@ export class AcpServer {
                 allowedDirectories,
               })
             : null,
-        // coordinate_task is gated by a config flag
         coordinateTaskTool:
           config.preferences.enableCoordinatorMode === true
             ? createCoordinateTaskTool(orchestrator, agentStore, sessionId)

@@ -151,8 +151,7 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
     throw new Error('[eval] ask_user_question is disabled in eval mode — task should not have triggered it.');
   };
 
-  // Empty observation queue per sandbox; the runner doesn't share queues
-  // across tasks because each task gets a fresh ReActAgent.
+  // Fresh AgentContext per task; each task gets a fresh ReActAgent.
   const agentContext = { currentAgent: null };
 
   const toolFactory: EvalToolFactory = async sandboxDir => {

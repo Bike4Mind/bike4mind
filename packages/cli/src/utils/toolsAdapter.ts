@@ -487,8 +487,10 @@ export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): 
 }
 
 /**
- * The CLI-built tools in the order they are offered to the model. The optional groups are
- * absent when their config gate is off, so each entry point passes only what it built.
+ * The CLI-built tools in the order they are offered to the model. Each entry point passes
+ * only what it built, so an optional group is absent when its config gate is off or when
+ * that entry point does not build it at all (the decision / blocker / review tools are
+ * interactive-only).
  */
 export interface CliToolListInput {
   /** `tool_search`, when deferred tool schemas exist. Offered ahead of the rest of the list. */
