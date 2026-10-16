@@ -35,7 +35,13 @@ export interface SidebarSections {
   archived: ChatSessionSummary[];
 }
 
-/** Splits sessions into what the sidebar draws; each shows once, archived over pinned over a section. */
+/**
+ * Splits sessions into what the sidebar draws; each shows once, archived over pinned over a section.
+ *
+ * A pinned session is not repeated inside its group: two rows for one conversation reads as a
+ * duplicate rather than emphasis. Groups are ordered by their most recently updated session, so
+ * the project being worked on now rises to the top.
+ */
 export function groupSessions(
   sessions: readonly ChatSessionSummary[],
   mode: ChatSessionMode,
