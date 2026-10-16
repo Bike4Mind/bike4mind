@@ -4,6 +4,11 @@
  * The count is a SUBSET of the output tokens the provider already bills, so it is
  * informational only and never feeds settlement. `undefined` means the provider
  * reported nothing; callers must forward that as an absent field, never as 0.
+ *
+ * The subset invariant is relative to each adapter's normalized `outputTokens`,
+ * not the provider's raw fields: xAI reports `reasoning_tokens` apart from, not
+ * inside, `completion_tokens`, so an xAI adapter that wires this up must fold it
+ * into its `outputTokens` first or the two would diverge.
  */
 
 function readCount(value: unknown): number | undefined {
