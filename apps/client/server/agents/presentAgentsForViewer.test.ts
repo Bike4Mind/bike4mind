@@ -33,4 +33,16 @@ describe('presentAgentsForViewer', () => {
     expect(presented).not.toHaveProperty('tavernSessionId');
     expect(refreshAgentAvatarUrls).toHaveBeenCalledWith([agent('other')], 'viewer');
   });
+
+  it('redacts the session pointer from agents with no owner, for every viewer', async () => {
+    const unowned = [
+      { id: 'system', tavernSessionId: 'session-system' },
+      { id: 'org', userId: null, tavernSessionId: 'session-org' },
+    ] as unknown as IAgent[];
+
+    const presented = await presentAgentsForViewer(unowned, 'viewer');
+
+    expect(presented[0]).not.toHaveProperty('tavernSessionId');
+    expect(presented[1]).not.toHaveProperty('tavernSessionId');
+  });
 });

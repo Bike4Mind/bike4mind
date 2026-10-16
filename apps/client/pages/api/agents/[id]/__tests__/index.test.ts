@@ -48,7 +48,7 @@ const refreshAgentAvatarUrls = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls }));
 
 import '@pages/api/agents/[id]/index';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 const AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
@@ -92,6 +92,18 @@ describe('/api/agents/[id] access levels', () => {
 
     it('does not see the owner-only tavernSessionId', async () => {
       agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, tavernSessionId: 's1' });
+      const { res, run } = invoke('GET', 'u1');
+      await run();
+      expect(res._getJSONData()).not.toHaveProperty('tavernSessionId');
+    });
+
+    // Sharing, even with update access, is not ownership: the pointer stays hidden.
+    it('does not see the owner-only tavernSessionId when shared with update access', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({
+        ...AGENT,
+        users: [{ userId: 'u1', permissions: [Permission.update] }],
+        tavernSessionId: 's1',
+      });
       const { res, run } = invoke('GET', 'u1');
       await run();
       expect(res._getJSONData()).not.toHaveProperty('tavernSessionId');
