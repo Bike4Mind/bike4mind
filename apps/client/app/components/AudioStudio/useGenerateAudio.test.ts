@@ -253,3 +253,26 @@ describe('useGenerateAudio tts save outcome', () => {
     expect(mocks.toastInfo).toHaveBeenCalledWith('Audio generated, but saving to Files failed.');
   });
 });
+
+describe('useGenerateAudio unmount', () => {
+  it('revokes the blob of a response that arrived after the tab unmounted', async () => {
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false } });
+      await pending;
+    });
+
+    // The unmount cleanup runs before the response exists, so only the settle path can free this one.
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio');
+  });
+});

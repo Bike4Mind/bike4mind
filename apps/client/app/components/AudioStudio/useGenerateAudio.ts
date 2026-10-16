@@ -78,6 +78,7 @@ export function useGenerateAudio(mode: AudioGenMode) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<AudioGenerationResult | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const releaseObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -86,7 +87,14 @@ export function useGenerateAudio(mode: AudioGenMode) {
     }
   }, []);
 
-  useEffect(() => releaseObjectUrl, [releaseObjectUrl]);
+  // Switching Studio tabs unmounts this hook, and a request already in flight still settles.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      releaseObjectUrl();
+    };
+  }, [releaseObjectUrl]);
 
   const refreshFiles = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
@@ -153,6 +161,12 @@ export function useGenerateAudio(mode: AudioGenMode) {
 
         const data = response.data;
         const playable = toPlayableAudio(data);
+        if (!mountedRef.current) {
+          // Nothing here can play it any more, and no cleanup will run for this one, so revoke it
+          // here rather than leak the blob.
+          if (playable.isObjectUrl) URL.revokeObjectURL(playable.url);
+          return;
+        }
         if (playable.isObjectUrl) objectUrlRef.current = playable.url;
         setResult({
           ...playable,
