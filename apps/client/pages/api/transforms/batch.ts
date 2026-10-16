@@ -75,13 +75,12 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 
-  const admission = await createModelAdmission(req.user);
   const modelIds = [...new Set(body.requests.map(r => r.model))];
-  for (const modelId of modelIds) await admission.assert(modelId);
-
   // Priced at the standard rate: the pricing layer does not model the Batches 50% discount, so the
   // hold (and the settlement) over-charges rather than under.
   const catalog = await getAvailableModels({ anthropic: apiKey });
+  const admission = await createModelAdmission(req.user, catalog);
+  for (const modelId of modelIds) await admission.assert(modelId);
   const modelInfos = new Map<string, ModelInfo>(catalog.filter(m => modelIds.includes(m.id)).map(m => [m.id, m]));
   const unpriced = modelIds.filter(id => !modelInfos.has(id));
   if (unpriced.length > 0 && (await isCreditsEnforced())) {

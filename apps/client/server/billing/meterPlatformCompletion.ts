@@ -1,24 +1,15 @@
 import { randomUUID } from 'crypto';
 import type { IncomingHttpHeaders } from 'http';
-import {
-  getTextModelCost,
-  getTurnsCost,
-  type IMessage,
-  type IUserDocument,
-  type LLMModelConfig,
-  type ModelInfo,
-} from '@bike4mind/common';
+import { getTextModelCost, getTurnsCost, type IMessage, type IUserDocument, type ModelInfo } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { CompletionInfo } from '@bike4mind/llm-adapters/backend';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import {
-  ForbiddenError,
-  getSettingsMap,
-  getSettingsValue,
-  isModelAccessible,
-  usdToCredits,
-  usdToCreditsStochastic,
-} from '@bike4mind/utils';
+  createModelAdmission as createSharedModelAdmission,
+  loadModelConfigurations,
+  type ModelAdmission,
+} from '@bike4mind/services/llm/modelAdmission';
+import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
@@ -35,32 +26,23 @@ type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
 };
 
 /**
- * Catalog + entitlement admission for one user. Must stay in sync with the primary-model check in
- * b4m-core/services/src/llm/ChatCompletionInvoke.ts (same semantics and 403 copy): a model with no
- * config entry is admitted; entitlements are resolved only when they can change the outcome.
+ * Model admission for one user: delegates to the single implementation in
+ * b4m-core/services/src/llm/modelAdmission.ts (shared with ChatCompletionInvoke, the fallback chain,
+ * executeCompletion and the agent executor). Pass the resolved catalog so a disabled model, or an
+ * unpriced text model while credits are enforced, is refused too.
  */
-export async function createModelAdmission(user: IUserDocument) {
-  const setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' });
-  const configs: LLMModelConfig[] = Array.isArray(setting?.settingValue) ? setting.settingValue : [];
-  const isAdmin = user.isAdmin || false;
-  let entitlementKeys: Promise<string[]> | undefined;
-
-  const admits = async (modelId: string): Promise<boolean> => {
-    const config = configs.find(c => c.id === modelId);
-    if (!config) return true;
-    const needsEntitlements = !isAdmin && (config.allowedEntitlements?.length ?? 0) > 0;
-    const keys = needsEntitlements ? await (entitlementKeys ??= getUserEntitlements(user).catch(() => [])) : [];
-    return isModelAccessible(config, user.tags || [], isAdmin, keys);
-  };
-
-  return {
-    admits,
-    async assert(modelId: string): Promise<void> {
-      if (!(await admits(modelId))) {
-        throw new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
-      }
-    },
-  };
+export async function createModelAdmission(user: IUserDocument, models?: ModelInfo[]): Promise<ModelAdmission> {
+  const [configs, enforceCredits] = await Promise.all([
+    loadModelConfigurations(adminSettingsRepository),
+    isCreditsEnforced(),
+  ]);
+  return createSharedModelAdmission({
+    user,
+    configs,
+    getEntitlements: () => getUserEntitlements(user),
+    models,
+    enforceCredits,
+  });
 }
 
 /** Worst-case cost of one call: the full maxTokens, since settlement clamps to the hold. */

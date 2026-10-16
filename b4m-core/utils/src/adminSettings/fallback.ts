@@ -463,6 +463,13 @@ export type LlmWithFallbackOptions = {
   endUserId?: string | null;
   /** The request carries tools, so only a tool-capable model may take over. */
   requireTools?: boolean;
+  /**
+   * The caller's model admission (b4m-core/services/src/llm/modelAdmission.ts). A fallback the user
+   * could not have picked directly - entitlement-gated, admin-disabled, or unpriced - is never
+   * selected: a non-admitted frontend fallback is dropped in favour of automatic selection, and
+   * automatic selection skips non-admitted candidates.
+   */
+  isAdmitted?: (modelId: string) => Promise<boolean>;
 };
 
 /**
@@ -496,6 +503,17 @@ export async function getLlmWithFallback(
   // advances via automatic selection instead of dead-ending on the same repeated id each hop.
   if (fallbackModelId && excludeModelIds?.has(fallbackModelId)) {
     fallbackModelId = undefined;
+  }
+
+  const isAdmitted = options.isAdmitted;
+  if (isAdmitted) {
+    const admitted = await Promise.all(availableModels.map(m => isAdmitted(m.id)));
+    const listed = availableModels.some(m => m.id === fallbackModelId);
+    availableModels = availableModels.filter((_, i) => admitted[i]);
+    if (fallbackModelId && listed && !availableModels.some(m => m.id === fallbackModelId)) {
+      logger.warn(`Fallback model ${fallbackModelId} is not admitted for this user; selecting automatically`);
+      fallbackModelId = undefined;
+    }
   }
 
   // If no fallback model provided, try to find one automatically

@@ -250,6 +250,16 @@
         "default": "./dist/llm/intentClassifier.cjs"
       }
     },
+    "./llm/modelAdmission": {
+      "import": {
+        "types": "./dist/llm/modelAdmission.d.mts",
+        "default": "./dist/llm/modelAdmission.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/modelAdmission.d.cts",
+        "default": "./dist/llm/modelAdmission.cjs"
+      }
+    },
     "./llm/refineText": {
       "import": {
         "types": "./dist/llm/refineText.d.mts",

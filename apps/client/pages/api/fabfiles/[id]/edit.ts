@@ -217,7 +217,7 @@ const handler = baseApi()
           );
         }
 
-        await (await createModelAdmission(user)).assert(modelInfo.id);
+        await (await createModelAdmission(user, models)).assert(modelInfo.id);
 
         // Initialize LLM backend
         const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });

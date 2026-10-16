@@ -198,7 +198,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         availableModelIds: models.slice(0, 10).map(m => m.id),
       });
     }
-    await (await createModelAdmission(req.user)).assert(modelInfo.id);
+    await (await createModelAdmission(req.user, models)).assert(modelInfo.id);
     const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
     if (!llm) {
       return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });

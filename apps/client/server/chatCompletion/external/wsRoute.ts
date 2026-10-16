@@ -36,6 +36,7 @@ import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * CLI completions with WebSocket response streaming (`/api/ai/v1/ws-completions`), served by
@@ -197,6 +198,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
+            getEntitlements: getUserEntitlements,
             userId,
             model,
             messages: messages as IMessage[],

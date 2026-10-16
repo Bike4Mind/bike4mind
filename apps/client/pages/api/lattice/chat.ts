@@ -339,7 +339,7 @@ const handler = baseApi({ auth: true }).post(
     if (candidates.length === 0) {
       throw new BadRequestError('No LLM models with tool support available.');
     }
-    const admission = await createModelAdmission(user);
+    const admission = await createModelAdmission(user, availableModels);
     let modelInfo: ModelInfo | undefined;
     for (const candidate of candidates) {
       if (await admission.admits(candidate.id)) {

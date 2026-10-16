@@ -33,6 +33,7 @@ export default defineConfig({
     'src/llm/SmallLLMService.ts',
     'src/llm/reranker/index.ts',
     'src/llm/intentClassifier.ts',
+    'src/llm/modelAdmission.ts',
     'src/llm/refineText.ts',
     'src/llm/artifactGating.ts',
     'src/llm/agents/ServerAgentStore.ts',

@@ -135,6 +135,7 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
+import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -930,6 +931,8 @@ export class ChatCompletionProcess {
   public priorUserPrompts?: string[];
 
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  /** Set once the turn's model resolves; gates the deprecated remap and every fallback hop. */
+  private modelAdmission?: ModelAdmission;
   private entitlementsResolved = false;
   /**
    * Set only in `resolveEntitlementKeys()`'s catch branch and reported back through that method's
@@ -2310,6 +2313,16 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      this.modelAdmission = createModelAdmission({
+        user: this.user,
+        configs: await loadModelConfigurations(this.db.adminSettings),
+        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        models,
+        enforceCredits: this.getDefaultSettingValue('enforceCredits', defaultAdminSettings),
+      });
+      // A remapped successor was never admitted: /api/chat admits it in ChatCompletionInvoke, but the
+      // quest/Slack queue handlers and the rapid-reply test construct this class directly.
+      if (modelInfo.id !== model) await this.modelAdmission.assert(modelInfo.id);
       // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
       // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
       // turn is not credited to the model it replaced.
@@ -5065,6 +5078,7 @@ export class ChatCompletionProcess {
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
                   requireTools: !!options.tools?.length,
+                  isAdmitted: this.modelAdmission?.admits,
                 }
               );
 

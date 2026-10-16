@@ -426,6 +426,38 @@ describe('getLlmWithFallback - forceSwitch option', () => {
   });
 });
 
+describe('getLlmWithFallback - isAdmitted', () => {
+  const opus45 = createModelInfo({ id: 'claude-opus-4-5-20251101', name: 'Opus', backend: ModelBackend.Anthropic });
+  const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', name: 'Sonnet', backend: ModelBackend.Anthropic });
+  const gated = createModelInfo({ id: 'claude-opus-4-6', name: 'Gated', backend: ModelBackend.Anthropic });
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const isAdmitted = async (id: string) => id !== gated.id;
+
+  it('drops a non-admitted frontend fallback and selects an admitted one automatically', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated, sonnet46], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('never selects a non-admitted model automatically', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('still uses an admitted frontend fallback', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted: async () => true,
+    });
+    expect(result!.model.id).toBe(gated.id);
+  });
+});
+
 describe('getLlmWithFallback - deprecated model fallback preferences', () => {
   // These tests verify that the fallback preferences map correctly routes
   // deprecated Haiku 3.5 to Haiku 4.5 through the automatic fallback path.
