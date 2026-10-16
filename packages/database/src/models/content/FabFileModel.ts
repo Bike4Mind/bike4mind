@@ -2746,12 +2746,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const hit = await this.fabFileModel.exists({
       embeddingModel,
       vectorizedChunkCount: { $gt: 0 },
-      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with a
-      // null stamp, and a non-final vectorize message raises the count while leaving the label and
-      // the stamp alone - so without this an in-flight file matches its own substitution and refuses
-      // every later message on the keyless stage the fallback exists for. The completion stamp sets
-      // the real label and this timestamp in one transaction; re-chunking clears both.
-      chunkEmbeddingModelStampedAt: { $ne: null },
+      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with an
+      // explicit null stamp, and a non-final vectorize message raises the count while leaving the
+      // label and the stamp alone - so an in-flight file (explicit null stamp) must not match its own
+      // substitution, or it would refuse every later message on the keyless stage the fallback exists
+      // for. A file completed before the stamp field existed carries NO stamp at all, yet its label
+      // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
+      // excludes. The completion stamp writes the real label and this timestamp in one transaction,
+      // and re-chunking rewrites the label to the requested model and clears the stamp.
+      $or: [
+        { chunkEmbeddingModelStampedAt: { $ne: null } },
+        { chunkEmbeddingModelStampedAt: { $exists: false } },
+      ],
       deletedAt: null,
     });
     return hit !== null;

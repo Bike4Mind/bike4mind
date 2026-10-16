@@ -207,6 +207,15 @@ describe('FabFileRepository.hasVectorizedFileInEmbeddingSpace', () => {
     expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(false);
   });
 
+  it('counts a file completed before the stamp field existed, which carries no stamp', async () => {
+    // The stamp field post-dates the corpus: a file embedded before it has a real label and no stamp
+    // at all (only an explicit null marks in-flight). It is settled, so the guard must still see it -
+    // excluding it would restore the silent keyless substitution on the established deployments this
+    // check exists to protect.
+    await FabFile.create([makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3 })]);
+    expect(await fabFileRepository.hasVectorizedFileInEmbeddingSpace(MODEL)).toBe(true);
+  });
+
   it('finds a live file with vectors in that model, whatever lake it belongs to', async () => {
     await FabFile.create([
       makeFile({ embeddingModel: MODEL, vectorizedChunkCount: 3, chunkEmbeddingModelStampedAt: STAMPED, tags: [] }),
