@@ -91,6 +91,10 @@ const EXHAUSTED_USER = `context-telemetry-metrics-principal-${Date.now()}`;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // The limiter's deny path relies on the unique `key` index: a full window's claim upsert must hit
+  // E11000. Built in the background on connect, so a contended runner can reach the 429 before it
+  // exists, and the upsert then inserts a second counter and serves the request.
+  await mongoose.model('Cache').createIndexes();
 });
 
 afterAll(async () => {
