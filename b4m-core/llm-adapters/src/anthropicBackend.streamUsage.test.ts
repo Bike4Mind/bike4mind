@@ -82,7 +82,15 @@ const toolTurn = eventStream([
   {
     type: 'message_delta',
     delta: { stop_reason: 'tool_use' },
-    usage: { input_tokens: 80, output_tokens: 15, cache_read_input_tokens: 3000 },
+    usage: {
+      input_tokens: 80,
+      output_tokens: 15,
+      cache_read_input_tokens: 3000,
+      // The only reasoning count in these chains: the abort/degenerate turns below never
+      // reach message_delta, so their reasoning count can only come from this earlier turn
+      // through the accumulator.
+      output_tokens_details: { thinking_tokens: 12 },
+    },
   },
   { type: 'message_stop' },
 ]);
@@ -129,6 +137,8 @@ describe('AnthropicBackend - usage on a degenerate stream', () => {
     const estimated = estimateStreamedOutputTokens(stream.streamedChars, ChatModels.CLAUDE_4_8_OPUS);
     expect(estimated).toBeGreaterThan(0);
     expect(last.stopReason).toBe(DEGENERATE_STREAM_STOP_REASON);
+    // The count from the earlier tool turn survives our own abort.
+    expect(last.reasoningTokens).toBe(12);
     expect(last.inputTokens).toBe(100);
     expect(last.outputTokens).toBe(15 + estimated);
     expect(last.cacheReadInputTokens).toBe(6100);
@@ -145,6 +155,8 @@ describe('AnthropicBackend - usage on a degenerate stream', () => {
     const estimated = estimateStreamedOutputTokens(stream.streamedChars, ChatModels.CLAUDE_4_8_OPUS);
     expect(estimated).toBeGreaterThan(0);
     expect(last.stopReason).toBe(DEGENERATE_STREAM_STOP_REASON);
+    // Same as the AbortError variant above: the earlier turn's count survives.
+    expect(last.reasoningTokens).toBe(12);
     expect(last.outputTokens).toBe(15 + estimated);
     expect(last.turnUsage).toEqual([
       { inputTokens: 80, outputTokens: 15, cacheReadInputTokens: 3000 },

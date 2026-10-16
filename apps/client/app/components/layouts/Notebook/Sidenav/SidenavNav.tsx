@@ -13,6 +13,7 @@ import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
@@ -313,6 +314,17 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/profile', search: { tab: 'published' } });
+      },
+    },
+    {
+      // A discovery surface, so it sits in the nav rather than behind Profile -> Skills.
+      key: 'skill-market',
+      label: t('sidenav.skillMarket', 'Skill Market'),
+      icon: iconSlot(<StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname.startsWith('/skills/market'),
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/skills/market' });
       },
     },
     // Single-gated on the experimental flag:

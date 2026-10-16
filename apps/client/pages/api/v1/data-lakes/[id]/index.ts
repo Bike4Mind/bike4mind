@@ -26,7 +26,7 @@ import { loadRegistryLakeStats, toPublicDataLake } from '@server/dataLakes/toPub
 
 const handler = nextRouteForContract(getDataLakeContract, {
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
     // Required: the raw pathname embeds `id`, so without a stable bucket each lake gets its own
     // counter instead of one budget per caller.

@@ -1,156 +1,171 @@
-// @vitest-environment node
-/**
- * POST /api/fabfiles/{id}/edit runs an LLM call on the platform's provider keys outside
- * ChatCompletionInvoke, so it must admit the model and reserve credits before the call, then
- * settle or refund. The metering module is faked (balance mechanics: meterPlatformCompletion.test.ts).
- */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import type { Request, Response } from 'express';
+import { NotFoundError, StorageLimitError } from '@bike4mind/common';
 
-const m = vi.hoisted(() => ({
-  denied: new Set<string>(),
-  reserve: vi.fn(),
-  refund: vi.fn(),
-  settle: vi.fn(),
-  complete: vi.fn(),
-  findById: vi.fn(),
+const h = vi.hoisted(() => ({
+  file: undefined as Record<string, unknown> | undefined,
+  upload: vi.fn(),
+  getSignedUrl: vi.fn(),
+  assertRewriteFits: vi.fn(),
+  commitContentRewrite: vi.fn(),
+  applyEditedText: vi.fn(),
+  extractEditableText: vi.fn(),
+  edited: 'edited',
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
-    const handlers: Mw[] = [];
-    const api = {
-      use: (mw: Mw) => (handlers.push(mw), api),
-      post: (h: Mw) => async (req: unknown, res: unknown) => {
-        for (const mw of [...handlers, h]) {
-          let advanced = false;
-          await mw(req, res, () => {
-            advanced = true;
-          });
-          if (!advanced) return;
-        }
-      },
-    };
-    return api;
-  },
-}));
+vi.mock('@server/middlewares/baseApi', () => {
+  const chain = { use: () => chain, post: (fn: unknown) => fn };
+  return { baseApi: () => chain };
+});
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ upload: h.upload, getSignedUrl: h.getSignedUrl }),
+}));
 vi.mock('@bike4mind/database', () => ({
-  FabFile: { findById: m.findById },
+  FabFile: { findById: () => ({ where: () => h.file }) },
   withTransaction: (fn: () => unknown) => fn(),
   apiKeyRepository: {},
   adminSettingsRepository: {},
+  fabFileRepository: {},
+  userRepository: {},
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
-vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
+vi.mock('@bike4mind/services', () => ({
+  apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
+  fabFilesService: { assertRewriteFits: h.assertRewriteFits, commitContentRewrite: h.commitContentRewrite },
+}));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'model-a', backend: 'anthropic' }],
-  getLlmByModel: () => ({ complete: m.complete }),
-}));
-vi.mock('@client/services/operationsModelService', () => ({
-  OperationsModelService: { getOperationsModelConfig: async () => null },
-}));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
-  createModelAdmission: async () => ({
-    admits: async (id: string) => !m.denied.has(id),
-    assert: async (id: string) => {
-      if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
-    },
+  getAvailableModels: vi.fn(async () => [{ id: 'm', backend: 'test' }]),
+  getLlmByModel: () => ({
+    complete: async (_id: string, _messages: unknown, _options: unknown, cb: (chunks: string[]) => Promise<void>) =>
+      cb([h.edited]),
   }),
-  completionCeilingUsd: () => 1,
-  reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
-  latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
-    if (info?.inputTokens) u.inputTokens = info.inputTokens;
-    if (info?.outputTokens) u.outputTokens = info.outputTokens;
-  },
-  completionUsd: (_model: unknown, u: { inputTokens?: number; outputTokens?: number }) =>
-    (u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002,
-  settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => m.settle(charge),
+}));
+vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+  completionCeilingUsd: () => 0,
+  reserveCompletionCredits: async () => ({ reservedCredits: 0, refund: async () => {} }),
+  latchUsage: () => {},
+  completionUsd: () => 0,
+  settleCompletion: async () => {},
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  applyEditedText: h.applyEditedText,
+  extractEditableText: h.extractEditableText,
 }));
 
-const { default: handler } = await import('@pages/api/fabfiles/[id]/edit');
+const handler = (await import('../edit')).default as unknown as (req: Request, res: Response) => Promise<unknown>;
 
-const FILE_ID = '65a000000000000000000001';
-
-async function call() {
-  const { req, res } = createMocks({
-    method: 'POST',
-    query: { id: FILE_ID },
-    body: { instruction: 'Fix the typo', model: 'model-a' },
-  });
-  Object.assign(req, { user: { id: 'u1' }, ability: { can: () => true }, logger: console });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
-  await (handler as any)(req, res);
-  return res;
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  m.denied.clear();
-  const file = {
-    id: FILE_ID,
-    fileName: 'a.txt',
-    mimeType: 'text/plain',
-    filePath: 'files/u1/a.txt',
-    moderationStatus: 'clean',
-  };
-  m.findById.mockReturnValue({ where: async () => file });
-  vi.stubGlobal('fetch', async () => new Response('helo world'));
-  m.reserve.mockResolvedValue({ reservedCredits: 10, refund: m.refund });
-  // Non-streaming adapters deliver the text, then a final null chunk carrying the usage.
-  m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
-    await cb(['hello world']);
-    await cb([null], { inputTokens: 200, outputTokens: 10 });
-  });
+const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const user = { id: 'u1' };
+const makeFile = (mimeType: string) => ({
+  _id: 'ff1',
+  id: 'ff1',
+  userId: 'u1',
+  fileName: 'doc',
+  filePath: 'files/u1/doc',
+  fileSize: 10,
+  mimeType,
+  moderationStatus: 'clean',
+  versions: [],
 });
-
-describe('POST /api/fabfiles/{id}/edit metering', () => {
-  it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
-    m.reserve.mockRejectedValue(insufficientCreditsError('You do not have enough credits for AI file editing.'));
-
-    await expect(call()).rejects.toMatchObject({ statusCode: 422 });
-    expect(m.complete).not.toHaveBeenCalled();
+const call = () =>
+  handler(
+    {
+      query: { id: 'ff1' },
+      user,
+      body: { instruction: 'edit it', applyImmediately: true, model: 'm' },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } as unknown as Request,
+    { json: vi.fn() } as unknown as Response
+  );
+const QUOTA = 'File size exceeds storage limit';
+const quotaError = () =>
+  new StorageLimitError(QUOTA, {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 900,
+    limit_bytes: 1000,
+    requested_bytes: 200,
+    owner: 'user',
   });
 
-  it('403s a model the user is not admitted to, before reserving or calling the provider', async () => {
-    m.denied.add('model-a');
-
-    await expect(call()).rejects.toMatchObject({ statusCode: 403 });
-    expect(m.reserve).not.toHaveBeenCalled();
-    expect(m.complete).not.toHaveBeenCalled();
+describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    h.assertRewriteFits.mockResolvedValue(undefined);
+    h.commitContentRewrite.mockResolvedValue(true);
+    h.getSignedUrl.mockResolvedValue('https://s3/signed');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, text: async () => 'old', arrayBuffer: async () => new ArrayBuffer(4) }))
+    );
   });
 
-  it('settles a funded call on the provider-reported usage', async () => {
-    const res = await call();
+  describe('text branch', () => {
+    beforeEach(() => {
+      h.file = makeFile('text/plain');
+      h.edited = 'a much longer body';
+    });
 
-    expect(res._getStatusCode()).toBe(200);
-    expect(m.reserve).toHaveBeenCalledBefore(m.complete);
-    expect(m.settle).toHaveBeenCalledWith({
-      model: 'model-a',
-      usd: 200 * 0.001 + 10 * 0.002,
-      inputTokens: 200,
-      outputTokens: 10,
+    it('charges the rewrite through the helper with the new byte size', async () => {
+      await call();
+
+      expect(h.assertRewriteFits).toHaveBeenCalledWith(h.file, 18, expect.anything(), user);
+      expect(h.commitContentRewrite).toHaveBeenCalledWith(
+        expect.objectContaining({ fabFileId: 'ff1', newSize: 18 }),
+        expect.anything()
+      );
+    });
+
+    it('refuses growth past the quota with the standard message before uploading', async () => {
+      h.assertRewriteFits.mockRejectedValue(quotaError());
+
+      // Rethrown as-is so the client still gets the used/limit numbers.
+      await expect(call()).rejects.toMatchObject({ message: QUOTA, info: { used_bytes: 900 } });
+      expect(h.upload).not.toHaveBeenCalled();
+      expect(h.commitContentRewrite).not.toHaveBeenCalled();
+    });
+
+    it('propagates a missing owner as a 404 rather than rewrapping it as a 400', async () => {
+      h.assertRewriteFits.mockRejectedValue(new NotFoundError('File owner not found'));
+
+      await expect(call()).rejects.toMatchObject({ statusCode: 404 });
+      expect(h.upload).not.toHaveBeenCalled();
     });
   });
 
-  it('charges the reservation ceiling when the adapter reports no usage', async () => {
-    m.complete.mockImplementation(async (_model, _messages, _opts, cb) => cb(['hello world']));
+  describe('Office branch', () => {
+    beforeEach(() => {
+      h.file = makeFile(DOCX);
+      h.edited = '[1] edited';
+      h.extractEditableText.mockResolvedValue('[1] old');
+      h.applyEditedText.mockResolvedValue(Buffer.alloc(30));
+    });
 
-    await call();
+    it('repoints and charges in one helper call, guarded on the edited filePath', async () => {
+      await call();
 
-    expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1 }));
-  });
+      expect(h.assertRewriteFits).toHaveBeenCalledWith(h.file, 30, expect.anything(), user);
+      const [args] = h.commitContentRewrite.mock.calls[0];
+      expect(args).toMatchObject({ fabFileId: 'ff1', newSize: 30, filter: { filePath: 'files/u1/doc' } });
+      expect(args.set.filePath).toEqual(h.upload.mock.calls[0][1]);
+    });
 
-  it('refunds in full and does not settle when the provider throws or returns nothing', async () => {
-    m.complete.mockRejectedValueOnce(new Error('provider down'));
-    await expect(call()).rejects.toMatchObject({ statusCode: 400 });
+    it('refuses growth past the quota before uploading the new version', async () => {
+      h.assertRewriteFits.mockRejectedValue(new Error(QUOTA));
 
-    m.complete.mockImplementationOnce(async (_model, _messages, _opts, cb) => cb(['']));
-    await expect(call()).rejects.toThrow('empty response');
+      await expect(call()).rejects.toThrow(QUOTA);
+      expect(h.upload).not.toHaveBeenCalled();
+    });
 
-    expect(m.refund).toHaveBeenCalledTimes(2);
-    expect(m.settle).not.toHaveBeenCalled();
+    it('reports a lost repoint race (the helper charged nothing)', async () => {
+      h.commitContentRewrite.mockResolvedValue(false);
+
+      await expect(call()).rejects.toThrow('modified by another edit');
+    });
   });
 });

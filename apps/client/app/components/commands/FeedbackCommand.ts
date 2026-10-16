@@ -1,4 +1,5 @@
 import {
+  feedbackDeliveryFailed,
   FeedbackStatus,
   FeedbackType,
   IChatHistoryItem,
@@ -59,7 +60,10 @@ function outcomeMessage(result: Awaited<ReturnType<typeof createFeedbackOnServer
       level: 'warning',
     };
   }
-  const deliveryFailed = result.delivery?.delivered === false;
+  // See HelpModal: only a channel that actually FAILED is worth a warning. A skipped channel
+  // (off, no recipients, a non-prod stage nobody opted in) means the report saved and nothing
+  // went wrong.
+  const deliveryFailed = feedbackDeliveryFailed(result.delivery);
   if (result.contentTruncated && deliveryFailed) {
     return {
       text: 'Your feedback was saved (trimmed a bit), but we could not notify the team - please ping support if it is urgent.',

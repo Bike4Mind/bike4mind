@@ -59,7 +59,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   executeFacetCompatible: vi.fn().mockResolvedValue([]),
 }));
 
-import { executeFacetCompatible } from '@bike4mind/database';
+import { Cache, executeFacetCompatible } from '@bike4mind/database';
 import handler, { FEEDBACK_ROLLUP_RATE_LIMIT as ROUTE_LIMIT } from '@pages/api/feedback/rollup';
 
 // The route's own window, and the ceiling Retry-After has to fall under.
@@ -88,6 +88,10 @@ const fillWindow = async (userId: string, times: number) => {
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // The limiter's fresh-window claim is an upsert that relies on Cache's unique `key` index to reject a
+  // second counter doc. Mongoose builds it in the background after connect, so wait for it or a fast
+  // run inserts a duplicate, reads as allowed, and leaves the index build failed for the retries too.
+  await Cache.init();
 });
 
 afterAll(async () => {

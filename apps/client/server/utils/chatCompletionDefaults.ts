@@ -60,6 +60,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { Resource } from 'sst';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
 
@@ -195,6 +196,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // to avoid credential expiration issues.
     // @deprecated: Use scope instead
     abilityGetter: defineAbilitiesFor,
+    workspaceDeniedTools: premiumWorkspaceDeniedTools,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve entitlement keys so ALL chat surfaces (chat/opti/voice/ai-llm/rapid-reply/slack)

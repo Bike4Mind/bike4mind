@@ -15,7 +15,7 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
@@ -92,7 +92,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // file does not exist yet, so it can only ever be a JOIN.
   await assertDataLakeTagWriteScope(req, requestedTagNames, { userId, db: { dataLakes: dataLakeRepository } });
   const ctx = await toAccessContext(req);
-  await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+  const targetLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
     db: {
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -141,6 +141,9 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     Key: fileKey,
   });
 
+  // Same owner rule as fabFileService.createFabFile, which this direct create bypasses.
+  const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+
   // Create File metadata, status will be set to `pending` by default
   const file = await createFabFile(
     {
@@ -153,6 +156,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       // Admission provenance (#1679): stamp the door - the web upload path the lake previously
       // could not identify. Mirrors the batch door and the connector/chat-platform doors.
       sourceType: FabFileSourceType.MANUAL_UPLOAD,
+      ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
       ...(data.contentHash && { contentHash: data.contentHash }),
       ...(data.batchId && { batchId: data.batchId }),
       ...(data.relativePath && { relativePath: data.relativePath }),

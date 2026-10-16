@@ -49,9 +49,12 @@ interface ResearchTaskProcessAdapters {
   db: {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
-    fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite' | 'findChargeState'
+    >;
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
-    users: Pick<IUserRepository, 'findById'>;
+    users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     adminSettings: IAdminSettingsRepository;
     // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
     // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a

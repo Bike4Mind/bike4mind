@@ -99,6 +99,16 @@ describe('DataLakeDiscoverPanel', () => {
     expect(screen.getByTestId('datalake-discover-count')).toHaveTextContent('Showing 1 of 1');
   });
 
+  it('hides the generated prefix chip of a GitHub connector lake, keeping a typed one', () => {
+    const [typed] = page().data;
+    const github = { ...typed, id: 'lk2', origin: 'connector-fed' as const, fileTagPrefix: 'gh-1a2b3c4d:' };
+    mockHook({ pages: [page({ data: [typed, github], total: 2 })] });
+    render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('datalake-discover-prefix-lk1')).toHaveTextContent('sales:');
+    expect(screen.queryByTestId('datalake-discover-prefix-lk2')).not.toBeInTheDocument();
+  });
+
   it('accumulates lakes across pages and reads total from the first page', () => {
     mockHook({
       pages: [

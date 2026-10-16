@@ -262,7 +262,11 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 
@@ -1145,6 +1149,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
 
   /**
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
+   */
+  findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
+   * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
+   * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
+   * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.
+   */
+  commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter?: Record<string, unknown>
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
    * Find a file by its ID and the user's ID.
    * @param id - The ID of the file.
    * @param userId - The ID of the user.
@@ -1953,6 +1975,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
@@ -2002,6 +2026,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

@@ -71,6 +71,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
 import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
 import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { generateNewSession, stopChatMessage } from '@client/app/utils/sessionsAPICalls';
@@ -745,7 +746,7 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
-      deniedTools: currentSession?.disabledTools,
+      deniedTools: effectiveDisabledTools(currentSession),
     });
     if (refused) {
       setSubmitting(false);
