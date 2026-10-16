@@ -30,7 +30,8 @@
     "title": "Registro de cambios"
   },
   "feedback": {
-    "send": "Enviar comentarios"
+    "send": "Enviar comentarios",
+    "rollupTitle": "Tus comentarios"
   },
   "terms_policies": "Términos y políticas",
   "login": "Iniciar sesión",
@@ -166,7 +167,8 @@
     "messages": "Mensajes",
     "invites": "Invitaciones",
     "sendMessage": "Enviar un mensaje",
-    "noMessages": "No hay mensajes"
+    "noMessages": "No hay mensajes",
+    "title_unread": "Bandeja de entrada, elementos no leídos"
   },
   "addSomething": "Añadir {{ name }}",
   "deleteAllSomething": "Eliminar todo {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Renueva el {{ date }}"
   },
   "billing": {
-    "title": "Facturación"
+    "title": "Facturación",
+    "balance": "Saldo",
+    "credits_heading": "Recargar créditos",
+    "credits_sub": "Paquetes únicos que se suman a tu saldo. Sin suscripción.",
+    "credits_sub_with_plan": "Paquetes únicos que se suman a tu asignación mensual.",
+    "free_plan": "Gratis",
+    "free_plan_detail": "Paga por uso con paquetes de créditos",
+    "low_org": "Un administrador de la organización puede añadir créditos a esta cuenta.",
+    "low_with_plan": "Recarga para seguir trabajando hasta que se renueve tu asignación.",
+    "low_without_plan": "Un plan añade créditos cada mes; un paquete te recarga ahora.",
+    "payment_failed": "Pago fallido",
+    "plan": "Plan",
+    "plan_fallback": "Suscripción",
+    "plan_unavailable": "No disponible",
+    "plan_unavailable_detail": "No pudimos cargar tu plan.",
+    "plans_change": "Tu plan",
+    "plans_change_sub": "Gestiona, cambia o cancela tu suscripción.",
+    "plans_heading": "Planes",
+    "plans_heading_sub": "Planes mensuales con una asignación de créditos.",
+    "plans_upgrade": "Mejorar",
+    "plans_upgrade_sub": "Obtén una asignación mensual de créditos en lugar de recargar a mano.",
+    "retry": "Reintentar",
+    "see_plans": "Ver planes",
+    "top_up": "Recargar"
   },
   "credits": {
     "title": "Créditos",
@@ -314,7 +339,8 @@
     "usage_pattern": "Basado en tu patrón de uso de los últimos {{days}} días",
     "credits_used": "Créditos utilizados",
     "credits_purchased": "Créditos comprados",
-    "net_credits": "Créditos netos"
+    "net_credits": "Créditos netos",
+    "unit": "créditos"
   },
   "time": {
     "last_7_days": "Últimos 7 días",
@@ -362,7 +388,15 @@
       "completed": "Completado",
       "pending": "Pendiente",
       "failed": "Fallido"
-    }
+    },
+    "buy_pack": "Comprar {{credits}} créditos por {{price}}",
+    "choose_pack": "Elige un paquete de créditos",
+    "history_usage_hint": "Aquí solo aparecen las compras.",
+    "organization_credits_active": "Créditos de la organización activos",
+    "rate_per_thousand": "{{rate}} por 1.000 créditos",
+    "see_usage": "Ver uso",
+    "shared_rate": "Todos los paquetes tienen la misma tarifa: {{rate}} por 1.000 créditos.",
+    "switch_to_personal": "Cambia a tu cuenta personal para comprar créditos de uso personal."
   },
   "settings": {
     "title": "Configuración",
@@ -543,7 +577,9 @@
     "personal": "Personal",
     "business": "Negocios",
     "team": "Equipo",
-    "enterprise": "Empresarial"
+    "enterprise": "Empresarial",
+    "audience_label": "Tipo de plan",
+    "includes": "Incluye"
   },
   "agents": {
     "title": "Agentes",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Habilidades",
     "command_palette_description": "Gestionar plantillas de instrucciones reutilizables"
+  },
+  "apiKeys": {
+    "title": "Claves de API"
+  },
+  "connections": {
+    "menuTooltip": "Integraciones como Google Drive y Slack, y claves de API para tu propio código",
+    "sections": "Secciones de conexiones",
+    "title": "Conexiones"
   }
 }

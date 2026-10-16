@@ -30,7 +30,8 @@
     "title": "Wijzigingslogboek"
   },
   "feedback": {
-    "send": "Feedback Verzenden"
+    "send": "Feedback Verzenden",
+    "rollupTitle": "Jouw feedback"
   },
   "terms_policies": "Voorwaarden & Beleid",
   "login": "Inloggen",
@@ -166,7 +167,8 @@
     "messages": "Berichten",
     "invites": "Uitnodigingen",
     "sendMessage": "Verstuur een bericht",
-    "noMessages": "Geen berichten"
+    "noMessages": "Geen berichten",
+    "title_unread": "Inbox, ongelezen items"
   },
   "addSomething": "Voeg {{ name }} toe",
   "deleteAllSomething": "Verwijder alle {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Verlengt op {{ date }}"
   },
   "billing": {
-    "title": "Facturering"
+    "title": "Facturering",
+    "balance": "Saldo",
+    "credits_heading": "Credits bijkopen",
+    "credits_sub": "Eenmalige pakketten, bij je saldo opgeteld. Geen abonnement nodig.",
+    "credits_sub_with_plan": "Eenmalige pakketten, bovenop je maandelijkse tegoed.",
+    "free_plan": "Gratis",
+    "free_plan_detail": "Betaal naar gebruik met creditpakketten",
+    "low_org": "Een beheerder van de organisatie kan credits aan dit account toevoegen.",
+    "low_with_plan": "Koop bij om door te werken tot je tegoed wordt vernieuwd.",
+    "low_without_plan": "Een abonnement voegt elke maand credits toe; een pakket vult nu aan.",
+    "payment_failed": "Betaling mislukt",
+    "plan": "Abonnement",
+    "plan_fallback": "Abonnement",
+    "plan_unavailable": "Niet beschikbaar",
+    "plan_unavailable_detail": "We konden je abonnement niet laden.",
+    "plans_change": "Je abonnement",
+    "plans_change_sub": "Beheer, wijzig of annuleer je abonnement.",
+    "plans_heading": "Abonnementen",
+    "plans_heading_sub": "Maandelijkse abonnementen met een credittegoed.",
+    "plans_upgrade": "Upgraden",
+    "plans_upgrade_sub": "Krijg een maandelijks credittegoed in plaats van handmatig bij te kopen.",
+    "retry": "Opnieuw proberen",
+    "see_plans": "Abonnementen bekijken",
+    "top_up": "Bijkopen"
   },
   "credits": {
     "title": "Tegoeden",
@@ -314,7 +339,8 @@
     "usage_pattern": "Op basis van je gebruikspatroon van de afgelopen {{days}} dagen",
     "credits_used": "Gebruikte Credits",
     "credits_purchased": "Aangekochte Credits",
-    "net_credits": "Netto Credits"
+    "net_credits": "Netto Credits",
+    "unit": "credits"
   },
   "time": {
     "last_7_days": "Laatste 7 dagen",
@@ -362,7 +388,15 @@
       "completed": "Voltooid",
       "pending": "In afwachting",
       "failed": "Mislukt"
-    }
+    },
+    "buy_pack": "Koop {{credits}} credits voor {{price}}",
+    "choose_pack": "Kies een creditpakket",
+    "history_usage_hint": "Hier staan alleen aankopen.",
+    "organization_credits_active": "Organisatiecredits actief",
+    "rate_per_thousand": "{{rate}} per 1.000 credits",
+    "see_usage": "Gebruik bekijken",
+    "shared_rate": "Elk pakket heeft hetzelfde tarief: {{rate}} per 1.000 credits.",
+    "switch_to_personal": "Schakel over naar je persoonlijke account om credits voor persoonlijk gebruik te kopen."
   },
   "settings": {
     "title": "Instellingen",
@@ -543,7 +577,9 @@
     "personal": "Persoonlijk",
     "business": "Zakelijk",
     "team": "Team",
-    "enterprise": "Enterprise"
+    "enterprise": "Enterprise",
+    "audience_label": "Soort abonnement",
+    "includes": "Inclusief"
   },
   "agents": {
     "title": "Agents",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Vaardigheden",
     "command_palette_description": "Beheer herbruikbare instructiesjablonen"
+  },
+  "apiKeys": {
+    "title": "API-sleutels"
+  },
+  "connections": {
+    "menuTooltip": "Integraties zoals Google Drive en Slack, plus API-sleutels voor je eigen code",
+    "sections": "Onderdelen van verbindingen",
+    "title": "Verbindingen"
   }
 }
