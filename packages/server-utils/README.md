@@ -8,7 +8,7 @@ Server code shared by `apps/client` and `apps/workers`, moving out of `apps/clie
 
 1. **A transpile hook.** The Next pages router needs `transpilePackages` (`apps/client/next.config.mjs`). Otherwise it externalizes the package and Node `require()`s raw `.ts`. esbuild Lambdas and vitest transpile it already.
 2. **A tsx tsconfig include.** tsx applies `strict` and `target` only to files its tsconfig includes, so each tsx entrypoint's tsconfig must include `packages/server-utils/src/**/*.ts`: `apps/client/tsconfig.json` (Dockerfile.chatcompletion) and `apps/workers/tsconfig.selfhost.json` (self-host worker and agentexecutor).
-3. **A turbo `inputs` glob.** `^build` never hashes a package with no build, so the consumer's typecheck/test tasks must list `../../packages/server-utils/src/**` in `inputs` (`turbo.json`, the `@bike4mind/client#*` and `@bike4mind/workers#*` entries). Without it, an edit here replays a cached green result for that consumer.
+3. **A turbo `inputs` glob.** `^build` never hashes a package with no build, so the consumer's typecheck/test tasks must list `../../packages/server-utils/**` (minus its `node_modules`) in `inputs` (`turbo.json`, the `@bike4mind/client#*` and `@bike4mind/workers#*` entries). Without it, an edit here replays a cached green result for that consumer.
 
 The package must never import from either app, their path aliases (`@server/*`, `@client/*`, `@/*`, ...) or UI code. `eslint.config.mjs` enforces this.
 
