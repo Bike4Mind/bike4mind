@@ -1287,8 +1287,8 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       waitTurnLimits.budgetMs = 0;
       waitTurnLimits.windDownMs = 20;
       mockSettleIfUnfinished.mockResolvedValue(true);
-      // No readable persisted row by default: the deadline path falls back to the in-memory quest.
-      mockQuestFindById.mockResolvedValue(null);
+      // The invoke-created row the deadline path reads in production, before anything streamed.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
       mockReleaseReservedCredits.mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
       mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
@@ -1330,6 +1330,31 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
           status: 'done',
           finishReason: 'timeout',
           reply: expect.stringContaining('Partial answer'),
+        })
+      );
+    });
+
+    it('keeps text streamed after the last heartbeat, which lives only in memory', async () => {
+      // The heartbeat writes the row every ~10s, so text that streamed since then is not in it;
+      // the settle must write the in-memory copy rather than that stale snapshot.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: 'Part', replies: ['Part'] });
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.reply = 'Partial answer with a tail';
+            prefetchedQuest.replies = ['Partial answer', ' with a tail'];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({
+          status: 'done',
+          finishReason: 'timeout',
+          reply: expect.stringContaining('with a tail'),
         })
       );
     });
