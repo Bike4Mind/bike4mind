@@ -611,6 +611,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result;
   }
 
+  /**
+   * Debit up to `credits` without taking the balance below zero, in one atomic update: a balance
+   * that cannot cover the whole debit is taken to zero (a negative one is left as is). Resolves the
+   * credits actually debited, 0 for a missing user, so the caller can see and act on a shortfall.
+   */
+  async decrementCreditsFloored(userId: string, credits: number): Promise<number> {
+    const available = { $max: [{ $ifNull: ['$currentCredits', 0] }, 0] };
+    const before = await this.model.findOneAndUpdate(
+      { _id: userId },
+      [{ $set: { currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] } } }],
+      { new: false, projection: { currentCredits: 1 } }
+    );
+    if (!before) return 0;
+    return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
+  }
+
   async incrementCurrentStorage(userId: string, count: number): Promise<void> {
     await this.model.findByIdAndUpdate(
       userId,

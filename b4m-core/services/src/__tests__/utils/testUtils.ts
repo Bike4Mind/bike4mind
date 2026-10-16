@@ -230,7 +230,6 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findStaleVoiceHolds: vi.fn(),
     claimVoiceHold: vi.fn(),
     openVoiceHold: vi.fn(),
-    restoreVoiceHold: vi.fn(),
     recordVoiceActivity: vi.fn(),
   });
 

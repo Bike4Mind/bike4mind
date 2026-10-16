@@ -4,6 +4,11 @@
 // so the reserve and the refund can never drift apart.
 export const MAX_SESSION_SECONDS = 5 * 60;
 
+// Lifetime of an ElevenLabs call's session token, measured from its hold's start: the call cap plus
+// headroom for the provider's last turns. The llm-proxy refuses any turn past it, so reconnecting
+// onto the same hold can never stretch one reserve past this window.
+export const VOICE_SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
+
 // Realtime (OpenAI) voice: the hold covers this long a call at worst-case audio rates. Reserved in
 // POST /api/ai/voice-sessions; the same rate floors what a call settles for in
 // server/websocket/voiceSessionEnded.ts, so client-reported usage can never settle below it.
@@ -47,6 +52,9 @@ export function creditsForElapsed(reservedCredits: number, elapsedSeconds: numbe
  * `voiceBilledCredits` and settles on its own rate, so an ElevenLabs reconnect reusing it would
  * bill ElevenLabs minutes at the realtime floor (and the reverse). A mismatched hold is settled
  * and a fresh one reserved instead.
+ *
+ * Reuse also ends with the hold's window (MAX_SESSION_SECONDS, or REALTIME_VOICE_HOLD_SECONDS for a
+ * realtime hold): the reserve only covers that long a call, so a later reconnect pays a fresh hold.
  */
 export function shouldReuseVoiceHold(
   isReconnect: boolean | undefined,
@@ -54,12 +62,13 @@ export function shouldReuseVoiceHold(
     | { voiceReservedCredits?: number | null; voiceSessionStartedAt?: Date | null; voiceBilledCredits?: number | null }
     | null
     | undefined,
-  realtime: boolean
+  realtime: boolean,
+  now: Date = new Date()
 ): boolean {
+  if (!isReconnect || session?.voiceReservedCredits == null || session?.voiceSessionStartedAt == null) return false;
+  const windowMs = (realtime ? REALTIME_VOICE_HOLD_SECONDS : MAX_SESSION_SECONDS) * 1000;
   return (
-    !!isReconnect &&
-    session?.voiceReservedCredits != null &&
-    session?.voiceSessionStartedAt != null &&
-    (session.voiceBilledCredits != null) === realtime
+    (session.voiceBilledCredits != null) === realtime &&
+    now.getTime() - new Date(session.voiceSessionStartedAt).getTime() < windowMs
   );
 }

@@ -18,7 +18,6 @@ import {
   SessionListFilters,
   SessionOriginChannel,
   tagAttemptDueFilter,
-  VoiceHoldMarkers,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -280,6 +279,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     voiceLastActivityAt: { type: Date, required: false, default: null },
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
+    voiceHoldUserId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -743,17 +743,19 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
         },
-        $unset: { voiceBilledCredits: '' },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
       },
-      { new: false, projection: { voiceBilledCredits: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
     );
-    return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
+    return before
+      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      : null;
   }
 
   async openVoiceHold(
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
@@ -774,6 +776,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceSessionStartedAt: hold.voiceSessionStartedAt,
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
+          voiceHoldUserId: hold.payerId,
           // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
           ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
         },
@@ -781,28 +784,6 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       }
     );
     return matchedCount === 1;
-  }
-
-  async restoreVoiceHold(
-    sessionId: string,
-    voiceReservedCredits: number,
-    startedAt: Date,
-    markers: VoiceHoldMarkers = {}
-  ) {
-    // Only while no newer call has started a hold on the session.
-    const { modifiedCount } = await this.sessionModel.updateOne(
-      { _id: sessionId, voiceSessionStartedAt: null },
-      {
-        $set: {
-          voiceReservedCredits,
-          voiceSessionStartedAt: startedAt,
-          voiceConnectedAt: markers.voiceConnectedAt ?? null,
-          voiceLastActivityAt: markers.voiceLastActivityAt ?? null,
-          ...(markers.voiceBilledCredits != null ? { voiceBilledCredits: markers.voiceBilledCredits } : {}),
-        },
-      }
-    );
-    return modifiedCount === 1;
   }
 
   async findSessionIdsByUserId(userId: string) {
