@@ -4,23 +4,24 @@ import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
-import { isSurfaceHidden, OPTI_SURFACE, WORKSPACE_SURFACES, type NavigationIntent } from '@bike4mind/common';
-import { hostedWorkspaceAt } from '@client/app/utils/premiumHostedWorkspace';
+import type { NavigationIntent } from '@bike4mind/common';
+import { leadsIntoHiddenSurface } from '@client/app/utils/navigationIntentSurface';
 import { useHiddenSurfaceIds } from './useHiddenSurfaces';
 
 // Builds without the OptiHashi overlay (open core) have no /opti route; an
 // Opti action intent must no-op there instead of navigating to a dead route.
 const optiRouteExists = premiumRoutes.some(route => route.path.startsWith('/opti'));
 
-/** The registered workspace a suggested navigation leads into, or null for the main app. */
-function intentSurface(intent: NavigationIntent): string | null {
-  if (intent.navigationType === 'action') return intent.target === 'file_browser' ? null : OPTI_SURFACE;
-  if (intent.navigationType !== 'route') return null;
-  const path = intent.target.split(/[?#]/)[0];
-  const surface = WORKSPACE_SURFACES.find(
-    entry => entry.id !== null && (path === entry.routePrefix || path.startsWith(`${entry.routePrefix}/`))
+/** Predicate for a suggested navigation that leads into a workspace the user hid (see leadsIntoHiddenSurface). */
+export function useIsIntentHidden(): (intent: NavigationIntent) => boolean {
+  const hiddenSurfaces = useHiddenSurfaceIds();
+  const pathname = useLocation({ select: location => location.pathname });
+  const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
+  return useCallback(
+    (intent: NavigationIntent) =>
+      leadsIntoHiddenSurface(intent, { hiddenSurfaces, pathname, hostHandlesFamilyInPlace }),
+    [hiddenSurfaces, pathname, hostHandlesFamilyInPlace]
   );
-  return surface?.id ?? null;
 }
 
 /**
@@ -35,18 +36,12 @@ export function useNavigationExecutor() {
   const requestFamily = useOptiNavigation(state => state.requestFamily);
   const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
   const setFileBrowserOpen = useFileBrowser(state => state.setOpen);
-  const hiddenSurfaces = useHiddenSurfaceIds();
-  const pathname = useLocation({ select: location => location.pathname });
+  const isIntentHidden = useIsIntentHidden();
 
   const execute = useCallback(
     (intent: NavigationIntent) => {
-      // A suggestion leading into a workspace the user hid is a no-op, unless they are already in it
-      // (its own route, or a host drawing it in place).
-      const target = intentSurface(intent);
-      const alreadyThere =
-        hostedWorkspaceAt(pathname, premiumRoutes) === target ||
-        (intent.navigationType === 'action' && hostHandlesFamilyInPlace);
-      if (target && isSurfaceHidden(hiddenSurfaces, target) && !alreadyThere) return;
+      // A suggestion leading into a workspace the user hid is a no-op, unless they are already in it.
+      if (isIntentHidden(intent)) return;
       switch (intent.navigationType) {
         case 'route':
           navigate({ to: intent.target });
@@ -92,7 +87,7 @@ export function useNavigationExecutor() {
         }
       }
     },
-    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace, hiddenSurfaces, pathname]
+    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace, isIntentHidden]
   );
 
   return execute;
