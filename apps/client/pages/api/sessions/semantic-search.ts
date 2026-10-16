@@ -16,7 +16,9 @@
 
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { resolveRequestBillingOrgId } from '@server/billing/reserveRequestCredits';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import {
@@ -117,8 +119,10 @@ const handler = baseApi().post(
       return res.status(400).json({ error: 'Query is required' });
     }
 
-    // Same holder deductCreditsWithOrgSupport charges: the org pool when the user has one.
-    const billingOrg = req.user.organizationId ? await organizationRepository.findById(req.user.organizationId) : null;
+    // The holder reserveRequestCredits would bill: an API key's billing owner, else the user's org seat.
+    const billingOrgId = resolveRequestBillingOrgId(req);
+    const billingOrg = billingOrgId ? await organizationRepository.findById(billingOrgId) : null;
+    assertApiKeyOrgMembership({ billingOrg, billingUser: req.user, isApiKeyCaller: Boolean(req.apiKeyInfo) });
     // assertOwnerCanAfford's gate, inlined so the org read above is the only one.
     if (await isCreditsEnforced()) {
       if (billingOrg && creditService.isMemberAtOrOverCap(billingOrg, userId)) {

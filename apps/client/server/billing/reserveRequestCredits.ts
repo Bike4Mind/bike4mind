@@ -55,6 +55,24 @@ type ReserveRequestCreditsParams = {
 };
 
 /**
+ * The organization a request bills, or undefined when it bills the user. Precedence: org-billed API key
+ * -> its org; user-billed API key -> the user; JWT caller -> `organizationId` when given (null = the
+ * user), else the user's own org seat.
+ */
+export function resolveRequestBillingOrgId(
+  req: Pick<BillingRequest, 'user' | 'apiKeyInfo'>,
+  organizationId?: string | null
+): string | undefined {
+  if (req.apiKeyInfo) {
+    return req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
+      ? req.apiKeyInfo.organizationId
+      : undefined;
+  }
+  if (organizationId !== undefined) return organizationId ?? undefined;
+  return req.user?.organizationId?.toString() ?? undefined;
+}
+
+/**
  * Reserve a request's cost BEFORE any provider cost is incurred, for the stateless paid API routes
  * (pages/api/ai/music.ts, sound-effects.ts, pages/api/v1/embeddings.ts). The money movement itself
  * lives in creditService/creditHold.ts; this resolves the billing owner and the request-only checks.
@@ -79,13 +97,7 @@ export async function reserveRequestCredits({
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
-  const billingOrganizationId = req.apiKeyInfo
-    ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
-      ? req.apiKeyInfo.organizationId
-      : undefined
-    : organizationId !== undefined
-      ? (organizationId ?? undefined)
-      : (req.user.organizationId?.toString() ?? undefined);
+  const billingOrganizationId = resolveRequestBillingOrgId(req, organizationId);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 

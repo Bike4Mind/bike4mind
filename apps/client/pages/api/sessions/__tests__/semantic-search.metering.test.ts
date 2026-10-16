@@ -47,6 +47,7 @@ vi.mock('@bike4mind/services', () => ({
   assertOwnerHasCredits: (owner: { currentCredits?: number }) => {
     if (!((owner.currentCredits ?? 0) > 0)) throw insufficientCreditsError('Insufficient credits');
   },
+  organizationService: { isCurrentOrgMember: () => true },
   creditService: { isMemberAtOrOverCap: () => false, MEMBER_CREDIT_CAP_MESSAGE: 'cap' },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({ isCreditsEnforced: async () => m.enforce }));
@@ -84,10 +85,11 @@ const { default: handler } = await import('@pages/api/sessions/semantic-search')
 
 const QUERY = 'bike trip';
 
-async function call(currentCredits: number, organizationId?: string) {
+async function call(currentCredits: number, organizationId?: string, apiKeyInfo?: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body: { query: QUERY, useReRanking: true } });
   Object.assign(req, {
     user: { id: 'u1', currentCredits, organizationId },
+    apiKeyInfo,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() },
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
@@ -161,6 +163,26 @@ describe('POST /api/sessions/semantic-search metering', () => {
     await expect(call(100, 'o1')).rejects.toMatchObject({ statusCode: 422 });
     expect(m.findOrg).toHaveBeenCalledOnce();
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('bills a user-billed API key to the user, not the org seat', async () => {
+    m.findOrg.mockResolvedValue({ id: 'o1', currentCredits: 0 });
+
+    const res = await call(100, 'o1', { billingOwnerType: 'User', organizationId: 'o1' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.findOrg).not.toHaveBeenCalled();
+    expect(m.record.mock.calls.every(([p]) => p.organization === null)).toBe(true);
+  });
+
+  it('bills an org-billed API key to its org', async () => {
+    m.findOrg.mockResolvedValue({ id: 'o2', currentCredits: 50 });
+
+    const res = await call(0, undefined, { billingOwnerType: 'Organization', organizationId: 'o2' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.findOrg).toHaveBeenCalledWith('o2');
+    expect(m.record.mock.calls.every(([p]) => p.organization?.id === 'o2')).toBe(true);
   });
 
   it('tags every event of one search with the same per-request id, distinct across searches', async () => {

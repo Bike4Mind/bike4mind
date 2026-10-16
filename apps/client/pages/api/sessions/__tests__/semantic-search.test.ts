@@ -50,6 +50,8 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
   // Metering is covered in semantic-search.metering.test.ts.
   recordOperationalUsage: vi.fn(async () => undefined),
+  creditService: {},
+  organizationService: {},
 }));
 vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
   // Query expansion is best-effort behind a try/catch; throwing exercises its keyword fallback
