@@ -391,6 +391,11 @@ export const SettingKeySchema = z.enum([
   'atlassianClientSecret',
   'notionClientId',
   'notionClientSecret',
+  'EnableCustomMcpConnectors',
+  'customMcpPolicy',
+  'customMcpBlockedHosts',
+  'customMcpPresetClients',
+  'customMcpAllowPrivateNetworks',
   'qWorkUrl',
   'qWorkToken',
 
@@ -1100,6 +1105,73 @@ export enum ServerStatusEnum {
   Offline = 'offline',
 }
 
+export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
+export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
+
+/**
+ * Org policy for custom remote MCP connectors, evaluated on create, OAuth start, offering and every
+ * call (design #4845 section 8). The platform row is the default for users with no org override,
+ * so `presets_only` keeps arbitrary URLs closed until an operator or org opts in to `allowlist`/`any`.
+ */
+export const CustomMcpPolicySchema = z.object({
+  mode: z.enum(CUSTOM_MCP_POLICY_MODES).default('presets_only'),
+  /** Host patterns (`example.com`, `*.example.com`) a URL must match when `mode` is `allowlist`. */
+  allowedHostPatterns: z.array(z.string()).default([]),
+  /** Checked in every mode, after the platform `customMcpBlockedHosts`. */
+  blockedHostPatterns: z.array(z.string()).default([]),
+  allowUnauthenticated: z.boolean().default(true),
+  /** false drops every tool not annotated read-only at offering time. */
+  allowWriteTools: z.boolean().default(true),
+  requireApprovalForAll: z.boolean().default(false),
+  maxConnectionsPerUser: z.number().int().min(0).max(100).default(20),
+});
+
+export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
+
+export const CustomMcpBlockedHostsSchema = z.object({
+  hosts: z.array(z.string()).default([]),
+});
+
+export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
+
+const IPV4_CIDR = /^(\d{1,3}\.){3}\d{1,3}\/(\d|[12]\d|3[0-2])$/;
+const IPV6_CIDR = /^[0-9a-fA-F:.]*:[0-9a-fA-F:.]*\/(\d{1,2}|1[01]\d|12[0-8])$/;
+
+/** Self-host only; hosted deployments never reach private networks regardless of this value. */
+export const CustomMcpAllowPrivateNetworksSchema = z.object({
+  cidrs: z
+    .array(
+      z.string().refine(v => IPV4_CIDR.test(v) || IPV6_CIDR.test(v), { message: 'Must be a CIDR such as 10.0.0.0/8' })
+    )
+    .default([]),
+  allowHttp: z.boolean().default(false),
+});
+
+export type CustomMcpAllowPrivateNetworks = z.infer<typeof CustomMcpAllowPrivateNetworksSchema>;
+
+/**
+ * Shape of the `customMcpPresetClients` value: `{ [presetId]: { clientId, clientSecret? } }`. The
+ * setting itself is a sensitive plain string (the masking protocol only supports strings), so the
+ * JSON is parsed here at the point of use.
+ */
+export const CustomMcpPresetClientsSchema = z.record(
+  z.string(),
+  z.object({ clientId: z.string().min(1), clientSecret: z.string().optional() })
+);
+
+export type CustomMcpPresetClients = z.infer<typeof CustomMcpPresetClientsSchema>;
+
+/** Parse the stored `customMcpPresetClients` string; blank or malformed reads as no preset clients. */
+export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClients {
+  if (typeof raw !== 'string' || raw.trim() === '') return {};
+  try {
+    const parsed = CustomMcpPresetClientsSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : {};
+  } catch {
+    return {};
+  }
+}
+
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
   customLogoUrl: z.string().prefault(''),
@@ -1793,6 +1865,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'atlassianClientSecret', order: 5 },
       { key: 'notionClientId', order: 6 },
       { key: 'notionClientSecret', order: 7 },
+      { key: 'EnableCustomMcpConnectors', order: 8 },
+      { key: 'customMcpPolicy', order: 9 },
+      { key: 'customMcpBlockedHosts', order: 10 },
+      { key: 'customMcpPresetClients', order: 11 },
+      { key: 'customMcpAllowPrivateNetworks', order: 12 },
     ],
   },
   Q_WORK: {
@@ -3687,6 +3764,78 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MCP.id,
     order: 7,
     isSensitive: true,
+  }),
+  EnableCustomMcpConnectors: makeBooleanSetting({
+    key: 'EnableCustomMcpConnectors',
+    name: 'Enable Custom MCP Connectors',
+    defaultValue: false,
+    description:
+      'Let users connect remote MCP servers by URL (beta). Off: no custom connector tools are offered ' +
+      'and new connections cannot be created; existing ones can still be disconnected. An org can ' +
+      'turn it on for its members only.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 8,
+    dependsOn: 'EnableMCPServer',
+    // The Integrations page derives the custom connector card's status from it.
+    userReadable: true,
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  customMcpPolicy: makeObjectSetting({
+    key: 'customMcpPolicy',
+    name: 'Custom MCP Connector Policy',
+    defaultValue: CustomMcpPolicySchema.parse({}),
+    description:
+      'Which custom MCP servers members may connect. mode: off, presets_only (catalog presets only), ' +
+      'allowlist (allowedHostPatterns only) or any. blockedHostPatterns apply in every mode. ' +
+      'allowUnauthenticated permits servers with no sign-in; allowWriteTools false hides tools not ' +
+      'marked read-only; requireApprovalForAll asks before every tool call. Overridable per org.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 9,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpPolicySchema,
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  customMcpBlockedHosts: makeObjectSetting({
+    key: 'customMcpBlockedHosts',
+    name: 'Custom MCP Blocked Hosts',
+    defaultValue: CustomMcpBlockedHostsSchema.parse({}),
+    description:
+      'Platform kill switch per host: custom MCP connections to these hosts are blocked for every ' +
+      'org and user on their next use. Exact hosts or *.example.com patterns.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 10,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpBlockedHostsSchema,
+  }),
+  customMcpPresetClients: makeStringSetting({
+    key: 'customMcpPresetClients',
+    name: 'Custom MCP Preset OAuth Clients',
+    defaultValue: '',
+    description:
+      'JSON map of pre-registered OAuth clients for connector presets whose vendor offers no dynamic ' +
+      'registration: {"<presetId>": {"clientId": "...", "clientSecret": "..."}}.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 11,
+    dependsOn: 'EnableCustomMcpConnectors',
+    isSensitive: true,
+  }),
+  customMcpAllowPrivateNetworks: makeObjectSetting({
+    key: 'customMcpAllowPrivateNetworks',
+    name: 'Custom MCP Private Networks (self-host)',
+    defaultValue: CustomMcpAllowPrivateNetworksSchema.parse({}),
+    description:
+      'Self-host only, ignored on hosted deployments. CIDRs that custom MCP connections may reach even ' +
+      'though they are private, and whether plain http is allowed. Empty (the default) blocks every ' +
+      'private address.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 12,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpAllowPrivateNetworksSchema,
   }),
   qWorkUrl: makeStringSetting({
     key: 'qWorkUrl',
