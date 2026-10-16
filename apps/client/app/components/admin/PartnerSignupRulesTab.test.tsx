@@ -155,4 +155,17 @@ describe('PartnerSignupRulesTab subscription', () => {
     expect(cell).toHaveTextContent(`${plan.name} (${plan.interval}), 3 mo`);
     expect(screen.getByTestId('partner-rule-subscription-plain.com')).toHaveTextContent('-');
   });
+
+  it('shows the raw priceId in the edit select when the plan is no longer in the catalog', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(
+      listOf([makeRule({ subscription: { priceId: 'price_removed', durationMonths: 2 } })])
+    );
+    renderTab();
+
+    await userEvent.click(await screen.findByTestId('partner-rule-edit-partner.com'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('partner-rule-subscription-select')).toHaveTextContent('price_removed (unavailable)')
+    );
+  });
 });

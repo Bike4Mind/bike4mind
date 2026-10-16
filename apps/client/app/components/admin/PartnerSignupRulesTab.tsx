@@ -119,6 +119,11 @@ export default function PartnerSignupRulesTab() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<IPartnerSignupRuleDocument | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  // A plan removed from the catalog after the rule was saved would otherwise match no Option and render blank.
+  const planOptions = SUBSCRIPTION_PLANS.map(plan => ({ priceId: plan.priceId, label: planLabel(plan) }));
+  if (form.subscriptionPriceId && !planOptions.some(option => option.priceId === form.subscriptionPriceId)) {
+    planOptions.push({ priceId: form.subscriptionPriceId, label: `${form.subscriptionPriceId} (unavailable)` });
+  }
   const [formError, setFormError] = useState<string | null>(null);
   // Rule pending deletion (drives the confirm dialog); null when closed.
   const [deleteTarget, setDeleteTarget] = useState<IPartnerSignupRuleDocument | null>(null);
@@ -586,9 +591,9 @@ export default function PartnerSignupRulesTab() {
                 slotProps={{ button: { 'data-testid': 'partner-rule-subscription-select' } }}
               >
                 <Option value={null}>None</Option>
-                {SUBSCRIPTION_PLANS.map(plan => (
-                  <Option key={plan.priceId} value={plan.priceId}>
-                    {planLabel(plan)}
+                {planOptions.map(({ priceId, label }) => (
+                  <Option key={priceId} value={priceId}>
+                    {label}
                   </Option>
                 ))}
               </Select>
