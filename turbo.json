@@ -53,13 +53,16 @@
     // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
     // package-specific config REPLACES the generic entry, so ^build is repeated here.
     "@bike4mind/scripts#typecheck": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     "@bike4mind/scripts#typecheck:native": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     "@bike4mind/scripts#typecheck:fast": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
