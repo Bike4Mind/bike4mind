@@ -18,15 +18,16 @@ import {
 import {
   adminSettingsRepository,
   Connection,
-  creditTransactionRepository,
   modelPriceRepository,
   sessionRepository,
   usageEventRepository,
   userRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@server/voice/voiceSessionLimits';
+import { isVoiceLedgerKeyTaken, recordVoiceUsage, VOICE_TRANSACTION_OPTIONS } from '@server/voice/settleVoiceHold';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage, responseId } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -93,64 +94,43 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Credits still reserved for this call after this frame: an open hold is not exhaustion.
   let holdLeft = 0;
 
-  const recordUsage = (credits: number, transactionId?: string) =>
-    creditTransactionRepository.createTransaction('realtime_voice_usage', {
-      ownerId: user.id,
-      ownerType: CreditHolderType.User,
-      credits: -Math.abs(credits),
-      description: 'Voice usage',
-      model,
-      sessionId,
-      ...(transactionId ? { transactionId } : {}),
-    });
-
   if (responseId) {
-    // One response of a live call. The transaction id makes a replayed frame a no-op; the hold
-    // stays open, so later responses and a reconnect (which reuses a live hold) keep drawing on it.
-    const recorded = await recordUsage(actualCredits, `realtime-voice:${sessionId}:${responseId}`);
-    if (!recorded) {
+    // One response of a live call. Its ledger row, the hold's billed total and the debit commit
+    // together, keyed on the response, so a replayed frame moves nothing. The hold stays open, so
+    // later responses and a reconnect (which reuses a live hold) keep drawing on it.
+    const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+    const reserved = session.voiceReservedCredits ?? 0;
+    let billedBefore: number | null;
+    try {
+      billedBefore = await withTransaction(async () => {
+        await recordVoiceUsage({
+          userId: user.id,
+          sessionId,
+          model,
+          credits: actualCredits,
+          transactionId: `realtime-voice:${sessionId}:${responseId}`,
+        });
+        const before = startedAt
+          ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
+          : null;
+        // Only the part past the hold leaves the balance now; the hold already covers the rest. With
+        // the hold already closed (a close frame that overtook this one) the whole response is charged.
+        const fromBalance =
+          before === null
+            ? actualCredits
+            : Math.max(0, before + actualCredits - reserved) - Math.max(0, before - reserved);
+        if (fromBalance > 0) {
+          await userRepository.incrementCredits(user.id, -fromBalance);
+        }
+        return before;
+      }, VOICE_TRANSACTION_OPTIONS);
+    } catch (err) {
+      if (!isVoiceLedgerKeyTaken(err)) throw err;
       logger.warn(`voiceSessionEnded: response ${responseId} on session ${sessionId} already billed - ignoring`);
       return { statusCode: 200 };
     }
-    const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
-    let billedBefore: number | null = null;
-    try {
-      billedBefore = startedAt
-        ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
-        : null;
-      // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
-      // hold already closed (a close frame that overtook this one) the whole response is charged.
-      const fromBalance =
-        billedBefore === null
-          ? actualCredits
-          : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
-            Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
-      if (fromBalance > 0) {
-        await userRepository.incrementCredits(user.id, -fromBalance);
-      }
-    } catch (billingError) {
-      // The ledger row is this response's replay gate, so a row left behind would make a retried
-      // frame a no-op and the response would never be charged. Undo the row and the billed total.
-      const billed = billedBefore !== null && startedAt;
-      const [unbilled, unrecorded] = await Promise.allSettled([
-        billed ? sessionRepository.addVoiceBilledCredits(session.id, startedAt, -actualCredits) : null,
-        creditTransactionRepository.delete(recorded.id),
-      ]);
-      // A null from the revert means the hold was claimed meanwhile, with this response counted in it.
-      const undone =
-        unrecorded.status === 'fulfilled' && unbilled.status === 'fulfilled' && (!billed || unbilled.value !== null);
-      if (!undone) {
-        logger.error('voiceSessionEnded: response billing failed and could not be undone', {
-          sessionId,
-          userId: user.id,
-          responseId,
-          actualCredits,
-        });
-      }
-      throw billingError;
-    }
     if (billedBefore !== null) {
-      holdLeft = Math.max(0, (session.voiceReservedCredits ?? 0) - billedBefore - actualCredits);
+      holdLeft = Math.max(0, reserved - billedBefore - actualCredits);
     }
     // The sweep settles an abandoned hold up to the last response the server saw. Best-effort and
     // after the debit, so a failed marker write can never leave a ledger row the balance never paid.
@@ -165,95 +145,75 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     const startedAt = new Date(session.voiceSessionStartedAt);
-    // Claim the hold before any credit moves: of this frame, a replay, the end endpoint and the
-    // stale hold sweep (apps/workers/src/cron/voiceHoldSweep.ts), exactly one settles it.
-    // Only a realtime hold: an ElevenLabs hold must not settle at the realtime floor from this frame.
-    const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
-    if (!claimed) {
+    const reserved = session.voiceReservedCredits ?? 0;
+    const reportedCredits = actualCredits;
+    const elapsedMs = Date.now() - startedAt.getTime();
+    // The claim, the balance move and the closing ledger row commit together. The claim matches the
+    // hold's start, so of this frame, a replay, the end endpoint and the stale hold sweep
+    // (apps/workers/src/cron/voiceHoldSweep.ts) exactly one settles it, and a failure leaves the
+    // hold open for the sweep. Only a realtime hold: an ElevenLabs hold must not settle at the
+    // realtime floor from this frame.
+    let charged: number | null;
+    try {
+      charged = await withTransaction(async () => {
+        const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
+        if (!claimed) return null;
+        const billed = claimed.billedCredits ?? 0;
+        let credits = reportedCredits;
+
+        // 60-min hard cap: a call that ran over pays at most what is left of its hold
+        const SIXTY_MIN_MS = 60 * 60 * 1000;
+        if (elapsedMs > SIXTY_MIN_MS && session.voiceReservedCredits != null) {
+          logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
+            actualCredits: credits,
+            voiceReservedCredits: reserved,
+            durationMinutes: Math.round(elapsedMs / 60000),
+          });
+          credits = Math.min(credits, Math.max(0, reserved - billed));
+        }
+
+        // Client-reported usage can only raise the settlement: a call never settles below the hold's
+        // own rate for the time it has been open by the server's clock, so a zero-usage frame sent
+        // mid-call still pays for that call.
+        const elapsedSeconds = Math.floor(elapsedMs / 1000);
+        const floor = realtimeCreditsFloor(
+          session.voiceReservedCredits ?? usdToCredits(REALTIME_VOICE_RESERVE_USD),
+          elapsedSeconds
+        );
+        if (billed + credits < floor) {
+          logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
+            reportedCredits: billed + credits,
+            floor,
+            elapsedSeconds,
+          });
+          credits = floor - billed;
+        }
+
+        // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
+        const delta = Math.max(0, reserved - billed) - credits;
+        if (delta !== 0) {
+          await userRepository.incrementCredits(user.id, delta);
+        }
+        if (credits > 0) {
+          await recordVoiceUsage({
+            userId: user.id,
+            sessionId,
+            model,
+            credits,
+            transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
+          });
+        }
+        return credits;
+      }, VOICE_TRANSACTION_OPTIONS);
+    } catch (err) {
+      if (!isVoiceLedgerKeyTaken(err)) throw err;
+      charged = null;
+    }
+    if (charged === null) {
       logger.warn(`voiceSessionEnded: session ${sessionId} has no open realtime hold - ignoring`);
       return { statusCode: 200 };
     }
-    const billed = claimed.billedCredits ?? 0;
-    const reserved = session.voiceReservedCredits ?? 0;
-
-    // 60-min hard cap: a call that ran over pays at most what is left of its hold
-    const SIXTY_MIN_MS = 60 * 60 * 1000;
-    if (Date.now() - startedAt.getTime() > SIXTY_MIN_MS && session.voiceReservedCredits != null) {
-      const capped = Math.max(0, reserved - billed);
-      logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
-        actualCredits,
-        voiceReservedCredits: reserved,
-        durationMinutes: Math.round((Date.now() - startedAt.getTime()) / 60000),
-      });
-      actualCredits = Math.min(actualCredits, capped);
-    }
-
-    // Client-reported usage can only raise the settlement: a call never settles below the hold's
-    // own rate for the time it has been open by the server's clock, so a zero-usage frame sent
-    // mid-call still pays for that call.
-    const elapsedSeconds = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-    const floor = realtimeCreditsFloor(
-      session.voiceReservedCredits ?? usdToCredits(REALTIME_VOICE_RESERVE_USD),
-      elapsedSeconds
-    );
-    if (billed + actualCredits < floor) {
-      logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
-        reportedCredits: billed + actualCredits,
-        floor,
-        elapsedSeconds,
-      });
-      actualCredits = floor - billed;
-    }
-
-    // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
-    // The balance moves before the ledger row, so a failed ledger write loses only the audit row,
-    // never the refund. If the balance move fails the hold is restored (as settleVoiceHold does)
-    // so a retried frame or the stale-hold sweep can still settle it.
-    const delta = Math.max(0, reserved - billed) - actualCredits;
-    if (delta !== 0) {
-      try {
-        await userRepository.incrementCredits(user.id, delta);
-      } catch (creditError) {
-        const restored = await sessionRepository
-          .restoreVoiceHold(session.id, reserved, startedAt, {
-            voiceConnectedAt: session.voiceConnectedAt ?? null,
-            voiceLastActivityAt: session.voiceLastActivityAt ?? null,
-            voiceBilledCredits: claimed.billedCredits,
-          })
-          .catch(restoreError => {
-            throw new AggregateError(
-              [creditError, restoreError],
-              `voice hold ${sessionId}: settlement failed and the hold could not be restored`
-            );
-          });
-        // A newer call already holds the session, so no retry can settle this hold.
-        if (!restored) {
-          logger.error('voiceSessionEnded: settlement failed and a newer hold blocks restoring this one', {
-            sessionId,
-            userId: user.id,
-            startedAt: startedAt.toISOString(),
-            actualCredits,
-            delta,
-          });
-        }
-        throw creditError;
-      }
-    }
-    if (actualCredits > 0) {
-      // Deterministic per hold, so an operator replaying this row after a failure cannot add it twice.
-      try {
-        await recordUsage(actualCredits, `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`);
-      } catch (ledgerError) {
-        logger.error('voiceSessionEnded: balance settled but the closing ledger row was not written', {
-          sessionId,
-          userId: user.id,
-          startedAt: startedAt.toISOString(),
-          actualCredits,
-          delta,
-        });
-        throw ledgerError;
-      }
-    }
+    actualCredits = charged;
   }
 
   // Dual-write usage event: analytics only, never billing.

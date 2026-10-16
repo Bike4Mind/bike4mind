@@ -1,4 +1,5 @@
-import { sessionRepository, userRepository } from '@bike4mind/database';
+import { CreditHolderType } from '@bike4mind/common';
+import { creditTransactionRepository, sessionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
 
@@ -6,6 +7,57 @@ const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
 
 /** Message of the one log line every settlement writes; aggregate on it. */
 export const VOICE_HOLD_SETTLED_LOG = 'voice_hold_settled';
+
+/**
+ * Options for every voice balance transaction: the committed ledger row is what makes a repeat a
+ * no-op, so it must not be readable before it is durable. Same as server/billing/grantCreditPurchase.ts.
+ */
+export const VOICE_TRANSACTION_OPTIONS = {
+  readConcern: { level: 'snapshot' },
+  writeConcern: { w: 'majority' },
+} as const;
+
+/** Thrown inside a voice transaction whose ledger key already exists, so it aborts with nothing moved. */
+export class VoiceLedgerKeyTaken extends Error {
+  constructor(transactionId: string) {
+    super(`voice ledger row ${transactionId} already exists`);
+    this.name = 'VoiceLedgerKeyTaken';
+  }
+}
+
+/** Whether `err` means the transaction's ledger key was already committed by an earlier attempt. */
+export function isVoiceLedgerKeyTaken(err: unknown): boolean {
+  if (err instanceof VoiceLedgerKeyTaken) return true;
+  const dup = err as { code?: number; keyPattern?: Record<string, number> } | null;
+  return dup?.code === 11000 && dup.keyPattern?.transactionId === 1;
+}
+
+/**
+ * Write a voice usage ledger row inside the caller's transaction. A duplicate `transactionId`
+ * throws VoiceLedgerKeyTaken: the server has already aborted the transaction, so it cannot commit.
+ */
+export async function recordVoiceUsage(row: {
+  userId: string;
+  sessionId: string;
+  model: string;
+  credits: number;
+  transactionId: string;
+}): Promise<void> {
+  const recorded = await creditTransactionRepository.createTransaction('realtime_voice_usage', {
+    ownerId: row.userId,
+    ownerType: CreditHolderType.User,
+    credits: -Math.abs(row.credits),
+    description: 'Voice usage',
+    model: row.model,
+    sessionId: row.sessionId,
+    transactionId: row.transactionId,
+  });
+  if (!recorded) throw new VoiceLedgerKeyTaken(row.transactionId);
+}
+
+/** Ledger key of a hold settlement: one per hold, which its session and start identify. */
+export const voiceHoldSettleTransactionId = (sessionId: string, startedAt: Date) =>
+  `voice-hold-settle:${sessionId}:${startedAt.toISOString()}`;
 
 export type VoiceHold = {
   id: string;
@@ -32,108 +84,102 @@ const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.floor((to.getT
  * An ElevenLabs hold is billed connected time, from voiceConnectedAt to `endedAt`, capped at the
  * hold; a call that never connected costs nothing. A realtime hold (billed per response) keeps at
  * least what its responses drew from it and never less than the hold's own rate over the time it
- * was open by the server's clock. The hold is claimed atomically before any credit moves, so of
- * concurrent settlers exactly one settles and the others get `settled: false`.
+ * was open by the server's clock.
  *
- * If crediting back throws, the hold is restored (with its per-call markers) and the error
- * rethrown, so the sweep retries it rather than leaving it with no record left to reconcile.
+ * The claim, the refund and the ledger row commit in one transaction. The claim matches the hold's
+ * start, so of concurrent or repeated settlers exactly one moves credits and the others get
+ * `settled: false`; a failure leaves the hold open, unchanged, for the sweep to settle.
  */
 export async function settleVoiceHold(
   hold: VoiceHold,
   endedAt: Date,
   source: VoiceHoldSettlementSource
 ): Promise<VoiceHoldSettlement> {
-  const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
-  if (!claimed) return { settled: false };
-
   const reserved = hold.voiceReservedCredits;
-  const { billedCredits } = claimed;
-  let chargedCredits: number;
-  let connected: boolean;
-  if (billedCredits !== null) {
-    chargedCredits = Math.max(
-      Math.min(billedCredits, reserved),
-      realtimeCreditsFloor(reserved, secondsBetween(hold.voiceSessionStartedAt, endedAt))
-    );
-    connected = chargedCredits > 0;
-  } else {
-    connected = hold.voiceConnectedAt != null;
-    chargedCredits = hold.voiceConnectedAt
-      ? creditsForElapsed(reserved, secondsBetween(new Date(hold.voiceConnectedAt), endedAt))
-      : 0;
-  }
+  let settlement: VoiceHoldSettlement;
+  try {
+    settlement = await withTransaction(async (): Promise<VoiceHoldSettlement> => {
+      const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
+      if (!claimed) return { settled: false };
 
-  // Responses billed past the hold already left the balance, so a settlement only ever refunds.
-  const refundedCredits = Math.max(0, reserved - chargedCredits);
-  if (refundedCredits > 0) {
-    try {
-      await userRepository.incrementCredits(hold.userId, refundedCredits);
-    } catch (creditError) {
-      // An explicit end is the call's last activity, so the sweep's retry must bill up to it, not
-      // stop at the last beat or turn seen before it.
-      const lastActivity = hold.voiceLastActivityAt ? new Date(hold.voiceLastActivityAt) : null;
-      const restoredLastActivity =
-        source === 'end' && (!lastActivity || lastActivity < endedAt) ? endedAt : lastActivity;
-      const restored = await sessionRepository
-        .restoreVoiceHold(hold.id, reserved, hold.voiceSessionStartedAt, {
-          voiceConnectedAt: hold.voiceConnectedAt ?? null,
-          voiceLastActivityAt: restoredLastActivity,
-          voiceBilledCredits: billedCredits,
-        })
-        .catch(restoreError => {
-          throw new AggregateError(
-            [creditError, restoreError],
-            `voice hold ${hold.id}: refund failed and the hold could not be restored`
-          );
-        });
-      // A newer call already holds the session, so no retry can settle this hold: the refund is
-      // owed by hand.
-      if (!restored) {
-        logger.error('[settleVoiceHold] refund failed and a newer hold blocks restoring this one', {
-          sessionId: hold.id,
+      const { billedCredits } = claimed;
+      let chargedCredits: number;
+      let connected: boolean;
+      if (billedCredits !== null) {
+        chargedCredits = Math.max(
+          Math.min(billedCredits, reserved),
+          realtimeCreditsFloor(reserved, secondsBetween(hold.voiceSessionStartedAt, endedAt))
+        );
+        connected = chargedCredits > 0;
+      } else {
+        connected = hold.voiceConnectedAt != null;
+        chargedCredits = hold.voiceConnectedAt
+          ? creditsForElapsed(reserved, secondsBetween(new Date(hold.voiceConnectedAt), endedAt))
+          : 0;
+      }
+
+      // Responses billed past the hold already left the balance, so a settlement only ever refunds.
+      const refundedCredits = Math.max(0, reserved - chargedCredits);
+      if (refundedCredits > 0) {
+        await userRepository.incrementCredits(hold.userId, refundedCredits);
+      }
+      // Each realtime response wrote its own row, so only the charge they did not cover is new usage.
+      const unrecorded = Math.max(0, chargedCredits - (billedCredits ?? 0));
+      if (unrecorded > 0) {
+        await recordVoiceUsage({
           userId: hold.userId,
-          startedAt: hold.voiceSessionStartedAt.toISOString(),
-          refund: refundedCredits,
+          sessionId: hold.id,
+          model: billedCredits !== null ? 'openai-realtime' : 'elevenlabs',
+          credits: unrecorded,
+          transactionId: voiceHoldSettleTransactionId(hold.id, hold.voiceSessionStartedAt),
         });
       }
-      throw creditError;
-    }
+      return { settled: true, connected, chargedCredits, refundedCredits };
+    }, VOICE_TRANSACTION_OPTIONS);
+  } catch (err) {
+    if (isVoiceLedgerKeyTaken(err)) return { settled: false };
+    throw err;
   }
 
-  logger.info(VOICE_HOLD_SETTLED_LOG, {
-    source,
-    userId: hold.userId,
-    sessionId: hold.id,
-    holdCredits: reserved,
-    chargedCredits,
-    refundedCredits,
-    connected,
-  });
-  return { settled: true, connected, chargedCredits, refundedCredits };
-}
-
-/** Message of the log line a bootstrap writes when it lost the hold race and its refund failed. */
-export const VOICE_HOLD_LOSER_REFUND_FAILED_LOG = 'voice_hold_loser_refund_failed';
-
-/**
- * Credit back the reserve of a bootstrap that lost the race to open the session's hold. A failed
- * refund is logged for reconciliation by hand, not thrown: no hold records this reserve, and the
- * caller must still answer 409.
- */
-export async function refundLostVoiceHoldReserve(
-  log: Pick<Logger, 'error'>,
-  hold: { userId: string; sessionId: string; refund: number }
-): Promise<void> {
-  try {
-    await userRepository.incrementCredits(hold.userId, hold.refund);
-  } catch (error) {
-    log.error(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+  if (settlement.settled) {
+    logger.info(VOICE_HOLD_SETTLED_LOG, {
+      source,
       userId: hold.userId,
-      sessionId: hold.sessionId,
-      refund: hold.refund,
-      err: error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) },
+      sessionId: hold.id,
+      holdCredits: reserved,
+      chargedCredits: settlement.chargedCredits,
+      refundedCredits: settlement.refundedCredits,
+      connected: settlement.connected,
     });
   }
+  return settlement;
+}
+
+/**
+ * Open a fresh call's hold and take its reserve in one transaction, so neither lands without the
+ * other. Resolves false, with nothing moved, when a concurrent bootstrap opened the session's hold
+ * first. A null reserve (credits not enforced) opens the hold without touching the balance.
+ */
+export async function reserveVoiceHold(args: {
+  userId: string;
+  sessionId: string;
+  priorStartedAt: Date | null;
+  reservedCredits: number | null;
+  startedAt: Date;
+  realtime: boolean;
+}): Promise<boolean> {
+  return withTransaction(async () => {
+    const opened = await sessionRepository.openVoiceHold(args.sessionId, args.priorStartedAt, {
+      voiceReservedCredits: args.reservedCredits,
+      voiceSessionStartedAt: args.startedAt,
+      realtime: args.realtime,
+    });
+    if (!opened) return false;
+    if (args.reservedCredits) {
+      await userRepository.incrementCredits(args.userId, -args.reservedCredits);
+    }
+    return true;
+  }, VOICE_TRANSACTION_OPTIONS);
 }
 
 /** When a call nobody closed was last seen alive: its last activity, else its connect, else its start. */
