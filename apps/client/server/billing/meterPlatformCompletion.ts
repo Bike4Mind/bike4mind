@@ -1,6 +1,13 @@
 import { randomUUID } from 'crypto';
 import type { IncomingHttpHeaders } from 'http';
-import { getTextModelCost, getTurnsCost, type IMessage, type IUserDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  getTextModelCost,
+  getTurnsCost,
+  insufficientCreditsError,
+  type IMessage,
+  type IUserDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import {
@@ -66,13 +73,15 @@ export async function isCreditsEnforced(): Promise<boolean> {
 export async function reserveCompletionCredits(
   req: MeteredRequest,
   usd: number,
-  featureLabel: string
+  featureLabel: string,
+  organizationId?: string | null
 ): Promise<CreditReservation> {
   return reserveRequestCredits({
     req,
     requiredCredits: usdToCredits(usd),
     enforceCredits: await isCreditsEnforced(),
     featureLabel,
+    organizationId,
   });
 }
 
@@ -147,20 +156,21 @@ export async function settleCompletion(
 /**
  * A CompletionMeter (b4m-core/services/src/billing/completionMeter.ts) for platform-key work with no
  * HTTP request (queue workers, crons, mission wakes): admits the model for `user`, reserves the
- * ceiling against the user's billing owner (their org seat when present), and settles through
+ * ceiling against the billing owner (`opts.organizationId` when given, else the user's org seat when
+ * present, else the user), and settles through
  * settleCompletion. Throws a 422 insufficient_credits when the owner cannot cover the hold.
  */
 export function createCompletionMeter(
   user: IUserDocument,
   logger: Logger,
   featureLabel: string,
-  opts: { sessionId?: string } = {}
+  opts: { sessionId?: string; organizationId?: string | null } = {}
 ): CompletionMeter {
   const req = { user, logger, headers: {} };
   return async (modelInfo, messages, maxTokens, models) => {
     await (await createModelAdmission(user, models)).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
-    const reservation = await reserveCompletionCredits(req, ceilingUsd, featureLabel);
+    const reservation = await reserveCompletionCredits(req, ceilingUsd, featureLabel, opts.organizationId);
     return {
       refund: () => reservation.refund(),
       settle: usage =>

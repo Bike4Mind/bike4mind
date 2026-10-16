@@ -862,6 +862,7 @@ export class ChatCompletionProcess {
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
+  public createCompletionMeter: IChatCompletionServiceOptions['createCompletionMeter'];
   public features: Map<featureNames, ChatCompletionFeature>;
   public userAbility: MongoAbility | null = null;
   public sessionId: string;
@@ -1060,6 +1061,7 @@ export class ChatCompletionProcess {
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
+    this.createCompletionMeter = options.createCompletionMeter;
     this.sessionId = options.sessionId;
     this.cacheRepository = options.cacheRepository;
     this.publishTelemetryAlert = options.publishTelemetryAlert;
@@ -2552,6 +2554,7 @@ export class ChatCompletionProcess {
               fabFileIds: sessionFabFileIds,
               questId,
               questMaster,
+              organizationId: organization?.id ?? null,
             });
 
             const elapsed = Date.now() - featureStartTime;

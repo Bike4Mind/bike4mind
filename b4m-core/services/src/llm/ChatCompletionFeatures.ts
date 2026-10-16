@@ -106,6 +106,7 @@ import {
   withDeadline,
   type ForcedRetrievalCandidateSelection,
 } from './forcedRetrievalCandidateSelection';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
@@ -362,6 +363,12 @@ export interface IChatCompletionServiceOptions {
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
+  /**
+   * Builds a CompletionMeter billing the turn's owner (`organizationId` = the turn's active org, null =
+   * the user) for platform-key calls the turn makes outside its own credit reservation, e.g. the
+   * QuestMaster plan. Unset = those calls run unmetered (hosts that do not bill).
+   */
+  createCompletionMeter?: (opts: { organizationId: string | null; featureLabel: string }) => CompletionMeter;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
@@ -526,6 +533,7 @@ export type ChatCompletionContext = Pick<
   | 'personalCorpusOnly'
   | 'embeddingBinding'
   | 'priorUserPrompts'
+  | 'createCompletionMeter'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -571,6 +579,8 @@ export interface ChatCompletionFeature {
     fabFileIds: string[];
     questId: string;
     questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
+    /** The turn's active organization, which owns its billing (null/unset = the user). */
+    organizationId?: string | null;
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
@@ -1102,6 +1112,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     fabFileIds,
     questId,
     questMaster,
+    organizationId,
   }: {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
@@ -1114,6 +1125,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     fabFileIds: string[];
     questId: string;
     questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
+    organizationId?: string | null;
   }): Promise<{ shouldContinue: boolean }> {
     // If questMaster is provided, that means we are to process a task from a QuestMaster plan
     if (questMaster) {
@@ -1191,7 +1203,22 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
       this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);
 
-      await this.questMasterRequest(quest, llm, model, startParams, quest.sessionId, message, conversationHistory);
+      // The plan runs before the turn reserves credits, so each plan call is billed on its own (a
+      // provider failure is refunded); a fallback turn after a failed plan pays only for its own reply.
+      const meter = this.chatCompletion.createCompletionMeter?.({
+        organizationId: organizationId ?? null,
+        featureLabel: 'QuestMaster planning',
+      });
+      const plannerLlm = meter ? meterCompletionBackend(llm, meter, modelInfo) : llm;
+      await this.questMasterRequest(
+        quest,
+        plannerLlm,
+        model,
+        startParams,
+        quest.sessionId,
+        message,
+        conversationHistory
+      );
 
       // Refetch to verify the questMasterReply was set
       const updatedQuest = await this.chatCompletion.db.quests.findById(questId);

@@ -75,6 +75,7 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // Cache static ChatCompletion options that don't change between invocations
 type ChatCompletionOptions = ConstructorParameters<typeof ChatCompletionProcess>[0];
@@ -412,6 +413,8 @@ export const handler = withEventContext(async (event, logger) => {
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    createCompletionMeter: ({ organizationId, featureLabel }) =>
+      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   console.log(`⏱️ [TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
 

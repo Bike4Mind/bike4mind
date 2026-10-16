@@ -50,6 +50,8 @@ type ReserveRequestCreditsParams = {
   enforceCredits: boolean | undefined;
   /** Noun phrase for the insufficient-credits copy, e.g. "music generation". */
   featureLabel: string;
+  /** Overrides rule 3's org seat with the org the caller is acting in (a chat turn's active org); null = the user. */
+  organizationId?: string | null;
 };
 
 /**
@@ -73,6 +75,7 @@ export async function reserveRequestCredits({
   requiredCredits,
   enforceCredits,
   featureLabel,
+  organizationId,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
@@ -80,7 +83,9 @@ export async function reserveRequestCredits({
     ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
       ? req.apiKeyInfo.organizationId
       : undefined
-    : (req.user.organizationId?.toString() ?? undefined);
+    : organizationId !== undefined
+      ? (organizationId ?? undefined)
+      : (req.user.organizationId?.toString() ?? undefined);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 
