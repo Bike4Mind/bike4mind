@@ -41,6 +41,7 @@ import {
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -1024,6 +1025,51 @@ describe('ChatCompletionProcess', () => {
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
       expect(lastSave.replies.join('')).toContain('The request was interrupted');
+    });
+
+    it('a Responses stream the user stopped mid-answer ends stopped with the partial reply kept', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('Request aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['partial answer']);
+          throw abort;
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(lastSave.replies.join('')).toContain('partial answer');
+      expect(lastSave.replies.join('')).not.toContain('interrupted');
+    });
+
+    it('a Responses stream closed early ends done with the interrupted reply, warning not erroring', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new ResponsesStreamTruncatedError('gpt-5')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.toBeUndefined();
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Truncated]'));
+      const errorCalls = mockLogger.error.mock.calls.flat();
+      expect(errorCalls.some(a => a instanceof ResponsesStreamTruncatedError)).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(ResponsesStreamTruncatedError));
     });
   });
 
