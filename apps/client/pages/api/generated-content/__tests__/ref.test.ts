@@ -8,14 +8,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 const h = vi.hoisted(() => ({
   findSessionIdsByImage: vi.fn(),
-  findAllByIds: vi.fn(),
+  findAllAccessibleByIds: vi.fn(),
   getMetadata: vi.fn(),
   getSignedUrl: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   questRepository: { findSessionIdsByImage: h.findSessionIdsByImage },
-  sessionRepository: { findAllByIds: h.findAllByIds },
+  sessionRepository: { shareable: { findAllAccessibleByIds: h.findAllAccessibleByIds } },
 }));
 
 vi.mock('@server/utils/storage', () => ({
@@ -38,7 +38,11 @@ function makeRes() {
 }
 
 const req = (userId: string | undefined, ref = REF) =>
-  ({ method: 'GET', query: { ref }, user: userId ? { id: userId } : undefined }) as unknown as NextApiRequest;
+  ({
+    method: 'GET',
+    query: { ref },
+    user: userId ? { id: userId, groups: ['g1'] } : undefined,
+  }) as unknown as NextApiRequest;
 
 describe('GET /api/generated-content/[ref] object-level authz', () => {
   beforeEach(() => {
@@ -49,7 +53,7 @@ describe('GET /api/generated-content/[ref] object-level authz', () => {
 
   it('redirects to a presigned URL for an image the caller created', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
 
     const res = makeRes();
     await handler(req('me'), res);
@@ -57,19 +61,26 @@ describe('GET /api/generated-content/[ref] object-level authz', () => {
     expect(res.redirect).toHaveBeenCalledWith(302, 'https://signed.example/img');
   });
 
-  it('redirects for an image shared with the caller via the source chat', async () => {
+  it('redirects for an image shared with the caller (user or group share) via the source chat', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'owner', users: [{ userId: 'me', permissions: ['read'] }] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
 
     const res = makeRes();
     await handler(req('me'), res);
 
     expect(res.redirect).toHaveBeenCalledWith(302, 'https://signed.example/img');
+    expect(h.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'me', groups: ['g1'] }),
+      ['s1'],
+      {
+        includeDeleted: true,
+      }
+    );
   });
 
   it('rejects (404) a key that belongs to another user - no S3 access', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'someone-else', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([]);
 
     const res = makeRes();
     await expect(handler(req('me'), res)).rejects.toThrow(/not found/i);
@@ -92,7 +103,7 @@ describe('GET /api/generated-content/[ref] object-level authz', () => {
     ['an uppercase ref', '9DB8F846-08D5-47D7-9166-A039D3C3D4D7.PNG'],
   ])('redirects for %s the caller created', async (_label, ref) => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
 
     const res = makeRes();
     await handler(req('me', ref), res);
