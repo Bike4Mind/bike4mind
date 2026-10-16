@@ -1418,6 +1418,10 @@ describe('fabFileVectorize handler - keyless substitute on a deployment that has
 
     expect(h.hasVectorizedFileInEmbeddingSpace).toHaveBeenCalledWith('text-embedding-3-small');
     expect(h.getVector).not.toHaveBeenCalled();
+    // The refusal must sit upstream of the cache and the spend gate: a regression that moves it
+    // after enforceEmbeddingSpendGate still throws, but reserves lake spend first.
+    expect(h.getEmbedding).not.toHaveBeenCalled();
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
     expect(h.chunkUpdate).not.toHaveBeenCalled();
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
