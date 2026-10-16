@@ -322,9 +322,12 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return (await this.findOne({ _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey })) ?? null;
   }
 
-  async findByIdWithCredentials(id: string): Promise<IMcpConnectionDocument | null> {
+  /** Owner-scoped so a request-supplied id can never read another owner's ciphertext. */
+  async findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const result = await this.model.findById(id).select(WITH_CREDENTIALS);
+    const result = await this.model
+      .findOne({ _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey })
+      .select(WITH_CREDENTIALS);
     return result?.toJSON() ?? null;
   }
 

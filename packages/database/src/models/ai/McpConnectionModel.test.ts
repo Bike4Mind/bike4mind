@@ -188,7 +188,7 @@ describe('McpConnectionModel', () => {
 
     it('returns every secret from the credential read', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.urlEnc).toBe('enc:url');
       expect(withCreds?.auth.oauth).toMatchObject({
         accessTokenEnc: 'enc:access',
@@ -198,7 +198,9 @@ describe('McpConnectionModel', () => {
       });
 
       const key = await mcpConnectionRepository.create(apiKeyConnection());
-      expect((await mcpConnectionRepository.findByIdWithCredentials(key.id))?.auth.apiKey?.valueEnc).toBe('enc:key');
+      expect((await mcpConnectionRepository.findByIdWithCredentials(key.id, OWNER))?.auth.apiKey?.valueEnc).toBe(
+        'enc:key'
+      );
     });
 
     it('a default read reports token presence and the key tail in the public view', async () => {
@@ -251,15 +253,26 @@ describe('McpConnectionModel', () => {
         hasAccessToken: false,
         hasRefreshToken: false,
       });
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth?.accessTokenEnc).toBeUndefined();
       expect(withCreds?.auth.oauth?.refreshTokenEnc).toBeUndefined();
       expect(withCreds?.auth.oauth?.manualClientIdEnc).toBe('enc:client-id');
     });
 
+    it("the credential read refuses another owner's id", async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      expect(
+        await mcpConnectionRepository.findByIdWithCredentials(created.id, { ownerType: 'user', ownerKey: 'user-2' })
+      ).toBeNull();
+      expect(
+        await mcpConnectionRepository.findByIdWithCredentials(created.id, { ownerType: 'org', ownerKey: 'user-1' })
+      ).toBeNull();
+      expect(await mcpConnectionRepository.findByIdWithCredentials('not-an-id', OWNER)).toBeNull();
+    });
+
     it('the public projection carries no ciphertext even from a credential read', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       const view = toMcpConnectionPublic(withCreds!);
 
       expect(JSON.stringify(view)).not.toMatch(/enc:/);
@@ -314,7 +327,7 @@ describe('McpConnectionModel', () => {
         McpConnectionProtectedFieldError
       );
 
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access', refreshTokenEnc: 'enc:refresh' });
       expect(withCreds?.displayName).toBe('Linear');
     });
@@ -340,7 +353,7 @@ describe('McpConnectionModel', () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const updated = await mcpConnectionRepository.update({ id: created.id, displayName: 'Edited' });
       expect(updated?.displayName).toBe('Edited');
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access');
     });
   });
@@ -545,7 +558,7 @@ describe('McpConnectionModel', () => {
         expiresAt: new Date(Date.now() + 3600_000),
       });
       expect(secretValues(stored)).toEqual([]);
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh' });
 
       const key = await mcpConnectionRepository.create(apiKeyConnection());
@@ -755,7 +768,7 @@ describe('McpConnectionModel', () => {
       expect(done).not.toBeNull();
       expect(secretValues(done)).toEqual([]);
       expect(done?.refreshLease).toBeUndefined();
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh-2' });
     });
 
@@ -775,7 +788,7 @@ describe('McpConnectionModel', () => {
           refreshTokenEnc: 'enc:refresh-stale',
         })
       ).toBeNull();
-      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth).toMatchObject({
         accessTokenEnc: 'enc:access-new',
         refreshTokenEnc: 'enc:refresh-new',

@@ -505,7 +505,7 @@ export interface McpDiscoveryUpdate {
 export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnectionDocument> {
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
-  findByIdWithCredentials(id: string): Promise<IMcpConnectionDocument | null>;
+  findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /**
    * Hot path: the user's enabled, connected connections offered to a chat turn or agent run, with
    * the tool input schemas tool building needs. `slugs` narrows to the connections a turn selected.
