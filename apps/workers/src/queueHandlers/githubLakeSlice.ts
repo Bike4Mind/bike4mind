@@ -256,15 +256,16 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         if (!doc.githubPath || leaving.has(doc.id)) return [];
         const [folderTag] = folderPathTagsForFile(doc.githubPath, folderPrefix);
         const names = new Set((doc.tags ?? []).map(tag => tag.name));
-        return folderTag && names.has(stamp) && !names.has(folderTag.name) ? [{ doc, folderTag }] : [];
+        // A copy holding both tags is a heal whose pull failed after its push; retract the stamp alone.
+        return folderTag && names.has(stamp) ? [{ doc, folderTag, hasFolderTag: names.has(folderTag.name) }] : [];
       });
-      for (const [index, { doc, folderTag }] of heals.entries()) {
+      for (const [index, { doc, folderTag, hasFolderTag }] of heals.entries()) {
         if (remainingMs() < GITHUB_LAKE_DEADLINE_BUFFER_MS) {
           return { kind: 'deadline', batchId: priorOrAdoptedBatchId, remaining: heals.length - index };
         }
         const refused = await assertWrite();
         if (refused) return refused;
-        await fabFileRepository.pushTagsByFabFileId(doc.id, [folderTag.name], folderTag.strength);
+        if (!hasFolderTag) await fabFileRepository.pushTagsByFabFileId(doc.id, [folderTag.name], folderTag.strength);
         await fabFileRepository.pullTagsByFabFileId(doc.id, [stamp]);
       }
     }

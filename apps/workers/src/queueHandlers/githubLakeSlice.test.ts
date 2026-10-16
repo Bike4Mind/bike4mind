@@ -473,6 +473,19 @@ describe('runGitHubLakeSlice', () => {
       expect(h.batchCreate).not.toHaveBeenCalled();
     });
 
+    it('drops a stamp left beside the folder tag by an interrupted heal, without re-pushing', async () => {
+      tree(blob('docs/x.md', 's1'));
+      h.findByGitHubConnectionIdInDataLake.mockResolvedValue([
+        {
+          ...stored('d', 'docs/x.md', 's1'),
+          tags: [{ name: 'datalake:lake1' }, { name: 'gh-x:docs' }, { name: 'gh-x:uncategorized' }],
+        },
+      ]);
+      await runGitHubLakeSlice(input());
+      expect(h.pushTags).not.toHaveBeenCalled();
+      expect(h.pullTags).toHaveBeenCalledWith('d', ['gh-x:uncategorized']);
+    });
+
     it('leaves alone a copy whose folder tag a user removed (no stamp left)', async () => {
       tree(blob('docs/x.md', 's1'));
       h.findByGitHubConnectionIdInDataLake.mockResolvedValue([

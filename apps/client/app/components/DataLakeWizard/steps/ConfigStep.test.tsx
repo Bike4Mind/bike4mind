@@ -223,6 +223,7 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
 
     expect(screen.queryByTestId('config-tag-prefix-input')).toBeNull();
     expect(screen.getByTestId('config-append-alert')).not.toHaveTextContent('gh-abc123');
+    expect(screen.getByTestId('config-append-alert')).not.toHaveTextContent(/prefix/i);
   });
 });
 

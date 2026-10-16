@@ -139,7 +139,9 @@ export default function ConfigStep() {
                     {accessTagNote && `, ${accessTagNote}`})
                   </>
                 )}
-                {'. Name, prefix, and access tag can\u2019t be changed here - edit them in the lake\u2019s settings.'}
+                {generatedPrefix
+                  ? '. Its name and access tag can\u2019t be changed here - edit them in the lake\u2019s settings.'
+                  : '. Name, prefix, and access tag can\u2019t be changed here - edit them in the lake\u2019s settings.'}
               </Typography>
             </Box>
           </Alert>
