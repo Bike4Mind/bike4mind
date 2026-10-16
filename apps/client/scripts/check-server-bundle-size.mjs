@@ -17,8 +17,14 @@
  * `openNextVersion` in infra/web.ts, so a major bump there wants a look at this path.
  *
  * Modes:
- *   --enforce      exit non-zero when any bundle is over budget
- *   --dir=<path>   measure exactly this one directory instead of discovering them
+ *   --enforce          exit non-zero when any bundle is over budget
+ *   --dir=<path>       measure exactly this one directory instead of discovering them
+ *   --reserve-mib=<n>  add n MiB to every measured bundle before judging it, for bytes the deployed
+ *                      package carries that this build does not (a build without the premium
+ *                      overlays). Passed but empty means no allowance is known: warn, apply none.
+ *
+ * Above the warn fraction a bundle gets a warning annotation but never fails, so the trend through
+ * the 80s is visible before the budget cliff.
  */
 
 import { readdir, stat } from 'node:fs/promises';
@@ -31,6 +37,11 @@ export const LAMBDA_UNZIPPED_LIMIT_BYTES = 262144000;
 /** Fraction of the limit we allow before the budget is considered breached. */
 export const DEFAULT_BUDGET_FRACTION = 0.9;
 
+/** Fraction of the limit above which a bundle is flagged, without failing, as nearing the budget. */
+export const DEFAULT_WARN_FRACTION = 0.85;
+
+const MIB = 1048576;
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const SERVER_FUNCTIONS_ROOT = join(REPO_ROOT, 'apps/client/.open-next/server-functions');
 
@@ -38,18 +49,32 @@ const SERVER_FUNCTIONS_ROOT = join(REPO_ROOT, 'apps/client/.open-next/server-fun
  * Budget arithmetic, split out from the filesystem walk so it is unit-testable.
  *
  * `over-limit` means AWS itself would reject the package; `over-budget` means we are inside the
- * red zone we refuse to operate in, with headroom left to react.
+ * red zone we refuse to operate in, with headroom left to react; `near-budget` is a warning only.
+ * `totalBytes` in the result is `measuredBytes + reserveBytes`, the figure every status is judged on.
  */
 export function evaluateBudget({
-  totalBytes,
+  totalBytes: measuredBytes,
+  reserveBytes = 0,
   limitBytes = LAMBDA_UNZIPPED_LIMIT_BYTES,
   budgetFraction = DEFAULT_BUDGET_FRACTION,
+  warnFraction = DEFAULT_WARN_FRACTION,
 }) {
+  const totalBytes = measuredBytes + reserveBytes;
   const budgetBytes = Math.floor(limitBytes * budgetFraction);
-  const status = totalBytes > limitBytes ? 'over-limit' : totalBytes > budgetBytes ? 'over-budget' : 'ok';
+  const warnBytes = Math.floor(limitBytes * warnFraction);
+  const status =
+    totalBytes > limitBytes
+      ? 'over-limit'
+      : totalBytes > budgetBytes
+        ? 'over-budget'
+        : totalBytes > warnBytes
+          ? 'near-budget'
+          : 'ok';
   return {
     status,
     totalBytes,
+    measuredBytes,
+    reserveBytes,
     limitBytes,
     budgetBytes,
     percentOfLimit: (totalBytes / limitBytes) * 100,
@@ -57,14 +82,32 @@ export function evaluateBudget({
   };
 }
 
-const STATUS_SEVERITY = { ok: 0, 'over-budget': 1, 'over-limit': 2 };
+const STATUS_SEVERITY = { ok: 0, 'near-budget': 1, 'over-budget': 2, 'over-limit': 3 };
+
+/** Whether a status fails the gate under --enforce. `near-budget` only warns. */
+export function failsBudget(status) {
+  return STATUS_SEVERITY[status] >= STATUS_SEVERITY['over-budget'];
+}
+
+/**
+ * Parse the --reserve-mib value into bytes. `undefined` (flag absent) and '' (flag passed from an
+ * unset CI variable) both mean no allowance; anything else must be a non-negative number.
+ */
+export function parseReserveMib(value) {
+  if (value === undefined || value.trim() === '') return 0;
+  const mib = Number(value);
+  if (!Number.isFinite(mib) || mib < 0) {
+    throw new Error(`--reserve-mib must be a non-negative number of MiB, got "${value}"`);
+  }
+  return Math.round(mib * MIB);
+}
 
 /** The worst status across several bundles, since one oversized package fails the whole deploy. */
 export function worstStatus(statuses) {
   return statuses.reduce((worst, next) => (STATUS_SEVERITY[next] > STATUS_SEVERITY[worst] ? next : worst), 'ok');
 }
 
-const megabytes = bytes => (bytes / 1048576).toFixed(1);
+const megabytes = bytes => (bytes / MIB).toFixed(1);
 
 /** Recursively collect [relativePath, bytes] for every regular file under `root`. */
 async function collectFiles(root) {
@@ -104,15 +147,25 @@ function label(dir) {
   return !rel || rel.startsWith('..') ? dir : rel;
 }
 
-async function measure(dir) {
+async function measure(dir, reserveBytes) {
   const files = await collectFiles(dir);
   const totalBytes = files.reduce((sum, [, bytes]) => sum + bytes, 0);
-  return { dir, fileCount: files.length, contributors: topContributors(files), ...evaluateBudget({ totalBytes }) };
+  return {
+    dir,
+    fileCount: files.length,
+    contributors: topContributors(files),
+    ...evaluateBudget({ totalBytes, reserveBytes }),
+  };
 }
 
 function report(result) {
   console.log(`\n${label(result.dir)}`);
-  console.log(`  ${megabytes(result.totalBytes)} MB unzipped across ${result.fileCount} files`);
+  console.log(`  ${megabytes(result.measuredBytes)} MB unzipped across ${result.fileCount} files`);
+  if (result.reserveBytes) {
+    console.log(
+      `  + ${megabytes(result.reserveBytes)} MB reserve for bytes not in this build = ${megabytes(result.totalBytes)} MB judged`
+    );
+  }
   console.log(
     `  limit ${megabytes(result.limitBytes)} MB, budget ${megabytes(result.budgetBytes)} MB ` +
       `(${(DEFAULT_BUDGET_FRACTION * 100).toFixed(0)}%), now ${result.percentOfLimit.toFixed(1)}% ` +
@@ -126,7 +179,7 @@ function report(result) {
 
 function summarize(result) {
   return (
-    `${label(result.dir)} is ${megabytes(result.totalBytes)} MB unzipped ` +
+    `${label(result.dir)} is ${megabytes(result.totalBytes)} MB unzipped${result.reserveBytes ? ' with reserve' : ''} ` +
     `(${result.percentOfLimit.toFixed(1)}% of Lambda's ${megabytes(result.limitBytes)} MB unzipped limit, ` +
     `budget ${megabytes(result.budgetBytes)} MB). Trim it or move the Next server to container-image ` +
     `packaging; the limit itself cannot be raised.`
@@ -137,6 +190,21 @@ async function main() {
   const args = process.argv.slice(2);
   const enforce = args.includes('--enforce');
   const dirArg = args.find(a => a.startsWith('--dir='));
+  const reserveArg = args.find(a => a.startsWith('--reserve-mib='));
+
+  let reserveBytes;
+  try {
+    reserveBytes = parseReserveMib(reserveArg?.slice('--reserve-mib='.length));
+  } catch (error) {
+    console.error(`::error::${error.message}`);
+    process.exit(2);
+  }
+  if (reserveArg && reserveBytes === 0) {
+    console.log(
+      '::warning::--reserve-mib is empty, so no allowance is applied for bytes the deployed bundle carries ' +
+        'that this build does not. The measured size may undercount the deployed one.'
+    );
+  }
 
   let dirs;
   try {
@@ -161,7 +229,7 @@ async function main() {
   const results = [];
   for (const dir of dirs) {
     try {
-      const result = await measure(dir);
+      const result = await measure(dir, reserveBytes);
       report(result);
       results.push(result);
     } catch (error) {
@@ -172,12 +240,12 @@ async function main() {
 
   await writeStepSummary(results);
 
-  const breached = results.filter(r => r.status !== 'ok');
-  for (const result of breached) {
-    console.log(`${enforce ? '::error::' : '::warning::'}${summarize(result)}`);
+  for (const result of results.filter(r => r.status !== 'ok')) {
+    const level = enforce && failsBudget(result.status) ? '::error::' : '::warning::';
+    console.log(`${level}${summarize(result)}`);
   }
 
-  if (enforce && worstStatus(results.map(r => r.status)) !== 'ok') process.exit(1);
+  if (enforce && failsBudget(worstStatus(results.map(r => r.status)))) process.exit(1);
 }
 
 /** Put the number on the run's summary page, so nobody has to open the log to find it. */
@@ -187,7 +255,8 @@ async function writeStepSummary(results) {
   const { appendFile } = await import('node:fs/promises');
   const rows = results.map(
     r =>
-      `| ${label(r.dir)} | ${megabytes(r.totalBytes)} MB | ${r.percentOfLimit.toFixed(1)}% | ` +
+      `| ${label(r.dir)} | ${megabytes(r.measuredBytes)} MB | ${megabytes(r.reserveBytes)} MB | ` +
+      `${r.percentOfLimit.toFixed(1)}% | ` +
       `${megabytes(r.headroomBytes)} MB | ${r.status} |`
   );
   const heaviest = results
@@ -198,8 +267,8 @@ async function writeStepSummary(results) {
     [
       '### Server bundle vs Lambda unzipped limit',
       '',
-      '| bundle | unzipped | of limit | headroom | status |',
-      '| --- | --- | --- | --- | --- |',
+      '| bundle | unzipped | reserve | of limit | headroom | status |',
+      '| --- | --- | --- | --- | --- | --- |',
       ...rows,
       '',
       '<details><summary>Heaviest paths</summary>',
