@@ -97,6 +97,7 @@ describe('music_generation tool', () => {
       'in the vein of Celtic folk, fiddle and whistle',
       'Like a lullaby, inspired by Delta blues',
       'a track in the style of Motown.',
+      'in the style of Motown. Female vocals, warm',
       "warm strings, inspired by Nashville's session players",
     ];
     for (const prompt of prompts) {

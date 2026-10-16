@@ -33,7 +33,8 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
 // Genre, place and style words are exempt so "in the style of Motown" or "sounds like Latin jazz" pass.
 // The phrase matches in any case (sentence-initial "In the style of"); the name must start with a capital.
 const STYLE_PHRASE = /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?/gi;
-const CAPITALIZED_RUN = /^(?:\p{Lu}[\p{L}\p{N}'.-]*[ \t]?)+/u;
+// A dot only joins letters, so the run ends at a sentence boundary instead of swallowing the next sentence.
+const CAPITALIZED_RUN = /^(?:\p{Lu}(?:[\p{L}\p{N}'-]|\.(?=\p{L}))*[ \t]?)+/u;
 
 const STYLE_WORDS = new Set([
   'latin',
