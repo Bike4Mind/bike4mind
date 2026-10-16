@@ -250,6 +250,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
     return (
       <Box
+        data-testid="mfa-enforcement-required-screen"
         sx={{
           display: 'flex',
           justifyContent: 'center',

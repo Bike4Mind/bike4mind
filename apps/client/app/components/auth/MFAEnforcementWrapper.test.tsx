@@ -194,7 +194,7 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     const onRejected = await registeredRefusalHandler();
     await onRejected(enrollmentRefusal()).catch(() => undefined);
 
-    await screen.findByText('Multi-Factor Authentication Required');
+    await screen.findByTestId('mfa-enforcement-required-screen');
     expect(screen.queryByTestId('app-content')).toBeNull();
     // The flow is usable, not just visible: setup is attempted.
     await waitFor(() => expect(mfaSetupCalls()).toBeGreaterThanOrEqual(1));
