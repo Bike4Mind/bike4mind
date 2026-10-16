@@ -9,7 +9,7 @@ import FirstPageIcon from '@mui/icons-material/FirstPage';
 import KeyboardTabIcon from '@mui/icons-material/KeyboardTab';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
-import InboxBadge from '@client/app/components/inbox/Badge';
+import InboxBadge, { useInboxHasUnread } from '@client/app/components/inbox/Badge';
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { AspectRatio, Box, IconButton, Tooltip } from '@mui/joy';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
@@ -32,6 +32,10 @@ const SideNavHeader = () => {
   // Entitlement-aware (admin/developer/OptiHashi Pro entitlement): the logo click
   // routes tag-less email-domain grantees to /opti too, not just `Opti`-tagged users.
   const isOptiUser = useOptiAccess();
+  const hasUnreadInbox = useInboxHasUnread();
+  const setInboxOpen = useInbox(s => s.setOpen);
+  const setInboxIndex = useInbox(s => s.setInboxIndex);
+  const inboxLabel = hasUnreadInbox ? t('inbox.title_unread', 'Inbox, unread items') : t('inbox.title', 'Inbox');
 
   const handleLogoClick = () => {
     if (isOptiUser) {
@@ -89,13 +93,17 @@ const SideNavHeader = () => {
       <Box className="notebook-sidenav-header-actions" display="flex" gap="10px">
         <Tooltip title={t('inbox.title', 'Inbox')}>
           <IconButton
-            aria-label={t('inbox.title', 'Inbox')}
+            aria-label={inboxLabel}
             data-testid="sidenav-header-inbox-btn"
             className="notebook-sidenav-header-inbox-button"
             sx={{ width: '36px', height: '36px', borderRadius: '8px' }}
             variant={'outlined'}
             color={'neutral'}
-            onClick={() => useInbox.getState().setOpen(true)}
+            onClick={() => {
+              // The bell is about messages, so it always opens on Messages, not wherever the inbox was left.
+              setInboxIndex(0);
+              setInboxOpen(true);
+            }}
           >
             <InboxBadge>
               <MailOutlineIcon sx={{ fontSize: '18px' }} />
