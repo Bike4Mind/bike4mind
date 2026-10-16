@@ -2808,7 +2808,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // retrieval here injects off-topic context and emits spurious citations for
     // sources the answer never used. The model can still call search_knowledge_base
     // itself if it genuinely needs the library alongside the attachment.
-    if (quest.fabFileIds && quest.fabFileIds.length > 0) {
+    //
+    // Not for a session with a chosen lake scope: the picker's (lakeScopeExplicit) or a lake start's
+    // (library off). Tags derived from attaching a lake file carry neither and still skip.
+    const lakeChosen =
+      this.retrievalTags.length > 0 && (!!this.lakeScopeExplicit || this.includeLibraryFiles === false);
+    if (quest.fabFileIds && quest.fabFileIds.length > 0 && !lakeChosen) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
       this.recordForcedSkip(quest, 'attached_files');
       return [];

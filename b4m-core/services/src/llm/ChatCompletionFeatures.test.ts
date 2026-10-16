@@ -4956,6 +4956,65 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
       });
     });
 
+    // Picker scope (marked explicit) and a session started from a lake (library off): both name the
+    // lakes the answer should come from, so an attachment is no reason to skip them.
+    it.each([
+      ['picked in the lake picker', true, undefined],
+      ['picked in the lake picker with the library on', true, true],
+      ['started from a lake', undefined, false],
+    ])('still retrieves on an attachment turn in a session scoped to a lake %s', async (_label, explicit, library) => {
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        explicit,
+        undefined,
+        library
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await scopedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'compare the attached draft with the lake'
+      );
+      expect(retrievalOf(withFiles)).toMatchObject({ attempted: true, mode: 'forced' });
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBeUndefined();
+    });
+
+    it('still skips an attachment turn when the tags were only derived from attaching a lake file', async () => {
+      const derivedFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await derivedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof derivedFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
+    it('still skips an attachment turn in a session scoped to no lake, as the attachment', async () => {
+      const noLakeFeature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await noLakeFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof noLakeFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
     it('records the personal-corpus skip without claiming retrieval ran', async () => {
       const personalFeature = new KnowledgeRetrievalFeature({
         ...makeCtx(),
