@@ -17,6 +17,9 @@ export const VOICE_TRANSACTION_OPTIONS = {
   writeConcern: { w: 'majority' },
 } as const;
 
+/** The same options plus this module's logger, so withTransaction reports a retry and its exhaustion. */
+const VOICE_SETTLE_TRANSACTION_OPTIONS = { ...VOICE_TRANSACTION_OPTIONS, logger };
+
 /** Thrown inside a voice transaction whose ledger key already exists, so it aborts with nothing moved. */
 export class VoiceLedgerKeyTaken extends Error {
   constructor(transactionId: string) {
@@ -135,7 +138,7 @@ export async function settleVoiceHold(
         });
       }
       return { settled: true, connected, chargedCredits, refundedCredits };
-    }, VOICE_TRANSACTION_OPTIONS);
+    }, VOICE_SETTLE_TRANSACTION_OPTIONS);
   } catch (err) {
     if (isVoiceLedgerKeyTaken(err)) return { settled: false };
     throw err;
@@ -186,7 +189,7 @@ export async function reserveVoiceHold(args: {
       if ((after?.currentCredits ?? 0) < 0) throw args.unaffordable();
     }
     return true;
-  }, VOICE_TRANSACTION_OPTIONS);
+  }, VOICE_SETTLE_TRANSACTION_OPTIONS);
 }
 
 /** When a call nobody closed was last seen alive: its last activity, else its connect, else its start. */

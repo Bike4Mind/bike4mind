@@ -94,6 +94,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Credits still reserved for this call after this frame: an open hold is not exhaustion.
   let holdLeft = 0;
 
+  // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
+  const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
+
   if (responseId) {
     // One response of a live call. Its ledger row, the hold's billed total and the debit commit
     // together, keyed on the response, so a replayed frame moves nothing. The hold stays open, so
@@ -123,7 +126,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           await userRepository.incrementCredits(user.id, -fromBalance);
         }
         return before;
-      }, VOICE_TRANSACTION_OPTIONS);
+      }, transactionOptions);
     } catch (err) {
       if (!isVoiceLedgerKeyTaken(err)) throw err;
       logger.warn(`voiceSessionEnded: response ${responseId} on session ${sessionId} already billed - ignoring`);
@@ -198,7 +201,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           });
         }
         return { credits, capped, floor: floored ? floor : null };
-      }, VOICE_TRANSACTION_OPTIONS);
+      }, transactionOptions);
     } catch (err) {
       if (!isVoiceLedgerKeyTaken(err)) throw err;
       closed = null;
