@@ -10,6 +10,10 @@ import type { AuthLogger, AuthTokens, TokenStore } from './tokens';
  * checkSessionValid / a WS reconnect loop) can key on the type. The human-readable
  * message is preserved on both paths so existing `error.message.includes(...)` callers are
  * unaffected.
+ *
+ * It does NOT mean the stored tokens were discarded: only the rejected-refresh path clears
+ * them (and reports it through `onTokensCleared`). A 401 that survived a successful refresh
+ * keeps them, so that session may still be restorable.
  */
 export class SessionRevokedError extends Error {
   constructor(message: string) {
