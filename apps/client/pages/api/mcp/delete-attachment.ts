@@ -13,6 +13,7 @@ import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { JiraResource } from '@bike4mind/slack';
 import { ConfluenceResource } from '@bike4mind/slack';
+import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 const DeleteAttachmentRequestSchema = z.object({
   sessionId: z.string(),
@@ -81,7 +82,7 @@ const handler = baseApi().post(async (req, res) => {
   try {
     const resource = source === 'jira' ? new JiraResource(user, logger) : new ConfluenceResource(user, logger);
     const envVariables = await resource.getMcpEnvVariables();
-    const toolName = source === 'jira' ? 'jira_delete_attachment' : 'confluence_delete_attachment';
+    const toolName = source === 'jira' ? JIRA_DELETE_ATTACHMENT : CONFLUENCE_DELETE_ATTACHMENT;
 
     logger.info('[Web MCP Delete] Calling MCP delete tool', {
       toolName,
