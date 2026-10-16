@@ -1131,6 +1131,41 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
     const targetHeading = `### doc-149.pdf (ID: ${TARGET})`;
 
+    const lake = (key: string) => ({
+      id: `lake-${key}`,
+      name: key,
+      slug: key,
+      datalakeTag: `datalake:${key}`,
+      fileTagPrefix: `${key}:`,
+      source: 'dynamic' as const,
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: `datalake:${key}`,
+        fileTagPrefix: `${key}:`,
+        creatorUserId: 'u1',
+      },
+    });
+    const fileInLake = (key: string, i: number, tags: { name: string }[] = [{ name: `datalake:${key}` }]) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `${key}${n}`,
+        fileName: `${key}-${n}.pdf`,
+        tags,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: STAMPED,
+      };
+    };
+    const stubLakeAccess = (feature: KnowledgeRetrievalFeature, lakes: ReturnType<typeof lake>[]) => {
+      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
+        lakeViewComplete: true,
+        excludedByAccessCount: 0,
+        dataLakeTags: lakes.map(l => l.datalakeTag),
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: lakes.map(l => l.fileTagPrefix),
+        lakes,
+      });
+    };
+
     const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
       const ctx = makeCtx({
         files: lakeFiles,
@@ -1265,33 +1300,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
 
     it('without vector search, takes the by-name cut in turn from each lake of a multi-lake session', async () => {
       // Lake a holds 150 files that all sort ahead of lake b's 10; the answer is in lake b.
-      const lake = (key: string) => ({
-        id: `lake-${key}`,
-        name: key,
-        slug: key,
-        datalakeTag: `datalake:${key}`,
-        fileTagPrefix: `${key}:`,
-        source: 'dynamic' as const,
-        membership: {
-          kind: 'owned' as const,
-          datalakeTag: `datalake:${key}`,
-          fileTagPrefix: `${key}:`,
-          creatorUserId: 'u1',
-        },
-      });
-      const fileIn = (key: string, i: number) => {
-        const n = String(i).padStart(3, '0');
-        return {
-          id: `${key}${n}`,
-          fileName: `${key}-${n}.pdf`,
-          tags: [{ name: `datalake:${key}` }],
-          vectorizedChunkCount: 1,
-          chunkEmbeddingModelStampedAt: STAMPED,
-        };
-      };
       const twoLakeFiles = [
-        ...Array.from({ length: 150 }, (_, i) => fileIn('a', i)),
-        ...Array.from({ length: 10 }, (_, i) => fileIn('b', i)),
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('b', i)),
       ];
       const answer = 'b005';
       const ctx = makeCtx({
@@ -1317,14 +1328,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         ['datalake:a', 'datalake:b']
       );
       const lakes = [lake('a'), lake('b')];
-      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
-        lakeViewComplete: true,
-        excludedByAccessCount: 0,
-        dataLakeTags: lakes.map(l => l.datalakeTag),
-        dataLakeTagPrefixes: [],
-        scopedTagPrefixes: lakes.map(l => l.fileTagPrefix),
-        lakes,
-      });
+      stubLakeAccess(feature, lakes);
       const messages = await feature.getContextMessages(
         makeQuest(),
         embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
@@ -1340,35 +1344,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
 
     it('keeps library files behind every lake when the by-name cut is fair across lakes and the library is included', async () => {
       // Library files sort ahead of both lakes; the lake-first listing must still win every slot.
-      const lake = (key: string) => ({
-        id: `lake-${key}`,
-        name: key,
-        slug: key,
-        datalakeTag: `datalake:${key}`,
-        fileTagPrefix: `${key}:`,
-        source: 'dynamic' as const,
-        membership: {
-          kind: 'owned' as const,
-          datalakeTag: `datalake:${key}`,
-          fileTagPrefix: `${key}:`,
-          creatorUserId: 'u1',
-        },
-      });
-      const fileIn = (key: string, i: number, tags: { name: string }[]) => {
-        const n = String(i).padStart(3, '0');
-        return {
-          id: `${key}${n}`,
-          fileName: `${key}-${n}.pdf`,
-          tags,
-          vectorizedChunkCount: 1,
-          chunkEmbeddingModelStampedAt: STAMPED,
-        };
-      };
       const lakeRows = [
-        ...Array.from({ length: 150 }, (_, i) => fileIn('m', i, [{ name: 'datalake:m' }])),
-        ...Array.from({ length: 10 }, (_, i) => fileIn('n', i, [{ name: 'datalake:n' }])),
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('m', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('n', i)),
       ];
-      const libraryRows = Array.from({ length: 50 }, (_, i) => fileIn('a', i, []));
+      const libraryRows = Array.from({ length: 50 }, (_, i) => fileInLake('a', i, []));
       const ctx = makeCtx({
         files: lakeRows,
         rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
@@ -1390,14 +1370,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         true
       );
       const lakes = [lake('m'), lake('n')];
-      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
-        lakeViewComplete: true,
-        excludedByAccessCount: 0,
-        dataLakeTags: lakes.map(l => l.datalakeTag),
-        dataLakeTagPrefixes: [],
-        scopedTagPrefixes: lakes.map(l => l.fileTagPrefix),
-        lakes,
-      });
+      stubLakeAccess(feature, lakes);
       await feature.getContextMessages(
         makeQuest(),
         embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
