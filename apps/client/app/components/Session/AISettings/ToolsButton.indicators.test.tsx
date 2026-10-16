@@ -180,3 +180,18 @@ describe('ToolsButton session-denied tools', () => {
     expect(lastMount().disabledTools).toBeUndefined();
   });
 });
+
+// globals.css sets `min-width: 0` on every element, so a button that flex may shrink gets squeezed
+// below its content: the label slid under the indicators and the row never overflowed, so
+// useOverflowCompact never collapsed it to icons.
+describe('ToolsButton in a crowded composer row', () => {
+  it('keeps its width instead of letting flex squeeze it', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('session-tools-dropdown-toggle')).toHaveStyle({ flexShrink: '0' });
+  });
+});
