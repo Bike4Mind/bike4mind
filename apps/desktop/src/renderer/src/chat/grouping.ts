@@ -13,7 +13,6 @@ export interface ProjectGroup {
   sessions: ChatSessionSummary[];
 }
 
-/** A section the user made, with the sessions they moved into it. */
 export interface CustomGroup {
   section: SidebarSection;
   sessions: ChatSessionSummary[];
@@ -22,9 +21,8 @@ export interface CustomGroup {
 export interface SidebarSections {
   pinned: ChatSessionSummary[];
   /**
-   * Every section the user made, in their order, including the empty ones - an empty section
-   * still has to be on screen to be renamed, deleted, or found again. A section whose sessions
-   * all belong to the other mode is left out, so it does not show as empty here.
+   * Empty sections included, so they can still be renamed or deleted; one whose sessions are all
+   * in the other mode is left out, so it does not show as empty here.
    */
   custom: CustomGroup[];
   /** Code sessions, one group per project directory. */

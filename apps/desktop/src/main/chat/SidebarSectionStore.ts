@@ -16,9 +16,8 @@ const storedSchema = z.object({
 });
 
 /**
- * What a file that parsed can still get wrong by hand edit: a blank name, a repeated id, or an
- * assignment pointing at a section that is gone. Each is dropped rather than failing the whole
- * read, so one bad entry does not cost the user every other section.
+ * Drops hand-edit damage (blank names, repeated ids, assignments to a gone section) one entry at a
+ * time, so one bad entry does not cost the user every other section.
  */
 function sanitize(stored: z.infer<typeof storedSchema>): SidebarSectionsState {
   const seen = new Set<string>();

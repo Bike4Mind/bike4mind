@@ -137,7 +137,6 @@ interface RowProps {
   pr: PrSummary | undefined;
   /** Every user section, for the Move to menu. The state's own array, so it is stable between changes. */
   userSections: readonly SidebarSection[];
-  /** The section this session is filed in, if any. */
   sectionId: string | undefined;
   actions: RowActions;
 }
@@ -581,10 +580,7 @@ function CustomSectionHeader({
   );
 }
 
-/**
- * Carries a dragged row's session id. A type of our own, so a drag from anywhere else - text,
- * a link, the files useFileDrop handles - is never taken for one.
- */
+/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
 const SESSION_DRAG_TYPE = 'application/x-b4m-session';
 
 /** Where a dragged row would land: a section by id, or the default groups, out of any section. */
@@ -790,11 +786,8 @@ export function SessionList({
 
   const draggingSectionId = draggedSession ? sectionOf(userSections, draggedSession) : undefined;
 
-  /**
-   * dragover rather than dragenter decides the target: it keeps firing while the pointer is over
-   * a section's children, where enter and leave would flicker. A section stops it here so the
-   * list around it never sees it.
-   */
+  // dragover rather than dragenter, which flickers across a section's children. Stopped here so
+  // the list around the section never sees it.
   const dragOverSection = (sectionId: string) => (event: DragEvent<HTMLElement>) => {
     if (!draggedSession || !event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
     event.preventDefault();
@@ -865,9 +858,7 @@ export function SessionList({
           {group.sessions.map(row)}
         </List>
       ) : (
-        // Nothing at rest - a line of text here sat exactly where a row would and read as one.
-        // While a row is in the air the empty section needs somewhere to aim, so it gets a
-        // dashed slot, which nothing else in the list looks like.
+        // Nothing at rest, where a line of text read as a row; a dashed slot only while a row is in the air.
         draggedSession && (
           <Box
             sx={{

@@ -11,12 +11,7 @@ import { normalizeSectionName, SIDEBAR_SECTION_NAME_MAX_LENGTH } from '@shared/s
 export type SectionNameRequest =
   { kind: 'create'; sessionId?: string } | { kind: 'rename'; sectionId: string; currentName: string };
 
-/**
- * Names a sidebar section. Enter submits, Escape and Cancel close; a blank name, or a rename to
- * the same name, keeps the submit button disabled rather than saving nothing.
- *
- * Mounted only while open, so each opening starts from the request's own name.
- */
+/** Mounted only while open, so each opening starts from the request's own name. */
 export function SectionNameDialog({
   request,
   onSubmit,

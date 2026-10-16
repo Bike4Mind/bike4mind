@@ -1,7 +1,6 @@
 /**
- * User-made sidebar sections: named buckets a session can be moved into, beside the pinned,
- * project and archived groups the sidebar derives on its own. Owned by main
- * (SidebarSectionStore); the renderer only ever holds the state a call handed back.
+ * User-made sidebar sections. Owned by main (SidebarSectionStore); the renderer only holds the
+ * state a call handed back.
  */
 
 export const SIDEBAR_SECTION_NAME_MAX_LENGTH = 60;
@@ -31,7 +30,5 @@ export function sectionOf(state: SidebarSectionsState, sessionId: string): strin
 /** A typed name the way the store keeps it, so the dialog can refuse what the store would. */
 export function normalizeSectionName(text: string): string {
   // By code point, so the cap cannot split an emoji's surrogate pair.
-  return Array.from(text.replace(/\s+/g, ' ').trim())
-    .slice(0, SIDEBAR_SECTION_NAME_MAX_LENGTH)
-    .join('');
+  return Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, SIDEBAR_SECTION_NAME_MAX_LENGTH).join('');
 }
