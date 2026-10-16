@@ -1564,7 +1564,7 @@ export interface components {
           usage?: {
             inputTokens?: number;
             outputTokens?: number;
-            /** @description Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider reports no count. */
+            /** @description Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count. */
             reasoningTokens?: number;
             cacheReadInputTokens?: number;
             cacheCreationInputTokens?: number;
