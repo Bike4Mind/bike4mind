@@ -1125,6 +1125,18 @@ describe('buildCliToolList', () => {
     expect(await delegate!.toolFn({})).toBe('tool result');
     expect(prompt).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['the interactive entry point', '../index.tsx'],
+    ['the headless entry point', '../commands/headlessCommand.ts'],
+    ['the ACP entry point', '../acp/AcpServer.ts'],
+  ])('builds its CLI tools through buildCliToolList: %s', async (_label, relPath) => {
+    // Every entry point must call the builder rather than assembling a raw CLI tool list,
+    // which would skip the permission gate. Behavioral coverage lives above; this pins the
+    // call sites, which are the wiring the builder tests cannot reach.
+    const source = await fs.readFile(new URL(relPath, import.meta.url), 'utf-8');
+    expect(source).toContain('buildCliToolList(');
+  });
 });
 
 describe('generateCliTools checkpoint wiring', () => {
