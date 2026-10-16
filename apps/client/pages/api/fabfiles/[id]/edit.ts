@@ -45,6 +45,8 @@ import {
 } from '@server/billing/meterPlatformCompletion';
 
 const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
+/** Generous UTF-8 bound for one output token, for the pre-call storage check. */
+const MAX_OUTPUT_BYTES_PER_TOKEN = 4;
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -273,6 +275,12 @@ Return only the edited content without any markdown code blocks or explanations.
           { role: 'user', content: userPrompt },
         ];
         const maxTokens = 4000;
+        // Refuse an edit whose worst-case result cannot fit before paying for it: the rewrite is at
+        // most the full output (plus the Office container it is written back into).
+        if (applyImmediately) {
+          const worstCaseSize = (originalBuffer?.length ?? 0) + maxTokens * MAX_OUTPUT_BYTES_PER_TOKEN;
+          await fabFilesService.assertRewriteFits(file, worstCaseSize, rewriteStorageDb, user);
+        }
         const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
         const reservation = await reserveCompletionCredits(req, ceilingUsd, 'AI file editing');
 
@@ -306,17 +314,7 @@ Return only the edited content without any markdown code blocks or explanations.
         editedContent = editedContent.trim();
         editedContent = editedContent.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
 
-        if (!editedContent) {
-          console.error('[Edit API] AI model returned empty response', {
-            model: modelToUse,
-            backend: modelInfo.backend,
-            instructionLength: instruction.length,
-            contentLength: originalContent.length,
-          });
-          await reservation.refund();
-          throw new BadRequestError('AI model returned empty response. Please try again or select a different model.');
-        }
-
+        // The provider billed the input even when the answer is empty, so settle before failing.
         // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
         const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
         if (!reported)
@@ -328,6 +326,16 @@ Return only the edited content without any markdown code blocks or explanations.
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,
         });
+
+        if (!editedContent) {
+          console.error('[Edit API] AI model returned empty response', {
+            model: modelToUse,
+            backend: modelInfo.backend,
+            instructionLength: instruction.length,
+            contentLength: originalContent.length,
+          });
+          throw new BadRequestError('AI model returned empty response. Please try again or select a different model.');
+        }
 
         // Generate diff
         const differences = diffLines(originalContent, editedContent);

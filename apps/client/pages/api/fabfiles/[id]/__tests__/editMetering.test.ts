@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   settle: vi.fn(),
   complete: vi.fn(),
   findById: vi.fn(),
+  assertRewriteFits: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -48,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
-  fabFilesService: {},
+  fabFilesService: { assertRewriteFits: m.assertRewriteFits },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [{ id: 'model-a', backend: 'anthropic' }],
@@ -79,11 +80,11 @@ const { default: handler } = await import('@pages/api/fabfiles/[id]/edit');
 
 const FILE_ID = '65a000000000000000000001';
 
-async function call() {
+async function call(applyImmediately = false) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: FILE_ID },
-    body: { instruction: 'Fix the typo', model: 'model-a' },
+    body: { instruction: 'Fix the typo', model: 'model-a', applyImmediately },
   });
   Object.assign(req, { user: { id: 'u1' }, ability: { can: () => true }, logger: console });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
@@ -149,14 +150,44 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1 }));
   });
 
-  it('refunds in full and does not settle when the provider throws or returns nothing', async () => {
+  it('refunds in full and does not settle when the provider throws', async () => {
     m.complete.mockRejectedValueOnce(new Error('provider down'));
     await expect(call()).rejects.toMatchObject({ statusCode: 400 });
 
-    m.complete.mockImplementationOnce(async (_model, _messages, _opts, cb) => cb(['']));
-    await expect(call()).rejects.toThrow('empty response');
-
-    expect(m.refund).toHaveBeenCalledTimes(2);
+    expect(m.refund).toHaveBeenCalledOnce();
     expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('settles the reported usage, without refunding, when the model returns nothing', async () => {
+    m.complete.mockImplementationOnce(async (_model, _messages, _opts, cb) => {
+      await cb(['']);
+      await cb([null], { inputTokens: 200, outputTokens: 0 });
+    });
+
+    await expect(call()).rejects.toThrow('empty response');
+    expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: 200 * 0.001, inputTokens: 200 }));
+    expect(m.refund).not.toHaveBeenCalled();
+  });
+
+  it('refuses an applied edit whose worst-case size cannot fit, before reserving or calling the provider', async () => {
+    m.assertRewriteFits.mockRejectedValue(
+      Object.assign(new Error('File size exceeds storage limit'), { statusCode: 400 })
+    );
+
+    await expect(call(true)).rejects.toThrow('storage limit');
+    expect(m.assertRewriteFits).toHaveBeenCalledWith(
+      expect.objectContaining({ id: FILE_ID }),
+      4000 * 4,
+      expect.anything(),
+      expect.objectContaining({ id: 'u1' })
+    );
+    expect(m.reserve).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('does not run the storage pre-check when the edit is not applied', async () => {
+    await call(false);
+
+    expect(m.assertRewriteFits).not.toHaveBeenCalled();
   });
 });
