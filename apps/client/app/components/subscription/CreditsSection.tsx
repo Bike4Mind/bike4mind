@@ -80,7 +80,7 @@ export const CreditsSection = ({ transactions, transactionsLoading, onClose }: C
                     p: { xs: 2, sm: 2.5 },
                     bgcolor: 'background.surface',
                     transition: 'border-color 120ms ease, box-shadow 120ms ease',
-                    '&:hover': { borderColor: isSelected ? 'primary.500' : 'neutral.outlinedHoverBorder' },
+                    '&:hover': { borderColor: isSelected ? 'primary.500' : 'neutral.400' },
                     ...(isSelected && {
                       borderColor: 'primary.500',
                       boxShadow: '0 0 0 1px var(--joy-palette-primary-500)',
