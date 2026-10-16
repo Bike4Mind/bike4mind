@@ -32,6 +32,13 @@ const SAVE_SKIPPED_MESSAGES: Record<AudioSaveSkippedReason, (kind: AudioKind) =>
   error: kind => `${kind} generated, but saving to Files failed.`,
 };
 
+// The same reasons as a clause, for a clip that finished after its tab unmounted and so is not kept anywhere.
+const SAVE_SKIPPED_CAUSES: Record<AudioSaveSkippedReason, string> = {
+  storage_limit: 'your storage is full',
+  file_too_large: 'it was too large to save',
+  error: 'saving it failed',
+};
+
 interface ParsedError {
   status?: number;
   message: string;
@@ -105,11 +112,12 @@ export function useGenerateAudio(mode: AudioGenMode) {
       if (data.saved === true) {
         refreshFiles();
         toast.success(`${kind} generated and saved to your Files.`);
-      } else if (data.saved === false && data.saveSkippedReason) {
-        toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
       } else if (playerGone) {
         // Unsaved and its blob already revoked: there is no copy left anywhere, so "generated" alone would mislead.
-        toast.warning(`${kind} finished after you left, but it was not saved to your Files.`);
+        const cause = data.saved === false && data.saveSkippedReason ? SAVE_SKIPPED_CAUSES[data.saveSkippedReason] : '';
+        toast.warning(`${kind} finished after you left, but it was not saved to your Files${cause && ` (${cause})`}.`);
+      } else if (data.saved === false && data.saveSkippedReason) {
+        toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
       } else {
         toast.success(`${kind} generated.`);
       }

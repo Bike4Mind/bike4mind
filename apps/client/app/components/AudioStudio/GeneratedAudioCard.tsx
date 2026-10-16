@@ -1,6 +1,7 @@
 import { Box, Button, Card, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import {
+  isStoredPromptPossiblyTruncated,
   supportedVoiceGenerationVendor,
   VOICE_VENDOR_LABELS,
   type GeneratedAssetMetadata,
@@ -44,9 +45,10 @@ const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
     applySettings(settingsFromGeneration(reused));
     // Saving keeps only a prefix of a long prompt, so restoring it would quietly send a script that
     // stops mid-sentence - and the user pays for the clip. Settings alone are still worth copying.
-    if (!reused.promptTruncated) setText(mode, reused.prompt);
+    const promptCut = isStoredPromptPossiblyTruncated(reused);
+    if (!promptCut) setText(mode, reused.prompt);
     toast.success(
-      reused.promptTruncated
+      promptCut
         ? 'Settings copied. The text was too long to keep, so paste it in again.'
         : 'Settings copied into the form above.'
     );

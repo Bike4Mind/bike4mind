@@ -56,6 +56,19 @@ export const GeneratedAssetMetadataSchema = z.object({
 
 export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema>;
 
+/** sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is stored as a prefix. */
+export const GENERATED_ASSET_MAX_STORED_TEXT_CHARS = 2_000;
+
+/**
+ * Whether the stored prompt may be only a prefix of what was generated. Files saved before `promptTruncated`
+ * existed were cut at the same cap without the flag, so a cap-length prompt with no flag counts as cut too.
+ */
+export function isStoredPromptPossiblyTruncated(
+  generation: Pick<GeneratedAssetMetadata, 'prompt' | 'promptTruncated'>
+) {
+  return generation.promptTruncated ?? generation.prompt.length >= GENERATED_ASSET_MAX_STORED_TEXT_CHARS;
+}
+
 /**
  * The generated-content bucket key of the second copy an in-chat tool keeps for inline playback
  * (`quest.images`), stamped as `sourceMetadata.generatedCopyKey` so deleting the file can remove that copy too.

@@ -2,6 +2,7 @@ import {
   extensionFromMimeType,
   FabFileSourceType,
   GENERATED_ASSET_GENERATOR_TAG,
+  GENERATED_ASSET_MAX_STORED_TEXT_CHARS,
   GENERATED_ASSET_TAG,
   isStorageLimitError,
   KnowledgeType,
@@ -37,9 +38,6 @@ const KEY_PREFIX: Record<Modality, string> = {
 };
 
 const PROMPT_SNIPPET_CHARS = 40;
-
-// sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is not stored whole.
-export const GENERATED_ASSET_MAX_STORED_TEXT_CHARS = 2_000;
 
 export type SaveGeneratedAssetResult =
   | { saved: true; fileId: string; s3Key: string; fileName: string; fileUrl?: string }

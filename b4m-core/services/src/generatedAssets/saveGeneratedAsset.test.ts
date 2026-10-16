@@ -1,11 +1,12 @@
-import { FabFileSourceType, KnowledgeType, StorageLimitError, type GeneratedAssetMetadata } from '@bike4mind/common';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  FabFileSourceType,
   GENERATED_ASSET_MAX_STORED_TEXT_CHARS as CAP,
-  saveGeneratedAsset,
-  type SaveGeneratedAssetDeps,
-  type SaveGeneratedAssetParams,
-} from './saveGeneratedAsset';
+  KnowledgeType,
+  StorageLimitError,
+  type GeneratedAssetMetadata,
+} from '@bike4mind/common';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { saveGeneratedAsset, type SaveGeneratedAssetDeps, type SaveGeneratedAssetParams } from './saveGeneratedAsset';
 
 const createFabFile = vi.hoisted(() => vi.fn());
 vi.mock('../fabFileService/create', () => ({ createFabFile }));

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import type { IFabFileDocument } from '@bike4mind/common';
+import { GENERATED_ASSET_MAX_STORED_TEXT_CHARS, type IFabFileDocument } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const { setOpen, toastSuccess } = vi.hoisted(() => ({ setOpen: vi.fn(), toastSuccess: vi.fn() }));
@@ -79,6 +79,18 @@ describe('GeneratedAudioCard', () => {
 
     expect(useAudioGenSettings.getState()).toMatchObject({ ttsProvider: 'elevenlabs', format: 'opus' });
     expect(useAudioStudioDraft.getState().text.tts).toBe('');
+    expect(toastSuccess).toHaveBeenCalledWith('Settings copied. The text was too long to keep, so paste it in again.');
+  });
+
+  // Files saved before the flag existed were cut at the same cap, so a cap-length prompt is not trusted either.
+  it('does not restore a cap-length prompt saved without the truncation flag', () => {
+    useAudioStudioDraft.setState({ text: { tts: 'my own draft', 'sound-effects': '' } });
+    const legacy = { ...generation, prompt: 'x'.repeat(GENERATED_ASSET_MAX_STORED_TEXT_CHARS) };
+    renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile(legacy)} />);
+    fireEvent.click(screen.getByTestId('generated-audio-card-reuse-btn'));
+
+    expect(useAudioGenSettings.getState()).toMatchObject({ ttsProvider: 'elevenlabs', format: 'opus' });
+    expect(useAudioStudioDraft.getState().text.tts).toBe('my own draft');
     expect(toastSuccess).toHaveBeenCalledWith('Settings copied. The text was too long to keep, so paste it in again.');
   });
 

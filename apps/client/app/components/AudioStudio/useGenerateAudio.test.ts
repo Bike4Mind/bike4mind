@@ -305,10 +305,10 @@ describe('useGenerateAudio unmount', () => {
   });
 
   describe('a clip that settles after the tab unmounted', () => {
-    const settleAfterUnmount = async (data: Record<string, unknown>) => {
+    const settleAfterUnmount = async (data: Record<string, unknown>, mode: 'tts' | 'sound-effects' = 'tts') => {
       let settle: (value: unknown) => void = () => {};
       mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
-      const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+      const { result, unmount } = renderHook(() => useGenerateAudio(mode));
       let pending: Promise<void> = Promise.resolve();
       act(() => {
         pending = result.current.generate('hello');
@@ -329,13 +329,31 @@ describe('useGenerateAudio unmount', () => {
       expect(mocks.toastSuccess).not.toHaveBeenCalled();
     });
 
-    it('still explains why the save was skipped', async () => {
+    it('says a clip whose save was skipped is gone, and why it was not saved', async () => {
       await settleAfterUnmount({ saved: false, saveSkippedReason: 'storage_limit' });
 
-      expect(mocks.toastInfo).toHaveBeenCalledWith(
-        'Audio generated, but your storage is full so it was not saved to Files.'
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Audio finished after you left, but it was not saved to your Files (your storage is full).'
       );
-      expect(mocks.toastWarning).not.toHaveBeenCalled();
+      expect(mocks.toastInfo).not.toHaveBeenCalled();
+    });
+
+    it('reports a provider fallback, then that the unsaved clip is gone', async () => {
+      await settleAfterUnmount({ saved: false, provider: 'openai', fallbackFrom: 'elevenlabs' });
+
+      expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('was unavailable'));
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Audio finished after you left, but it was not saved to your Files.'
+      );
+      expect(mocks.toastInfo.mock.invocationCallOrder[0]).toBeLessThan(mocks.toastWarning.mock.invocationCallOrder[0]);
+    });
+
+    it('names a sound effect in the warning', async () => {
+      await settleAfterUnmount({ saved: false }, 'sound-effects');
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Sound effect finished after you left, but it was not saved to your Files.'
+      );
     });
 
     it('still reports a provider fallback', async () => {
