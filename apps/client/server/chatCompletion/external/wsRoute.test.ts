@@ -119,6 +119,15 @@ describe('JWT refusals the caller can act on', () => {
       error: 'MFA enrollment required. Set it up in the web app to continue.',
     });
   });
+
+  it('relays a suspension refusal the same way, so the account state reaches the caller', async () => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new ForbiddenError('Account suspended.'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Account suspended.' });
+  });
 });
 
 describe('completion analytics', () => {
