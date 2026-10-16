@@ -158,6 +158,16 @@ describe('pinnedFetch - connect-time pinning', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('blocks non-public names, including the trailing-dot spelling, in the production posture', async () => {
+    const fetchFn = createPinnedFetch({});
+    fetches.push(fetchFn);
+    // The trailing-dot forms must be refused here, at the hop check, rather than falling through to DNS.
+    for (const url of ['https://foo.corp/ok', 'https://foo.corp./ok', 'https://intranet./ok']) {
+      await expectViolation(fetchFn(url), 'ssrf_blocked');
+    }
+    expect(seen).toHaveLength(0);
+  });
+
   it('blocks a DNS rebind: the pre-flight sees a public address, the socket would get a private one', async () => {
     answers['rebind.test'] = ['93.184.216.34', '127.0.0.1'];
     const preflight = await new Promise<dns.LookupAddress[]>((resolve, reject) =>

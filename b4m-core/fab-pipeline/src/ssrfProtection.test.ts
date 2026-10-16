@@ -5,6 +5,7 @@ import type https from 'https';
 import {
   isPrivateIP,
   isPrivateOrInternalHostname,
+  isNonPublicHostname,
   validateUrlForFetch,
   ssrfSafeLookup,
   createSsrfSafeLookup,
@@ -548,6 +549,32 @@ describe('SSRF - connect-time lookup with a private-address admission predicate'
     expect(err?.code).toBe(SSRF_BLOCKED_CODE);
     expect(err?.message).toContain('10.99.0.1');
     expect(address).toBe('');
+  });
+});
+
+describe('isNonPublicHostname', () => {
+  it('refuses localhost, single-label names and the private-use suffixes', () => {
+    expect(isNonPublicHostname('localhost')).toBe(true);
+    expect(isNonPublicHostname('x.localhost')).toBe(true);
+    expect(isNonPublicHostname('intranet')).toBe(true);
+    expect(isNonPublicHostname('printer.lan')).toBe(true);
+    expect(isNonPublicHostname('foo.corp')).toBe(true);
+    expect(isNonPublicHostname('db.internal')).toBe(true);
+    expect(isNonPublicHostname('nas.home.arpa')).toBe(true);
+  });
+
+  it('judges a trailing-dot FQDN spelling the same as the bare name', () => {
+    expect(isNonPublicHostname('intranet.')).toBe(true);
+    expect(isNonPublicHostname('printer.lan.')).toBe(true);
+    expect(isNonPublicHostname('foo.corp.')).toBe(true);
+    expect(isNonPublicHostname('FOO.CORP.')).toBe(true);
+    expect(isNonPublicHostname('localhost.')).toBe(true);
+  });
+
+  it('leaves public names alone', () => {
+    expect(isNonPublicHostname('example.com')).toBe(false);
+    expect(isNonPublicHostname('api.example.com')).toBe(false);
+    expect(isNonPublicHostname('example.com.')).toBe(false);
   });
 });
 

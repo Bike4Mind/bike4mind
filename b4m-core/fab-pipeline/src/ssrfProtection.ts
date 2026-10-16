@@ -495,7 +495,10 @@ const NON_PUBLIC_SUFFIXES = [
  * this export exists to prevent.
  */
 export function isNonPublicHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  // Trailing dots are stripped HERE, not at the call sites, so an FQDN spelling (`foo.corp.`) gets the
+  // same verdict as the bare name. `validateRemoteMcpUrl` already strips them at the entry, but the
+  // connect-time hop check in `pinnedFetch` passes `url.hostname` raw, and the two must not disagree.
+  const host = hostname.toLowerCase().replace(/\.+$/, '');
   return (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
