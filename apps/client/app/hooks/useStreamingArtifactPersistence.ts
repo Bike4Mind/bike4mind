@@ -92,13 +92,16 @@ export function useStreamingArtifactPersistence() {
           type: artifact.type,
           title: artifact.title,
           content: artifact.content,
+          identifier: artifact.identifier,
           metadata,
         };
       });
 
       // Persist artifacts and store their IDs for UI access
       const questId = quest.id;
-      persistArtifacts(artifactsToPersist, quest.sessionId)
+      // The parser returns artifacts last-to-first; persistArtifacts wants document order so a
+      // re-emitted identifier lands as the later version. Ids above keep the parser's indices.
+      persistArtifacts([...artifactsToPersist].reverse(), quest.sessionId)
         .then(() => {
           perfLogger.log(
             `✅ [ARTIFACTS] Successfully persisted ${artifactsToPersist.length} artifact(s) for quest ${questId}`

@@ -41,19 +41,34 @@ export async function checkArtifactExists(artifactId: string): Promise<boolean> 
   }
 }
 
+interface PersistableArtifact {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  /** The reply's `<artifact identifier=...>`, stored on the row and used to find it again. */
+  identifier?: string;
+  metadata?: any;
+}
+
+/**
+ * The newest session row of `type` carrying `identifier`, or null. The server also matches rows
+ * written before `identifier` was a field through their `metadata.originalIdentifier`.
+ */
+async function findArtifactIdByIdentifier(type: string, identifier: string, sessionId: string): Promise<string | null> {
+  const response = await api.get(`/api/artifacts`, {
+    params: { sessionId, type, identifier, sortBy: 'createdAt', sortOrder: 'desc', limit: 1 },
+  });
+  return response.data?.artifacts?.[0]?.id ?? null;
+}
+
 /**
  * Persists an AI-generated artifact to the database
- * For React artifacts: creates v2+ versions when a new React artifact is generated in the same session
- * For other artifact types: always creates a new v1 artifact
+ * For React artifacts: a new version of the session's React row with the same identifier, if any
+ * For everything else (and React without an identifier): always creates a new v1 artifact
  */
 export async function persistArtifact(
-  artifact: {
-    id: string;
-    type: string;
-    title: string;
-    content: string;
-    metadata?: any;
-  },
+  artifact: PersistableArtifact,
   sessionId?: string,
   skipExistenceCheck = false
 ): Promise<void> {
@@ -73,24 +88,13 @@ export async function persistArtifact(
         }
       }
 
-      // Check for existing React artifacts in the session to create versions
-      // Only do this for React artifacts since they are typically iterated on
+      // Only React artifacts are iterated on as versions, and only under the same identifier: any
+      // other React artifact in the session is a different component, not an earlier version.
       let existingArtifactId: string | null = null;
-      if (sessionId && artifact.type === 'react') {
+      if (sessionId && artifact.type === 'react' && artifact.identifier) {
         try {
-          const response = await api.get(`/api/artifacts`, {
-            params: {
-              sessionId,
-              type: 'react',
-              sortBy: 'createdAt',
-              sortOrder: 'desc',
-              limit: 1, // Get the most recent React artifact
-            },
-          });
-
-          const existingArtifacts = response.data?.artifacts || [];
-          if (existingArtifacts.length > 0) {
-            existingArtifactId = existingArtifacts[0].id;
+          existingArtifactId = await findArtifactIdByIdentifier('react', artifact.identifier, sessionId);
+          if (existingArtifactId) {
             console.log(`📦 [ARTIFACTS] Found existing React artifact in session: ${existingArtifactId}`);
           }
         } catch (error) {
@@ -152,6 +156,7 @@ export async function persistArtifact(
         tags: ['ai-generated'],
         sessionId: sessionId,
         ...(sourceQuestId ? { sourceQuestId } : {}),
+        ...(artifact.identifier ? { identifier: artifact.identifier } : {}),
         metadata: {
           ...artifact.metadata,
           aiGenerated: true,
@@ -174,26 +179,34 @@ export async function persistArtifact(
 }
 
 /**
- * Persists multiple artifacts from an AI response
+ * Persists multiple artifacts from an AI response, given in document order.
+ *
+ * Artifacts sharing an identifier persist one after another, in that order, so a later block
+ * versions the row an earlier one created instead of racing it to the lookup. The rest run in
+ * parallel.
  */
 export async function persistArtifacts(
-  artifacts: Array<{
-    id: string;
-    type: string;
-    title: string;
-    content: string;
-    metadata?: any;
-  }>,
+  artifacts: PersistableArtifact[],
   sessionId?: string,
   skipExistenceCheck = true
 ): Promise<void> {
-  const persistPromises = artifacts.map(artifact => persistArtifact(artifact, sessionId, skipExistenceCheck));
+  const chains = new Map<string, Promise<void>>();
+  const persistPromises = artifacts.map(artifact => {
+    const persist = () => persistArtifact(artifact, sessionId, skipExistenceCheck);
+    if (!artifact.identifier) {
+      return persist();
+    }
+    const previous = chains.get(artifact.identifier) ?? Promise.resolve();
+    // Runs even when the earlier block failed; it then creates the row itself.
+    const next = previous.then(persist, persist);
+    chains.set(artifact.identifier, next);
+    return next;
+  });
   await Promise.allSettled(persistPromises);
 }
 
 /**
- * Find existing artifact by querying the session's artifacts
- * This searches the database for artifacts matching the type and identifier
+ * Find the session's artifact for a reply's `type` + `identifier`, newest first.
  */
 export async function findExistingArtifactId(
   type: string,
@@ -201,11 +214,17 @@ export async function findExistingArtifactId(
   sessionId?: string
 ): Promise<string | null> {
   try {
-    // Query artifacts by session and type
-    if (!sessionId) {
+    if (!sessionId || !identifier) {
       return null;
     }
 
+    const byIdentifier = await findArtifactIdByIdentifier(type, identifier, sessionId);
+    if (byIdentifier) {
+      return byIdentifier;
+    }
+
+    // A legacy row with neither the field nor metadata.originalIdentifier carries the identifier
+    // only as an id segment.
     const response = await api.get(`/api/artifacts`, {
       params: {
         sessionId,

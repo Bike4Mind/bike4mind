@@ -30,6 +30,7 @@ const createArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.string().optional(),
+  identifier: z.string().optional(),
   permissions: z
     .object({
       canRead: z.array(z.string()).prefault([]),
@@ -98,6 +99,7 @@ export const create = async (
     sourceQuestId,
     sessionId,
     parentArtifactId,
+    identifier,
     permissions,
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
@@ -158,6 +160,7 @@ export const create = async (
     sourceQuestId,
     sessionId,
     parentArtifactId,
+    identifier,
     status: 'draft',
     tags,
     contentHash,

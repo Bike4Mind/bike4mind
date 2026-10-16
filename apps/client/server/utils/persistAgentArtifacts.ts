@@ -23,9 +23,8 @@ import type { Logger } from '@bike4mind/observability';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
 // callers use). Only this one exports `generateCompleteArtifactId`, and its exact
-// `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what
-// `findExistingArtifactId` (app/utils/artifactPersistence.ts) matches positionally
-// so the rendered card adopts this row instead of minting a fresh id. The two
+// `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what the client's id
+// readers parse positionally (see createArtifactId in @bike4mind/common). The two
 // parsers are a known fork; consolidating them is a separate change.
 //
 // Not interchangeable with `createArtifactId` (@bike4mind/common) despite the matching shape: this
@@ -57,6 +56,7 @@ export interface AgentArtifactPayload {
   tags: string[];
   sessionId: string;
   sourceQuestId: string;
+  identifier?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -82,8 +82,8 @@ export function buildAgentArtifactPayloads(args: {
   // load-bearing only because `_{index}` must be STABLE across re-parses of the same reply for the
   // idempotency pre-check to recognize an already-written row. Reordering here would
   // remint every id and orphan the rows already persisted. (Adoption by the rendered
-  // card does not depend on it - `findExistingArtifactId` compares only the
-  // identifier segment, never the timestamp or index.)
+  // card does not depend on it - `findExistingArtifactId` matches on the identifier,
+  // never the timestamp or index.)
   return (
     artifacts
       .map((artifact, index) => ({
@@ -97,6 +97,7 @@ export function buildAgentArtifactPayloads(args: {
         tags: ['ai-generated'],
         sessionId: args.sessionId,
         sourceQuestId: args.questId,
+        identifier: artifact.identifier,
         metadata: {
           operation: artifact.operation,
           language: artifact.language,

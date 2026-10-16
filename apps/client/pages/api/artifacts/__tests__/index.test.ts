@@ -116,6 +116,32 @@ describe('GET /api/artifacts', () => {
   });
 });
 
+describe('GET /api/artifacts identifier filter', () => {
+  beforeEach(() => {
+    mockRefs.listArgs = undefined;
+  });
+
+  it('hands the identifier to the service', async () => {
+    const { req, res } = invokeGet({ sessionId: 's1', type: 'react', identifier: 'todo_app' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.listArgs?.[1]).toMatchObject({ sessionId: 's1', type: 'react', identifier: 'todo_app' });
+  });
+
+  it.each([
+    ['a bracketed operator', { 'identifier[$ne]': 'x' }],
+    ['an operator object', { identifier: { $ne: 'x' } }],
+    ['a repeated param', { identifier: ['a', 'b'] }],
+    ['an empty string', { identifier: '' }],
+  ])('rejects %s before it reaches the query', async (_label, query) => {
+    const { req, res } = invokeGet(query);
+
+    await expect(Promise.resolve(mockRefs.getHandler!(req, res))).rejects.toThrow(/identifier/);
+    expect(mockRefs.listArgs).toBeUndefined();
+  });
+});
+
 /**
  * The artifact opt-out has to hold at the route, not just in the browser: chat mode parses the
  * finished quest client-side and posts the rows itself, so a caller that skips the client check
@@ -189,6 +215,22 @@ describe('POST /api/artifacts artifact gate', () => {
 
     expect(res._getStatusCode()).toBe(201);
     expect(mockRefs.createArgs).toBeDefined();
+  });
+});
+
+describe('POST /api/artifacts identifier', () => {
+  it('keeps the reply identifier on the create', async () => {
+    mockRefs.createArgs = undefined;
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+    const { req, res } = invokePost(
+      { ...aiBody(), sessionId: 's1', identifier: 'todo_app' },
+      { enableArtifacts: true }
+    );
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockRefs.createArgs?.[1]).toMatchObject({ sessionId: 's1', identifier: 'todo_app' });
   });
 });
 

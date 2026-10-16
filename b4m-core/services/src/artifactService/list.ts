@@ -8,6 +8,7 @@ const listArtifactsSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']).optional(),
   projectId: z.string().optional(),
   sessionId: z.string().optional(),
+  identifier: z.string().min(1).optional(),
   tags: z.array(z.string()).optional(),
   search: z.string().optional(),
   limit: z.number().min(1).max(100).prefault(20),
@@ -36,6 +37,7 @@ export const list = async (userId: string, parameters: ListArtifactsParameters, 
     visibility,
     projectId,
     sessionId,
+    identifier,
     tags,
     search,
     limit,
@@ -56,6 +58,10 @@ export const list = async (userId: string, parameters: ListArtifactsParameters, 
   if (visibility) filter.visibility = visibility;
   if (projectId) filter.projectId = projectId;
   if (sessionId) filter.sessionId = sessionId;
+  if (identifier !== undefined) {
+    // Rows written before `identifier` became a field recorded it only in metadata.
+    filter.$or = [{ identifier }, { identifier: { $exists: false }, 'metadata.originalIdentifier': identifier }];
+  }
   if (tags && tags.length > 0) {
     filter.tags = { $in: tags };
   }

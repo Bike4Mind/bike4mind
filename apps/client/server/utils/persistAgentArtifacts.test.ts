@@ -149,6 +149,12 @@ describe('buildAgentArtifactPayloads', () => {
     expect(payload.sessionId).toBe(SESSION_ID);
   });
 
+  it('stores the identifier as a field, so a later chat reply can version the row', () => {
+    const [payload] = build(reactArtifact('todo_app'));
+
+    expect(payload.identifier).toBe('todo_app');
+  });
+
   it('promotes a fenced tsx block (the fallback path runs)', () => {
     const payloads = build('```tsx\nexport default function Widget() { return <div />; }\n```');
 
