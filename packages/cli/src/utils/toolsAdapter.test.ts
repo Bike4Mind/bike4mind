@@ -16,6 +16,7 @@ import {
   isSandboxFailure,
   deriveGrantDirectory,
   persistToolTrust,
+  wrapTools,
   type HookWrapperContext,
 } from './toolsAdapter.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
@@ -993,5 +994,24 @@ describe('wrapToolWithPermission file-change notification', () => {
     await wrapped.toolFn({ path: 'src/a.ts' });
 
     expect(onFileChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('wrapTools with the real tool router', () => {
+  it('runs a wrapped MCP tool instead of failing it as an unknown tool', async () => {
+    const mcpTool = {
+      toolFn: vi.fn(async () => 'pong'),
+      toolSchema: { name: 'mcp__demo__ping', description: 'Ping', parameters: { type: 'object', properties: {} } },
+    } as unknown as ICompletionOptionTools;
+    const [wrapped] = wrapTools([mcpTool], {
+      permissionManager: { needsPermission: () => false, isDenied: () => false } as unknown as PermissionManager,
+      showPermissionPrompt: vi.fn(),
+      agentContext: { observationQueue: [] } as never,
+      configStore: {} as ConfigStore,
+      apiClient: {} as ApiClient,
+      allowedDirectories: [process.cwd()],
+    });
+    await expect(wrapped.toolFn({})).resolves.toBe('pong');
+    expect(mcpTool.toolFn).toHaveBeenCalledTimes(1);
   });
 });

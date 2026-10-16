@@ -141,7 +141,7 @@ import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
 import { FallbackLlmBackend } from './llm/FallbackLlmBackend.js';
 import { type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { WebSocketConnectionManager } from './ws/WebSocketConnectionManager';
-import { setWebSocketToolExecutor, registerFeatureModuleTools, clearFeatureModuleTools } from './llm/ToolRouter';
+import { setWebSocketToolExecutor } from './llm/ToolRouter';
 import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
 import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
@@ -1062,12 +1062,6 @@ function CliApp() {
       // runtime plugin command now owns - so load, display, and dispatch all share
       // one reserved-name source.
       rewireReservedNames(state, featureRegistry);
-
-      // Register feature module tool names with ToolRouter so they route as local tools
-      const featureModuleToolNames = featureRegistry.getAllToolNames();
-      if (featureModuleToolNames.length > 0) {
-        registerFeatureModuleTools(featureModuleToolNames);
-      }
 
       // Register feature module WS handlers
       if (wsManager && featureRegistry.hasModules) {
@@ -3732,9 +3726,6 @@ function CliApp() {
       // Dispose old registry (unsubscribes WS handlers)
       state.featureRegistry?.disposeAll();
 
-      // Clear old feature tool registrations from ToolRouter
-      clearFeatureModuleTools();
-
       // Create fresh registry with new config (same descriptors as bootstrap;
       // newly installed plugins appear after a restart)
       const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
@@ -3760,12 +3751,6 @@ function CliApp() {
 
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
-      }
-
-      // Register new tool names with ToolRouter
-      const newToolNames = newFeatureRegistry.getAllToolNames();
-      if (newToolNames.length > 0) {
-        registerFeatureModuleTools(newToolNames);
       }
 
       // Register new WS handlers. The feature-event socket is only opened at
