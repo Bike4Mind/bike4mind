@@ -105,6 +105,7 @@ import {
   withDeadline,
   type ForcedRetrievalCandidateSelection,
 } from './forcedRetrievalCandidateSelection';
+import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
   formatSupersededSample,
@@ -523,6 +524,7 @@ export type ChatCompletionContext = Pick<
   | 'resolveEntitlementKeys'
   | 'personalCorpusOnly'
   | 'embeddingBinding'
+  | 'priorUserPrompts'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -3061,7 +3063,27 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         fallbackModel
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
-      const queryVector = await embeddingService.generateEmbedding(query);
+      // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
+      // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
+      const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
+      const [messageVector, contextVector] = await Promise.all([
+        embeddingService.generateEmbedding(query),
+        followUp
+          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+              this.logger.warn(
+                '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
+                error
+              );
+              return undefined;
+            })
+          : undefined,
+      ]);
+      const queryVector = contextVector ? blendFollowUpQueryVector(messageVector, contextVector) : messageVector;
+      if (followUp && contextVector) {
+        this.logger.log(
+          `\u{1F512} Forced retrieval: follow-up scored with ${followUp.priorTurnsUsed} earlier user turn(s)`
+        );
+      }
 
       // The pair is only complete HERE. `embeddingModel` above is the space every score below is
       // computed in - the corpus's own majority, not the admin default - which is exactly the space

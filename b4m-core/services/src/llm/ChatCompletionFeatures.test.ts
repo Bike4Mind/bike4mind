@@ -5310,3 +5310,121 @@ describe('mergeLakeFirstListing', () => {
     expect(merged.hasMore).toBe(false);
   });
 });
+
+describe('KnowledgeRetrievalFeature follow-up questions', () => {
+  // Bag-of-words embedding over three axes: the two subjects and the pricing topic.
+  const embed = (text: string) => [
+    (text.match(/alder/gi) ?? []).length,
+    (text.match(/birchway/gi) ?? []).length,
+    (text.match(/pricing|price|cost/gi) ?? []).length,
+  ];
+  const passages = [
+    { id: 'c-alder', fabFileId: 'f-alder', text: 'ALDER_PRICING Alder pricing: seats are billed monthly.' },
+    { id: 'c-birch', fabFileId: 'f-birch', text: 'BIRCHWAY_PRICING Birchway pricing: the price is set per seat.' },
+  ];
+  const platform: Record<string, string> = {
+    forcedRetrievalMinSimilarityPct: '20',
+    forcedRetrievalRelativeFloorPct: '90',
+  };
+
+  const run = async (opts: { priorUserPrompts?: string[]; message: string; failContextEmbedding?: boolean }) => {
+    const generateEmbedding = vi.fn(async (text: string) => {
+      if (opts.failContextEmbedding && text !== opts.message) throw new Error('embedding outage');
+      return embed(text);
+    });
+    const ctx = {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
+      priorUserPrompts: opts.priorUserPrompts,
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'f-alder', fileName: 'alder.md', tags: [] },
+              { id: 'f-birch', fileName: 'birchway.md', tags: [] },
+            ],
+            hasMore: false,
+            total: 2,
+          }),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() => Promise.resolve(passages.map(p => ({ ...p, vector: embed(p.text) })))),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (key: string) => platform[key]),
+          findBySettingNames: vi.fn(async (names: string[]) =>
+            names
+              .filter(name => platform[name] != null)
+              .map(name => ({ settingName: name, settingValue: platform[name] }))
+          ),
+          findAll: vi.fn(async () =>
+            Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
+        },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const embeddingFactory = {
+      createEmbeddingService: () => ({ generateEmbedding }),
+      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    };
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      opts.message
+    );
+    const content = messages.map(m => m.content).join('\n');
+    return {
+      injected: ['ALDER_PRICING', 'BIRCHWAY_PRICING'].filter(marker => content.includes(marker)),
+      embeddedTexts: generateEmbedding.mock.calls.map(([text]) => text),
+    };
+  };
+
+  beforeEach(() => {
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('retrieves the wrong subject when the follow-up is embedded on its own', async () => {
+    const { injected } = await run({ message: 'What about their pricing?' });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('retrieves the subject of the earlier turn for a follow-up', async () => {
+    const { injected, embeddedTexts } = await run({
+      priorUserPrompts: ['Tell me about Alder.', 'What about their pricing?'],
+      message: 'What about their pricing?',
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+  });
+
+  it('follows an explicit switch to another subject', async () => {
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What does Birchway offer?',
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('makes one embedding call for a self-contained message', async () => {
+    const message = 'Summarize the Birchway pricing model for a new enterprise customer during the first month';
+    const { embeddedTexts } = await run({ priorUserPrompts: ['Tell me about Alder.'], message });
+    expect(embeddedTexts).toEqual([message]);
+  });
+
+  it('falls back to the message alone when the earlier turns cannot be embedded', async () => {
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      failContextEmbedding: true,
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+});

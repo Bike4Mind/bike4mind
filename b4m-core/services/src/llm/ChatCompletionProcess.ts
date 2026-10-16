@@ -926,6 +926,9 @@ export class ChatCompletionProcess {
     configured: boolean;
   };
 
+  /** This turn's verbatim history window as the user typed it, oldest first; forced retrieval reads follow-ups with it. */
+  public priorUserPrompts?: string[];
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -2705,6 +2708,9 @@ export class ChatCompletionProcess {
         includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
+      this.priorUserPrompts = previousMessages.flatMap(m =>
+        m.role === 'user' && typeof m.content === 'string' ? [m.content] : []
+      );
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
