@@ -1052,10 +1052,7 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
     try {
       const response = await api.post('/api/mcp/delete-attachment', {
         sessionId,
-        source: attachmentList.source,
         attachmentId: attachment.id,
-        filename: attachment.filename,
-        ...(attachmentList.pageId && { pageId: attachmentList.pageId }),
       });
 
       if (response.data?.success) {
