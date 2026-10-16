@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PENDING_FREE_CREDITS_TAG } from '../constants/user';
+import { hasDeveloperUserTag } from './user';
 
 /**
  * Public mail providers that must never be configured as a partner signup rule
@@ -68,7 +69,9 @@ const userTagSchema = z
   .min(1, 'Tag cannot be empty')
   .max(128, 'Tag is too long')
   // System-managed: stamping it at signup would re-mark a verified user as awaiting free credits.
-  .refine(tag => tag !== PENDING_FREE_CREDITS_TAG, { message: `"${PENDING_FREE_CREDITS_TAG}" is a reserved tag` });
+  .refine(tag => tag !== PENDING_FREE_CREDITS_TAG, { message: `"${PENDING_FREE_CREDITS_TAG}" is a reserved tag` })
+  // Developer tags grant elevated access and outlive the rule, so they are never domain-wide grants.
+  .refine(tag => !hasDeveloperUserTag([tag]), { message: 'Developer tags are reserved' });
 // Duplicates are dropped rather than rejected; the grant merges with $addToSet regardless.
 const tagsSchema = z
   .array(userTagSchema)

@@ -53,6 +53,13 @@ describe('createPartnerSignupRuleSchema', () => {
     ).toThrow();
   });
 
+  it('rejects developer tags', () => {
+    for (const tag of ['Developer', 'dev', 'developers']) {
+      expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: [tag] })).toThrow(/reserved/);
+    }
+    expect(() => updatePartnerSignupRuleSchema.parse({ tags: ['Dev'] })).toThrow(/reserved/);
+  });
+
   it('normalizes domain and entitlement keys to lowercase', () => {
     const parsed = createPartnerSignupRuleSchema.parse({
       ...base,
