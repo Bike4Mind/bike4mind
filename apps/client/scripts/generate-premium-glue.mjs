@@ -601,9 +601,11 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
 
 // Tools a workspace denies to every session whose surface matches (b4mContributions.workspaceDeniedTools,
 // `{ "<workspace id>": ["<tool name>"] }`). Pure data, applied at read time and never written onto sessions.
-// No `/i`: tool names are matched exactly at read time, so a mixed-case entry would deny nothing - the
-// same reason a mixed-case workspace id is rejected below.
-const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*$/;
+// Native tool names are lowercase, but an MCP id is `${serverName.toLowerCase()}__${originalToolName}`
+// (see toolGenerators.ts), so the tool half of a `server__tool` entry keeps the upstream server's case.
+// The prefix stays lowercase; the MCP runtime lowercases it. Read-time matching is exact, so a mixed-case
+// workspace id (whose surface is compared verbatim) is still rejected below.
+const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
 
 function generateWorkspaceDeniedTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
@@ -636,7 +638,7 @@ function generateWorkspaceDeniedTools(packages) {
       if (!Array.isArray(tools) || !tools.every(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool))) {
         throw new Error(
           `[codegen] invalid ${field} tools for "${workspaceId}" from package "${pkg.name}": ` +
-            `expected an array of tool names of [A-Za-z0-9_.:-], got ${JSON.stringify(tools)}`
+            `expected an array of lowercase tool names or \`server__tool\` MCP ids, got ${JSON.stringify(tools)}`
         );
       }
       const list = merged.get(workspaceId) ?? [];

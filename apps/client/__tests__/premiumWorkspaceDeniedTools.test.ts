@@ -132,6 +132,20 @@ describe('premium workspace denied tools', () => {
     expect(stderr).toContain('invalid workspaceDeniedTools tools');
   });
 
+  // An MCP id is `${serverName.toLowerCase()}__${originalToolName}`, so the tool half keeps the
+  // upstream server's case - integrations that name their tools in camelCase need that preserved.
+  it('accepts a camelCase MCP tool id, keeping only the server prefix lowercase', () => {
+    writeOverlay('mcpTool', { workspaceDeniedTools: { 'example-workspace': ['atlassian__createJiraIssue'] } });
+
+    expect(generate()).toContain(`"example-workspace": ["atlassian__createJiraIssue"]`);
+  });
+
+  it('rejects a mixed-case MCP server prefix, since the runtime lowercases it', () => {
+    writeOverlay('mcpServer', { workspaceDeniedTools: { 'example-workspace': ['Atlassian__createJiraIssue'] } });
+
+    expect(runCodegen().status).toBe(1);
+  });
+
   it('rejects an entry that is not an array of tool names', () => {
     writeOverlay('loose', { workspaceDeniedTools: { space: 'tool_a' } });
     expect(runCodegen().status).toBe(1);
