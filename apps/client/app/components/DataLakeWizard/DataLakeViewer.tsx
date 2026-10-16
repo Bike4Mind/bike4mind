@@ -35,6 +35,7 @@ import {
   submittedTagPrefix,
 } from '@bike4mind/common';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
+import { labelLakeRoot } from '@client/app/components/datalake/treeChrome';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 
 // Utilities
@@ -142,6 +143,7 @@ export default function DataLakeViewer({
           tree={tree}
           articles={articles}
           tagPrefix={tagPrefix}
+          lakeName={dataLakeName}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
           selectedFileIds={selectedFileIds}
@@ -168,6 +170,7 @@ interface TreeSidebarProps {
   tree: ReturnType<typeof buildTagTree>;
   articles: DataLakeMemberFile[];
   tagPrefix: string;
+  lakeName: string;
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
   selectedFileIds: ReadonlySet<string>;
@@ -180,6 +183,7 @@ function TreeSidebar({
   tree,
   articles,
   tagPrefix,
+  lakeName,
   breadcrumb,
   onNavigate,
   selectedFileIds,
@@ -191,6 +195,7 @@ function TreeSidebar({
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
   const prefixNorm = submittedTagPrefix(tagPrefix) || ':';
+  const label = labelLakeRoot(prefixNorm, lakeName, humanizeTagSegment);
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]
@@ -245,7 +250,7 @@ function TreeSidebar({
     scrollSx: { flex: 1, overflow: 'auto' },
     nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
     fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
-    renderNodeRow: (node, _depth, onOpen) => (
+    renderNodeRow: (node, depth, onOpen) => (
       <ListItem>
         <ListItemButton
           onClick={onOpen}
@@ -259,7 +264,7 @@ function TreeSidebar({
           )}
           <ListItemContent>
             <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
-              {humanizeTagSegment(node.segment)}
+              {label(node.segment, depth)}
             </Typography>
           </ListItemContent>
           <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
@@ -285,7 +290,7 @@ function TreeSidebar({
         </ListItemButton>
       </ListItem>
     ),
-    humanize: humanizeTagSegment,
+    humanize: label,
     allCategoriesLabel: 'All Categories',
     emptyFilesLabel: 'No files found',
     errorLabel: 'Failed to load files',

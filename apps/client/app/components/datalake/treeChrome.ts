@@ -140,6 +140,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   industry: 'Industries',
 };
 
+/**
+ * Wraps a tree label function so a lake's depth-0 prefix node reads as the lake name: the raw
+ * prefix is often internal (a connector-fed GitHub lake's is `gh-<hex>`).
+ */
+export const labelLakeRoot =
+  (tagPrefix: string, lakeName: string, humanize: (segment: string, depth: number) => string) =>
+  (segment: string, depth: number): string =>
+    depth === 0 && lakeName && segment === tagPrefix.split(':')[0] ? lakeName : humanize(segment, depth);
+
 export function humanizeSegment(segment: string, depth: number): string {
   if (depth === 0 && PREFIX_LABELS[segment]) return PREFIX_LABELS[segment];
   if (depth === 1 && CATEGORY_LABELS[segment]) return CATEGORY_LABELS[segment];
