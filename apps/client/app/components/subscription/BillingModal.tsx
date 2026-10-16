@@ -103,8 +103,11 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
   const hasPaymentIssue = !!currentSubscription && isDelinquentSubscriptionStatus(currentSubscription.status);
+  // A failed read says nothing about the plan, so nothing below may read it as "no plan" (Free, Upgrade,
+  // plans-first). Data from an earlier successful read is still the user's plan.
+  const planUnknown = subscriptions.isError && !subscriptions.data;
   // A failed payment keeps plans on top: fixing the card is the action that matters.
-  const plansFirst = !currentSubscription || hasPaymentIssue;
+  const plansFirst = !planUnknown && (!currentSubscription || hasPaymentIssue);
   const ready = !subscriptions.isPending;
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -133,11 +136,19 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
       view="plans"
       headingRef={plansHeadingRef}
       isFocusTarget={focus === 'plans'}
-      title={currentSubscription ? t('billing.plans_change', 'Your plan') : t('billing.plans_upgrade', 'Upgrade')}
+      title={
+        planUnknown
+          ? t('billing.plans_heading', 'Plans')
+          : currentSubscription
+            ? t('billing.plans_change', 'Your plan')
+            : t('billing.plans_upgrade', 'Upgrade')
+      }
       subtitle={
-        currentSubscription
-          ? t('billing.plans_change_sub', 'Manage, change or cancel your subscription.')
-          : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
+        planUnknown
+          ? t('billing.plans_heading_sub', 'Monthly plans with a credit allowance.')
+          : currentSubscription
+            ? t('billing.plans_change_sub', 'Manage, change or cancel your subscription.')
+            : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
       }
     >
       <PlansSection />
@@ -223,7 +234,28 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
               <Typography level="body-xs" sx={statLabelSx}>
                 {t('billing.plan', 'Plan')}
               </Typography>
-              {ready ? (
+              {planUnknown ? (
+                <Box sx={{ mt: 0.5 }} data-testid="billing-current-plan-unavailable">
+                  <Typography level="title-md" sx={{ fontWeight: 600 }}>
+                    {t('billing.plan_unavailable', 'Unavailable')}
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                      {t('billing.plan_unavailable_detail', 'We could not load your plan.')}
+                    </Typography>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      data-testid="billing-current-plan-retry"
+                      loading={subscriptions.isFetching}
+                      onClick={() => void subscriptions.refetch()}
+                      sx={{ minHeight: 0, py: 0, px: 0.5, fontSize: 'xs' }}
+                    >
+                      {t('billing.retry', 'Retry')}
+                    </Button>
+                  </Box>
+                </Box>
+              ) : ready ? (
                 <Box sx={{ mt: 0.5 }}>
                   <Typography level="title-md" sx={{ fontWeight: 600 }}>
                     {planName}
@@ -275,9 +307,11 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
                   variant="plain"
                   color={noCredits ? 'danger' : 'warning'}
                   data-testid="billing-low-balance-action"
-                  onClick={() => scrollTo(currentSubscription ? 'credits' : 'plans')}
+                  onClick={() => scrollTo(currentSubscription || planUnknown ? 'credits' : 'plans')}
                 >
-                  {currentSubscription ? t('billing.top_up', 'Top up') : t('billing.see_plans', 'See plans')}
+                  {currentSubscription || planUnknown
+                    ? t('billing.top_up', 'Top up')
+                    : t('billing.see_plans', 'See plans')}
                 </Button>
               )}
             </Box>

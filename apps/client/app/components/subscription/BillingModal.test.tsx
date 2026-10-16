@@ -10,6 +10,8 @@ import type { BillingView } from '@client/app/utils/billingDeepLink';
 const state = vi.hoisted(() => ({
   subscriptions: [] as unknown[],
   subscriptionsPending: false,
+  subscriptionsError: false,
+  refetch: vi.fn(),
   credits: 5000,
 }));
 
@@ -20,7 +22,13 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
-  useGetSubscriptions: () => ({ data: state.subscriptions, isPending: state.subscriptionsPending }),
+  useGetSubscriptions: () => ({
+    data: state.subscriptionsError ? undefined : state.subscriptions,
+    isPending: state.subscriptionsPending,
+    isError: state.subscriptionsError,
+    isFetching: false,
+    refetch: state.refetch,
+  }),
 }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 1000 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
@@ -64,7 +72,22 @@ describe('BillingModal', () => {
   beforeEach(() => {
     state.subscriptions = [];
     state.subscriptionsPending = false;
+    state.subscriptionsError = false;
+    state.refetch.mockClear();
     state.credits = 5000;
+  });
+
+  it('says the plan is unavailable, not Free, when the subscriptions read fails, and retries on demand', () => {
+    state.subscriptionsError = true;
+    renderModal();
+    const plan = screen.getByTestId('billing-current-plan');
+    expect(plan).toHaveTextContent('Unavailable');
+    expect(plan).not.toHaveTextContent('Free');
+    // Neutral order and copy: nothing reads the failure as "no plan".
+    expect(sectionOrder()).toEqual(['billing-section-credits', 'billing-section-plans']);
+    expect(screen.getByTestId('billing-section-plans-heading')).toHaveTextContent('Plans');
+    fireEvent.click(screen.getByTestId('billing-current-plan-retry'));
+    expect(state.refetch).toHaveBeenCalledTimes(1);
   });
 
   it('leads with plans when the user has no subscription, and says they are on Free', () => {
