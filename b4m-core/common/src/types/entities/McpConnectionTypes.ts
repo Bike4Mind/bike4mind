@@ -98,8 +98,11 @@ export interface IMcpConnectionOAuth {
 export interface IMcpConnectionApiKey {
   headerName: string;
   scheme?: McpApiKeyScheme;
-  /** Write-only: never returned to the client, only `last4`. */
-  valueEnc: string;
+  /**
+   * Write-only: never returned to the client, only `last4`. Optional in the type because every
+   * default read deselects it; the schema still requires it on write.
+   */
+  valueEnc?: string;
   last4: string;
 }
 
@@ -191,9 +194,10 @@ export interface IMcpConnection {
   /**
    * Ciphertext of the normalized URL (lowercased host, no fragment, no userinfo), because servers
    * often carry a key in the query or path. The caller encrypts with `encryptToken` and decrypts
-   * after a `*WithCredentials` read, like every other `*Enc` field.
+   * after a `*WithCredentials` read, like every other `*Enc` field. Optional in the type because
+   * default reads deselect it; the schema requires it on write.
    */
-  urlEnc: string;
+  urlEnc?: string;
   /** Safe to show: see {@link toMcpDisplayUrl}. */
   displayUrl: string;
   /**

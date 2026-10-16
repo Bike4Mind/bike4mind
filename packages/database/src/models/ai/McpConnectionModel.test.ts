@@ -259,6 +259,15 @@ describe('McpConnectionModel', () => {
       expect(withCreds?.auth.oauth?.manualClientIdEnc).toBe('enc:client-id');
     });
 
+    it('still requires the URL and API key ciphertext on write', async () => {
+      await expect(mcpConnectionRepository.create(baseConnection({ urlEnc: undefined }))).rejects.toThrow(/urlEnc/);
+      await expect(
+        mcpConnectionRepository.create(
+          apiKeyConnection({ auth: { kind: 'api_key', apiKey: { headerName: 'Authorization', last4: 'abcd' } } })
+        )
+      ).rejects.toThrow(/valueEnc/);
+    });
+
     it("the credential read refuses another owner's id", async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       expect(
