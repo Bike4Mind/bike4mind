@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, cosineFloorPctForSpace } from './embeddingSpaceFloors';
+import {
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
+  cosineFloorPctForSpace,
+  forcedRetrievalFloorAboveMeasured,
+} from './embeddingSpaceFloors';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from './forcedRetrieval';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 
@@ -96,5 +100,23 @@ describe('behavior preservation on the model in production today', () => {
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
     ).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+});
+
+describe('forcedRetrievalFloorAboveMeasured', () => {
+  const small = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
+
+  it('names the measured floor a configured value sits above', () => {
+    expect(forcedRetrievalFloorAboveMeasured(75, small)).toBe(58);
+    expect(forcedRetrievalFloorAboveMeasured(59, small)).toBe(58);
+  });
+
+  it('passes a value at or below the measured floor', () => {
+    expect(forcedRetrievalFloorAboveMeasured(58, small)).toBeUndefined();
+    expect(forcedRetrievalFloorAboveMeasured(75, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)).toBeUndefined();
+  });
+
+  it('has no opinion on a space nobody measured', () => {
+    expect(forcedRetrievalFloorAboveMeasured(99, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE)).toBeUndefined();
   });
 });

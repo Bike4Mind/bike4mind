@@ -926,6 +926,9 @@ export class ChatCompletionProcess {
     configured: boolean;
   };
 
+  /** This turn's verbatim history window as the user typed it, oldest first; forced retrieval reads follow-ups with it. */
+  public priorUserPrompts?: string[];
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
@@ -2711,6 +2714,9 @@ export class ChatCompletionProcess {
         includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
+      this.priorUserPrompts = previousMessages.flatMap(m =>
+        m.role === 'user' && typeof m.content === 'string' ? [m.content] : []
+      );
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
@@ -3902,6 +3908,16 @@ export class ChatCompletionProcess {
         logger.warn(
           `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
         );
+      }
+      // Forced retrieval published its citation chips before the budget ran. Its lake prompt and its
+      // passages are separate messages of one source, and the source-level map above ORs them, so read
+      // delivery per message: a kept lake prompt must not mask a dropped passages block. The feature
+      // then decides what actually justifies withdrawing, since it alone knows which message is which.
+      const knowledgeRetrievalMessageShed = admittedContextMessages.some(
+        t => t.source === 'knowledgeRetrieval' && t.message.role === 'system' && !deliveredMessages.has(t.message)
+      );
+      if (knowledgeRetrievalMessageShed) {
+        this.features.get('knowledgeRetrieval')?.onContextDropped?.(quest, deliveredMessages);
       }
 
       const countSystemBlockTokens = (content: string) =>

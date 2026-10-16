@@ -7,6 +7,11 @@ import {
   SettingKey,
   settingsMap,
   experimentalFeatureSettingKeys,
+  forcedRetrievalFloorAboveMeasured,
+  forcedRetrievalFloorAboveMeasuredMessage,
+  isBlankSettingValue,
+  isSupportedEmbeddingModel,
+  OpenAIEmbeddingModel,
 } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -30,17 +35,21 @@ export function useUpdateSettings() {
       key,
       value,
       confirmClear,
+      confirmAboveMeasuredFloor,
     }: {
       key: SettingKey;
       value: z.TypeOf<(typeof settingsMap)[SettingKey]['schema']>;
       // Required by the server to unset a sensitive setting - clearing one destroys a live
       // credential, so the intent has to be explicit rather than inferred from an empty value.
       confirmClear?: boolean;
+      // Sent only after the field has shown useFloorAboveMeasuredWarning's text.
+      confirmAboveMeasuredFloor?: boolean;
     }) => {
       const { data } = await api.put(`/api/settings/update`, {
         key,
         value,
         ...(confirmClear ? { confirmClear } : {}),
+        ...(confirmAboveMeasuredFloor ? { confirmAboveMeasuredFloor } : {}),
       });
 
       return data;
@@ -176,6 +185,25 @@ export function useGetSettingsValue(key: SettingKey) {
 
     return serverSetting?.settingValue ?? defaultSetting?.defaultValue;
   }, [key, settingsFromServer, settingConfigs]);
+}
+
+/**
+ * The warning an admin field shows before saving a forced-retrieval floor above the one measured for
+ * the default embedding model; the server refuses that value unless the save confirms it.
+ */
+export function useFloorAboveMeasuredWarning(key: SettingKey, value: unknown): string | undefined {
+  const model = useGetSettingsValue('defaultEmbeddingModel');
+  if (key !== 'forcedRetrievalMinSimilarityPct' || typeof model !== 'string' || isBlankSettingValue(value)) {
+    return undefined;
+  }
+  // Mirror `resolveDefaultEmbeddingModel` on the server: the stored value is the model only while it
+  // is supported, and an unsupported one falls back to 3-small - the floor the server refuses
+  // against. Without this the two sides disagree when the stored value is stale or legacy, and a
+  // save the client never warned about is refused with no way to confirm it from here.
+  const resolvedModel = isSupportedEmbeddingModel(model) ? model : OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
+  const pct = Number(value);
+  const measured = Number.isFinite(pct) ? forcedRetrievalFloorAboveMeasured(pct, resolvedModel) : undefined;
+  return measured === undefined ? undefined : forcedRetrievalFloorAboveMeasuredMessage(pct, measured, resolvedModel);
 }
 
 /**

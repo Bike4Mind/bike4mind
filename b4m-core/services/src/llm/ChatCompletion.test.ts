@@ -7697,6 +7697,7 @@ describe('ChatCompletionProcess', () => {
   // no second count, and a lake block the budget dropped bills nothing.
   describe('lake retrieval promoted out of the system-prompt residual', () => {
     const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const lakePrompt = { role: 'system' as const, content: 'LAKE-OPERATING-PROMPT' };
     const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
 
     // Content-keyed so a message counts the same way in the six source totals and in
@@ -7709,7 +7710,12 @@ describe('ChatCompletionProcess', () => {
         return sum + 1;
       }, 0);
 
-    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+    const runWithLakeSources = async (opts: {
+      withLakes: boolean;
+      dropRetrieval?: boolean;
+      dropLakePrompt?: boolean;
+      lakePrompt?: boolean;
+    }) => {
       mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
       mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
@@ -7741,15 +7747,21 @@ describe('ChatCompletionProcess', () => {
       let builtMessages: IMessage[] = [];
       mockedBuildAndSortMessages.mockImplementation(
         async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
-          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages].filter(
+            message => !(opts.dropRetrieval && message === chunk) && !(opts.dropLakePrompt && message === lakePrompt)
+          );
           return { messages: builtMessages, messageTruncation: null } as any;
         }
       );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
+      const onRetrievalDropped = vi.fn();
       if (opts.withLakes) {
-        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('knowledgeRetrieval', {
+          getContextMessages: async () => (opts.lakePrompt ? [lakePrompt, chunk] : [chunk]),
+          onContextDropped: onRetrievalDropped,
+        } as any);
         service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
       }
 
@@ -7762,8 +7774,51 @@ describe('ChatCompletionProcess', () => {
       // Re-derive the residual the way the write site does, independently of the promotion:
       // total over the payload it counted, less the user prompt (the only known non-system source).
       const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
-      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual, onRetrievalDropped };
     };
+
+    it('tells forced retrieval when the budget dropped its block', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true, dropRetrieval: true });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      expect(onRetrievalDropped.mock.calls[0][0]).toMatchObject({ id: startQuestParams.questId });
+      // The delivered set is what the feature decides on, so assert on it: the passages were the
+      // shed message and must not read as delivered.
+      expect((onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>).has(chunk)).toBe(false);
+    });
+
+    it('leaves forced retrieval alone when its block was delivered', async () => {
+      const { onRetrievalDropped } = await runWithLakeSources({ withLakes: true });
+      expect(onRetrievalDropped).not.toHaveBeenCalled();
+    });
+
+    it('tells forced retrieval when the lake prompt was kept but its passages were dropped', async () => {
+      // The lake prompt and the passages are separate messages of the one source, so a kept prompt
+      // must not stand in for the dropped passages: the chips rest on the passages alone.
+      const { onRetrievalDropped } = await runWithLakeSources({
+        withLakes: true,
+        dropRetrieval: true,
+        lakePrompt: true,
+      });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      const delivered = onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>;
+      expect(delivered.has(lakePrompt)).toBe(true);
+      expect(delivered.has(chunk)).toBe(false);
+    });
+
+    it('hands forced retrieval the delivered passages when only the lake prompt was dropped', async () => {
+      // The hook fires on any shed message of the source, so the set it passes has to be the real
+      // per-message payload: these passages reached the model and must read as delivered, or the
+      // feature would withdraw chips the answer is entitled to.
+      const { onRetrievalDropped } = await runWithLakeSources({
+        withLakes: true,
+        dropLakePrompt: true,
+        lakePrompt: true,
+      });
+      expect(onRetrievalDropped).toHaveBeenCalledTimes(1);
+      const delivered = onRetrievalDropped.mock.calls[0][1] as ReadonlySet<IMessage>;
+      expect(delivered.has(chunk)).toBe(true);
+      expect(delivered.has(lakePrompt)).toBe(false);
+    });
 
     it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
       const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
@@ -8250,6 +8305,57 @@ describe('ChatCompletionProcess', () => {
 
       // Only 2 attempts: original + 1 retry (not 3)
       expect(callCount).toBe(2);
+    });
+  });
+
+  // Follow-up retrieval reads the earlier user turns off `priorUserPrompts`, so this assignment is the
+  // only thing that turns that behavior on in production. The feature tests inject `priorUserPrompts`
+  // straight into the feature context, so they would stay green with the assignment deleted; pin the
+  // hand-off from the fetched history here instead.
+  describe('follow-up context from quest history', () => {
+    const run = async (history: IMessage[]) => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([history, history.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      return service.priorUserPrompts;
+    };
+
+    it('collects the user text turns, oldest first, and nothing else', async () => {
+      const priorUserPrompts = await run([
+        { role: 'user', content: 'Tell me about Alder.' },
+        { role: 'assistant', content: 'Alder is a vendor.' },
+        // A tool-result turn is an array content, not a question to borrow a subject from.
+        { role: 'user', content: [{ type: 'tool_result', content: 'ignored' }] as any },
+        { role: 'user', content: 'What about their pricing?' },
+      ]);
+
+      expect(priorUserPrompts).toEqual(['Tell me about Alder.', 'What about their pricing?']);
     });
   });
 });

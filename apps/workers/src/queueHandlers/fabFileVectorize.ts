@@ -22,6 +22,7 @@ import {
   ChunkSchema,
   EmbeddingFactory,
   resolveEmbeddingWithKeylessFallback,
+  EmbeddingAuthError,
   isEmbeddingAuthError,
   EmbeddingSpaceConflictError,
   isEmbeddingSpaceConflictError,
@@ -207,6 +208,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       apiKeyTable
     );
     if (embeddingModel !== requestedEmbeddingModel) {
+      // Files already embedded with the requested model mean a lost credential, not a keyless
+      // stage: a substitute would land this file where searches over the rest cannot reach it.
+      if (await fabFileRepository.hasVectorizedFileInEmbeddingSpace(requestedEmbeddingModel)) {
+        throw new EmbeddingAuthError(
+          getProviderFromModel(requestedEmbeddingModel),
+          `No credential for ${requestedEmbeddingModel}, which files on this deployment are already ` +
+            `embedded with; refusing to embed with the keyless ${embeddingModel}, which searches could not ` +
+            `match against them. Restore the credential and re-index the file.`
+        );
+      }
       logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
     }
 

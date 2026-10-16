@@ -11,6 +11,7 @@ import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
 import { registerUpdates } from './update';
+import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
 import { appWindows } from './windows';
 
@@ -108,8 +109,20 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   registerAccount(auth);
   registerUsage(auth);
-  const { service: chat, background, mcp, browser, pullRequests } = registerChat(auth);
+  const {
+    service: chat,
+    background,
+    mcp,
+    browser,
+    pullRequests,
+  } = registerChat(auth, {
+    sessionClosed: sessionId => terminals.killSession(sessionId),
+  });
   closeAgentBrowsers = () => browser.closeAll();
+  const terminals = registerTerminals(async sessionId => {
+    const session = await chat.getSession(sessionId);
+    return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
+  });
 
   // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
   // once. Declared here because the updater's install path does that teardown itself and must
@@ -131,7 +144,12 @@ void app.whenReady().then(async () => {
     },
     prepareQuit: async () => {
       quitting = true;
-      await Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()]).catch(() => undefined);
+      await Promise.all([
+        background.shutdown(),
+        mcp.shutdown(),
+        terminals.shutdown(),
+        browser.cookies.clearOnQuit(),
+      ]).catch(() => undefined);
     },
   });
 
@@ -158,7 +176,7 @@ void app.whenReady().then(async () => {
     event.preventDefault();
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
-    void Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()])
+    void Promise.all([background.shutdown(), mcp.shutdown(), terminals.shutdown(), browser.cookies.clearOnQuit()])
       .catch(() => undefined)
       .finally(() => app.quit());
   });
@@ -172,6 +190,7 @@ void app.whenReady().then(async () => {
     // grace period above must not leave a process group behind.
     background.shutdownSync();
     mcp.shutdownSync();
+    terminals.shutdownSync();
     browser.closeAll();
   });
 
@@ -182,6 +201,7 @@ void app.whenReady().then(async () => {
     process.on(signal, () => {
       background.shutdownSync();
       mcp.shutdownSync();
+      terminals.shutdownSync();
       app.quit();
     });
   }

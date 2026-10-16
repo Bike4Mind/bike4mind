@@ -65,6 +65,7 @@ import {
   citationTagDescription,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
+  forcedRetrievalFloorAboveMeasured,
   forcedRetrievalRelativeCutoff,
   forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
@@ -105,6 +106,7 @@ import {
   withDeadline,
   type ForcedRetrievalCandidateSelection,
 } from './forcedRetrievalCandidateSelection';
+import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
   formatSupersededSample,
@@ -523,6 +525,7 @@ export type ChatCompletionContext = Pick<
   | 'resolveEntitlementKeys'
   | 'personalCorpusOnly'
   | 'embeddingBinding'
+  | 'priorUserPrompts'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -577,6 +580,12 @@ export interface ChatCompletionFeature {
     /** Input-window-derived; deliberately NOT the model's output cap. */
     attachedFileTokenBudget: number
   ) => Promise<IMessage[]>;
+  /**
+   * Called when the input budget dropped a system message this feature returned, so it can take
+   * back what it published on the strength of the dropped ones. `deliveredMessages` is the final
+   * payload, so a feature can tell which of its own messages survived.
+   */
+  onContextDropped?: (quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>) => void;
 }
 
 /**
@@ -1839,14 +1848,6 @@ function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): num
   return undefined;
 }
 
-/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
-const warnedOverFloor = new Set<string>();
-
-/** Test-only: forget which floors were warned about, so a warn-once test does not depend on test order. */
-export function resetForcedRetrievalFloorWarnings(): void {
-  warnedOverFloor.clear();
-}
-
 /**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
@@ -1883,19 +1884,8 @@ export function resetForcedRetrievalFloorWarnings(): void {
  */
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
-  if (configuredPct !== undefined) {
-    // Honored, but above the measured floor it can reject the space's whole band (75 on
-    // text-embedding-3-small returns nothing on every query), so say so - once, not every turn.
-    const warnKey = `${space}:${configuredPct}`;
-    if (spacePct !== undefined && configuredPct > spacePct && !warnedOverFloor.has(warnKey)) {
-      warnedOverFloor.add(warnKey);
-      logger.warn(
-        `\u{1F512} Forced retrieval: configured absolute floor ${configuredPct}% is above the ${spacePct}% ` +
-          `measured for embedding space "${space}" and may reject every chunk; clear it to use the measured floor`
-      );
-    }
-    return configuredPct / 100;
-  }
+  // Honored even above the measured floor; a turn it empties is reported by the no-match exit.
+  if (configuredPct !== undefined) return configuredPct / 100;
 
   if (spacePct !== undefined) {
     if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
@@ -2050,6 +2040,8 @@ export function mergeLakeFirstListing<T extends { id: string }>(
   };
 }
 
+const citableKey = (c: CitableSource) => c.id || c.url || c.title;
+
 /**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
@@ -2098,6 +2090,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private readerConsentTags: string[];
   /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
   private includeLibraryFiles: boolean | undefined;
+  /** Keys of the citables this turn's injection added, withdrawn if the block never reaches the model. */
+  private publishedCitableKeys = new Set<string>();
+  /**
+   * The retrieved-passages message this turn returned, or undefined when it returned none. The lake
+   * prompt is a separate message of the same source, so withdrawal keys on THIS message: a kept lake
+   * prompt must not pass the chips through when the passages behind them were dropped.
+   */
+  private retrievedContextMessage?: IMessage;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2795,11 +2795,34 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     });
   }
 
+  /**
+   * The budget dropped the retrieved-context block, so the model saw neither the passages nor the
+   * abstention text. Its chips would credit sources the answer never read, so take them back and
+   * warn that the passages were not used.
+   */
+  onContextDropped(quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>): void {
+    const published = this.publishedCitableKeys;
+    this.publishedCitableKeys = new Set();
+    const passages = this.retrievedContextMessage;
+    this.retrievedContextMessage = undefined;
+    // The lake prompt can survive the budget while the passages behind it do not, and only the
+    // passages justify the chips - so a delivered passages block keeps them.
+    if (published.size === 0 || !quest.promptMeta || (passages && deliveredMessages.has(passages))) return;
+    quest.promptMeta.citables = (quest.promptMeta.citables ?? []).filter(c => !published.has(citableKey(c)));
+    this.logger.warn('\u{1F512} Forced retrieval: context block dropped by the input budget, citations withdrawn');
+    quest.promptMeta.warnings = [
+      ...(quest.promptMeta.warnings ?? []),
+      "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+    ];
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string
   ): Promise<IMessage[]> {
+    this.publishedCitableKeys = new Set();
+    this.retrievedContextMessage = undefined;
     const query = message?.trim();
     if (!query) return [];
 
@@ -3061,7 +3084,34 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         fallbackModel
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
-      const queryVector = await embeddingService.generateEmbedding(query);
+      // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
+      // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
+      const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
+      const [messageVector, contextVector] = await Promise.all([
+        embeddingService.generateEmbedding(query),
+        followUp
+          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+              this.logger.warn(
+                '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
+                error
+              );
+              return undefined;
+            })
+          : undefined,
+      ]);
+      const queryVector = contextVector ? blendFollowUpQueryVector(messageVector, contextVector) : messageVector;
+      // A blended query keeps the bare message vector as a second reading for the absolute floor.
+      // That floor was swept on single-message query vectors, and the blend scales a passage's cosine
+      // down whenever the earlier turns pull away from it - a topic switch after an earlier turn, the
+      // case this path must not break. Admitting on EITHER reading means a chunk the bare message alone
+      // cleared cannot be dropped by blending, so the blend can never lower recall below the path it
+      // replaced; ranking and the relative/spread floors still run on the blended score.
+      const bareQueryVector = contextVector ? messageVector : undefined;
+      if (followUp && contextVector) {
+        this.logger.log(
+          `\u{1F512} Forced retrieval: follow-up scored with ${followUp.priorTurnsUsed} earlier user turn(s)`
+        );
+      }
 
       // The pair is only complete HERE. `embeddingModel` above is the space every score below is
       // computed in - the corpus's own majority, not the admin default - which is exactly the space
@@ -3226,7 +3276,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             scoredCount++;
             scannedScores.push(score);
             if (score > topScore) topScore = score;
-            if (score < floors.minSimilarity) continue;
+            const clearsFloor =
+              score >= floors.minSimilarity ||
+              (bareQueryVector !== undefined &&
+                computeCosineSimilarity(bareQueryVector, row.vector) >= floors.minSimilarity);
+            if (!clearsFloor) continue;
             pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
             if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
               pool.sort(compareForcedRetrievalCandidates);
@@ -3287,30 +3341,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
+      // Both cutoffs below measure from this turn's best ADMITTED candidate, `ranked[0]`, not from
+      // `topScore`. The two stopped being the same score when the absolute floor started clearing on
+      // EITHER the blended or the bare reading: the chunk with the highest blended score can now be
+      // rejected outright while a chunk it outscored was admitted on its bare score alone. A cutoff
+      // anchored on `topScore` would then sit above the only admitted candidate and empty the turn,
+      // which is the one thing a ranking floor must never do - `ranked` is score-descending, so its
+      // head is the candidate that has to survive. `topScore` is the fallback for an empty `ranked`,
+      // where neither cutoff has anything to act on either way.
+      const anchorScore = ranked.length > 0 ? ranked[0].score : topScore;
       // The relative floor runs HERE rather than inside the scan above: it is a fraction of the
-      // turn's FINAL top score, which is not known until the last batch has been scored. This is
+      // turn's top admitted score, which is not known until the last batch has been scored. This is
       // the floor that ranks - it moves with the turn, so it keeps discriminating whichever band a
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing.
       //
-      // Skipped when the top score is not positive - that guard now lives in
-      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it.
-      // `topScore` is not derived from `pool`: it is updated one line BEFORE the absolute-floor
-      // `continue`, so it tracks every finite scored candidate while `pool` holds only those that
-      // cleared the floor, and can therefore be negative here. The guard is inert on THIS path (a
-      // non-positive `topScore` makes the product non-positive, so the unfiltered branch is taken
-      // either way) and load-bearing on the sweep's, which is handed arbitrary floor pairs.
+      // Skipped when the anchor is not positive - that guard now lives in
+      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it. It
+      // is inert on THIS path (a non-positive anchor makes the product non-positive, so the
+      // unfiltered branch is taken either way) and load-bearing on the sweep's, which is handed
+      // arbitrary floor pairs.
       //
-      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
-      // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
-      // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
-      // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
-      const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, floors.relativeFloor);
+      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100), so the head of
+      // `ranked` always clears its own cutoff. No new empty-handed exit is introduced.
+      const relativeCutoff = forcedRetrievalRelativeCutoff(anchorScore, floors.relativeFloor);
       const afterRelative = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
       if (afterRelative.length < ranked.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: relative floor kept ${afterRelative.length}/${ranked.length} candidates ` +
-            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${topScore.toFixed(3)})`
+            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${anchorScore.toFixed(3)})`
         );
       }
 
@@ -3325,17 +3384,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // would move with the very floor this one exists to be independent of.
       //
       // Runs after the relative floor purely so the two `pre`/`post` counts on promptMeta stay a
-      // chain; the two cuts are independent, and applying both is an AND either way. Cannot empty
-      // the turn at any setting: the cutoff never exceeds `topScore`, which the head of `ranked`
-      // meets, and `ranked` is non-empty here.
+      // chain; the two cuts are independent, and applying both is an AND either way. Anchored on
+      // `anchorScore` for the reason above, and cannot empty the turn at any setting: the cutoff lands
+      // between the anchor and the background when the background is the lower of the two, and is 0
+      // otherwise, so it never sits above the head of `ranked`, which is non-empty here.
       const backgroundScore = backgroundScoreOf(scannedScores);
-      const spreadCutoff = forcedRetrievalSpreadCutoff(topScore, backgroundScore, floors.spreadFloor);
+      const spreadCutoff = forcedRetrievalSpreadCutoff(anchorScore, backgroundScore, floors.spreadFloor);
       const scored = spreadCutoff > 0 ? afterRelative.filter(c => c.score >= spreadCutoff) : afterRelative;
       if (scored.length < afterRelative.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: spread floor kept ${scored.length}/${afterRelative.length} candidates ` +
             `(cutoff ${spreadCutoff.toFixed(3)} = ${(floors.spreadFloor * 100).toFixed(0)}% of the way from ` +
-            `top ${topScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
+            `top ${anchorScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
         );
       }
 
@@ -3428,7 +3488,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // walk above skips a candidate only via its budget `break`, and `used` starts at 0
           // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
           // an empty `sections` means an empty `scored`. And the top candidate always survives
-          // BOTH per-turn cutoffs - the relative one is `topScore * fraction` with fraction <= 1,
+          // BOTH per-turn cutoffs - the relative one is `anchorScore * fraction` with fraction <= 1,
           // the spread one interpolates between the top and the background and so never exceeds the
           // top - meaning an empty `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE
           // floor, which is exactly what the `chunks: 0` beside it says. If that budget ever admits
@@ -3443,10 +3503,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // below the line - and no per-turn test separates them, so the line carries what an
         // operator needs to tell them apart instead: a top score far below the floor across a whole
         // scanned corpus is the misconfiguration, one just below it is a genuine miss.
-        this.logger.log(
+        const noneClearedLine =
           `\u{1F512} Forced retrieval: no chunk cleared the ${(floors.minSimilarity * 100).toFixed(0)}% absolute ` +
-            `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`
-        );
+          `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`;
+        // An operator floor above the measured one can empty every turn, so that case warns on every
+        // turn it happens and tells the reader; a measured floor emptying a turn is an ordinary miss.
+        // The top candidate always survives the relative and spread cutoffs (see above), so the
+        // configured floor is what emptied the turn exactly when the top score cleared the measured
+        // floor too - below it, clearing the setting would still return nothing.
+        const measuredPct =
+          configuredAbsolutePct !== undefined
+            ? forcedRetrievalFloorAboveMeasured(configuredAbsolutePct, embeddingModel)
+            : undefined;
+        if (configuredAbsolutePct !== undefined && measuredPct !== undefined && topScore >= measuredPct / 100) {
+          this.logger.warn(
+            `${noneClearedLine}; the configured floor is above the ${measuredPct}% measured for this space, ` +
+              'clear forcedRetrievalMinSimilarityPct to use the measured floor'
+          );
+          quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+            sessionId: quest.sessionId,
+            userId: this.chatCompletion.user.id,
+          });
+          quest.promptMeta.retrievalFloorRejection = {
+            floorPct: configuredAbsolutePct,
+            measuredPct,
+            embeddingModel,
+          };
+        } else {
+          this.logger.log(noneClearedLine);
+        }
         // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
         // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
         // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the
@@ -3577,7 +3662,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         userId: user.id,
       });
       const existingCitables = quest.promptMeta.citables || [];
-      const citableKey = (c: CitableSource) => c.id || c.url || c.title;
       const withoutCitationIndex = (c: CitableSource): CitableSource => {
         if (c.metadata?.citationIndex === undefined) return c;
         const { citationIndex: _staleIndex, ...metadata } = c.metadata;
@@ -3608,6 +3692,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           })
           .map(withoutCitationIndex);
         quest.promptMeta.citables = [...citables, ...keptExisting];
+        this.publishedCitableKeys = newKeys;
       } else {
         // Named style: legacy order - existing citables first, then de-duplicated new ones.
         const seenKeys = new Set(existingCitables.map(citableKey).filter(Boolean));
@@ -3618,6 +3703,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           return true;
         });
         quest.promptMeta.citables = [...existingCitables, ...newCitables];
+        this.publishedCitableKeys = new Set(newCitables.map(citableKey).filter(Boolean));
       }
       await this.chatCompletion.sendStatusUpdate(quest, 'Grounded in the knowledge base');
 
@@ -3723,6 +3809,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
 
+      this.retrievedContextMessage = retrievedContext;
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {
       // A failed search still leaves the turn ungrounded, so it gets the abstention block for the

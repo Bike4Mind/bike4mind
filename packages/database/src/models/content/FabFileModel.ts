@@ -2791,6 +2791,28 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  // Unindexed on embeddingModel; callers reach it only when a keyless substitution fires.
+  async hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean> {
+    const hit = await this.fabFileModel.exists({
+      embeddingModel,
+      vectorizedChunkCount: { $gt: 0 },
+      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with an
+      // explicit null stamp, and a non-final vectorize message raises the count while leaving the
+      // label and the stamp alone - so an in-flight file (explicit null stamp) must not match its own
+      // substitution, or it would refuse every later message on the keyless stage the fallback exists
+      // for. A file completed before the stamp field existed carries NO stamp at all, yet its label
+      // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
+      // excludes. The completion stamp writes the real label and this timestamp in one transaction,
+      // and re-chunking rewrites the label to the requested model and clears the stamp.
+      $or: [
+        { chunkEmbeddingModelStampedAt: { $ne: null } },
+        { chunkEmbeddingModelStampedAt: { $exists: false } },
+      ],
+      deletedAt: null,
+    });
+    return hit !== null;
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
