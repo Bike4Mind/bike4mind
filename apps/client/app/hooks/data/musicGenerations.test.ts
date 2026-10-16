@@ -224,11 +224,13 @@ describe('useCancelMusicGeneration', () => {
 
   it('treats a 409 without that code as an ordinary failure', async () => {
     h.post.mockRejectedValue(axiosError(409, {}));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
     await act(async () => {
       await result.current.mutateAsync('music-1').catch(() => undefined);
     });
     expect(h.toastError).toHaveBeenCalledWith('Could not cancel the song. Try again.');
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });
 
