@@ -61,7 +61,7 @@ const CreditsModal = ({ open, onClose }: CreditsModalProps) => {
   );
 };
 
-const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
+export const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
   transactions,
   onClose,
 }) => {

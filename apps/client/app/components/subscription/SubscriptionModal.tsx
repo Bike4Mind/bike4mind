@@ -80,7 +80,7 @@ const SubscriptionModal = ({ open, onClose }: SubscriptionModalProps) => {
   );
 };
 
-const SubscriptionModalContent = () => {
+export const SubscriptionModalContent = () => {
   const { t } = useTranslation();
   const theme = useTheme();
   const [selectedTab, setSelectedTab] = useState<SubscriptionModalTabs>(SubscriptionModalTabs.Personal);

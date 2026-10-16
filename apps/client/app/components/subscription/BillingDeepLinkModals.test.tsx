@@ -24,14 +24,17 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => mocks.creditsEnabled }));
 
-type ModalProps = { open: boolean; onClose: () => void };
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (_key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : _key) }),
+}));
+vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [] }) }));
 vi.mock('@client/app/components/subscription/CreditsModal', () => ({
-  default: ({ open, onClose }: ModalProps) =>
-    open ? <button data-testid="credits-modal-close-btn" onClick={onClose} /> : null,
+  CreditsModalContent: ({ onClose }: { onClose: () => void }) => (
+    <button data-testid="credits-modal-close-btn" onClick={onClose} />
+  ),
 }));
 vi.mock('@client/app/components/subscription/SubscriptionModal', () => ({
-  default: ({ open, onClose }: ModalProps) =>
-    open ? <button data-testid="plans-modal-close-btn" onClick={onClose} /> : null,
+  SubscriptionModalContent: () => <div data-testid="plans-panel" />,
 }));
 
 describe('BillingDeepLinkModals', () => {
@@ -44,34 +47,52 @@ describe('BillingDeepLinkModals', () => {
   it('opens nothing without the billing param', () => {
     render(<BillingDeepLinkModals />);
     expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('plans-modal-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
   });
 
   it('opens the credits modal for ?billing=credits', () => {
     setLocation('?billing=credits');
     render(<BillingDeepLinkModals />);
     expect(screen.getByTestId('credits-modal-close-btn')).toBeInTheDocument();
-    expect(screen.queryByTestId('plans-modal-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
   });
 
-  it('opens the plans modal for ?billing=plans', () => {
+  it('opens the plans tab for ?billing=plans', () => {
     setLocation('?billing=plans');
     render(<BillingDeepLinkModals />);
-    expect(screen.getByTestId('plans-modal-close-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('plans-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-tab-plans')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
+  });
+
+  it('selects the credits tab for ?billing=credits', () => {
+    setLocation('?billing=credits');
+    render(<BillingDeepLinkModals />);
+    expect(screen.getByTestId('billing-tab-credits')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('renders both tabs and switching replaces the billing param, keeping the rest of the URL', () => {
+    setLocation('?projectId=p1&billing=credits', 'top');
+    render(<BillingDeepLinkModals />);
+    expect(screen.getByTestId('billing-tab-credits')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-tab-plans')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('billing-tab-plans'));
+    expect(mocks.replace).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=plans#top');
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 
   it('ignores an unknown view', () => {
     setLocation('?billing=bogus');
     render(<BillingDeepLinkModals />);
     expect(screen.queryByTestId('credits-modal-close-btn')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('plans-modal-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
   });
 
   it('stays closed when credits are not enforced', () => {
     mocks.creditsEnabled = false;
     setLocation('?billing=plans');
     render(<BillingDeepLinkModals />);
-    expect(screen.queryByTestId('plans-modal-close-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-panel')).not.toBeInTheDocument();
   });
 
   it('closing strips only the billing param, keeping the rest of the URL', () => {

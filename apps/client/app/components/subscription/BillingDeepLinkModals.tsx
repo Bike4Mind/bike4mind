@@ -1,5 +1,4 @@
-import CreditsModal from '@client/app/components/subscription/CreditsModal';
-import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
+import BillingModal from '@client/app/components/subscription/BillingModal';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import {
   BILLING_SEARCH_PARAM,
@@ -30,24 +29,28 @@ export function useBillingView() {
 
   const openView = useCallback((next: BillingView) => router.history.push(hrefFor(next)), [router, hrefFor]);
   const closeView = useCallback(() => router.history.replace(hrefFor(undefined)), [router, hrefFor]);
+  // Tab switches replace the entry so Back leaves the modal rather than stepping through tabs.
+  const switchView = useCallback((next: BillingView) => router.history.replace(hrefFor(next)), [router, hrefFor]);
 
-  return { view, openView, closeView };
+  return { view, openView, closeView, switchView };
 }
 
 /**
- * App-shell host for the credits and plans modals, opened by `?billing=credits|plans`. Mounted
- * once in the layout route (router.tsx); the profile menu opens them by writing the same param,
+ * App-shell host for the tabbed billing modal, opened by `?billing=credits|plans`. Mounted
+ * once in the layout route (router.tsx); the profile menu opens it by writing the same param,
  * so every open state has a URL.
  */
 const BillingDeepLinkModals = () => {
-  const { view, closeView } = useBillingView();
+  const { view, closeView, switchView } = useBillingView();
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
   return (
-    <>
-      <CreditsModal open={isCreditsEnabled && view === 'credits'} onClose={closeView} />
-      <SubscriptionModal open={isCreditsEnabled && view === 'plans'} onClose={closeView} />
-    </>
+    <BillingModal
+      open={isCreditsEnabled && !!view}
+      view={view ?? 'credits'}
+      onViewChange={switchView}
+      onClose={closeView}
+    />
   );
 };
 
