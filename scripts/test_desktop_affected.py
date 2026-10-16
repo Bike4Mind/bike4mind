@@ -53,6 +53,14 @@ class DesktopAffectedTest(unittest.TestCase):
         self.commit('fix: shared', 'b4m-core/leaf/src/index.ts')
         self.assertTrue(affected(self.base, 'HEAD'))
 
+    def test_desktop_docs_only_skips(self):
+        self.commit('docs(desktop): document integration', 'apps/desktop/SPARKLE-INTEGRATION.md')
+        self.assertFalse(affected(self.base, 'HEAD'))
+
+    def test_desktop_runtime_change_runs(self):
+        self.commit('fix(desktop): update runtime', 'apps/desktop/src/main/index.ts')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
     def test_unrelated_lock_resolution_skips(self):
         self.lock['packages']['web-only@1.0.0'] = {'resolution': {'integrity': 'changed'}}
         self.lock['importers']['apps/client']['dependencies']['web-only']['version'] = '2.0.0'

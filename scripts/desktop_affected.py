@@ -131,6 +131,8 @@ def affected(base, head):
         return True
     roots = old_roots | new_roots
     for path in paths:
+        if path.endswith(('.md', '.mdx')):
+            continue
         if any(path.startswith(folder + '/') for folder in roots):
             return True
         if path.startswith(('scripts/desktop_', 'scripts/test_desktop_', '.github/workflows/desktop-release.')):
