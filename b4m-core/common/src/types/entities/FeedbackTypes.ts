@@ -157,6 +157,28 @@ export interface FeedbackDeliveryResult {
   channels: Record<FeedbackDeliveryChannel, FeedbackChannelDelivery>;
 }
 
+/**
+ * Whether anything actually went WRONG delivering a report - which is not the same question as
+ * `delivered`, and is the one a submitter's confirmation line wants answered.
+ *
+ * `delivered` is false both when a channel threw and when every channel was deliberately skipped
+ * (feedback-to-Slack switched off, no recipients configured, a non-production stage an operator
+ * has not opted in). Reading `delivered === false` as failure tells a user on staging that "we
+ * could not notify the team" on every single send, though nothing failed and the report is sitting
+ * on the admin Feedback page - and it contradicts postFeedbackToSlack, which logs the same
+ * `nonprod_unconfigured` skip as a warning precisely because it is the expected default.
+ *
+ * So: only an `outcome: 'failed'` channel is a failure. A reply with no `delivery` at all (a
+ * rolling deploy answering from an instance that predates the field) is not news either.
+ */
+export function feedbackDeliveryFailed(delivery?: {
+  channels?: Partial<Record<FeedbackDeliveryChannel, { outcome?: string } | undefined>>;
+}): boolean {
+  const channels = delivery?.channels;
+  if (!channels) return false;
+  return Object.values(channels).some(channel => channel?.outcome === 'failed');
+}
+
 /** POST /api/feedback response: the saved document plus how far delivery got.
  * `contentTruncated` is echoed here (not read off the document itself - it lives on the
  * FeedbackText sibling, not FeedbackModel) so a caller can tell the submitter their text was cut. */
