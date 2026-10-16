@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
 
 // Just enough of the menu's data hooks to render it; none of these rows are under test here.
@@ -229,7 +230,7 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     expect(screen.queryByTestId('profile-menu-billing')).not.toBeInTheDocument();
   });
 
-  it('has no Inbox or Your feedback rows, and Invite sits directly under Teams', () => {
+  it('keeps Inbox and Your feedback out of the top level, and Invite sits directly under Teams', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-more'));
     expect(screen.queryByTestId('profile-more-inbox')).not.toBeInTheDocument();
@@ -420,16 +421,32 @@ describe('ProfileMenu - Connections', () => {
     ).toBeInTheDocument();
   });
 
-  it('lists API Keys directly above API Docs in More and opens the API Keys tab', () => {
+  it('lists API Keys, Your feedback, then API Docs in More and opens the API Keys tab', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-more'));
     const keys = screen.getByTestId('profile-more-api-keys');
-    expect(keys.nextElementSibling).toBe(screen.getByTestId('profile-more-api-docs'));
+    const feedback = screen.getByTestId('profile-more-feedback');
+    expect(keys.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(screen.getByTestId('profile-more-api-docs'));
 
     fireEvent.click(keys);
     expect(router.navigate).toHaveBeenCalledWith({
       to: '/integrations',
       search: { tab: 'api-keys', source: 'profile_menu' },
+    });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('opens the personal feedback rollup with the default window from More', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    const feedback = screen.getByTestId('profile-more-feedback');
+    expect(feedback).toHaveTextContent('Your feedback');
+
+    fireEvent.click(feedback);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: '/feedback/rollup',
+      search: defaultFeedbackRollupWindow(),
     });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
   });

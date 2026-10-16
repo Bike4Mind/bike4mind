@@ -22,6 +22,7 @@ import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { greenAlpha } from '@client/app/utils/themes/colors';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -40,6 +41,7 @@ import GavelIcon from '@mui/icons-material/GavelOutlined';
 import CookieOutlinedIcon from '@mui/icons-material/CookieOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
@@ -705,6 +707,17 @@ const ProfileMenu = () => {
                   onClick={() => {
                     navigateFromMenu('/integrations', () =>
                       navigate({ to: '/integrations', search: { tab: 'api-keys', source: 'profile_menu' } })
+                    );
+                  }}
+                />
+                <MenuRow
+                  testId="profile-more-feedback"
+                  icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+                  label={t('feedback.rollupTitle', 'Your feedback')}
+                  onClick={() => {
+                    // The route's search type requires both window bounds, so hand over the default.
+                    navigateFromMenu('/feedback/rollup', () =>
+                      navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() })
                     );
                   }}
                 />
