@@ -1,5 +1,6 @@
 import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox';
 import MessageIcon from '@mui/icons-material/Message';
 import { Box, Badge } from '@mui/joy';
@@ -14,6 +15,8 @@ import { useTranslation } from 'react-i18next';
 import { useGetInbox } from '@client/app/hooks/data/inbox';
 import { useGetUserInvites } from '@client/app/hooks/data/invites';
 import { useMemo } from 'react';
+import FeedbackRollupView from '@client/app/components/feedback/FeedbackRollupView';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 
 export enum InboxTabList {
   Messages = 'Messages',
@@ -68,7 +71,7 @@ const InboxTabs: FC = () => {
         >
           <Tab
             sx={{
-              width: '50%',
+              width: '33.33%',
               height: '48px',
               borderTopLeftRadius: '12px',
               borderTopRightRadius: '12px',
@@ -95,6 +98,7 @@ const InboxTabs: FC = () => {
             }}
             color="primary"
             variant={'soft'}
+            data-testid="inbox-tab-messages"
           >
             <Badge size="sm" color="danger" invisible={!hasUnreadMessages} sx={{ mr: 1 }}>
               <MessageIcon />
@@ -103,7 +107,7 @@ const InboxTabs: FC = () => {
           </Tab>
           <Tab
             sx={{
-              width: '50%',
+              width: '33.33%',
               height: '48px',
               borderTopLeftRadius: '12px',
               borderTopRightRadius: '12px',
@@ -129,11 +133,45 @@ const InboxTabs: FC = () => {
             }}
             color="primary"
             variant={'soft'}
+            data-testid="inbox-tab-invites"
           >
             <Badge size="sm" color="danger" invisible={!hasPendingInvites} sx={{ mr: 1 }}>
               <ForwardToInboxIcon />
             </Badge>
             {t('inbox.invites')}
+          </Tab>
+          <Tab
+            sx={{
+              width: '33.33%',
+              height: '48px',
+              borderTopLeftRadius: '12px',
+              borderTopRightRadius: '12px',
+              borderBottomLeftRadius: 0,
+              borderBottomRightRadius: 0,
+              borderBottom: '1px solid',
+              borderBottomColor: 'inbox.border.light',
+              backgroundColor: theme => theme.vars.palette.primary.softBg,
+              color: theme => theme.vars.palette.text.primary,
+              position: 'relative',
+              zIndex: 2,
+              '&[aria-selected="false"]': {
+                backgroundColor: 'transparent',
+                color: 'inbox.text.disabledTab',
+                zIndex: 1,
+              },
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 1.5,
+              fontWeight: '400',
+              fontSize: '16px',
+            }}
+            color="primary"
+            variant={'soft'}
+            data-testid="inbox-tab-feedback"
+          >
+            <FeedbackOutlinedIcon sx={{ mr: 1 }} />
+            {t('feedback.rollupTitle', 'Your feedback')}
           </Tab>
         </TabList>
 
@@ -143,6 +181,10 @@ const InboxTabs: FC = () => {
 
         <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0 }} value={1}>
           {currentUser && <Invites />}
+        </TabPanel>
+
+        <TabPanel sx={{ padding: 0, flex: 1, minHeight: 0, overflow: 'auto' }} value={2}>
+          {inboxIndex === 2 && <FeedbackRollupView {...defaultFeedbackRollupWindow()} />}
         </TabPanel>
       </Tabs>
     </Box>

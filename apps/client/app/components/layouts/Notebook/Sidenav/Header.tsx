@@ -8,6 +8,9 @@ import CloseIcon from '@mui/icons-material/Close';
 import FirstPageIcon from '@mui/icons-material/FirstPage';
 import KeyboardTabIcon from '@mui/icons-material/KeyboardTab';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import InboxBadge from '@client/app/components/inbox/Badge';
+import { useInbox } from '@client/app/contexts/InboxContext';
 import { AspectRatio, Box, IconButton, Tooltip } from '@mui/joy';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useTranslation } from 'react-i18next';
@@ -84,6 +87,22 @@ const SideNavHeader = () => {
         </Tooltip>
       </AspectRatio>
       <Box className="notebook-sidenav-header-actions" display="flex" gap="10px">
+        <Tooltip title={t('inbox.title', 'Inbox')}>
+          <IconButton
+            aria-label={t('inbox.title', 'Inbox')}
+            data-testid="sidenav-header-inbox-btn"
+            className="notebook-sidenav-header-inbox-button"
+            sx={{ width: '36px', height: '36px', borderRadius: '8px' }}
+            variant={'outlined'}
+            color={'neutral'}
+            onClick={() => useInbox.getState().setOpen(true)}
+          >
+            <InboxBadge>
+              <MailOutlineIcon sx={{ fontSize: '18px' }} />
+            </InboxBadge>
+          </IconButton>
+        </Tooltip>
+
         <Tooltip title={t('whatsNew')}>
           <IconButton
             aria-label={t('whatsNew')}

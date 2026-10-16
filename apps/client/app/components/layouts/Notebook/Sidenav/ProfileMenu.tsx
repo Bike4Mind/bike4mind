@@ -5,10 +5,8 @@ import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
-import InboxBadge from '@client/app/components/inbox/Badge';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
-import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -29,7 +27,6 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccountsOutlined';
-import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import BusinessIcon from '@mui/icons-material/BusinessOutlined';
 import MonetizationOnIcon from '@mui/icons-material/MonetizationOnOutlined';
 import Brightness4Icon from '@mui/icons-material/Brightness4Outlined';
@@ -42,8 +39,6 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import CookieOutlinedIcon from '@mui/icons-material/CookieOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
-import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
-import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
@@ -235,7 +230,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
 
 /**
  * Bottom-of-sidebar profile control: an always-visible card (avatar + name + account type) that
- * expands upward into the account switcher and account menu (Profile, Inbox, Teams, Billing,
+ * expands upward into the account switcher and account menu (Profile, Teams, Invite, Billing,
  * Help Center, Theme toggle, a "More" flyout, and Log Out). Replaces the old
  * footer icon row + the top AccountSelector dropdown.
  */
@@ -265,7 +260,6 @@ const ProfileMenu = () => {
   const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
-  const { setOpen: setInboxOpen } = useInbox.getState();
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
@@ -483,23 +477,20 @@ const ProfileMenu = () => {
             </Box>
           </Tooltip>
           <MenuRow
-            testId="profile-menu-feedback-rollup"
-            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
-            label={t('feedback.rollupTitle', 'Your feedback')}
-            onClick={() => {
-              // The route fills a missing window itself, but its search type requires both bounds,
-              // so the menu hands over the same default rather than a bare link.
-              navigateFromMenu('/feedback/rollup', () =>
-                navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() })
-              );
-            }}
-          />
-          <MenuRow
             testId="profile-menu-teams"
             icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
             label={t('organization.teams', 'Teams')}
             onClick={() => {
               navigateFromMenu('/organizations', () => navigate({ to: '/organizations' }));
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-invite"
+            icon={<PersonAddIcon sx={{ fontSize: '18px' }} />}
+            label={t('inviteLong', 'Invite a friend')}
+            onClick={() => {
+              closeToTrigger();
+              toggleReferralModal();
             }}
           />
           {isCreditsEnabled && (
@@ -615,17 +606,15 @@ const ProfileMenu = () => {
               icon={<FormatListBulletedIcon sx={{ fontSize: '18px' }} />}
               label={t('common.more', 'More')}
               endDecorator={
-                <InboxBadge>
-                  <ChevronLeftIcon
-                    sx={{
-                      fontSize: '18px',
-                      color: 'text.tertiary',
-                      transition: 'transform 0.2s ease',
-                      // Points right when closed; rotates to the open (left) state on expand.
-                      transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
-                    }}
-                  />
-                </InboxBadge>
+                <ChevronLeftIcon
+                  sx={{
+                    fontSize: '18px',
+                    color: 'text.tertiary',
+                    transition: 'transform 0.2s ease',
+                    // Points right when closed; rotates to the open (left) state on expand.
+                    transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
+                  }}
+                />
               }
               submenuOpen={moreOpen}
               onClick={() => setMoreOpen(v => !v)}
@@ -648,28 +637,6 @@ const ProfileMenu = () => {
                   zIndex: 10002,
                 })}
               >
-                <MenuRow
-                  testId="profile-more-inbox"
-                  icon={
-                    <InboxBadge>
-                      <MailOutlineIcon sx={{ fontSize: '18px' }} />
-                    </InboxBadge>
-                  }
-                  label={t('inbox.title', 'Inbox')}
-                  onClick={() => {
-                    closeToTrigger();
-                    setInboxOpen(true);
-                  }}
-                />
-                <MenuRow
-                  testId="profile-more-invite"
-                  icon={<PersonAddIcon sx={{ fontSize: '18px' }} />}
-                  label={t('inviteShort', 'Invite')}
-                  onClick={() => {
-                    closeToTrigger();
-                    toggleReferralModal();
-                  }}
-                />
                 <MenuRow
                   testId="profile-more-about"
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
@@ -837,17 +804,13 @@ const ProfileMenu = () => {
           '&:focus-visible': { outline: `2px solid ${theme2.palette.primary[500]}`, outlineOffset: '2px' },
         })}
       >
-        {/* InboxBadge keeps the unread indicator visible on the always-mounted card (parity with
-            the old footer, where the collapsed menu button carried it) — not just inside the panel. */}
-        <InboxBadge>
-          <Avatar
-            size="md"
-            src={currentUser?.photoUrl ?? undefined}
-            sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}
-          >
-            {currentUser?.name?.charAt(0)?.toUpperCase()}
-          </Avatar>
-        </InboxBadge>
+        <Avatar
+          size="md"
+          src={currentUser?.photoUrl ?? undefined}
+          sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}
+        >
+          {currentUser?.name?.charAt(0)?.toUpperCase()}
+        </Avatar>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="title-sm" sx={{ fontWeight: 700 }} noWrap>
             {currentUser?.name}

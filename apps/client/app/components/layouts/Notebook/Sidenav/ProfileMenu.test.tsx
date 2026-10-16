@@ -229,6 +229,18 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     expect(screen.queryByTestId('profile-menu-billing')).not.toBeInTheDocument();
   });
 
+  it('has no Inbox or Your feedback rows, and Invite sits directly under Teams', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    expect(screen.queryByTestId('profile-more-inbox')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-more-invite')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-feedback-rollup')).not.toBeInTheDocument();
+    const teams = screen.getByTestId('profile-menu-teams');
+    const invite = screen.getByTestId('profile-menu-invite');
+    expect(invite).toHaveTextContent('Invite a friend');
+    expect(teams.nextElementSibling).toBe(invite);
+  });
+
   it('opens the credits view through the URL', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-billing'));
@@ -312,7 +324,7 @@ describe('ProfileMenu - keyboard', () => {
     more.focus();
     fireEvent.keyDown(more, { key: 'ArrowRight' });
     expect(more.getAttribute('aria-expanded')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-about'));
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
     expect(screen.queryByTestId('profile-menu-more-flyout')).not.toBeInTheDocument();
     expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
@@ -483,7 +495,7 @@ describe('ProfileMenu - roles and keyboard details', () => {
     more.focus();
     expect(more.getAttribute('aria-expanded')).toBe('true');
     fireEvent.keyDown(more, { key: 'ArrowRight' });
-    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-about'));
   });
 
   it('hands focus to the trigger before a non-billing row opens a new tab', () => {
