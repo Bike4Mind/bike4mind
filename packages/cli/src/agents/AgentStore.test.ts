@@ -145,9 +145,12 @@ describe('retiring and retired aliases', () => {
   });
 
   it('does not resolve prototype keys as aliases', () => {
-    const result = resolveModelAlias('constructor', 'test-agent', '/test/path.md');
-    expect(result.resolved).toBe(false);
-    expect(result.model).toBe(DEFAULT_AGENT_MODEL);
+    for (const key of ['constructor', 'toString', '__proto__']) {
+      const result = resolveModelAlias(key, 'test-agent', '/test/path.md');
+      expect(result.resolved, `${key} must not resolve`).toBe(false);
+      expect(result.model).toBe(DEFAULT_AGENT_MODEL);
+      expect(result.warning).toContain('Unknown model');
+    }
   });
 
   it('a retired alias that looks like a full id still warns rather than passing through', () => {
@@ -285,8 +288,11 @@ describe('resolveModelAlias', () => {
     });
 
     it('should pass through full GPT model IDs', () => {
-      expect(resolveModelAlias('gpt-4-turbo', testAgent, testPath).model).toBe('gpt-4-turbo');
+      expect(resolveModelAlias('gpt-5-chat-latest', testAgent, testPath).model).toBe('gpt-5-chat-latest');
       expect(resolveModelAlias('gpt-4.1-2025-04-14', testAgent, testPath).model).toBe('gpt-4.1-2025-04-14');
+      // An undated id keeps passing through after every sunsetting date.
+      const farFuture = new Date('2100-01-01T00:00:00Z');
+      expect(resolveModelAlias('gpt-5-chat-latest', testAgent, testPath, farFuture).model).toBe('gpt-5-chat-latest');
     });
 
     it('should pass through Bedrock model IDs', () => {
