@@ -93,7 +93,8 @@ export const PlansSection = () => {
   const { minSeats: teamMinSeats } = useTeamSeatLimits();
   const teamCreditsPerSeat = useTeamCreditsPerSeat();
   const teamSeatPrice = priceMap?.[ORGANIZATION_SUBSCRIPTION_PRICE_ID];
-  const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : centsToDollars(teamSeatPrice) * teamMinSeats;
+  // Multiplied in integer cents, then converted once, so a whole-dollar total stays an integer ("$70").
+  const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : (teamSeatPrice * teamMinSeats) / 100;
   const teamPlanCredits = teamMinSeats * teamCreditsPerSeat;
   const answerCostReference = useAnswerCostReference();
 

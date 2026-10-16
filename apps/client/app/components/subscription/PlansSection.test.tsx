@@ -28,6 +28,7 @@ const USER_ID = 'user_1';
 
 let subscriptions: IUserSubscription[] = [];
 let teamPriceActive = true;
+let teamUnitAmount = 3000;
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
@@ -40,7 +41,9 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () => ({
     data: [
       { id: PRICE_ID, active: true, unit_amount: 1500 },
-      ...(teamPriceActive ? [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: 3000 }] : []),
+      ...(teamPriceActive
+        ? [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: teamUnitAmount }]
+        : []),
     ],
     isPending: false,
   }),
@@ -199,6 +202,18 @@ describe('PlansSection - Team tab', () => {
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
     expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
     expect(screen.getByText('Up to 4 people at one flat price')).toBeInTheDocument();
+  });
+
+  it('quotes a whole-dollar team total without cents', async () => {
+    teamUnitAmount = 1400;
+    settingValues = { enableTeamPlan: true, teamPlanMinSeats: 5, teamPlanCreditsPerSeat: 1000 };
+    try {
+      renderSection();
+      await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
+      expect(screen.getByText('$70')).toBeInTheDocument();
+    } finally {
+      teamUnitAmount = 3000;
+    }
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {
