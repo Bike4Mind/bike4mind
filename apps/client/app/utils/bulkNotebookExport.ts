@@ -33,7 +33,7 @@ export interface ExportedChatMessage {
   prompt: string;
   replies?: string[];
   promptMeta?: {
-    model?: { name: string };
+    model?: { name: string; answeredBy?: string };
     tokenUsage?: {
       inputTokens?: number;
       outputTokens?: number;

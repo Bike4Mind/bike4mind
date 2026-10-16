@@ -105,7 +105,7 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   if (promptMeta.model?.name !== undefined) {
     lines.push(`Model: ${escapeLine(promptMeta.model.name)}`);
   }
-  if (promptMeta.model?.answeredBy) {
+  if (promptMeta.model?.answeredBy && promptMeta.model.answeredBy !== promptMeta.model.name) {
     lines.push(`Answered by: ${escapeLine(promptMeta.model.answeredBy)}`);
   }
 

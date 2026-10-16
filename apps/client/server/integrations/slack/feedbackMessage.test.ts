@@ -46,6 +46,11 @@ describe('buildPromptMetaSummary', () => {
     expect(summary).toBe('Model: gemini-2.5-pro\nAnswered by: gemini-3.5-flash');
   });
 
+  it('does not repeat the model name when a fallback hop left answeredBy equal to name', () => {
+    const summary = buildPromptMetaSummary({ model: { name: 'gpt-5', answeredBy: 'gpt-5' } });
+    expect(summary).toBe('Model: gpt-5');
+  });
+
   it('returns "none" for an undefined promptMeta', () => {
     expect(buildPromptMetaSummary(undefined)).toBe('none');
   });
