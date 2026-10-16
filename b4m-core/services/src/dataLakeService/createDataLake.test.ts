@@ -295,6 +295,8 @@ describe('previewDataLakeSlug', () => {
       },
     };
     await expect(previewDataLakeSlug(db as never, 'Vendor Contracts', 'org-1')).resolves.toBe('vendor-contracts-1');
+    // Unscoped on purpose: the org scope does not hold the slug, only the moved lake's tag does.
+    expect(db.dataLakes.find).toHaveBeenCalledWith({ datalakeTag: 'datalake:org-1:vendor-contracts' });
   });
 
   it('lowercases a mixed-case name, as create does', async () => {
