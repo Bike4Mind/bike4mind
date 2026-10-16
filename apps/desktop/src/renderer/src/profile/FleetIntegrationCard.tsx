@@ -57,7 +57,8 @@ function connectionNote(state: FleetState): string | null {
 /**
  * Shares aggregate activity with your team's Fleet, through the connection Fleet's installer
  * sets up. Sharing is off until the user turns it on. What is shared is metadata only: reply and
- * tool durations, tool categories and the repository a project works in.
+ * tool durations, tool categories, the repository a project works in, and the model and credits
+ * each reply used.
  */
 export function FleetIntegrationCard() {
   const state = useFleetState();
@@ -88,8 +89,9 @@ export function FleetIntegrationCard() {
         </Chip>
       </Stack>
       <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 1.5 }}>
-        Share aggregate activity with your team&apos;s Fleet: reply and tool durations, tool categories and the
-        repository a project works in. Never messages, prompts, file contents, commands or paths.
+        Share aggregate activity with your team&apos;s Fleet: reply and tool durations, tool categories, the repository
+        a project works in, and the model, tokens and credits each reply used. Never messages, prompts, file contents,
+        commands or paths.
       </Typography>
 
       <Stack spacing={1.25}>

@@ -9,6 +9,10 @@ import {
   type ActivityEvent,
 } from './activityContract';
 import type { RepositoryName } from './repository';
+import { mergeTotals, toReplyUsage, usageTotals, type UsageTotals } from './replyUsage';
+
+/** Replies whose reported usage is remembered, so a resumed reply adds only what is new. */
+const MAX_REPORTED_REPLIES = 200;
 
 export interface ActivityRecorderDeps {
   /** False while consent is off or no key is set; nothing is derived or looked up then. */
@@ -16,25 +20,32 @@ export interface ActivityRecorderDeps {
   record(events: ActivityEvent[]): void;
   /** The repository a conversation works in, or null. */
   repositoryFor(sessionId: string): Promise<RepositoryName | null>;
+  /** The model a conversation is on, or null. Asked when a reply starts. */
+  modelFor(sessionId: string): Promise<string | null>;
   now?(): number;
   newId?(): string;
 }
 
 interface OpenTurn {
   sessionId: string;
+  messageId: string;
   startedAt: number;
   edited: boolean;
+  model: Promise<string | null>;
+  /** The latest running total the stream reported, kept for a reply that ends in an error. */
+  usage: UsageTotals | null;
 }
 
 /**
  * Turns the chat stream into Fleet activity: one `session` event per reply with its duration,
- * one `tool` event per tool call by category, and one `repository` event per reply in a
- * project whose origin remote names a repository.
+ * the model and the tokens and credits it used, one `tool` event per tool call by category, and
+ * one `repository` event per reply in a project whose origin remote names a repository.
  *
  * Metadata only. A reply's text, a tool's name, input and output, and every path stay here.
  */
 export class ActivityRecorder {
   private readonly turns = new Map<string, OpenTurn>();
+  private readonly reported = new Map<string, UsageTotals>();
 
   constructor(private readonly deps: ActivityRecorderDeps) {}
 
@@ -55,7 +66,20 @@ export class ActivityRecorder {
 
     if (event.type === 'start') {
       this.prune();
-      this.turns.set(event.messageId, { sessionId: event.sessionId, startedAt: this.now(), edited: false });
+      this.turns.set(event.messageId, {
+        sessionId: event.sessionId,
+        messageId: event.messageId,
+        startedAt: this.now(),
+        edited: false,
+        model: this.deps.modelFor(event.sessionId).catch(() => null),
+        usage: null,
+      });
+      return;
+    }
+
+    if (event.type === 'usage') {
+      const turn = this.turns.get(event.messageId);
+      if (turn) turn.usage = usageTotals(event.usage);
       return;
     }
 
@@ -83,15 +107,26 @@ export class ActivityRecorder {
       const turn = this.turns.get(event.messageId);
       if (!turn) return;
       this.turns.delete(event.messageId);
-      void this.closeTurn(turn);
+      const final = event.type === 'done' ? event.usage : undefined;
+      void this.closeTurn(turn, final ? usageTotals(final) : turn.usage);
     }
   }
 
-  private async closeTurn(turn: OpenTurn): Promise<void> {
+  private async closeTurn(turn: OpenTurn, totals: UsageTotals | null): Promise<void> {
     const occurredAt = new Date(turn.startedAt).toISOString();
     const durationMs = clampDuration(this.now() - turn.startedAt);
+    const before = this.reported.get(turn.messageId);
+    const usage = totals ? toReplyUsage(await turn.model, totals, before) : null;
+    if (totals) this.remember(turn.messageId, before ? mergeTotals(before, totals) : totals);
     const events: ActivityEvent[] = [
-      { eventId: this.id(), occurredAt, durationMs, type: 'session', sessionId: turn.sessionId },
+      {
+        eventId: this.id(),
+        occurredAt,
+        durationMs,
+        type: 'session',
+        sessionId: turn.sessionId,
+        ...(usage ? { usage } : {}),
+      },
     ];
     const repository = await this.deps.repositoryFor(turn.sessionId).catch(() => null);
     if (repository) {
@@ -105,6 +140,15 @@ export class ActivityRecorder {
       });
     }
     if (this.deps.enabled()) this.deps.record(events);
+  }
+
+  private remember(messageId: string, totals: UsageTotals): void {
+    this.reported.delete(messageId);
+    this.reported.set(messageId, totals);
+    for (const oldest of this.reported.keys()) {
+      if (this.reported.size <= MAX_REPORTED_REPLIES) break;
+      this.reported.delete(oldest);
+    }
   }
 
   /** A reply that never reported an end must not hold its entry forever. */

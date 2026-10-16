@@ -41,6 +41,18 @@ function attributes(event: ActivityEvent): OtlpAttribute[] {
       str('repository.action', event.repository.action),
     ];
   }
+  if (event.usage) {
+    const u = event.usage;
+    return [
+      ...base,
+      str('model', u.model),
+      int('input_tokens', u.inputTokens),
+      int('output_tokens', u.outputTokens),
+      int('cache_read_tokens', u.cacheReadTokens),
+      int('cache_write_tokens', u.cacheWriteTokens),
+      int('credits_milli', u.creditsMilli),
+    ];
+  }
   return base;
 }
 
