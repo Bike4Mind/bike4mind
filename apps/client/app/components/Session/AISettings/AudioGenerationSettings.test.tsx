@@ -41,4 +41,15 @@ describe('AudioGenerationSettings provider switch', () => {
     expect(useAudioGenSettings.getState().ttsProvider).toBe('elevenlabs');
     expect(useAudioGenSettings.getState().voice).toBe('');
   });
+
+  it('resets a format the new provider cannot produce to mp3, and keeps one it can', () => {
+    useAudioGenSettings.setState({ ttsProvider: 'openai', format: 'flac' });
+    renderSettings();
+    pickProvider('ElevenLabs');
+    expect(useAudioGenSettings.getState().format).toBe('mp3');
+
+    useAudioGenSettings.setState({ ttsProvider: 'openai', format: 'opus' });
+    pickProvider('ElevenLabs');
+    expect(useAudioGenSettings.getState().format).toBe('opus');
+  });
 });

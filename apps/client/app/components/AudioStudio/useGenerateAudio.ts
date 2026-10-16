@@ -101,12 +101,15 @@ export function useGenerateAudio(mode: AudioGenMode) {
   }, [queryClient]);
 
   const notifySaveOutcome = useCallback(
-    (data: GeneratedAudioResponse, kind: AudioKind) => {
+    (data: GeneratedAudioResponse, kind: AudioKind, playerGone: boolean) => {
       if (data.saved === true) {
         refreshFiles();
         toast.success(`${kind} generated and saved to your Files.`);
       } else if (data.saved === false && data.saveSkippedReason) {
         toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
+      } else if (playerGone) {
+        // Unsaved and its blob already revoked: there is no copy left anywhere, so "generated" alone would mislead.
+        toast.warning(`${kind} finished after you left, but it was not saved to your Files.`);
       } else {
         toast.success(`${kind} generated.`);
       }
@@ -161,7 +164,8 @@ export function useGenerateAudio(mode: AudioGenMode) {
 
         const data = response.data;
         const playable = toPlayableAudio(data);
-        if (mountedRef.current) {
+        const playerGone = !mountedRef.current;
+        if (!playerGone) {
           if (playable.isObjectUrl) objectUrlRef.current = playable.url;
           setResult({
             ...playable,
@@ -186,7 +190,7 @@ export function useGenerateAudio(mode: AudioGenMode) {
           );
         }
 
-        notifySaveOutcome(data, mode === 'tts' ? 'Audio' : 'Sound effect');
+        notifySaveOutcome(data, mode === 'tts' ? 'Audio' : 'Sound effect', playerGone);
       } catch (error) {
         const parsed = parseError(error);
 

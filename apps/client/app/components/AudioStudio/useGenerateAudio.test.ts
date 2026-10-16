@@ -8,6 +8,7 @@ const { mocks } = vi.hoisted(() => ({
     toastInfo: vi.fn(),
     toastError: vi.fn(),
     toastSuccess: vi.fn(),
+    toastWarning: vi.fn(),
     getState: vi.fn(),
     invalidateQueries: vi.fn(),
   },
@@ -18,6 +19,7 @@ vi.mock('sonner', () => ({
     info: (...a: unknown[]) => mocks.toastInfo(...a),
     error: (...a: unknown[]) => mocks.toastError(...a),
     success: (...a: unknown[]) => mocks.toastSuccess(...a),
+    warning: (...a: unknown[]) => mocks.toastWarning(...a),
   },
 }));
 
@@ -298,6 +300,49 @@ describe('useGenerateAudio unmount', () => {
 
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
     expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: fabFileKeys.all });
-    expect(result.current.result).toBeNull();
+    // No player is left to own the blob, so the settle path frees it instead of storing it.
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio');
+  });
+
+  describe('a clip that settles after the tab unmounted', () => {
+    const settleAfterUnmount = async (data: Record<string, unknown>) => {
+      let settle: (value: unknown) => void = () => {};
+      mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+      const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+      let pending: Promise<void> = Promise.resolve();
+      act(() => {
+        pending = result.current.generate('hello');
+      });
+      unmount();
+      await act(async () => {
+        settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', ...data } });
+        await pending;
+      });
+    };
+
+    it('warns that an unsaved clip is gone rather than calling it generated', async () => {
+      await settleAfterUnmount({ saved: false });
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Audio finished after you left, but it was not saved to your Files.'
+      );
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it('still explains why the save was skipped', async () => {
+      await settleAfterUnmount({ saved: false, saveSkippedReason: 'storage_limit' });
+
+      expect(mocks.toastInfo).toHaveBeenCalledWith(
+        'Audio generated, but your storage is full so it was not saved to Files.'
+      );
+      expect(mocks.toastWarning).not.toHaveBeenCalled();
+    });
+
+    it('still reports a provider fallback', async () => {
+      await settleAfterUnmount({ saved: true, fabFileId: 'fab-4', provider: 'openai', fallbackFrom: 'elevenlabs' });
+
+      expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('was unavailable'));
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
+    });
   });
 });

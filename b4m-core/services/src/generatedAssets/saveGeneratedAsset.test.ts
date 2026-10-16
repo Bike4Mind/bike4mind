@@ -1,6 +1,11 @@
 import { FabFileSourceType, KnowledgeType, StorageLimitError, type GeneratedAssetMetadata } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { saveGeneratedAsset, type SaveGeneratedAssetDeps, type SaveGeneratedAssetParams } from './saveGeneratedAsset';
+import {
+  GENERATED_ASSET_MAX_STORED_TEXT_CHARS as CAP,
+  saveGeneratedAsset,
+  type SaveGeneratedAssetDeps,
+  type SaveGeneratedAssetParams,
+} from './saveGeneratedAsset';
 
 const createFabFile = vi.hoisted(() => vi.fn());
 vi.mock('../fabFileService/create', () => ({ createFabFile }));
@@ -71,12 +76,12 @@ describe('saveGeneratedAsset', () => {
   });
 
   it('caps the stored prompt and lyrics', async () => {
-    const long = 'x'.repeat(5_000);
+    const long = 'x'.repeat(CAP * 2);
     await saveGeneratedAsset(params({ generation: { ...music, prompt: long, lyrics: long } }), deps);
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
-    expect(generation.prompt).toHaveLength(2_000);
-    expect(generation.lyrics).toHaveLength(2_000);
+    expect(generation.prompt).toHaveLength(CAP);
+    expect(generation.lyrics).toHaveLength(CAP);
     // Marks the prefix incomplete, so a surface reusing the text can say so instead of generating
     // from half of it.
     expect(generation.promptTruncated).toBe(true);
@@ -90,11 +95,19 @@ describe('saveGeneratedAsset', () => {
   });
 
   it('treats a prompt of exactly the cap as kept whole', async () => {
-    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(2_000) } }), deps);
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) } }), deps);
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
-    expect(generation.prompt).toHaveLength(2_000);
+    expect(generation.prompt).toHaveLength(CAP);
     expect(generation.promptTruncated).toBeUndefined();
+  });
+
+  it('truncates and flags a prompt one character over the cap', async () => {
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(CAP) + 'y' } }), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.prompt).toBe('x'.repeat(CAP));
+    expect(generation.promptTruncated).toBe(true);
   });
 
   it('omits the notebook link when there is no session', async () => {

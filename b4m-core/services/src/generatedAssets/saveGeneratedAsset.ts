@@ -39,7 +39,7 @@ const KEY_PREFIX: Record<Modality, string> = {
 const PROMPT_SNIPPET_CHARS = 40;
 
 // sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is not stored whole.
-const MAX_STORED_TEXT_CHARS = 2_000;
+export const GENERATED_ASSET_MAX_STORED_TEXT_CHARS = 2_000;
 
 export type SaveGeneratedAssetResult =
   | { saved: true; fileId: string; s3Key: string; fileName: string; fileUrl?: string }
@@ -157,12 +157,14 @@ export async function saveGeneratedAsset(
 }
 
 function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMetadata {
-  const prompt = generation.prompt.slice(0, MAX_STORED_TEXT_CHARS);
+  const prompt = generation.prompt.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS);
   return {
     ...generation,
     prompt,
     ...(prompt.length < generation.prompt.length && { promptTruncated: true }),
-    ...(generation.lyrics !== undefined && { lyrics: generation.lyrics.slice(0, MAX_STORED_TEXT_CHARS) }),
+    ...(generation.lyrics !== undefined && {
+      lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
+    }),
   };
 }
 
