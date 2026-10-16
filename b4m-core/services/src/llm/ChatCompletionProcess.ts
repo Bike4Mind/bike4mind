@@ -40,6 +40,8 @@ import {
   QuestErrorCode,
   getQuestErrorCode,
   DEGENERATE_FINISH_REASON,
+  estimateStreamedOutputTokens,
+  MAX_TOOL_CALLS_CEILING,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
@@ -100,6 +102,7 @@ import {
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  buildThinkingParams,
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
@@ -212,9 +215,10 @@ import {
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
-import { ResearchModeService } from './ResearchModeService';
+import { ResearchModeService, researchConfigMaxTokens, type ResearchModeResult } from './ResearchModeService';
 import {
   deductCreditsWithOrgSupport,
+  type DeductCreditsParams,
   subtractCredits,
   getMemberUsedCredits,
   getMemberCreditCap,
@@ -849,6 +853,37 @@ export function computeSettlementDelta(
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
 }
 
+/** One model's share of a turn's usage, priced against the turn's credit reservation. */
+export interface ReservationUsage {
+  modelInfo: ModelInfo;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * The billable usage of a Research-mode turn: each configuration's reported counts, else the turn's
+ * input estimate plus its streamed characters for one that was cut short. A configuration that
+ * streamed nothing and reported nothing never reached a billable state and costs nothing.
+ */
+export function researchModeUsages(
+  results: ResearchModeResult[],
+  models: ModelInfo[],
+  inputTokens: number
+): ReservationUsage[] {
+  return results.flatMap(result => {
+    const modelInfo = models.find(m => m.id === result.model);
+    const reported = result.completionInfo;
+    if (!modelInfo || (!reported && !result.streamedChars)) return [];
+    return [
+      {
+        modelInfo,
+        inputTokens: reported?.inputTokens || inputTokens,
+        outputTokens: reported?.outputTokens || estimateStreamedOutputTokens(result.streamedChars, result.model),
+      },
+    ];
+  });
+}
+
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
@@ -1031,6 +1066,13 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
+  // streamed against it (settleAbortedReservation) instead of refunding the whole hold.
+  private reservationBasis: {
+    modelInfo: ModelInfo;
+    inputTokens: number;
+    organization: DeductCreditsParams['organization'];
+  } | null = null;
 
   // Phase 2: Tool state management
   private toolCacheManager: ToolCacheManager;
@@ -4107,11 +4149,43 @@ export class ChatCompletionProcess {
         // model usually stops far short of, and holding it would gate the turn on a cost
         // it will not incur. See reservationOutputTokens for the under-reservation
         // tradeoff this accepts; settlement below charges actual usage either way.
-        const usdCost = getTextModelCost(
-          modelInfo,
-          inputTokens,
-          reservationOutputTokens(safeMaxTokens, reasonsWithinOutputBudget(modelInfo))
-        );
+        //
+        // Thinking raises the max_tokens the adapter sends past safeMaxTokens (buildThinkingParams),
+        // so the hold and the member cap below are priced on the ceiling actually sent, and a turn
+        // that thinks is held like one that reasons inside its output budget.
+        const sentMaxTokens =
+          thinking?.enabled && modelInfo.can_think
+            ? buildThinkingParams(modelInfo.id, modelInfo, thinking.budget_tokens ?? 16000, safeMaxTokens).maxTokens
+            : safeMaxTokens;
+        // Research mode runs every enabled configuration instead of the primary, so it holds each of
+        // them at the output ceiling it runs with (researchConfigMaxTokens), and the cap below too.
+        const researchCosts = isResearchMode
+          ? researchMode.configurations
+              .filter(config => config.enabled)
+              .map(config => {
+                const configModel = models.find(m => m.id === config.model);
+                if (!configModel) throw new BadRequestError(`Invalid model: "${config.model}" is not available`);
+                const ceiling = researchConfigMaxTokens(config.parameters?.maxTokens, safeMaxTokens, configModel);
+                return {
+                  hold: getTextModelCost(
+                    configModel,
+                    inputTokens,
+                    reservationOutputTokens(ceiling, reasonsWithinOutputBudget(configModel))
+                  ),
+                  ceiling: getTextModelCost(configModel, inputTokens, ceiling),
+                };
+              })
+          : null;
+        const usdCost = researchCosts
+          ? researchCosts.reduce((sum, cost) => sum + cost.hold, 0)
+          : getTextModelCost(
+              modelInfo,
+              inputTokens,
+              reservationOutputTokens(
+                sentMaxTokens,
+                sentMaxTokens > safeMaxTokens || reasonsWithinOutputBudget(modelInfo)
+              )
+            );
         const requiredCredits = usdToCredits(usdCost);
 
         // Determine credit holder (user or org)
@@ -4134,7 +4208,11 @@ export class ChatCompletionProcess {
           // an upper bound on the turn - it prices one round at the uncached input rate on
           // the primary model, so a tool loop, a cache-write turn, or a fallback hop onto
           // pricier pricing can each settle above it.
-          const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens));
+          const capCheckCredits = usdToCredits(
+            researchCosts
+              ? researchCosts.reduce((sum, cost) => sum + cost.ceiling, 0)
+              : getTextModelCost(modelInfo, inputTokens, sentMaxTokens)
+          );
           if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
@@ -4209,6 +4287,7 @@ export class ChatCompletionProcess {
         this.reservedCreditsOwnerId = reservationOwnerId;
         this.reservedCreditsOwnerType = reservationOwnerType;
         this.reservedCreditHolder = holderAfterReservation;
+        this.reservationBasis = { modelInfo, inputTokens, organization };
 
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Credit pre-reservation completed in ${
@@ -4477,6 +4556,17 @@ export class ChatCompletionProcess {
         quest.researchModeResults = researchResults;
         quest.status = successStatus();
 
+        // This branch returns before the normal settlement, so each configuration's usage settles
+        // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
+        if (adminSettingsEnforceCredits && this.reservedCreditsOwnerId) {
+          await this.settleReservation(
+            quest,
+            researchModeUsages(researchResults, models, inputTokens),
+            processStartTime,
+            logger
+          );
+        }
+
         // This early return skips the normal-path cleanup below, so drop the controller entry
         // and the watcher here; the outer finally only clears the interval.
         cleanupAbortController();
@@ -4733,7 +4823,10 @@ export class ChatCompletionProcess {
                   // (strips tools after N rounds so an eager model can't keep re-emitting
                   // capped search/retrieve calls). Set by product surfaces at session
                   // create; the legacy product-flag fallback was retired in M0.5.
-                  ...(session.maxToolCalls != null ? { maxToolCalls: session.maxToolCalls } : {}),
+                  // Clamped as well as schema-bounded: a session stored or cloned before the bound existed.
+                  ...(session.maxToolCalls != null
+                    ? { maxToolCalls: Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING) }
+                    : {}),
                 },
               },
               async (streamedTexts, completionInfo) => {
@@ -6303,6 +6396,14 @@ export class ChatCompletionProcess {
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
 
+      // A Stop or disconnect that threw still bills what streamed; the rollback below then has
+      // nothing left to refund. Any other failure refunds the whole hold.
+      if (this.reservedCredits > 0 && this.reservedCreditsOwnerId && isAbortError(err)) {
+        await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
+          logger.error(`🚨 Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
+        );
+      }
+
       // Rollback reserved credits if we never completed reconciliation
       if (this.reservedCredits > 0 && this.reservedCreditsOwnerId) {
         try {
@@ -6517,6 +6618,123 @@ export class ChatCompletionProcess {
   /**
    * Send Research Mode streaming updates for individual configurations
    */
+  /**
+   * Settle the turn's credit reservation against `usages` outside the normal completion path (a
+   * Research-mode turn, or one ended by a thrown abort): the balance moves by the reservation's
+   * difference from the usage, floored at zero like the main settlement (computeSettlementDelta),
+   * and each usage gets its ledger row and usage event. Clears the reservation, so it settles once.
+   */
+  private async settleReservation(
+    quest: { id: string; sessionId: string },
+    usages: ReservationUsage[],
+    processStartTime: number,
+    logger: Logger,
+    status: 'ok' | 'error' = 'ok'
+  ): Promise<void> {
+    const ownerId = this.reservedCreditsOwnerId;
+    const ownerType = this.reservedCreditsOwnerType;
+    const organization = this.reservationBasis?.organization ?? null;
+    const priced = usages.map(usage => {
+      const costUsd = getTextModelCost(usage.modelInfo, usage.inputTokens, usage.outputTokens);
+      return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
+    });
+    const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0);
+    const { delta, writtenOffCredits } = computeSettlementDelta(
+      this.reservedCredits,
+      totalCredits,
+      this.reservedCreditHolder?.currentCredits ?? 0
+    );
+    const holderMethods = ownerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
+    let holder = this.reservedCreditHolder;
+    if (delta !== 0) holder = await holderMethods.incrementCredits(ownerId, delta);
+    logger.info(
+      `⚖️ Credits settled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCredits}, delta=${delta}`
+    );
+    this.reservedCredits = 0;
+    this.reservedCreditHolder = null;
+    this.reservationBasis = null;
+
+    for (const usage of priced) {
+      this.db.usageEvents
+        ?.record({
+          requestId: quest.id,
+          userId: this.user.id,
+          ownerId,
+          ownerType,
+          sessionId: quest.sessionId,
+          feature: 'chat',
+          provider: usage.modelInfo.backend,
+          model: usage.modelInfo.id,
+          source: 'web',
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          costUsd: usage.costUsd,
+          creditsCharged: usage.credits,
+          writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
+          status,
+          latencyMs: Date.now() - processStartTime,
+        })
+        .catch((usageEventError: unknown) => logger.warn('Failed to record usage event', usageEventError));
+      if (usage.credits <= 0 || !this.db.creditTransactions) continue;
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'text_generation_usage',
+          user: this.user,
+          organization,
+          credits: usage.credits,
+          sessionId: quest.sessionId,
+          questId: quest.id,
+          model: usage.modelInfo.id,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+        },
+        {
+          db: {
+            creditTransactions: this.db.creditTransactions,
+            users: this.db.users,
+            organizations: this.db.organizations,
+          },
+        },
+        { skipBalanceUpdate: true, currentCreditHolder: holder ?? undefined }
+      );
+    }
+  }
+
+  /**
+   * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
+   * reservation on the reserved model's input estimate plus the streamed replies, the same for every
+   * adapter, so a throwing adapter is billed like one that resolves on abort. Nothing streamed means
+   * nothing billable, and the caller's rollback refunds the whole hold.
+   */
+  private async settleAbortedReservation(
+    quest: { id: string; sessionId: string; replies?: string[] | null; reply?: string | null },
+    processStartTime: number,
+    logger: Logger
+  ): Promise<void> {
+    const basis = this.reservationBasis;
+    if (!basis) return;
+    const streamedChars = (quest.replies?.length ? quest.replies : [quest.reply ?? '']).reduce(
+      (sum, reply) => sum + (reply?.length ?? 0),
+      0
+    );
+    if (streamedChars === 0) return;
+    await this.settleReservation(
+      quest,
+      [
+        {
+          modelInfo: basis.modelInfo,
+          inputTokens: basis.inputTokens,
+          outputTokens: estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id),
+        },
+      ],
+      processStartTime,
+      logger,
+      'error'
+    );
+  }
+
   private async sendResearchModeStreamUpdate(
     quest: IChatHistoryItemDocument,
     configurationId: string,

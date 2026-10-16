@@ -316,6 +316,53 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.quests.create).not.toHaveBeenCalled();
   });
 
+  // Research mode runs each enabled configuration's model instead of the primary, so those models
+  // pass the same availability and access gates.
+  describe('research-mode configuration models', () => {
+    const researchBody = (configModel: string, enabled = true) => ({
+      ...bodyFor(SUCCESSOR_ID),
+      researchMode: {
+        enabled: true,
+        configurations: [{ id: 'cfg-1', enabled, model: configModel, parameters: {} }],
+      },
+    });
+    const research = { id: 'research-model', type: 'text', name: 'Research', max_tokens: 100, contextWindow: 1000 };
+
+    it('rejects a disabled configuration model before the quest is created', async () => {
+      mockedGetAvailableModels.mockResolvedValue([
+        successor,
+        { ...research, disabled: true, disabledReason: 'paused' },
+      ] as any);
+
+      await expect(
+        makeInvoke().invoke({ body: researchBody('research-model'), userId: OWNER_ID, authOrigin: 'session' })
+      ).rejects.toThrow('Model "research-model" is currently unavailable: paused');
+      expect(mockDb.quests.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a configuration model the caller has no access to', async () => {
+      mockedGetAvailableModels.mockResolvedValue([successor, research] as any);
+      modelConfigs([{ id: 'research-model', enabled: true, allowedUserTags: ['premium'] }]);
+
+      const invoke = makeInvoke();
+      await invoke.invoke({ body: researchBody('research-model'), userId: OWNER_ID, authOrigin: 'session' });
+
+      expect((invoke as any).questStartParams).toBeNull();
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'error', reply: expect.stringContaining('"research-model" is not accessible') })
+      );
+    });
+
+    it('ignores a disabled configuration that research mode will not run', async () => {
+      mockedGetAvailableModels.mockResolvedValue([successor, { ...research, disabled: true }] as any);
+
+      const invoke = makeInvoke();
+      await invoke.invoke({ body: researchBody('research-model', false), userId: OWNER_ID, authOrigin: 'session' });
+
+      expect((invoke as any).questStartParams).not.toBeNull();
+    });
+  });
+
   it('follows a successor chain to its live end and admits only that model', async () => {
     updateReplacedByOverlay({ [HIDDEN_ID]: 'mid-model', 'mid-model': SUCCESSOR_ID });
     mockedGetAvailableModels.mockResolvedValue([successor] as any);

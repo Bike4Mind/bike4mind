@@ -283,6 +283,34 @@ describe('executeCompletion - serverTools opt-in', () => {
     void users;
   });
 
+  it('settles what streamed before a caller abort instead of refunding the whole hold', async () => {
+    const { db, usageEvents, users } = buildDb();
+    const userApiKeys = { incrementSpend: vi.fn().mockResolvedValue(undefined) };
+    const controller = new AbortController();
+    completeImpl = async onChunk => {
+      await onChunk(['partial answer'], { inputTokens: 200, outputTokens: 25 });
+      controller.abort();
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    };
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db: { ...db, userApiKeys: userApiKeys as any },
+        apiKeyInfo: { keyId: 'key1' } as any,
+        abortSignal: controller.signal,
+        serverTools: [makeServerTool('search_knowledge_base')],
+      })
+    ).rejects.toThrow(/aborted/i);
+
+    const refunds = users.incrementCredits.mock.calls.filter(([, delta]: [string, number]) => delta > 0);
+    expect(refunds).toEqual([]);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 200, outputTokens: 25, creditsCharged: 10 })
+    );
+    expect(userApiKeys.incrementSpend).toHaveBeenCalledWith('key1', 10);
+  });
+
   it('does NOT record an aborted event when no tokens were consumed', async () => {
     const { db, usageEvents } = buildDb();
     completeImpl = async () => {

@@ -215,6 +215,21 @@ export class ChatCompletionInvoke {
       );
     }
 
+    // Research mode runs every enabled configuration's model instead of the primary, so each must
+    // pass the same availability gate; the access gate below covers them too.
+    const researchModelIds = researchMode?.enabled
+      ? [...new Set(researchMode.configurations.filter(c => c.enabled).map(c => c.model))]
+      : [];
+    for (const researchModelId of researchModelIds) {
+      const researchModel = modelInfo.find(m => m.id === researchModelId);
+      if (!researchModel) throw new BadRequestError(`Invalid model: "${researchModelId}" is not available`);
+      if (researchModel.disabled) {
+        throw new BadRequestError(
+          `Model "${researchModel.id}" is currently unavailable${researchModel.disabledReason ? `: ${researchModel.disabledReason}` : ''}`
+        );
+      }
+    }
+
     // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
     // cast. A completion legitimately resolves to text, image or video - the media backends run
     // through this same path - and speech-to-text is the one catalog type it cannot: that is served
@@ -439,21 +454,25 @@ export class ChatCompletionInvoke {
       const modelToUse = originalModel;
 
       if (modelConfigurations.length > 0) {
-        const primaryModelConfig = modelConfigurations.find(config => config.id === originalModel);
-        if (primaryModelConfig) {
-          // Entitlement-aware admission: a tag-less subscriber can reach an
-          // entitlement-gated model via their resolved keys. Fail-safe to [].
-          // Only resolve when keys can change the outcome - skip the DB lookup
-          // for admins (always allowed) and for models with no allowedEntitlements
-          // (tag-only), keeping the entitlement branch inert.
-          const isAdmin = this.user.isAdmin || false;
-          const needsEntitlements = !isAdmin && (primaryModelConfig.allowedEntitlements?.length ?? 0) > 0;
-          const entitlementKeys = needsEntitlements ? await this.resolveEntitlementKeys() : [];
-          const hasUserAccess = isModelAccessible(primaryModelConfig, this.user.tags || [], isAdmin, entitlementKeys);
+        // Entitlement-aware admission: a tag-less subscriber can reach an
+        // entitlement-gated model via their resolved keys. Fail-safe to [].
+        // Only resolve when keys can change the outcome - skip the DB lookup
+        // for admins (always allowed) and for models with no allowedEntitlements
+        // (tag-only), keeping the entitlement branch inert. Research-mode
+        // configuration models are admitted by the same rule as the primary.
+        const isAdmin = this.user.isAdmin || false;
+        let entitlementKeys: string[] | undefined;
+        for (const gatedModelId of [originalModel, ...researchModelIds]) {
+          const gatedConfig = modelConfigurations.find(config => config.id === gatedModelId);
+          if (!gatedConfig) continue;
+          if (!isAdmin && (gatedConfig.allowedEntitlements?.length ?? 0) > 0) {
+            entitlementKeys ??= await this.resolveEntitlementKeys();
+          }
+          const hasUserAccess = isModelAccessible(gatedConfig, this.user.tags || [], isAdmin, entitlementKeys ?? []);
 
-          if (!primaryModelConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Primary model ${originalModel} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${originalModel}" is not accessible and no fallback available`);
+          if (!gatedConfig.enabled || !hasUserAccess) {
+            this.logger.error(`Model ${gatedModelId} is not accessible and no fallback available`);
+            throw new ForbiddenError(`Model "${gatedModelId}" is not accessible and no fallback available`);
           }
         }
       }

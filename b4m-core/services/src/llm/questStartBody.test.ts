@@ -39,3 +39,15 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
     expect(QuestStartBodySchema.parse({ ...body, disableUserIntegrations: true }).disableUserIntegrations).toBe(true);
   });
 });
+
+describe('QuestStartBodySchema.deepResearchConfig', () => {
+  it('rejects a depth or duration past the Deep Research ceilings', () => {
+    expect(() => QuestStartBodySchema.parse({ ...body, deepResearchConfig: { maxDepth: 1000 } })).toThrow();
+    expect(() => QuestStartBodySchema.parse({ ...body, deepResearchConfig: { duration: 1000 } })).toThrow();
+  });
+
+  it('keeps values within the ceilings', () => {
+    const parsed = QuestStartBodySchema.parse({ ...body, deepResearchConfig: { maxDepth: 10, duration: 10 } });
+    expect(parsed.deepResearchConfig).toMatchObject({ maxDepth: 10, duration: 10 });
+  });
+});
