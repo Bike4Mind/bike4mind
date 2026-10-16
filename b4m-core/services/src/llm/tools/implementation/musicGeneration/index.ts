@@ -31,8 +31,9 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
 
 // Providers refuse prompts that name real artists, so catch "style of <Name>" shapes before a job exists.
 // Genre, place and style words are exempt so "in the style of Motown" or "sounds like Latin jazz" pass.
-const ARTIST_REFERENCE =
-  /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?((?:[A-Z][\w'.-]*\s?)+)/g;
+// The phrase matches in any case (sentence-initial "In the style of"); the name must start with a capital.
+const STYLE_PHRASE = /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?/gi;
+const CAPITALIZED_RUN = /^(?:\p{Lu}[\p{L}\p{N}'.-]*[ \t]?)+/u;
 
 const STYLE_WORDS = new Set([
   'latin',
@@ -72,12 +73,16 @@ export const ARTIST_REFERENCE_REFUSAL =
   'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
 
 export const namesArtistReference = (prompt: string): boolean =>
-  Array.from(prompt.matchAll(ARTIST_REFERENCE)).some(match =>
-    match[1]
-      .trim()
-      .split(/\s+/)
-      .some(word => !STYLE_WORDS.has(word.toLowerCase()))
-  );
+  Array.from(prompt.matchAll(STYLE_PHRASE)).some(match => {
+    const run = prompt.slice(match.index + match[0].length).match(CAPITALIZED_RUN)?.[0];
+    return (
+      run !== undefined &&
+      run
+        .trim()
+        .split(/\s+/)
+        .some(word => !STYLE_WORDS.has(word.toLowerCase()))
+    );
+  });
 
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
 const toRequest = (args: MusicToolArgs): MusicGenerationRequest => ({
@@ -94,10 +99,16 @@ export const musicGenerationTool: ToolDefinition = {
   implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
     if (!isMusicToolConfig(config)) return buildUnavailableTool('music_generation', 'Music generation');
     const { schema, description } = buildMusicToolSchema(config.usableModels);
+    // The guard is a heuristic, so it refuses once per built tool (one chat turn or agent run): a false positive such
+    // as "inspired by Shakespeare" costs one rephrase instead of looping until the tool-call cap with no song.
+    let artistRefusalSent = false;
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
-        if (namesArtistReference(args.prompt)) return ARTIST_REFERENCE_REFUSAL;
+        if (!artistRefusalSent && namesArtistReference(args.prompt)) {
+          artistRefusalSent = true;
+          return ARTIST_REFERENCE_REFUSAL;
+        }
         const request = toRequest(args);
         const result = await config.createJob({
           user: { id: context.userId, organizationId: context.organizationId ?? null },
