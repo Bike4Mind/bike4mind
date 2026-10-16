@@ -3079,6 +3079,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : undefined,
       ]);
       const queryVector = contextVector ? blendFollowUpQueryVector(messageVector, contextVector) : messageVector;
+      // A blended query keeps the bare message vector as a second reading for the absolute floor.
+      // That floor was swept on single-message query vectors, and the blend scales a passage's cosine
+      // down whenever the earlier turns pull away from it - a topic switch after an earlier turn, the
+      // case this path must not break. Admitting on EITHER reading means a chunk the bare message alone
+      // cleared cannot be dropped by blending, so the blend can never lower recall below the path it
+      // replaced; ranking and the relative/spread floors still run on the blended score.
+      const bareQueryVector = contextVector ? messageVector : undefined;
       if (followUp && contextVector) {
         this.logger.log(
           `\u{1F512} Forced retrieval: follow-up scored with ${followUp.priorTurnsUsed} earlier user turn(s)`
@@ -3248,7 +3255,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             scoredCount++;
             scannedScores.push(score);
             if (score > topScore) topScore = score;
-            if (score < floors.minSimilarity) continue;
+            const clearsFloor =
+              score >= floors.minSimilarity ||
+              (bareQueryVector !== undefined &&
+                computeCosineSimilarity(bareQueryVector, row.vector) >= floors.minSimilarity);
+            if (!clearsFloor) continue;
             pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
             if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
               pool.sort(compareForcedRetrievalCandidates);
