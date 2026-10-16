@@ -426,6 +426,20 @@ describe('ProfileMenu - Connections', () => {
     ).toBeInTheDocument();
   });
 
+  it('attaches the tooltip as a description on the menu item rather than a wrapper', async () => {
+    openMenu();
+    const row = screen.getByTestId('profile-menu-connections');
+    expect(row).toHaveAttribute('role', 'menuitem');
+    // The tooltip text must not become the row's accessible name on a role-less wrapper.
+    expect(
+      screen.queryByLabelText('Integrations like Google Drive and Slack, plus API keys for your own code')
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseOver(row);
+    await screen.findByText('Integrations like Google Drive and Slack, plus API keys for your own code');
+    expect(row).toHaveAttribute('aria-describedby');
+  });
+
   it('lists API Keys, Your feedback, then API Docs in More and opens the API Keys tab', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-more'));

@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
+import { forwardRef, KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Tooltip, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
@@ -106,30 +106,36 @@ type MenuRowProps = {
 };
 
 /** A single icon + label row used throughout the profile menu and its "More" flyout. */
-const MenuRow = ({ icon, label, onClick, endDecorator, testId, danger, submenuOpen }: MenuRowProps) => (
-  <Box
-    data-testid={testId}
-    role="menuitem"
-    // Focus moves by arrow key (see moveMenuFocus), so Tab never walks the rows.
-    tabIndex={-1}
-    aria-haspopup={submenuOpen === undefined ? undefined : 'menu'}
-    aria-expanded={submenuOpen}
-    onClick={onClick}
-    // Keyboard parity: Enter/Space activate the row like a real menuitem.
-    onKeyDown={e => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onClick?.();
-      }
-    }}
-    sx={theme => menuRowSx(theme, danger)}
-  >
-    <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
-    <Typography level="body-sm" sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }} noWrap>
-      {label}
-    </Typography>
-    {endDecorator}
-  </Box>
+const MenuRow = forwardRef<HTMLDivElement, MenuRowProps & Omit<React.HTMLAttributes<HTMLElement>, 'onClick'>>(
+  function MenuRow({ icon, label, onClick, endDecorator, testId, danger, submenuOpen, ...rest }, ref) {
+    return (
+      <Box
+        ref={ref}
+        {...rest}
+        data-testid={testId}
+        role="menuitem"
+        // Focus moves by arrow key (see moveMenuFocus), so Tab never walks the rows.
+        tabIndex={-1}
+        aria-haspopup={submenuOpen === undefined ? undefined : 'menu'}
+        aria-expanded={submenuOpen}
+        onClick={onClick}
+        // Keyboard parity: Enter/Space activate the row like a real menuitem.
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onClick?.();
+          }
+        }}
+        sx={theme => menuRowSx(theme, danger)}
+      >
+        <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
+        <Typography level="body-sm" sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }} noWrap>
+          {label}
+        </Typography>
+        {endDecorator}
+      </Box>
+    );
+  }
 );
 
 type AccountCardProps = {
@@ -460,23 +466,22 @@ const ProfileMenu = () => {
           />
           <Tooltip
             placement="right"
+            describeChild
             title={t(
               'connections.menuTooltip',
               'Integrations like Google Drive and Slack, plus API keys for your own code'
             )}
           >
-            <Box>
-              <MenuRow
-                testId="profile-menu-connections"
-                icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
-                label={t('connections.title', 'Connections')}
-                onClick={() => {
-                  navigateFromMenu('/integrations', () =>
-                    navigate({ to: '/integrations', search: { source: 'profile_menu' } })
-                  );
-                }}
-              />
-            </Box>
+            <MenuRow
+              testId="profile-menu-connections"
+              icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
+              label={t('connections.title', 'Connections')}
+              onClick={() => {
+                navigateFromMenu('/integrations', () =>
+                  navigate({ to: '/integrations', search: { source: 'profile_menu' } })
+                );
+              }}
+            />
           </Tooltip>
           <MenuRow
             testId="profile-menu-teams"
