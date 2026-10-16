@@ -98,6 +98,8 @@ describe('music_generation tool', () => {
       'Like a lullaby, inspired by Delta blues',
       'a track in the style of Motown.',
       'in the style of Motown. Female vocals, warm',
+      'sounds like Celtic-Irish fusion',
+      'in the style of A minor ballad, piano only',
       "warm strings, inspired by Nashville's session players",
     ];
     for (const prompt of prompts) {

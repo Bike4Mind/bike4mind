@@ -83,13 +83,12 @@ export const ARTIST_REFERENCE_REFUSAL =
 export const namesArtistReference = (prompt: string): boolean =>
   Array.from(prompt.matchAll(STYLE_PHRASE)).some(match => {
     const run = prompt.slice(match.index + match[0].length).match(CAPITALIZED_RUN)?.[0];
-    return (
-      run !== undefined &&
-      run
-        .trim()
-        .split(/\s+/)
-        .some(word => !STYLE_WORDS.has(toStyleWordKey(word)))
-    );
+    if (run === undefined) return false;
+    // A hyphen joins two style words ("Celtic-Irish") and a lone letter ("A minor") is never a name.
+    return run.split(/[-\s]+/).some(word => {
+      const key = toStyleWordKey(word);
+      return key.length > 1 && !STYLE_WORDS.has(key);
+    });
   });
 
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
