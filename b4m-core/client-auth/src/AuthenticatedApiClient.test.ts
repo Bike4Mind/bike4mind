@@ -184,15 +184,34 @@ describe('AuthenticatedApiClient single-flight refresh', () => {
     expect(refreshToken).toHaveBeenCalledTimes(1);
   });
 
+  it('exchanges again on a later refresh once the previous one has settled', async () => {
+    const { store } = memoryStore(tokens());
+    const refreshToken = vi.fn().mockResolvedValueOnce(grant(1)).mockResolvedValueOnce(grant(2));
+    const { client } = build(store, refreshToken);
+
+    await expect(client.refreshSession()).resolves.toMatchObject({ accessToken: 'access-1' });
+    await expect(client.refreshSession()).resolves.toMatchObject({ accessToken: 'access-2' });
+    expect(refreshToken).toHaveBeenCalledTimes(2);
+  });
+
   it('retries a 401 that lands just after a refresh with the stored token, without another exchange', async () => {
     const { store } = memoryStore(
       tokens({ accessToken: 'access-1', expiresAt: new Date(Date.now() + 60_000).toISOString() })
     );
+    // The request goes out with the token the store held when it was built; by the time the 401
+    // comes back the store holds access-1, as it would after a concurrent refresh replaced it.
+    store.getAuthTokens.mockResolvedValueOnce(tokens({ accessToken: 'access-0' }));
     const refreshToken = vi.fn();
     const { client } = build(store, refreshToken);
+    const seen: Array<string | undefined> = [];
+    const adapter = client.getAxiosInstance().defaults.adapter as AxiosAdapter;
+    client.getAxiosInstance().defaults.adapter = (async config => {
+      seen.push(config.headers.Authorization as string | undefined);
+      return adapter(config);
+    }) as AxiosAdapter;
 
-    // Sent with the token the store held before the refresh.
-    await expect(client.get('/a', { headers: { Authorization: 'Bearer access-0' } })).resolves.toEqual({ ok: true });
+    await expect(client.get('/a')).resolves.toEqual({ ok: true });
+    expect(seen).toEqual(['Bearer access-0', 'Bearer access-1']);
     expect(refreshToken).not.toHaveBeenCalled();
   });
 });
