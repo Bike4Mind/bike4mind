@@ -351,6 +351,14 @@ and mammoth, and electron-builder ships what is declared. Bundling that one subp
 those still ship. Fixing that is a change to `b4m-core/mcp`'s entry points, not to this
 config.
 
+`node-pty` (the terminal panel's pty) is the one native dependency, so it is a `dependency`
+and stays external, while `@xterm/*` is bundled into the renderer and lives in
+`devDependencies`. It is pinned to a 1.2 beta because 1.1.0 publishes its macOS
+`spawn-helper` without the execute bit, and every spawn then fails with `posix_spawnp failed`.
+`electron-builder.yml` unpacks it from the asar (a `.node` file and the helper both have to be
+real files) and turns `npmRebuild` off: the module is N-API with prebuilt binaries for every
+target, so a rebuild would only compile a different binary from the one dev runs.
+
 ## Layout
 
 ```
