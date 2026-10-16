@@ -108,6 +108,7 @@ import {
   PipelineTimer,
   resolveDeprecatedModelId,
   isTurnEndingTool,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -6393,6 +6394,15 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
+        setErrorReply('The request was interrupted. Please try sending your message again.');
+        quest.type = 'error';
+        quest.status = 'done';
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof ResponsesStreamTruncatedError) {
+        // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
+        // severity would trip the CloudWatch ERROR alert path.
+        logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';

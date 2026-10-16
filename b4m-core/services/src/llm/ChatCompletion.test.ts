@@ -14,6 +14,7 @@ import {
   isStreamIdleTimeoutError,
   FORCE_FALLBACK_TEST_MARKER,
 } from './ChatCompletionProcess';
+import { ResponsesStreamTruncatedError } from '@bike4mind/llm-adapters';
 import {
   buildAndSortMessages,
   calculateTotalTokenLength,
@@ -892,6 +893,25 @@ describe('ChatCompletionProcess', () => {
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
       expect(lastSave.replies.join('')).toContain('The request was interrupted');
+    });
+
+    it('a Responses stream closed early ends done with the interrupted reply, warning not erroring', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new ResponsesStreamTruncatedError('gpt-5')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.toBeUndefined();
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Truncated]'));
+      expect(mockLogger.error).not.toHaveBeenCalledWith(expect.stringContaining('ended without a terminal'));
     });
   });
 

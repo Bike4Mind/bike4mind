@@ -152,6 +152,17 @@ function federatedOpenAIClient(): OpenAI {
   });
 }
 
+/**
+ * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
+ * ChatCompletionProcess maps it to the interrupted reply; partial text already reached the client.
+ */
+export class ResponsesStreamTruncatedError extends Error {
+  constructor(model: string) {
+    super(`OpenAI Responses stream for ${model} ended without a terminal response event`);
+    this.name = 'ResponsesStreamTruncatedError';
+  }
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -2216,7 +2227,15 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     if (!finalResponse) {
-      throw new Error(`OpenAI Responses stream for ${model} ended without a terminal response event`);
+      // The openai SDK swallows an abort during the SSE read and ends the iterator quietly, so a
+      // user Stop lands here with no terminal event. Surface it as an abort so callers treat it
+      // as a stop, not a failure.
+      if (options.abortSignal?.aborted) {
+        const abortError = new Error('Request aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+      throw new ResponsesStreamTruncatedError(model);
     }
 
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
