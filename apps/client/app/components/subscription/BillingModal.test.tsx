@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   subscriptionsPending: false,
   subscriptionsError: false,
   plansLoading: false,
+  plansDisabled: false,
   reducedMotion: false,
   refetch: vi.fn(),
   credits: 5000,
@@ -34,7 +35,10 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({ isLoading: state.plansLoading }),
+  useGetSubscriptionPlans: () =>
+    state.plansDisabled
+      ? { isLoading: false, isPending: true, fetchStatus: 'idle' }
+      : { isLoading: state.plansLoading, isPending: state.plansLoading, fetchStatus: 'fetching' },
 }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 1000 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
@@ -83,6 +87,7 @@ describe('BillingModal', () => {
     state.subscriptionsPending = false;
     state.subscriptionsError = false;
     state.plansLoading = false;
+    state.plansDisabled = false;
     state.reducedMotion = false;
     state.refetch.mockClear();
     window.matchMedia = vi.fn((query: string) => ({
@@ -231,5 +236,14 @@ describe('BillingModal', () => {
   it('shows no low-balance banner when the balance is healthy', () => {
     renderModal();
     expect(screen.queryByTestId('billing-low-balance')).not.toBeInTheDocument();
+  });
+
+  it('shows only the credit packs, with no stuck plans skeleton, when plans are not offered (enforceCredits off)', () => {
+    state.plansDisabled = true;
+    state.credits = 0;
+    renderModal();
+    expect(sectionOrder()).toEqual(['billing-section-credits']);
+    expect(screen.queryByTestId('plans-section-skeleton')).not.toBeInTheDocument();
+    expect(screen.getByTestId('billing-low-balance-action')).toHaveTextContent('Top up');
   });
 });

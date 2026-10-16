@@ -129,6 +129,10 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   // swaps its own skeleton for cards after mount: a deep-link scroll to a section below the plans would
   // otherwise land on a position that moves. isLoading, not isPending: a disabled query stays pending.
   const ready = !subscriptions.isPending && !plans.isLoading;
+  // useGetSubscriptionPlans only fetches with enforceCredits on; a disabled query is pending forever, so
+  // PlansSection would hold its skeleton for good. Without plans, Billing is the credit packs alone.
+  const plansOffered = !(plans.isPending && plans.fetchStatus === 'idle');
+  const nudgeToCredits = !!currentSubscription || planUnknown || !plansOffered;
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -338,11 +342,9 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
                   variant="plain"
                   color={noCredits ? 'danger' : 'warning'}
                   data-testid="billing-low-balance-action"
-                  onClick={() => scrollTo(currentSubscription || planUnknown ? 'credits' : 'plans')}
+                  onClick={() => scrollTo(nudgeToCredits ? 'credits' : 'plans')}
                 >
-                  {currentSubscription || planUnknown
-                    ? t('billing.top_up', 'Top up')
-                    : t('billing.see_plans', 'See plans')}
+                  {nudgeToCredits ? t('billing.top_up', 'Top up') : t('billing.see_plans', 'See plans')}
                 </Button>
               )}
             </Box>
@@ -365,7 +367,9 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
         >
           {open &&
             (ready ? (
-              plansFirst ? (
+              !plansOffered ? (
+                creditsSection
+              ) : plansFirst ? (
                 [plansSection, creditsSection]
               ) : (
                 [creditsSection, plansSection]

@@ -98,7 +98,7 @@ export function CreditOfferActionsView({ moment, account }: CreditOfferActionsPr
 /**
  * Remediation actions for the low-credit and out-of-credits moments. Personal accounts get the
  * Pro plan as the one primary action and a credit pack as the quieter alternative (subscribers
- * get only the pack); org members cannot self-purchase (see CreditsModal's canPurchaseCredits), so they get an Ask your admin action.
+ * get only the pack); org members cannot self-purchase (see CreditsSection's canPurchaseCredits), so they get an Ask your admin action.
  */
 export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
