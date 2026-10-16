@@ -101,9 +101,20 @@ describe('SidenavNav feature rows', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'agents']) {
+    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
+  });
+});
+
+describe('SidenavNav Skill Market row', () => {
+  it('is always present and opens the market', () => {
+    useFeatureEnabledMock.mockReturnValue(false);
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-skill-market');
+    expect(row).toHaveTextContent('Skill Market');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
   });
 });
 
