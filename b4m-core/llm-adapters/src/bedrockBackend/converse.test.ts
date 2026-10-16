@@ -130,6 +130,43 @@ describe('ConverseBedrockBackend', () => {
     expect(out.joined()).toBe('<think>hmm ok</think>Answer.');
   });
 
+  it('suppresses reasoning only for special-task phrases in system turns', async () => {
+    const run = async (role: 'user' | 'system') => {
+      const backend = new TestConverseBackend();
+      withMockClient(backend, () => ({
+        stream: asStream([
+          { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: 'hmm' } } } },
+          { contentBlockStop: { contentBlockIndex: 0 } },
+          { contentBlockDelta: { contentBlockIndex: 1, delta: { text: 'Answer.' } } },
+          { messageStop: { stopReason: 'end_turn' } },
+        ]),
+      }));
+      const out = collect();
+      const messages: IMessage[] =
+        role === 'user'
+          ? [{ role: 'user', content: 'please give a title to this session' }]
+          : [
+              { role: 'system', content: 'Give a title to this session.' },
+              { role: 'user', content: 'q' },
+            ];
+      await backend.complete(NOVA, messages, { stream: true }, out.callback);
+      return out.joined();
+    };
+
+    expect(await run('user')).toBe('<think>hmm</think>Answer.');
+    expect(await run('system')).toBe('Answer.');
+  });
+
+  it('throws before calling Bedrock when no message survives filtering', async () => {
+    const backend = new TestConverseBackend();
+    const { spy } = withMockClient(backend, () => ({}));
+
+    await expect(
+      backend.complete(NOVA, [{ role: 'system', content: '   ' }], { stream: true }, async () => {})
+    ).rejects.toThrow(/no sendable messages/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('runs a streamed tool call and continues with toolUse/toolResult history, accumulating tokens', async () => {
     const backend = new TestConverseBackend();
     const rounds = [

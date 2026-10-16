@@ -40,7 +40,7 @@ export const CONVERSE_BEDROCK_MODELS: readonly ModelInfo[] = [
     can_stream: true,
     pricing: {
       // $0.80 / 1M in, $3.20 / 1M out (US on-demand). @see https://aws.amazon.com/bedrock/pricing/
-      300_000: { input: 0.8 / 1_000_000, output: 3.2 / 1_000_000 },
+      300_000: { input: 0.0000008, output: 0.0000032 },
     },
     supportsVision: true,
     supportsTools: true,
@@ -209,6 +209,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     const record = this.modelRecordFor(model);
     this.isSpecialTask = messages.some(
       m =>
+        m.role === 'system' &&
         typeof m.content === 'string' &&
         (m.content.toLowerCase().includes('generate an abstract summary of this session') ||
           m.content.toLowerCase().includes('give a title to this session'))
@@ -235,6 +236,9 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     if (converseMessages.length === 0 && systemText) {
       converseMessages.push({ role: 'user', content: [{ text: systemText }] });
       systemDemotedToUser = true;
+    }
+    if (converseMessages.length === 0) {
+      throw new Error(`Converse request for ${model} has no sendable messages after filtering`);
     }
 
     const ceiling = record?.max_tokens;
