@@ -52,8 +52,6 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-    // Same test providers as the chat path, so keyless non-production stages still offer the
-    // music/video tools in agent mode.
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
