@@ -58,6 +58,7 @@ describe('music_generation tool', () => {
       'in the vein of Some Singer',
       'in the style of Motown, inspired by Some Singer',
       'in the style of Detroit Example Singer',
+      'in the style of J. Example Singer',
     ];
     for (const prompt of named) {
       const createJob = vi.fn().mockResolvedValue(okJob);

@@ -31,8 +31,9 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
 
 // Providers refuse prompts that name real artists, so catch "style of <Name>" shapes before a job exists.
 const STYLE_PHRASE = /\b(?:in the style of|in the vein of|sounds like|inspired by)\s+(?:the\s+)?/gi;
-// A dot only joins letters, so the run ends at a sentence boundary instead of swallowing the next sentence.
-const CAPITALIZED_RUN = /^(?:\p{Lu}(?:[\p{L}\p{N}'-]|\.(?=\p{L}))*[ \t]?)+/u;
+// A dot joins letters inside a word ("D.J.") or follows a lone-capital initial ("J. Example"), continuing the run;
+// any other dot ends it at a sentence boundary rather than swallowing the next sentence.
+const CAPITALIZED_RUN = /^(?:\p{Lu}\.(?=[ \t]\p{Lu})[ \t]*|\p{Lu}(?:[\p{L}\p{N}'-]|\.(?=\p{L}))*[ \t]?)+/u;
 
 const STYLE_WORDS = new Set([
   'latin',
