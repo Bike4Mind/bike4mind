@@ -495,8 +495,12 @@ async function readCommittedEmbeddingSpace(fabFileId: string): Promise<Committed
  * actually embedded with. A credential lapsing mid-file can therefore still split it, whatever is
  * asked for here. That is a different mechanism from the one this guards (the model SETTING moving,
  * or an id leaving the enum), and `resolveFileLabel` reports it at completion rather than preventing
- * it. The handler refuses the substitution only when other files already hold vectors in the
- * requested space; a file's own existing vectors are not consulted.
+ * it. The handler refuses the substitution when another COMPLETED file already holds vectors in the
+ * requested space (the corpus check), and a separate guard refuses the mid-file split directly: it
+ * reads THIS file's own committed chunks and refuses when they name a space the resolved model is
+ * not in. Neither reaches a file whose first messages run concurrently with nothing committed yet -
+ * each reads empty and can still split it, which `resolveFileLabel` reports at completion rather
+ * than preventing.
  */
 function resolveResumeEmbeddingModel(params: {
   fabFileId: string;
