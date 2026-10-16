@@ -328,6 +328,26 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
   });
 
+  it('keeps a requested prompt influence of 0', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation.promptInfluence).toBe(0);
+  });
+
+  it('leaves prompt influence off the stored metadata when the request omitted it', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('promptInfluence');
+  });
+
   it('rejects an invalid body (422) without resolving a key', async () => {
     const { res, promise } = run({ text: '' });
     await promise;
