@@ -331,6 +331,18 @@ describe('applySignupDomainGrant', () => {
       expect(result.currentCredits).toBe(4100);
     });
 
+    it('logs a neutral line when the rule subscription was already granted', async () => {
+      mockPartnerGrant.mockResolvedValue(subscriptionGrant);
+      mockGrantSubscription.mockResolvedValue({ status: 'already_granted' });
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(result.subscriptionGranted).toBe(false);
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('already granted'));
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
     it('skips the grant when the rule has no subscription', async () => {
       mockPartnerGrant.mockResolvedValue({ ...subscriptionGrant, subscription: null });
 

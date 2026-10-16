@@ -105,13 +105,13 @@ describe('grantIndividualAdminSubscription', () => {
     expect(mockAddCredits.mock.calls[0][0]).not.toHaveProperty('transactionId');
   });
 
-  it('reports already_active without adding credits when the given subscriptionId is a duplicate', async () => {
+  it('reports already_granted without adding credits when the given subscriptionId is a duplicate', async () => {
     mockCreate.mockRejectedValue({ code: 11000 });
 
     expect(
       await grantIndividualAdminSubscription({ ...params, subscriptionId: 'partner_grant_rule-1_user-1' })
     ).toEqual({
-      status: 'already_active',
+      status: 'already_granted',
     });
     expect(mockAddCredits).not.toHaveBeenCalled();
   });

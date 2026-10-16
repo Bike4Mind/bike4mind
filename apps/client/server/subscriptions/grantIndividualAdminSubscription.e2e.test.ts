@@ -80,7 +80,7 @@ describe('grantIndividualAdminSubscription with a deterministic subscriptionId o
     // With the row no longer active the already-active pre-check passes, so only the unique index stops it.
     await Subscription.updateMany({ subscriptionId }, { $set: { status: 'canceled' } });
 
-    expect(await grant(user.id)).toEqual({ status: 'already_active' });
+    expect(await grant(user.id)).toEqual({ status: 'already_granted' });
     expect(await rowCount()).toBe(1);
     expect(await balanceOf(user.id)).toBe(startingCredits + plan.credits * durationMonths);
   });
@@ -90,7 +90,9 @@ describe('grantIndividualAdminSubscription with a deterministic subscriptionId o
 
     const results = await Promise.all([grant(user.id), grant(user.id)]);
 
-    expect(results.map(result => result.status).sort()).toEqual(['already_active', 'granted']);
+    const statuses = results.map(result => result.status);
+    expect(statuses.filter(status => status === 'granted')).toHaveLength(1);
+    expect(statuses.filter(status => status === 'already_active' || status === 'already_granted')).toHaveLength(1);
     expect(await rowCount()).toBe(1);
     expect(await balanceOf(user.id)).toBe(startingCredits + plan.credits * durationMonths);
   });

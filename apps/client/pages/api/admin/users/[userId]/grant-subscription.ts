@@ -96,6 +96,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       if (grant.status === 'already_active') {
         throw new BadRequestError('User already has an active subscription for this plan');
       }
+      if (grant.status === 'already_granted') {
+        throw new BadRequestError('This subscription grant already exists for this user');
+      }
 
       req.logger.info(`Admin ${req.user.id} granted individual subscription to user ${userId}`, {
         priceId,

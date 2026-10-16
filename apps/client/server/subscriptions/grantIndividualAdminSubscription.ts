@@ -18,6 +18,7 @@ export type GrantIndividualAdminSubscriptionResult =
       currentCredits: number | null;
     }
   | { status: 'already_active' }
+  | { status: 'already_granted' }
   | { status: 'unknown_plan' };
 
 /**
@@ -33,7 +34,7 @@ export type GrantIndividualAdminSubscriptionResult =
  *   per-price check.
  * - `subscriptionId`: a deterministic row id that makes the grant idempotent. A repeat or concurrent
  *   grant with the same id hits the unique `subscriptionId` index on the row insert, which runs
- *   before the credits are added, and is reported as `already_active`. Omitted, each call gets a
+ *   before the credits are added, and is reported as `already_granted` (the row may no longer be active). Omitted, each call gets a
  *   fresh `admin_grant_<uuid>` (the admin route, where a human decides).
  *   (`addCredits` drops `transactionId` for `type: 'subscription'`, so the credit write cannot be
  *   the idempotency key.)
@@ -109,7 +110,7 @@ export async function grantIndividualAdminSubscription(params: {
       currentCredits = holder?.currentCredits ?? null;
     });
   } catch (error) {
-    if (params.subscriptionId && isDuplicateKeyError(error)) return { status: 'already_active' };
+    if (params.subscriptionId && isDuplicateKeyError(error)) return { status: 'already_granted' };
     throw error;
   }
 

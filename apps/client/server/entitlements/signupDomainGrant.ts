@@ -224,6 +224,8 @@ async function applyPartnerSubscription(
       logger.info(
         `Partner-rule subscription: user ${userId} already has an active individual subscription (${trigger}); skipped`
       );
+    } else if (grant.status === 'already_granted') {
+      logger.info(`Partner-rule subscription: rule subscription already granted to user ${userId} (${trigger})`);
     } else {
       logger.warn(
         `Partner-rule subscription not granted to user ${userId} (rule ${ruleId}): unknown plan ${priceId}; ` +
