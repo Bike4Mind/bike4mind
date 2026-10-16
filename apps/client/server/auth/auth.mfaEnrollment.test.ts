@@ -22,10 +22,12 @@ vi.mock('@server/utils/config', () => ({
 
 // The admin toggle, flipped per test. The decision itself mirrors mfaEnforcement.ts (unit-tested
 // there); here it only has to depend on the setting and the user's enrollment.
-const enforcement = vi.hoisted(() => ({ enforced: false }));
+const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
 vi.mock('./mfaEnforcement', () => ({
-  isMfaEnrollmentOwed: async (user: { mfa?: { totpEnabled?: boolean } }) =>
-    enforcement.enforced && !user.mfa?.totpEnabled,
+  isMfaEnrollmentOwed: async (user: { mfa?: { totpEnabled?: boolean } }, opts: { impersonatedBy?: unknown } = {}) => {
+    if (enforcement.readFails) throw new Error('settings read failed');
+    return enforcement.enforced && !opts.impersonatedBy && !user.mfa?.totpEnabled;
+  },
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
@@ -44,7 +46,7 @@ const existingSession = (over: SessionUser = {}): SessionUser => ({
 async function call(method: RequestMethod, url: string, user: SessionUser, extra: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method, url }, { eventEmitter: EventEmitter });
   // any: node-mocks-http mocks aren't structurally the Express types the handler is typed against.
-  Object.assign(req as any, { user, logger: { info: vi.fn(), updateMetadata: vi.fn() }, ...extra });
+  Object.assign(req as any, { user, requestId: 'req-1', logger: { info: vi.fn(), updateMetadata: vi.fn() }, ...extra });
   const handlerFn = vi.fn((_req: unknown, response: { status: (code: number) => { end: () => void } }) =>
     response.status(200).end()
   );
@@ -53,13 +55,21 @@ async function call(method: RequestMethod, url: string, user: SessionUser, extra
   return {
     status,
     reached: handlerFn.mock.calls.length === 1,
-    body: status === 200 ? undefined : res._getJSONData(),
+    body: res._isJSON() ? res._getJSONData() : undefined,
   };
 }
 
 describe('auth middleware: enforceMFA on a session that existed before it was turned on', () => {
   beforeEach(() => {
     enforcement.enforced = false;
+    enforcement.readFails = false;
+  });
+
+  it('fails closed when the enforcement read fails', async () => {
+    enforcement.readFails = true;
+    const { reached, status } = await call('GET', '/api/quests', existingSession());
+    expect(reached).toBe(false);
+    expect(status).not.toBe(200);
   });
 
   it('serves an unenrolled session while enforcement is off, then blocks it once enforcement turns on', async () => {
@@ -74,6 +84,7 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
     // token is refused the same way.
     expect(after.status).toBe(403);
     expect(after.body).toMatchObject({ error: 'MFA enrollment required.', mfaEnrollmentRequired: true });
+    expect(after.body).toMatchObject({ request_id: 'req-1' });
   });
 
   it('lets an enrolled user through under enforcement', async () => {

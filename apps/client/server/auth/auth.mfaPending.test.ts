@@ -21,9 +21,9 @@ vi.mock('@server/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
 
-const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 vi.mock('@server/auth/mfaEnforcement', () => ({
-  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 

@@ -35,9 +35,9 @@ vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 vi.mock('@server/auth/mfaEnforcement', () => ({
-  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
@@ -149,6 +149,8 @@ describe('verifyWsAccessToken', () => {
 
 describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
     mockFindByKeyName.mockResolvedValue(null);
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access' });
@@ -162,7 +164,20 @@ describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
 
   it('accepts the same token while no enrollment is owed', async () => {
     await expect(verifyWsAccessToken('token')).resolves.toMatchObject({ id: 'user-1' });
-    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), {
+      impersonatedBy: undefined,
+    });
+  });
+
+  it('passes the impersonation claim through to the enrollment gate', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access', impersonatedBy: 'admin-1' });
+    await verifyWsAccessToken('token');
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+  });
+
+  it('fails closed when the enforcement read fails', async () => {
+    mockIsMfaEnrollmentOwed.mockRejectedValueOnce(new Error('settings read failed'));
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('settings read failed');
   });
 });
 

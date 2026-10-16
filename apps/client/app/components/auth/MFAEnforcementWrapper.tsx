@@ -5,6 +5,9 @@ import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
+import { registerMfaEnrollmentInterceptor } from '@client/app/utils/mfaEnrollmentInterceptor';
+import { api } from '@client/app/contexts/ApiContext';
+import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
@@ -67,6 +70,18 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       },
     });
   }, [setupMFAMutate]);
+
+  // The server refuses a session that owes enrollment as soon as its own settings cache sees
+  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
+  // first refusal so the enrollment flow renders instead of an app whose every call fails.
+  useEffect(
+    () =>
+      registerMfaEnrollmentInterceptor(api, () => {
+        void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
+        void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+      }),
+    [queryClient]
+  );
 
   useEffect(() => {
     if (showMFASetup) {

@@ -69,7 +69,9 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   }
   assertAccountStateUsable(user);
   // enforceMFA binds sessions minted before it applied, as on REST (auth.ts).
-  if (await isMfaEnrollmentOwed(user)) throw new UnauthorizedError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+  if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+    throw new UnauthorizedError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+  }
 
   return {
     user,

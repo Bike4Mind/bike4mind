@@ -73,6 +73,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       mfaPending?: boolean;
       typ?: string;
       kind?: string;
+      impersonatedBy?: string;
     };
 
     // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
@@ -129,8 +130,9 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     assertAccountStateUsable(user);
 
     // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
-    if (await isMfaEnrollmentOwed(user)) {
-      throw new Error(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
+    // ForbiddenError so the Function-URL adapter answers 403 with this message, not a generic 401.
+    if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+      throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
     }
 
     return {

@@ -47,6 +47,11 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
   apiKeyAuth: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
+// The enforceMFA half of the admission is covered in optionalAuth.test.ts; keep the shared guard only.
+vi.mock('@server/auth/mfaEnforcement', async () => {
+  const { admitsOptionalAuthUser } = await import('@server/middlewares/oauthRouteGate');
+  return { admitsOptionalAuthSession: async (user: unknown) => admitsOptionalAuthUser(user) };
+});
 vi.mock('@bike4mind/database', () => ({
   Annotation: { create: mockCreate, find: vi.fn(), countDocuments: vi.fn(), findOne: vi.fn() },
   PublishedArtifact: { findOne: mockLoadFindOne },

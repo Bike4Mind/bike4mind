@@ -13,7 +13,28 @@ vi.mock('@server/auth/auth', () => ({
 }));
 vi.mock('@server/auth/ability', () => ({ default: mockAbility }));
 
+// The real admission (auth/mfaEnforcement.ts) runs; only its leaf reads are stubbed. `enforced`
+// is the admin's enforceMFA toggle.
+const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/services', () => ({
+  mfaService: { userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled },
+}));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: async () => {
+    if (enforcement.readFails) throw new Error('settings read failed');
+    return {};
+  },
+  getSettingsValue: (name: string) => name === 'enforceMFA' && enforcement.enforced,
+}));
+
 import { optionalJwtAuth } from './optionalJwtAuth';
+
+/** Runs the shim and waits for it to hand off: admission is async once a token verifies. */
+const run = async (req: Request, res: Response, next: NextFunction) => {
+  optionalJwtAuth()(req, res, next);
+  await vi.waitFor(() => expect(next).toHaveBeenCalled());
+};
 
 const make = (headers: Record<string, string> = {}, user?: unknown) => {
   const req = { headers, user } as unknown as Request;
@@ -32,61 +53,63 @@ const queueAuthResult = (err: unknown, user: unknown) => {
 beforeEach(() => {
   mockAuthenticate.mockReset();
   mockAbility.mockClear();
+  enforcement.enforced = false;
+  enforcement.readFails = false;
 });
 
 describe('optionalJwtAuth', () => {
-  it('passes through (no req.user) when there is no Authorization header', () => {
+  it('passes through (no req.user) when there is no Authorization header', async () => {
     const { req, res, next } = make({});
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(req.user).toBeUndefined();
     expect(mockAuthenticate).not.toHaveBeenCalled();
   });
 
-  it('leaves an ApiKey authorization untouched for the apiKey shim', () => {
+  it('leaves an ApiKey authorization untouched for the apiKey shim', async () => {
     const { req, res, next } = make({ authorization: 'ApiKey abc123' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(req.user).toBeUndefined();
     expect(mockAuthenticate).not.toHaveBeenCalled();
   });
 
-  it('short-circuits to next() when req.user is already set', () => {
+  it('short-circuits to next() when req.user is already set', async () => {
     const { req, res, next } = make({ authorization: 'Bearer x.y.z' }, { id: 'pre' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(mockAuthenticate).not.toHaveBeenCalled();
   });
 
-  it('sets req.user from a valid Bearer token', () => {
+  it('sets req.user from a valid Bearer token', async () => {
     queueAuthResult(null, { id: 'u1' });
     const { req, res, next } = make({ authorization: 'Bearer good.token' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(req.user).toEqual({ id: 'u1' });
     expect(req.ability).toBeDefined();
     expect(mockAbility).toHaveBeenCalledWith({ id: 'u1' });
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('accepts a case-insensitive Bearer scheme (RFC 6750)', () => {
+  it('accepts a case-insensitive Bearer scheme (RFC 6750)', async () => {
     queueAuthResult(null, { id: 'u1' });
     const { req, res, next } = make({ authorization: 'bearer good.token' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(mockAuthenticate).toHaveBeenCalled(); // lowercase scheme still takes the JWT path
     expect(req.user).toEqual({ id: 'u1' });
   });
 
-  it('degrades a pre-MFA (mfaPending) session to anonymous — does NOT set req.user', () => {
+  it('degrades a pre-MFA (mfaPending) session to anonymous - does NOT set req.user', async () => {
     // The JWT strategy returns the user as a success but stamps mfaPending; this auth:false
     // route bypasses the normal mfaPending block, so the shim must enforce it.
     queueAuthResult(null, { id: 'u1', mfaPending: true });
     const { req, res, next } = make({ authorization: 'Bearer pending.token' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(req.user).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('degrades a relying-party OAuth access token to anonymous - does NOT set req.user', () => {
+  it('degrades a relying-party OAuth access token to anonymous - does NOT set req.user', async () => {
     // verifyJwtPayload stamps oauthGrant onto the user and returns it as a success. On the normal
     // auth chain oauthRouteGate default-denies it, but this auth:false route bypasses that gate, so
     // the shim must mirror the default-deny here or an openid-only OAuth token would read a user's
@@ -94,37 +117,68 @@ describe('optionalJwtAuth', () => {
     // existing visibility gate denies the private bundle, exactly as for an un-credentialed viewer.
     queueAuthResult(null, { id: 'u1', oauthGrant: { clientId: 'c1', scopes: ['openid'], aud: 'x' } });
     const { req, res, next } = make({ authorization: 'Bearer oauth.token' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(req.user).toBeUndefined();
     expect(req.ability).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('passes through anonymously (no 401) on an invalid/expired Bearer token', () => {
+  it('passes through anonymously (no 401) on an invalid/expired Bearer token', async () => {
     queueAuthResult(null, false);
     const { req, res, next } = make({ authorization: 'Bearer bad.token' });
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(req.user).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('passes through anonymously but logs a warning when the strategy errors', () => {
+  it('passes through anonymously but logs a warning when the strategy errors', async () => {
     queueAuthResult(new Error('boom'), null);
     const warn = vi.fn();
     const { req, res, next } = make({ authorization: 'Bearer err.token' });
     (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(req.user).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce(); // a strategy ERROR is observable (possible misconfig)
   });
 
-  it('stays silent (no warn) for a bare invalid token', () => {
+  it('stays silent (no warn) for a bare invalid token', async () => {
     queueAuthResult(null, false);
     const warn = vi.fn();
     const { req, res, next } = make({ authorization: 'Bearer bad.token' });
     (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
-    optionalJwtAuth()(req, res, next);
+    await run(req, res, next);
     expect(warn).not.toHaveBeenCalled(); // absent/invalid token is the normal anonymous path
+  });
+
+  it('degrades a session that owes MFA enrollment to anonymous', async () => {
+    enforcement.enforced = true;
+    queueAuthResult(null, { id: 'u1' });
+    const { req, res, next } = make({ authorization: 'Bearer owing.token' });
+    await run(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('admits an enrolled session, and an impersonation session, under enforcement', async () => {
+    enforcement.enforced = true;
+    for (const user of [
+      { id: 'u1', mfa: { totpEnabled: true } },
+      { id: 'u1', impersonatedBy: 'admin-1' },
+    ]) {
+      queueAuthResult(null, user);
+      const { req, res, next } = make({ authorization: 'Bearer good.token' });
+      await run(req, res, next);
+      expect(req.user).toEqual(user);
+    }
+  });
+
+  it('degrades to anonymous when the enforcement read fails', async () => {
+    enforcement.readFails = true;
+    queueAuthResult(null, { id: 'u1' });
+    const { req, res, next } = make({ authorization: 'Bearer good.token' });
+    await run(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
   });
 });

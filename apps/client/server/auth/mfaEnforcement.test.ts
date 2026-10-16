@@ -9,7 +9,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => mockGetSettingsMap(...args),
-  getSettingsValue: () => mockSettingsValue(),
+  getSettingsValue: (...args: unknown[]) => mockSettingsValue(...args),
 }));
 
 import { isMfaEnrollmentOwed, readEnforceMfa } from './mfaEnforcement';
@@ -32,6 +32,12 @@ describe('isMfaEnrollmentOwed', () => {
   it('is owed by an unenrolled user while enforcement is on', async () => {
     mockSettingsValue.mockReturnValue(true);
     expect(await isMfaEnrollmentOwed(user(false))).toBe(true);
+    expect(mockSettingsValue).toHaveBeenCalledWith('enforceMFA', expect.anything());
+  });
+
+  it('is never owed by an admin impersonation session', async () => {
+    mockSettingsValue.mockReturnValue(true);
+    expect(await isMfaEnrollmentOwed(user(false), { impersonatedBy: 'admin-1' })).toBe(false);
   });
 
   it('is not owed while enforcement is off', async () => {

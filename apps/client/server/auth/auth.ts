@@ -108,15 +108,15 @@ function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
  * binds new sign-ins, so an existing session, and every access token its refresh chain mints,
  * is confined here to the enrollment routes until the user enrolls. 403, not 401, so the client
  * does not run its token-refresh cascade; MFAEnforcementWrapper renders the enrollment flow.
- * API keys are exempt (they are not a sign-in), as is an admin impersonation session.
+ * API keys are exempt (they are not a sign-in). A failed settings read fails closed (next(err)).
  */
 async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unknown) => void): Promise<void> {
   const user = req.user as (IUserDocument & { impersonatedBy?: string }) | undefined;
-  if (!user || req.apiKeyInfo || user.impersonatedBy || isMfaEnrollmentAllowedRoute(req, user.id)) {
+  if (!user || req.apiKeyInfo || isMfaEnrollmentAllowedRoute(req, user.id)) {
     return next();
   }
   try {
-    if (!(await isMfaEnrollmentOwed(user))) return next();
+    if (!(await isMfaEnrollmentOwed(user, { impersonatedBy: user.impersonatedBy }))) return next();
   } catch (err) {
     return next(err);
   }
@@ -125,6 +125,7 @@ async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unkno
     error: MFA_ENROLLMENT_REQUIRED_MESSAGE,
     error_description: 'Multi-factor authentication is required. Set it up to continue.',
     mfaEnrollmentRequired: true,
+    request_id: req.requestId,
   });
 }
 

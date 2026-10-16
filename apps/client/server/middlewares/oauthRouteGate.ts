@@ -51,8 +51,8 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
  * session or a relying-party OAuth token would otherwise act as a full user (read a subject user's
  * PRIVATE published artifacts, mint a passphrase gate-proof cookie, or create/edit annotations).
  * Returns false for both markers; such callers fall through to the same anonymous posture as an
- * un-credentialed viewer. This is the single choke point every optional-auth shim shares - keep it
- * in sync with oauthRouteGate above.
+ * un-credentialed viewer. The shims call it through admitsOptionalAuthSession (auth/mfaEnforcement.ts),
+ * which adds the enforceMFA enrollment gate - keep this in sync with oauthRouteGate above.
  */
 export function admitsOptionalAuthUser(user: unknown): user is Express.User {
   const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;

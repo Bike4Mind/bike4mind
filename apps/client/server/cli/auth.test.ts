@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 
-const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown) => false);
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
 vi.mock('@server/auth/mfaEnforcement', () => ({
-  isMfaEnrollmentOwed: (user: unknown) => mockIsMfaEnrollmentOwed(user),
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
@@ -273,6 +273,7 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
 
   beforeEach(() => {
     vi.mocked(User.findById).mockReset();
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
   });
 
   it('rejects a JWT for an account with no recorded acceptance (fail-closed on the LLM surface)', async () => {
@@ -383,7 +384,25 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   it('rejects a valid session JWT once the user owes MFA enrollment', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
     mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
-    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('MFA enrollment required.');
+    const refusal = verifyJwtToken(sign('u1'));
+    await expect(refusal).rejects.toThrow('MFA enrollment required.');
+    // ForbiddenError, so the Function-URL adapter answers 403 with the message intact.
+    await expect(refusal).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), {
+      impersonatedBy: undefined,
+    });
+  });
+
+  it('passes the impersonation claim through to the enrollment gate', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    await verifyJwtToken(jwt.sign({ id: 'u1', impersonatedBy: 'admin-1' }, 'test-secret'));
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenLastCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+  });
+
+  it('fails closed when the enforcement read fails', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+    mockIsMfaEnrollmentOwed.mockRejectedValueOnce(new Error('settings read failed'));
+    await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('settings read failed');
   });
 });
 

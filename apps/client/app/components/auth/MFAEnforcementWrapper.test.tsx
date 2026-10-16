@@ -10,7 +10,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const post = vi.fn();
 const get = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: (...args: unknown[]) => post(...args), get: (...args: unknown[]) => get(...args) },
+  api: {
+    post: (...args: unknown[]) => post(...args),
+    get: (...args: unknown[]) => get(...args),
+    interceptors: { response: { use: vi.fn(() => 0), eject: vi.fn() } },
+  },
   isPublicPath: () => false,
 }));
 
