@@ -6,25 +6,16 @@ export interface AnsweringModelLabel {
 }
 
 /**
- * The id of the model that produced the reply: answeredBy when a deprecated-model redirect swapped
- * one in, else the recorded model. Anything that names or prices the reply reads this, not
- * model.name, which keeps the requested id unless a fallback hop overwrote it (ChatCompletionProcess
- * sets answeredBy).
- */
-export function answeringModelId(promptMeta: Pick<PromptMeta, 'model'> | null | undefined): string | undefined {
-  return promptMeta?.model?.answeredBy || promptMeta?.model?.name || undefined;
-}
-
-/**
- * The model name a reply should carry: the model that answered, plus the model it replaced when a
- * deprecated-model redirect swapped one in. Null when the turn recorded no model.
+ * The model name a reply should carry: the model that answered (`model.name`), plus the model it
+ * replaced when a deprecated-model redirect swapped one in (`redirectedFrom`). Null when the turn
+ * recorded no model.
  */
 export function answeringModelLabel(
-  promptMeta: Pick<PromptMeta, 'model'> | undefined,
+  promptMeta: Pick<PromptMeta, 'model' | 'redirectedFrom'> | undefined,
   displayName: (modelId: string) => string
 ): AnsweringModelLabel | null {
-  const model = promptMeta?.model;
-  if (!model?.name) return null;
-  if (!model.answeredBy || model.answeredBy === model.name) return { label: displayName(model.name) };
-  return { label: displayName(model.answeredBy), replaces: displayName(model.name) };
+  const name = promptMeta?.model?.name;
+  if (!name) return null;
+  const from = promptMeta.redirectedFrom;
+  return from ? { label: displayName(name), replaces: displayName(from) } : { label: displayName(name) };
 }

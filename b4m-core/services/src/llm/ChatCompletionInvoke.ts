@@ -238,11 +238,7 @@ export class ChatCompletionInvoke {
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
-        // A redirect resolved above keeps the requested id in `name` and the successor in
-        // `answeredBy`, matching what ChatCompletionProcess records for a redirect it resolves
-        // itself; the remaining fields describe the model that runs.
-        name: params.model,
-        ...(model.id !== params.model ? { answeredBy: model.id } : {}),
+        name: model.id,
         type: modelType,
         backend: model?.backend,
         contextWindow: model?.contextWindow,
@@ -314,6 +310,8 @@ export class ChatCompletionInvoke {
         { status: 'Received by backend', timestamp: now },
       ],
       ...(toolMode ? { toolMode } : {}),
+      // Drives the "is retired; answering with" status line in ChatCompletionProcess.
+      ...(model.id !== params.model ? { redirectedFrom: params.model } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is

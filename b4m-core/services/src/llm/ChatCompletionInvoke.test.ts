@@ -267,30 +267,6 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
   });
 
-  it('a hidden-model redirect records the requested model and the model that answered', async () => {
-    mockedGetAvailableModels.mockResolvedValue([successor] as any);
-
-    await makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
-
-    expect(mockDb.quests.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        promptMeta: expect.objectContaining({
-          model: expect.objectContaining({ name: HIDDEN_ID, answeredBy: SUCCESSOR_ID, contextWindow: 1000 }),
-        }),
-      })
-    );
-  });
-
-  it('records no answeredBy when the requested model runs as-is', async () => {
-    mockedGetAvailableModels.mockResolvedValue([successor] as any);
-
-    await makeInvoke().invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
-
-    const created = mockDb.quests.create.mock.calls[0][0];
-    expect(created.promptMeta.model.name).toBe(SUCCESSOR_ID);
-    expect(created.promptMeta.model).not.toHaveProperty('answeredBy');
-  });
-
   it('checks the successor, not the retired id, against model access configuration', async () => {
     mockedGetAvailableModels.mockResolvedValue([successor] as any);
     modelConfigs([
@@ -354,6 +330,33 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     await expect(
       makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key-1' })
     ).rejects.toThrow(/is replaced by/);
+  });
+
+  it('records the retired id in promptMeta.redirectedFrom and labels the reply with the successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(mockDb.quests.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMeta: expect.objectContaining({
+          redirectedFrom: HIDDEN_ID,
+          model: expect.objectContaining({ name: SUCCESSOR_ID, contextWindow: 1000 }),
+        }),
+      })
+    );
+  });
+
+  it('records no redirect for a current model', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    const { promptMeta } = mockDb.quests.create.mock.calls[0][0];
+    expect(promptMeta).not.toHaveProperty('redirectedFrom');
+    expect(promptMeta.model.name).toBe(SUCCESSOR_ID);
   });
 
   it('still rejects an unmapped model that is not in the catalog', async () => {

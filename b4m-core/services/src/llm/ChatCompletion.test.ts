@@ -600,7 +600,7 @@ describe('ChatCompletionProcess', () => {
       supportsImageVariation: false,
     };
 
-    it('reply metadata names the model that answered and keeps the requested model', async () => {
+    it('reply metadata names the model that answered and records the requested model', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
@@ -612,20 +612,24 @@ describe('ChatCompletionProcess', () => {
 
       // Assert on what the turn persisted, not only on the in-memory quest object.
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
-      expect(lastSave.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: ChatModels.GPT4,
+        model: { name: ChatModels.GPT4_1 },
+      });
     });
 
-    it('leaves answeredBy unset when no redirect happened', async () => {
+    it('records no redirect when none happened', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
 
       await service.process({ body, logger: mockLogger });
 
-      expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+      expect(mockQuest.promptMeta.redirectedFrom).toBeUndefined();
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
     });
 
-    it('clears answeredBy when the successor fails and nothing answers the turn', async () => {
+    it('keeps the requested model when the successor fails and nothing answers the turn', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
@@ -645,8 +649,7 @@ describe('ChatCompletionProcess', () => {
 
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
-      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
-      expect(lastSave.promptMeta.model.answeredBy).toBeUndefined();
+      expect(lastSave.promptMeta.redirectedFrom).toBe(ChatModels.GPT4);
     });
   });
 
@@ -830,6 +833,66 @@ describe('ChatCompletionProcess', () => {
       } finally {
         restore();
       }
+    });
+  });
+
+  describe('a turn redirected off a retired model', () => {
+    const redirectNotices = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter(([, status]) => typeof status === 'string' && status.includes('is retired'));
+
+    it('tells the user once which model answered in place of the retired one', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      const notices = redirectNotices(sendStatusUpdate as any);
+      expect(notices).toHaveLength(1);
+      expect(notices[0][1]).toBe(`gpt-5-chat-latest is retired; answering with ${ChatModels.GPT4}`);
+    });
+
+    it('says nothing when the successor turns out to be unusable', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      mockedGetAvailableModels.mockResolvedValue([]);
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow('Invalid LLM backend specified');
+
+      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(0);
+    });
+
+    it('says nothing when the turn was not redirected', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(0);
+    });
+
+    // Queue and agent runs reach Process without ChatCompletionInvoke, so it records the redirect itself.
+    it('records a redirect first seen here and relabels the reply with the model that answers', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: 'gpt-5-chat-latest', backend: ModelBackend.OpenAI };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      vi.mocked(resolveDeprecatedModelId).mockImplementation(id => (id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id));
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.redirectedFrom).toBe('gpt-5-chat-latest');
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(1);
     });
   });
 
@@ -4022,9 +4085,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
-      // No redirect here: the turn switched models only by falling back, so answeredBy stays unset
-      // and `name` (now the final hop) is the sole record of who answered.
-      expect(updateCall[0].promptMeta.model.answeredBy).toBeUndefined();
+      // No redirect here: the turn switched models only by falling back, so redirectedFrom stays
+      // unset and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.redirectedFrom).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call
@@ -4435,7 +4498,7 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect(hopN).toBe(2);
-      expect(mockQuest.promptMeta.model).toMatchObject({ name: 'hop-model-2', answeredBy: 'hop-model-2' });
+      expect(mockQuest.promptMeta).toMatchObject({ redirectedFrom: ChatModels.GPT4, model: { name: 'hop-model-2' } });
     });
 
     // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop

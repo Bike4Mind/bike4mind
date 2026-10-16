@@ -158,12 +158,12 @@ describe('MessageContent - fallback note reload wiring', () => {
 });
 
 describe('MessageContent - reply model chip', () => {
-  const renderWithModel = (model: NonNullable<IChatHistoryItem['promptMeta']>['model']) =>
+  const renderWithModel = (model: NonNullable<IChatHistoryItem['promptMeta']>['model'], redirectedFrom?: string) =>
     render(
       <TestWrapper>
         <MessageContent
           sessionId="session-1"
-          messageData={{ ...baseMessage, promptMeta: { model } } as IChatHistoryItem}
+          messageData={{ ...baseMessage, promptMeta: { model, redirectedFrom } } as IChatHistoryItem}
           index={0}
           onDelete={vi.fn()}
           onPinToggle={vi.fn()}
@@ -177,7 +177,7 @@ describe('MessageContent - reply model chip', () => {
     );
 
   it('a redirected reply is labelled with the model that answered, not the one requested', () => {
-    renderWithModel({ name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' });
+    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro');
 
     expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-3.5-flash');
   });
@@ -189,7 +189,7 @@ describe('MessageContent - reply model chip', () => {
   });
 
   it('names the replaced model in a tooltip on a redirected reply', async () => {
-    renderWithModel({ name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' });
+    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro');
 
     fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
 

@@ -141,11 +141,7 @@ const PromptMetaInspector = () => {
 
 ## Model Configuration
 - **Model**: ${promptMeta.model?.name || 'N/A'}
-${
-  promptMeta.model?.answeredBy && promptMeta.model.answeredBy !== promptMeta.model.name
-    ? `- **Answered by**: ${promptMeta.model.answeredBy}\n`
-    : ''
-}- **Temperature**: ${promptMeta.model?.parameters?.temperature ?? 'N/A'}
+${promptMeta.redirectedFrom ? `- **Redirected from**: ${promptMeta.redirectedFrom}\n` : ''}- **Temperature**: ${promptMeta.model?.parameters?.temperature ?? 'N/A'}
 - **Top P**: ${promptMeta.model?.parameters?.topP ?? 'N/A'}
 - **Max Tokens**: ${promptMeta.model?.parameters?.maxTokens ?? 'N/A'}
 
@@ -321,15 +317,15 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                       <Chip size="md" variant="soft" color="primary">
                         {promptMeta.model?.name || 'N/A'}
                       </Chip>
-                      {promptMeta.model?.answeredBy && promptMeta.model.answeredBy !== promptMeta.model.name && (
+                      {promptMeta.redirectedFrom && (
                         <Chip
                           size="md"
                           variant="soft"
                           color="neutral"
                           sx={{ ml: 1 }}
-                          data-testid="prompt-meta-answered-by-chip"
+                          data-testid="prompt-meta-redirected-from-chip"
                         >
-                          Answered by {promptMeta.model.answeredBy}
+                          Redirected from {promptMeta.redirectedFrom}
                         </Chip>
                       )}
                       <Stack direction="row" spacing={1} flexWrap="wrap" mt={1}>

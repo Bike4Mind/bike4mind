@@ -185,7 +185,7 @@ describe('PromptMetaInspector timestamps', () => {
   });
 });
 
-describe('PromptMetaInspector answered-by reporting', () => {
+describe('PromptMetaInspector redirect reporting', () => {
   beforeEach(() => {
     usePromptMetaInspector.getState().setPromptMeta(null);
   });
@@ -198,36 +198,29 @@ describe('PromptMetaInspector answered-by reporting', () => {
     return writeText.mock.calls[0][0] as string;
   };
 
-  it('flags the model that answered when a redirect replaced the requested one', () => {
-    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
+  it('flags the requested model when a redirect replaced it', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
     render(<PromptMetaInspector />, { wrapper: TestWrapper });
 
-    expect(screen.getByTestId('prompt-meta-answered-by-chip')).toHaveTextContent('Answered by gemini-3.5-flash');
+    expect(screen.getByTestId('prompt-meta-redirected-from-chip')).toHaveTextContent('Redirected from gemini-2.5-pro');
   });
 
-  it('shows no answered-by chip when nothing but the requested model answered', () => {
+  it('shows no redirected-from chip when the requested model answered', () => {
     show({ model: { name: 'gemini-2.5-pro' } });
     render(<PromptMetaInspector />, { wrapper: TestWrapper });
 
-    expect(screen.queryByTestId('prompt-meta-answered-by-chip')).toBeNull();
+    expect(screen.queryByTestId('prompt-meta-redirected-from-chip')).toBeNull();
   });
 
-  it('does not repeat the model name when a fallback hop made answeredBy equal name', () => {
-    show({ model: { name: 'gpt-5', answeredBy: 'gpt-5' } });
-    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+  it('adds a Redirected from line to the markdown report only when the turn was redirected', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
 
-    expect(screen.queryByTestId('prompt-meta-answered-by-chip')).toBeNull();
+    expect(copiedMarkdown()).toContain('- **Redirected from**: gemini-2.5-pro');
   });
 
-  it('adds an Answered by line to the markdown report only when the model differs', () => {
-    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
+  it('omits the Redirected from line when the turn was not redirected', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
 
-    expect(copiedMarkdown()).toContain('- **Answered by**: gemini-3.5-flash');
-  });
-
-  it('omits the Answered by line when the answering model is the requested one', () => {
-    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-2.5-pro' } });
-
-    expect(copiedMarkdown()).not.toContain('Answered by');
+    expect(copiedMarkdown()).not.toContain('Redirected from');
   });
 });

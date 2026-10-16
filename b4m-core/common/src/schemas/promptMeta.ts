@@ -45,10 +45,6 @@ const PromptMetaModelSchema = z.object({
   // We're flexible about model name since they'll potentially come from Hugging Face
   // or other public sources
   name: z.string(),
-  // The model that produced the reply when a deprecated-model redirect swapped one in. `name` keeps
-  // the requested id unless a fallback hop overwrote it; after such a hop the two coincide and this
-  // carries no extra information. Absent when the turn did not record one.
-  answeredBy: z.string().optional(),
   parameters: PromptMetaModelParametersSchema.optional(),
   type: z.enum(PROMPT_META_MODEL_TYPES).optional(),
   backend: z.string().optional(),
@@ -890,6 +886,8 @@ export const PromptMetaZodSchema = z.object({
   /** The public /api/chat request's `toolMode`, kept so tool-calling evals can split by it. Absent
    * when the request set none, which includes every in-app turn. */
   toolMode: ChatToolModeSchema.optional(),
+  /** The retired model id the turn was asked to run on, set only when it was redirected to `model.name`. */
+  redirectedFrom: z.string().optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),
