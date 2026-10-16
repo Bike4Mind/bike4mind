@@ -88,4 +88,21 @@ describe('GeneratedAudioCard', () => {
     expect(screen.getByTestId('generated-audio-card-settings')).toHaveTextContent('speech-hello-1.mp3');
     expect(screen.queryByTestId('generated-audio-card-reuse-btn')).not.toBeInTheDocument();
   });
+
+  it('summarizes a sound effect and copies its length and prompt influence', () => {
+    const generation = {
+      generator: 'sound_effect',
+      provider: 'elevenlabs',
+      prompt: 'rain on a tin roof',
+      durationSeconds: 4.5,
+      promptInfluence: 0.4,
+    };
+    renderWithTheme(<GeneratedAudioCard mode="sound-effects" file={speechFile(generation)} />);
+    expect(screen.getByTestId('generated-audio-card-settings')).toHaveTextContent('4.5s, Prompt influence 0.4');
+
+    fireEvent.click(screen.getByTestId('generated-audio-card-reuse-btn'));
+
+    expect(useAudioGenSettings.getState()).toMatchObject({ durationSeconds: 4.5, promptInfluence: 0.4 });
+    expect(useAudioStudioDraft.getState().text['sound-effects']).toBe('rain on a tin roof');
+  });
 });
