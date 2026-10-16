@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import {
   ChatCompletionProcess,
   addPairedTool,
@@ -193,6 +193,17 @@ const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
+// Turns on boolean admin flags that ChatCompletionProcess reads through getSettingsValue, keeping
+// whatever the test already wired for other keys; restored when the test finishes.
+const enableAdminFlags = (...keys: string[]) => {
+  const prev = mockedGetSettingsValue.getMockImplementation();
+  mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+    keys.includes(key) ? true : prev?.(key as never, settings)) as typeof getSettingsValue);
+  onTestFinished(() => {
+    if (prev) mockedGetSettingsValue.mockImplementation(prev);
+    else mockedGetSettingsValue.mockReset();
+  });
+};
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
@@ -308,7 +319,6 @@ describe('ChatCompletionProcess', () => {
     vi.spyOn(service, 'sendStatusUpdate').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'buildOptimizedFeatures').mockResolvedValue(undefined);
     vi.spyOn(service as any, 'loadAdminSettingsAsync').mockResolvedValue({});
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockReturnValue(false);
     vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({ promptMessages: [], convertedFabFiles: [] });
 
     // getLlmByModel resolves from @bike4mind/llm-adapters for both ChatCompletionProcess
@@ -3901,7 +3911,7 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       // enforceCredits gates the whole reservation block; leave every other setting off.
-      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      enableAdminFlags('enforceCredits');
       return { complete };
     };
 
@@ -3927,6 +3937,29 @@ describe('ChatCompletionProcess', () => {
       // Blocked at pre-flight: the org pool is never touched and the model never runs.
       expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
+    });
+
+    // A deployment with no enforceCredits row must bill: the read takes the setting's hosted
+    // default (on), not false, so a missing row can never switch reservation off.
+    it('reserves when the settings map has no enforceCredits row', async () => {
+      capOrgSetup();
+      const actual = await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils');
+      mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+        key === 'enforceCredits' ? actual.getSettingsValue(key, settings) : undefined) as typeof getSettingsValue);
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: null,
+        userDetails: [],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: 'org1' };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledWith('org1', expect.any(Number));
+      expect(mockDb.organizations.incrementCredits.mock.calls[0][1]).toBeLessThan(0);
     });
 
     it('lets an in-cap org member through the cap guard to the org-pool debit', async () => {
@@ -4756,7 +4789,7 @@ describe('ChatCompletionProcess', () => {
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
       mockedShouldTriggerFallback.mockReturnValue(true);
       mockedIsOverloadedError.mockReturnValue(false);
-      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      enableAdminFlags('enforceCredits');
       mockDb.users = {
         update: vi.fn(),
         findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
@@ -4841,7 +4874,7 @@ describe('ChatCompletionProcess', () => {
       mockedShouldTriggerFallback.mockReturnValue(true);
       mockedIsOverloadedError.mockReturnValue(false);
       mockedGetLlmWithFallback.mockResolvedValue(null);
-      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      enableAdminFlags('enforceCredits');
       mockDb.users = {
         update: vi.fn(),
         findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
@@ -4898,9 +4931,7 @@ describe('ChatCompletionProcess', () => {
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
       mockedShouldTriggerFallback.mockReturnValue(true);
       mockedIsOverloadedError.mockReturnValue(false);
-      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
-        (key: string) => key === 'enforceCredits' && opts.enforceCredits
-      );
+      if (opts.enforceCredits) enableAdminFlags('enforceCredits');
       mockDb.users = {
         update: vi.fn(),
         findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
@@ -9767,7 +9798,7 @@ describe('resolveDeniedTools', () => {
 
 describe('prompt moderation', () => {
   // These tests exercise the moderation path in ChatCompletionProcess.process() by
-  // controlling three knobs: ModerationEnabled (via getDefaultSettingValue spy),
+  // controlling three knobs: ModerationEnabled (via enableAdminFlags),
   // apiKeyTable.openai (via getEffectiveLLMApiKeys mock), and BedrockGuardrailId
   // (via getSettingsValue mock). The underlying service constructors are already
   // stubbed in the top-level vi.mock('@bike4mind/utils') block.
@@ -9941,9 +9972,7 @@ describe('prompt moderation', () => {
 
   it('calls OpenaiModerationsService when an OpenAI key is available', async () => {
     wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
-      key === 'ModerationEnabled' ? true : false
-    );
+    enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });
 
@@ -9955,9 +9984,7 @@ describe('prompt moderation', () => {
 
   it('calls BedrockGuardrailsService when no OpenAI key but guardrail is configured', async () => {
     wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
-      key === 'ModerationEnabled' ? true : false
-    );
+    enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });
 
@@ -9969,9 +9996,7 @@ describe('prompt moderation', () => {
 
   it('skips moderation when no OpenAI key and no guardrail configured', async () => {
     wireModMocks({ openaiKey: null, guardrailId: null });
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
-      key === 'ModerationEnabled' ? true : false
-    );
+    enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });
 
@@ -9981,9 +10006,7 @@ describe('prompt moderation', () => {
 
   it('records a moderation hit with source bedrock when Bedrock Guardrails blocks a prompt', async () => {
     wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
-      key === 'ModerationEnabled' ? true : false
-    );
+    enableAdminFlags('ModerationEnabled');
     vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: any) {
       this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', ['violence']));
     } as any);

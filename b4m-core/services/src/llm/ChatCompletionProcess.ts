@@ -2451,10 +2451,11 @@ export class ChatCompletionProcess {
         historyCount = adjustedHistoryCount;
       }
 
-      // Use default admin settings for immediate processing
-      const adminModerationEnabled = this.getDefaultSettingValue('ModerationEnabled', defaultAdminSettings);
-      const adminSettingsEnforceCredits = this.getDefaultSettingValue('enforceCredits', defaultAdminSettings);
-      const enableMCPServer = this.getDefaultSettingValue('EnableMCPServer', defaultAdminSettings);
+      // Schema-aware reads: an absent row takes the setting's default (enforceCredits is on for
+      // hosted), not false, so a missing row can never switch billing off.
+      const adminModerationEnabled = getSettingsValue('ModerationEnabled', defaultAdminSettings) === true;
+      const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', defaultAdminSettings) === true;
+      const enableMCPServer = getSettingsValue('EnableMCPServer', defaultAdminSettings) === true;
       if (adminSettingsEnforceCredits && !this.db.creditTransactions) {
         throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
       }
@@ -6808,12 +6809,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
    * Get setting value with default fallback.
    * Works with both default settings and real admin settings.
    */
-  private getDefaultSettingValue(key: string, settings: Record<string, string | number | boolean>): boolean {
-    const value = settings[key];
-    if (!value) return false;
-    return value.toString().toLowerCase() === 'true' || value.toString() === '1';
-  }
-
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,
