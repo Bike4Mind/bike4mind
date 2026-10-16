@@ -47,6 +47,19 @@ const sfxFinish = (path: string) =>
   ({ kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 5, paths: [path] }) as const;
 
 describe('ToolBuilder audio credit branches', () => {
+  it('gates each call against the balance left after the calls before it in the turn', () => {
+    // Room for one clip, not two: the second must be refused whether the first is still running
+    // or has already settled, since the balance snapshot predates both.
+    const { builder } = makeBuilder({ credits: Math.floor(speechCost * 1.5) });
+    const input = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 } as const;
+
+    builder.gateAudioCredits(input, true);
+    expect(() => builder.gateAudioCredits(input, true)).toThrow(/enough personal credits/);
+
+    builder.settleAudioCredits(quest(), speechFinish('a.mp3'), true);
+    expect(() => builder.gateAudioCredits(input, true)).toThrow(/enough personal credits/);
+  });
+
   it('settle reserves exactly one charge per delivered clip and rides the path on quest.images', () => {
     const { builder, toolCreditsMap, record } = makeBuilder();
     const q = quest();

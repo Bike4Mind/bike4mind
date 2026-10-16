@@ -48,6 +48,25 @@ beforeEach(() => {
 });
 
 describe('ToolBuilder.gateImageCredits', () => {
+  it('passes the credits already committed this turn, gated or settled, to the affordability check', async () => {
+    const { builder } = makeBuilder();
+
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+    builder.settleImageCredits(
+      'image_generation',
+      asQuest(quest()),
+      { ...COST_INPUT, paths: ['a.png'] } as never,
+      true,
+      null,
+      MODELS
+    );
+    await builder.gateImageCredits('edit_image', COST_INPUT, true, null, MODELS);
+
+    // In flight: 0, then 400. After one settles, its gate entry is replaced by the 400 charge.
+    expect(mockValidateUserCredits.mock.calls.map(call => call[6])).toEqual([0, 400, 800]);
+  });
+
   it('checks affordability without reserving anything', async () => {
     const { builder, toolCreditsMap, record } = makeBuilder();
 

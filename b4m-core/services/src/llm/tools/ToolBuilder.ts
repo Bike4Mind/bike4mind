@@ -492,6 +492,8 @@ export class ToolBuilder {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
+    // This call's gate estimate is now superseded by its settled charge.
+    this.gatedToolCredits.get(toolName)?.shift();
     // Only a charging call contributes: a zero-credit call is absent from the aggregate
     // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
@@ -509,6 +511,28 @@ export class ToolBuilder {
   }
 
   /**
+   * Gate estimates of calls that passed onToolStart and have not settled yet, per tool name in
+   * call order, so calls running in parallel in one turn each see the others. A call that fails
+   * keeps its entry: that can only refuse a later call in this turn, never let one overdraw.
+   */
+  private readonly gatedToolCredits = new Map<string, number[]>();
+
+  /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
+  private committedToolCredits(): number {
+    let total = 0;
+    for (const queues of [this.deps.toolCreditsMap, this.gatedToolCredits]) {
+      for (const queue of queues.values()) for (const credits of queue) total += credits;
+    }
+    return total;
+  }
+
+  private recordGatedToolCredits(toolName: string, credits: number): void {
+    const queue = this.gatedToolCredits.get(toolName) ?? [];
+    queue.push(credits);
+    this.gatedToolCredits.set(toolName, queue);
+  }
+
+  /**
    * Up-front affordability gate for audio_generation (onToolStart): throws
    * insufficient_credits before the paid provider call. Speech is gated on a conservative
    * per-character estimate (the resolved model is not known until synthesis returns);
@@ -517,7 +541,14 @@ export class ToolBuilder {
    */
   gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
     if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+    const { requiredCredits } = validateAudioCredits(
+      this.deps.user,
+      data,
+      this.deps.logger,
+      organization,
+      this.committedToolCredits()
+    );
+    this.recordGatedToolCredits('audio_generation', requiredCredits);
   }
 
   /**
@@ -633,14 +664,16 @@ export class ToolBuilder {
   ): Promise<void> {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-    await validateUserCredits(
+    const { requiredCredits } = await validateUserCredits(
       this.deps.user,
       modelInfo,
       data.n || 1,
       toImageCostInput(toolName, data),
       this.deps.logger,
-      organization
+      organization,
+      this.committedToolCredits()
     );
+    this.recordGatedToolCredits(toolName, requiredCredits);
   }
 
   /**
