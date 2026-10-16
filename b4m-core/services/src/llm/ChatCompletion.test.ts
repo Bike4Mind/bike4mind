@@ -610,7 +610,9 @@ describe('ChatCompletionProcess', () => {
 
       await service.process({ body, logger: mockLogger });
 
-      expect(mockQuest.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+      // Assert on what the turn persisted, not only on the in-memory quest object.
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
     });
 
     it('leaves answeredBy unset when no redirect happened', async () => {
@@ -621,6 +623,30 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+    });
+
+    it('clears answeredBy when the successor fails and nothing answers the turn', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      // No fallback (shouldTriggerFallback stays false): the redirect is the only swap, and the
+      // successor then fails, so no model produced a reply.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('gated model')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      // The terminal error rethrows after the error save; swallow it to inspect what was persisted.
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.answeredBy).toBeUndefined();
     });
   });
 
@@ -3996,6 +4022,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+      // No redirect here: the turn switched models only by falling back, so answeredBy stays unset
+      // and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.model.answeredBy).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call

@@ -2307,8 +2307,9 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
-      // promptMeta.model.name keeps the requested id (analytics and last-used-model read it); the
-      // reply label reads answeredBy so a redirected turn is not credited to the model it replaced.
+      // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
+      // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
+      // turn is not credited to the model it replaced.
       if (modelInfo.id !== model && quest.promptMeta?.model) {
         quest.promptMeta.model.answeredBy = modelInfo.id;
       }
@@ -6392,6 +6393,9 @@ export class ChatCompletionProcess {
       quest.status = 'done';
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
+      // Same rule for the redirect record: the successor ran but produced no reply, so the chip must
+      // not credit it as the answering model.
+      if (quest.promptMeta?.model) quest.promptMeta.model.answeredBy = undefined;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.
