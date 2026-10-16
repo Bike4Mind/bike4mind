@@ -228,8 +228,8 @@ DELETE /api/v1/agents/[id]
 
 #### List Agents (existing app route)
 
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\` or
-\`updatedAt\`) and \`orderDirection\`.
+\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\`,
+\`updatedAt\`, or \`name\`) and \`orderDirection\`.
 
 #### Agent Endpoints Summary
 
