@@ -175,9 +175,9 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
-  // OpenAI has already minted the call's key by the time the reserve runs, so a reserve failure
-  // must still answer without echoing it back.
-  it('answers 500 without leaking the ephemeral key when the reserve fails after OpenAI issued it', async () => {
+  // The reserve runs after OpenAI has minted the call's key, so its failure must still fail the
+  // request rather than answer 200 with the key.
+  it('answers 500 after the OpenAI call when the reserve fails', async () => {
     mockIncrementCredits.mockRejectedValueOnce(new Error('balance write failed'));
 
     const { res } = await callRoute();

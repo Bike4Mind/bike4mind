@@ -629,9 +629,9 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.openVoiceHold).not.toHaveBeenCalled();
   });
 
-  // The transport session exists by the time the reserve runs, so a reserve failure must still
-  // answer without carrying the signed URL or session token it just minted.
-  it('answers 500 without leaking the transport bootstrap when the reserve fails after it was created', async () => {
+  // The reserve runs after the transport session is minted, so its failure must still fail the
+  // request rather than answer 200 with the session.
+  it('answers 500 after the transport session is created when the reserve fails', async () => {
     mocks.incrementCredits.mockRejectedValueOnce(new Error('balance write failed'));
     const { res, run } = fireSessions();
     await run();
