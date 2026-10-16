@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { EMPTY_SIDEBAR_SECTIONS, normalizeSectionName, type SidebarSectionsState } from '@shared/sidebarSections';
+import {
+  EMPTY_SIDEBAR_SECTIONS,
+  normalizeSectionName,
+  sectionOf,
+  type SidebarSectionsState,
+} from '@shared/sidebarSections';
 
 const storedSchema = z.object({
   sections: z.array(z.object({ id: z.string().min(1), name: z.string() })),
@@ -106,7 +111,7 @@ export class SidebarSectionStore {
     return this.update(state => {
       if (sectionId === null) return withoutSession(state, sessionId);
       if (!state.sections.some(section => section.id === sectionId)) return state;
-      if (Object.hasOwn(state.assignments, sessionId) && state.assignments[sessionId] === sectionId) return state;
+      if (sectionOf(state, sessionId) === sectionId) return state;
       return { ...state, assignments: { ...state.assignments, [sessionId]: sectionId } };
     });
   }

@@ -20,6 +20,11 @@ export type SidebarSectionsState = {
 
 export const EMPTY_SIDEBAR_SECTIONS: SidebarSectionsState = { sections: [], assignments: {} };
 
+/** Own-property lookup, so a session id like `constructor` does not read an inherited value. */
+export function sectionOf(state: SidebarSectionsState, sessionId: string): string | undefined {
+  return Object.hasOwn(state.assignments, sessionId) ? state.assignments[sessionId] : undefined;
+}
+
 /** A typed name the way the store keeps it, so the dialog can refuse what the store would. */
 export function normalizeSectionName(text: string): string {
   // By code point, so the cap cannot split an emoji's surrogate pair.

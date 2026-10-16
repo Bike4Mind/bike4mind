@@ -1,5 +1,10 @@
 import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
-import { EMPTY_SIDEBAR_SECTIONS, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
+import {
+  EMPTY_SIDEBAR_SECTIONS,
+  sectionOf,
+  type SidebarSection,
+  type SidebarSectionsState,
+} from '@shared/sidebarSections';
 
 export interface ProjectGroup {
   /** The project directory, which is the grouping identity - two projects can share a name. */
@@ -58,7 +63,7 @@ export function groupSessions(
 
   const modesBySection = new Map<string, Set<ChatSessionMode>>();
   for (const session of sessions) {
-    const sectionId = userSections.assignments[session.id];
+    const sectionId = sectionOf(userSections, session.id);
     if (sectionId === undefined) continue;
     const modes = modesBySection.get(sectionId) ?? new Set<ChatSessionMode>();
     modes.add(session.mode);
@@ -75,7 +80,7 @@ export function groupSessions(
   const loose: ChatSessionSummary[] = [];
 
   for (const session of rest) {
-    const sectionId = userSections.assignments[session.id];
+    const sectionId = sectionOf(userSections, session.id);
     const sectionGroup = sectionId === undefined ? undefined : bySection.get(sectionId);
     if (sectionGroup) {
       sectionGroup.sessions.push(session);

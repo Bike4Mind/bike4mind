@@ -24,7 +24,7 @@ import {
   type ChatSessionSummary,
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
-import type { SidebarSection, SidebarSectionsState } from '@shared/sidebarSections';
+import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import {
   ArrowLeftIcon,
@@ -783,12 +783,12 @@ export function SessionList({
       status={statuses.get(session.id) ?? 'done'}
       pr={prSummaries.get(session.id)}
       userSections={userSections.sections}
-      sectionId={userSections.assignments[session.id]}
+      sectionId={sectionOf(userSections, session.id)}
       actions={actions}
     />
   );
 
-  const draggingSectionId = draggedSession ? userSections.assignments[draggedSession] : undefined;
+  const draggingSectionId = draggedSession ? sectionOf(userSections, draggedSession) : undefined;
 
   /**
    * dragover rather than dragenter decides the target: it keeps firing while the pointer is over
@@ -811,7 +811,7 @@ export function SessionList({
     event.preventDefault();
     event.stopPropagation();
     actions.drag(null);
-    if (userSections.assignments[sessionId] !== sectionId) sectionActions.move(sessionId, sectionId);
+    if (sectionOf(userSections, sessionId) !== sectionId) sectionActions.move(sessionId, sectionId);
   };
 
   // Anywhere in the list outside a section takes a session out of its section; a row in no
@@ -828,7 +828,7 @@ export function SessionList({
     if (!sessionId) return;
     event.preventDefault();
     actions.drag(null);
-    if (userSections.assignments[sessionId] !== undefined) sectionActions.move(sessionId, null);
+    if (sectionOf(userSections, sessionId) !== undefined) sectionActions.move(sessionId, null);
   };
 
   const customGroup = (group: CustomGroup) => (
