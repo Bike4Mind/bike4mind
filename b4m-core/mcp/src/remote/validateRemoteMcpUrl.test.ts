@@ -62,6 +62,7 @@ describe('validateRemoteMcpUrl', () => {
     ['subdomain of localhost', 'https://app.localhost/mcp'],
     ['.local', 'https://printer.local/mcp'],
     ['.internal', 'https://api.corp.internal/mcp'],
+    ['double trailing dot', 'https://foo.internal../mcp'],
     ['GCP metadata', 'https://metadata.google.internal/'],
     ['single label', 'https://intranet/mcp'],
     ['k8s service', 'https://svc.default.svc.cluster.local/'],
@@ -74,6 +75,7 @@ describe('validateRemoteMcpUrl', () => {
     const options = { ownHosts: ['https://app.bike4mind.com', 'cdn.bike4mind.com'] };
     expect(rejection('https://app.bike4mind.com/api/mcp', options)).toBe('own_host');
     expect(rejection('https://APP.bike4mind.com./x', options)).toBe('own_host');
+    expect(rejection('https://APP.bike4mind.com../x', options)).toBe('own_host');
     expect(rejection('https://edge.cdn.bike4mind.com/x', options)).toBe('own_host');
     expect(rejection('https://bike4mind.com/x', options)).toBe('accepted');
     expect(rejection('https://notapp.bike4mind.com.evil.example/x', options)).toBe('accepted');

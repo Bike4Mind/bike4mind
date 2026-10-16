@@ -1,5 +1,9 @@
 import { isIP } from 'net';
-import { buildPrivateAddressAdmission, isPrivateOrInternalHostname } from '@bike4mind/fab-pipeline/ssrf';
+import {
+  buildPrivateAddressAdmission,
+  isNonPublicHostname,
+  isPrivateOrInternalHostname,
+} from '@bike4mind/fab-pipeline/ssrf';
 import { RemoteMcpInvalidUrlError } from './errors';
 
 export interface ValidateRemoteMcpUrlOptions {
@@ -16,18 +20,6 @@ export interface ValidateRemoteMcpUrlOptions {
 
 const MAX_URL_LENGTH = 2048;
 const METADATA_HOSTNAMES = new Set(['instance-data', 'metadata', 'metadata.google.internal', 'metadata.internal']);
-// Suffixes that are not public DNS (RFC 6762, RFC 8375, ICANN-reserved private-use names).
-const PRIVATE_SUFFIXES = [
-  '.internal',
-  '.local',
-  '.localdomain',
-  '.home.arpa',
-  '.lan',
-  '.corp',
-  '.home',
-  '.intranet',
-  '.private',
-];
 
 function isLocalhostName(host: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost');
@@ -72,7 +64,9 @@ export function validateRemoteMcpUrl(input: string, options: ValidateRemoteMcpUr
   }
 
   url.hash = '';
-  url.hostname = url.hostname.replace(/\.$/, '');
+  // Strip every trailing dot: one hand-typed dot is the FQDN root and resolves to the same host, so
+  // leaving a second one would let `app.example.com..` dodge the `own_host` and suffix rules below.
+  url.hostname = url.hostname.replace(/\.+$/, '');
   // WHATWG URL already lowercases the host and rewrites decimal, octal and hex IPv4 spellings
   // (`2130706433`, `0x7f.1`, `0177.0.0.1`) to dotted form, so one isIP check covers every literal form.
   const host = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
@@ -88,10 +82,7 @@ export function validateRemoteMcpUrl(input: string, options: ValidateRemoteMcpUr
     }
   } else if (isLocalhostName(host) || METADATA_HOSTNAMES.has(host)) {
     throw new RemoteMcpInvalidUrlError('internal_hostname', 'URL points to a local or metadata host');
-  } else if (
-    !selfHostPrivate &&
-    (isPrivateOrInternalHostname(host) || !host.includes('.') || PRIVATE_SUFFIXES.some(suffix => host.endsWith(suffix)))
-  ) {
+  } else if (!selfHostPrivate && (isPrivateOrInternalHostname(host) || isNonPublicHostname(host))) {
     throw new RemoteMcpInvalidUrlError('internal_hostname', 'URL points to a private or internal hostname');
   }
 
