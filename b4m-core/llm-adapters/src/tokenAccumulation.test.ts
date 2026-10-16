@@ -1014,6 +1014,8 @@ interface NonStreamBackendSpec {
   build: (turns: unknown[]) => { backend: ICompletionBackend; callCount: () => number };
   toolTurn: (id: string, args: Record<string, unknown>, usage: MockUsage) => unknown;
   textTurn: (text: string, usage: MockUsage) => unknown;
+  /** Visible text plus a call to an end-of-turn tool, so the loop ends without another request. */
+  endTurn: (id: string, text: string, usage: MockUsage) => unknown;
 }
 
 const anthropicNonStreamSpec: NonStreamBackendSpec = {
@@ -1042,6 +1044,14 @@ const anthropicNonStreamSpec: NonStreamBackendSpec = {
     content: [{ type: 'text', text }],
     usage: anthropicUsage(usage),
     stop_reason: 'end_turn',
+  }),
+  endTurn: (id, text, usage) => ({
+    content: [
+      { type: 'text', text },
+      { type: 'tool_use', id, name: 'finish', input: {} },
+    ],
+    usage: anthropicUsage(usage),
+    stop_reason: 'tool_use',
   }),
 };
 
@@ -1083,6 +1093,20 @@ const openaiNonStreamSpec: NonStreamBackendSpec = {
     choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
     usage: openaiChatUsage(usage),
   }),
+  endTurn: (id, text, usage) => ({
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: text,
+          tool_calls: [{ id, type: 'function', function: { name: 'finish', arguments: '{}' } }],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: openaiChatUsage(usage),
+  }),
 };
 
 const geminiNonStreamSpec: NonStreamBackendSpec = {
@@ -1108,6 +1132,10 @@ const geminiNonStreamSpec: NonStreamBackendSpec = {
   }),
   textTurn: (text, usage) => ({
     candidates: [{ content: { parts: [{ text }] } }],
+    usageMetadata: geminiMockUsage(usage),
+  }),
+  endTurn: (_id, text, usage) => ({
+    candidates: [{ content: { parts: [{ text }, { functionCall: { name: 'finish', args: {} } }] } }],
     usageMetadata: geminiMockUsage(usage),
   }),
 };
@@ -1152,6 +1180,31 @@ describe.each([anthropicNonStreamSpec, openaiNonStreamSpec, geminiNonStreamSpec]
         spec.model,
         [{ role: 'user', content: 'Add.' }],
         { stream: false, tools: [ADD_TOOL], executeTools: false },
+        cb
+      );
+
+      expect(callCount()).toBe(1);
+      expect(finalCbInfo(calls)?.reasoningTokens).toBe(12);
+    });
+  }
+);
+
+// A round that carries answer text and calls only an end-of-turn tool ends the loop there
+// (shouldEndTurnAfterTools), so that round's emit is the terminal one - a branch the
+// single-turn, summed-tool-turn and executeTools: false cases above never reach.
+describe.each([anthropicNonStreamSpec, openaiNonStreamSpec, geminiNonStreamSpec])(
+  '$name non-streaming reasoning on an end-of-turn tool round',
+  spec => {
+    it('carries the count on the terminal emit', async () => {
+      const { backend, callCount } = spec.build([
+        spec.endTurn('tool_et1', 'The result is 5.', { input: 200, output: 30, reasoning: 12 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        spec.model,
+        [{ role: 'user', content: 'Finish.' }],
+        { stream: false, tools: [FINISH_TOOL], executeTools: true },
         cb
       );
 
