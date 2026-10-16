@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { agentRepository } from '@bike4mind/database';
 import { IAgent } from '@bike4mind/common';
-import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
+import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
 import { createAgent } from '@server/agents/createAgent';
 
 // baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
@@ -28,12 +28,9 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
 
     const data: IAgent[] = result.data;
 
-    // Refresh avatar URLs for all agents BEFORE returning response
-    const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(data, req.user!.id);
-
     res.json({
       ...result,
-      data: agentsWithRefreshedAvatars,
+      data: await presentAgentsForViewer(data, req.user!.id),
     });
   })
   .post(async (req, res) => {
