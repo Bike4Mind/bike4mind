@@ -67,6 +67,8 @@ function pointsAtLink(pkgName, dir) {
   });
 }
 
+// Overlay discovery here must stay in sync with scripts/link-premium-overlays.mjs, which
+// declares the packages this finds as apps/client dependencies so pnpm links them.
 function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
