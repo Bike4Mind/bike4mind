@@ -70,6 +70,7 @@ import {
   forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  retrievalTagsNameALake,
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
@@ -2826,12 +2827,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const query = message?.trim();
     if (!query) return [];
 
-    // Skip when the turn carries attached files - the question is about the
-    // attachment (e.g. "read this figure"), not the curated library. Forcing lake
-    // retrieval here injects off-topic context and emits spurious citations for
-    // sources the answer never used. The model can still call search_knowledge_base
-    // itself if it genuinely needs the library alongside the attachment.
-    if (quest.fabFileIds && quest.fabFileIds.length > 0) {
+    // Skip when the turn carries attached files and the chat did not choose a lake - the question is
+    // about the attachment (e.g. "read this figure"), and grounding it against every reachable lake
+    // injects off-topic context and spurious citations for sources the answer never used. The model
+    // can still call search_knowledge_base itself if it genuinely needs the library alongside the
+    // attachment.
+    //
+    // A chat with a chosen lake scope keeps retrieving: the picker records the choice
+    // (`lakeScopeExplicit`) and a lake start leaves the caller's library off. The test is the tag
+    // SHAPE, not how the tag got there - a session whose `datalake:` tag was derived from an attached
+    // file also passes the library-off arm. A tag that names no lake (a content tag, or no tags at
+    // all) keeps the skip. Prefixes are matched by identity only: a lake's file-tag prefix is known
+    // only after the access read below, which this pre-access check deliberately precedes.
+    const lakeChosen =
+      retrievalTagsNameALake(this.retrievalTags, []) &&
+      (!!this.lakeScopeExplicit || this.includeLibraryFiles === false);
+    if (quest.fabFileIds && quest.fabFileIds.length > 0 && !lakeChosen) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
       this.recordForcedSkip(quest, 'attached_files');
       return [];
