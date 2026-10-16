@@ -602,6 +602,22 @@ export class ToolBuilder {
   }
 
   /**
+   * Save the quest so newly reported generated-media keys are stored before the client sees them.
+   * A failed write is logged, never thrown: the file exists, and the streaming heartbeat or the
+   * end-of-turn save still records the key.
+   */
+  private async persistQuestImages(
+    quest: IChatHistoryItemDocument,
+    saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>
+  ): Promise<void> {
+    try {
+      await saveQuest(quest);
+    } catch (err) {
+      this.deps.logger.error(`[generatedMedia] failed to persist images on quest ${quest.id}:`, err);
+    }
+  }
+
+  /**
    * Up-front affordability gate for image_generation/edit_image (onToolStart): throws
    * insufficient_credits before the paid provider call. Like audio, the charge itself is
    * deferred to settleImageCredits so a failed generation is never billed. No-op when
@@ -873,6 +889,9 @@ export class ToolBuilder {
           // applyQuestStatusChanges.
           applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
           if (changes.generationJobs?.length) await this.persistGenerationJobs(quest.id, changes.generationJobs);
+          // The client resolves a pushed key via GET /api/sessions/[id]/generated-media, which only
+          // signs keys the stored quest records - so the key must be durable before it is broadcast.
+          if (changes.images?.length) await this.persistQuestImages(quest, saveQuest);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

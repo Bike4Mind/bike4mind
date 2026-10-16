@@ -46,7 +46,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
       // any user's image into their own files by supplying its key. Only copy an image the caller
       // created (or one shared with them via the source chat).
-      if (!(await userCanAccessGeneratedImage(imageS3Key, user.id))) {
+      if (!(await userCanAccessGeneratedImage(imageS3Key, user))) {
         throw new ForbiddenError('You do not have access to this image');
       }
 
