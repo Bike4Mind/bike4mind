@@ -239,6 +239,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       reservedCredits: enforceCredits ? reservedCredits : null,
       startedAt: holdStartedAt,
       realtime: false,
+      unaffordable: () =>
+        insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

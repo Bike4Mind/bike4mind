@@ -178,6 +178,7 @@ describe('reserveVoiceHold on a real replica set', () => {
       reservedCredits: HOLD_CREDITS,
       startedAt: new Date(),
       realtime: false,
+      unaffordable: () => new Error('insufficient credits'),
     });
 
   it('opens the hold and takes the reserve together', async () => {
@@ -208,5 +209,34 @@ describe('reserveVoiceHold on a real replica set', () => {
 
     expect(results.sort()).toEqual([false, true]);
     expect(await balanceOf(ids.userId)).toBe(STARTING_BALANCE - HOLD_CREDITS);
+  });
+
+  it('a reserve the balance no longer covers leaves no open hold and no balance change', async () => {
+    const ids = await seedSession();
+    await User.updateOne({ _id: ids.userId }, { $set: { currentCredits: HOLD_CREDITS - 1 } });
+
+    await expect(reserve(ids)).rejects.toThrow('insufficient credits');
+
+    expect(await balanceOf(ids.userId)).toBe(HOLD_CREDITS - 1);
+    const session = await Session.findById(ids.sessionId).lean();
+    expect(session?.voiceSessionStartedAt ?? null).toBeNull();
+    expect(session?.voiceReservedCredits ?? null).toBeNull();
+  });
+
+  it('of two concurrent calls the balance covers once, only one takes a reserve', async () => {
+    const first = await seedSession();
+    await User.updateOne({ _id: first.userId }, { $set: { currentCredits: HOLD_CREDITS + 1 } });
+    const now = new Date();
+    const second = await Session.create({ name: 'Voice', userId: first.userId, firstCreated: now, lastUpdated: now });
+
+    const results = await Promise.allSettled([
+      reserve(first),
+      reserve({ userId: first.userId, sessionId: second.id as string }),
+    ]);
+
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(await balanceOf(first.userId)).toBe(1);
+    const open = await Session.countDocuments({ userId: first.userId, voiceSessionStartedAt: { $ne: null } });
+    expect(open).toBe(1);
   });
 });

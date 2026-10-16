@@ -406,6 +406,8 @@ When you get the tool result back, summarize it conversationally for voice.`;
       startedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
       realtime: true,
+      unaffordable: () =>
+        new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

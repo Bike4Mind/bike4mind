@@ -383,6 +383,15 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
 
+  it('returns 422 insufficient_credits when the balance no longer covers the reservation at reserve time', async () => {
+    // The balance read at the top of the request passed; a concurrent debit drew it down since.
+    mocks.incrementCredits.mockResolvedValue({ currentCredits: -1 });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'insufficient_credits' });
+  });
+
   it('returns 503 provider_not_configured when no ElevenLabs server key is set', async () => {
     settings({ elevenLabsServerApiKey: '' });
     const { res, run } = fireSessions();
@@ -609,7 +618,7 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
   });
 
-  it('returns 502 without leaking the upstream message, and takes no reserve', async () => {
+  it('returns 502 without exposing the upstream message, and takes no reserve', async () => {
     mocks.createTransportSession.mockRejectedValue(new Error(UPSTREAM_SECRET_DETAIL));
     const { res, run } = fireSessions();
     await run();

@@ -152,6 +152,15 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     );
   });
 
+  it('answers 403 when the balance no longer covers the reserve at reserve time', async () => {
+    // The balance read at the top of the request passed; a concurrent debit drew it down since.
+    mockIncrementCredits.mockResolvedValueOnce({ currentCredits: -1 });
+
+    const { res } = await callRoute();
+
+    expect(res._getStatusCode()).toBe(403);
+  });
+
   it('rejects a missing OpenAI key up front: coded 502, no OpenAI call, no credit movement', async () => {
     mockGetEffectiveApiKey.mockResolvedValueOnce(null);
 

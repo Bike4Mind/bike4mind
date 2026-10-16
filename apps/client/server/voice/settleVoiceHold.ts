@@ -159,6 +159,11 @@ export async function settleVoiceHold(
  * Open a fresh call's hold and take its reserve in one transaction, so neither lands without the
  * other. Resolves false, with nothing moved, when a concurrent bootstrap opened the session's hold
  * first. A null reserve (credits not enforced) opens the hold without touching the balance.
+ *
+ * The caller's balance pre-check reads the user before the provider call, so it can be stale by
+ * now (another call's reserve, a chat debit). The reserve is therefore re-checked against the
+ * balance inside the transaction: a reserve the balance no longer covers throws `unaffordable()`
+ * and the transaction aborts with nothing moved.
  */
 export async function reserveVoiceHold(args: {
   userId: string;
@@ -167,6 +172,7 @@ export async function reserveVoiceHold(args: {
   reservedCredits: number | null;
   startedAt: Date;
   realtime: boolean;
+  unaffordable: () => Error;
 }): Promise<boolean> {
   return withTransaction(async () => {
     const opened = await sessionRepository.openVoiceHold(args.sessionId, args.priorStartedAt, {
@@ -176,7 +182,8 @@ export async function reserveVoiceHold(args: {
     });
     if (!opened) return false;
     if (args.reservedCredits) {
-      await userRepository.incrementCredits(args.userId, -args.reservedCredits);
+      const after = await userRepository.incrementCredits(args.userId, -args.reservedCredits);
+      if ((after?.currentCredits ?? 0) < 0) throw args.unaffordable();
     }
     return true;
   }, VOICE_TRANSACTION_OPTIONS);

@@ -185,6 +185,7 @@ describe('reserveVoiceHold', () => {
     reservedCredits: 600,
     startedAt: STARTED,
     realtime: true,
+    unaffordable: () => new Error('insufficient credits'),
   };
 
   beforeEach(() => {
@@ -210,6 +211,12 @@ describe('reserveVoiceHold', () => {
 
     expect(await reserveVoiceHold(RESERVE)).toBe(false);
     expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it("throws the caller's error when the balance no longer covers the reserve", async () => {
+    incrementCredits.mockResolvedValue({ currentCredits: -1 });
+
+    await expect(reserveVoiceHold(RESERVE)).rejects.toThrow('insufficient credits');
   });
 
   it('opens a hold without touching the balance when credits are not enforced', async () => {
