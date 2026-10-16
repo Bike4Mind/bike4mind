@@ -40,7 +40,9 @@ async function createAndOpenSession(
  *
  * Adopts the new session as current, seeds the react-query caches (same as the other create
  * seams), closes the lake manager, and navigates to the notebook by default. An embedding caller
- * can handle completion instead. Throws on API failure so the caller can surface its own error UX.
+ * can handle completion instead: `onCreated` runs after the session is created and adopted, so a
+ * rejection from it rejects the returned promise even though the session exists. Throws on API
+ * failure so the caller can surface its own error UX.
  *
  * NOTE (design follow-up): the entry point that calls this lives in the lake manager's info panel
  * for now - deliberately minimal. Placement/polish (e.g. a reader-facing lake card action) is left

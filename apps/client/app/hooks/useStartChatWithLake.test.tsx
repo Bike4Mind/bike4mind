@@ -72,6 +72,23 @@ describe('useStartChatWithLake (single lake)', () => {
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-embedded' });
     expect(closeManager).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects but still adopts the session when an embedding caller callback fails', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-callback-failed' } });
+    const onCreated = vi.fn().mockRejectedValue(new Error('embed failed'));
+    const { result } = renderWithClient(() => useStartChatWithLake());
+
+    await expect(
+      act(async () => {
+        await result.current('lake-1', { onCreated });
+      })
+    ).rejects.toThrow('embed failed');
+
+    expect(onCreated).toHaveBeenCalledWith({ id: 'session-callback-failed' });
+    expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-callback-failed' });
+    expect(closeManager).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useStartChatWithLakes (multi-lake subset)', () => {
@@ -91,6 +108,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       corpusGroundingMode: 'inline',
     });
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'session-2' }, replace: true });
   });
 
   it('sends preauthorizedLakeIds when the caller may admit some of the checked lakes', async () => {
