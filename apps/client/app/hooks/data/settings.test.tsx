@@ -10,10 +10,14 @@ import { useFloorAboveMeasuredWarning, useUpdateSettings } from './settings';
 import { ADMIN_SETTINGS_ARRAY_QUERY_KEY, ADMIN_SETTINGS_QUERY_KEY } from './queryKeys';
 
 describe('useFloorAboveMeasuredWarning', () => {
-  const renderWarning = (key: Parameters<typeof useFloorAboveMeasuredWarning>[0], value: unknown) => {
+  const renderWarning = (
+    key: Parameters<typeof useFloorAboveMeasuredWarning>[0],
+    value: unknown,
+    model = 'text-embedding-3-small'
+  ) => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(ADMIN_SETTINGS_ARRAY_QUERY_KEY, [
-      { settingName: 'defaultEmbeddingModel', settingValue: 'text-embedding-3-small' },
+      { settingName: 'defaultEmbeddingModel', settingValue: model },
     ]);
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -32,9 +36,50 @@ describe('useFloorAboveMeasuredWarning', () => {
     expect(renderWarning('forcedRetrievalMinSimilarityPct', '')).toBeUndefined();
     expect(renderWarning('forcedRetrievalRelativeFloorPct', 95)).toBeUndefined();
   });
+
+  it('falls back to 3-small for a stored model the server would not recognize', () => {
+    // The server's resolveDefaultEmbeddingModel falls back to 3-small for a value it cannot
+    // recognize; the client must grade the same floor, or a save it shows no warning for is
+    // refused with no confirm control here.
+    expect(renderWarning('forcedRetrievalMinSimilarityPct', 70, 'legacy-embedding-model')).toContain(
+      '70% is above the 58% minimum measured for text-embedding-3-small'
+    );
+  });
 });
 
 describe('useUpdateSettings', () => {
+  it('forwards confirmAboveMeasuredFloor only when the caller set it', async () => {
+    put.mockReset();
+    put.mockResolvedValue({ data: {} });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useUpdateSettings(), { wrapper });
+
+    act(() => {
+      result.current.mutate({ key: 'forcedRetrievalMinSimilarityPct', value: 75, confirmAboveMeasuredFloor: true });
+    });
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/api/settings/update', {
+        key: 'forcedRetrievalMinSimilarityPct',
+        value: 75,
+        confirmAboveMeasuredFloor: true,
+      })
+    );
+
+    act(() => {
+      result.current.mutate({ key: 'forcedRetrievalMinSimilarityPct', value: 58 });
+    });
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/api/settings/update', {
+        key: 'forcedRetrievalMinSimilarityPct',
+        value: 58,
+      })
+    );
+  });
+
   it('stays pending until the invalidated settings have been refetched', async () => {
     put.mockResolvedValue({ data: {} });
     let releaseRefetch: () => void = () => {};

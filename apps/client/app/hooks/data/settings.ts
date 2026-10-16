@@ -10,6 +10,8 @@ import {
   forcedRetrievalFloorAboveMeasured,
   forcedRetrievalFloorAboveMeasuredMessage,
   isBlankSettingValue,
+  isSupportedEmbeddingModel,
+  OpenAIEmbeddingModel,
 } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -194,9 +196,14 @@ export function useFloorAboveMeasuredWarning(key: SettingKey, value: unknown): s
   if (key !== 'forcedRetrievalMinSimilarityPct' || typeof model !== 'string' || isBlankSettingValue(value)) {
     return undefined;
   }
+  // Mirror `resolveDefaultEmbeddingModel` on the server: the stored value is the model only while it
+  // is supported, and an unsupported one falls back to 3-small - the floor the server refuses
+  // against. Without this the two sides disagree when the stored value is stale or legacy, and a
+  // save the client never warned about is refused with no way to confirm it from here.
+  const resolvedModel = isSupportedEmbeddingModel(model) ? model : OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
   const pct = Number(value);
-  const measured = Number.isFinite(pct) ? forcedRetrievalFloorAboveMeasured(pct, model) : undefined;
-  return measured === undefined ? undefined : forcedRetrievalFloorAboveMeasuredMessage(pct, measured, model);
+  const measured = Number.isFinite(pct) ? forcedRetrievalFloorAboveMeasured(pct, resolvedModel) : undefined;
+  return measured === undefined ? undefined : forcedRetrievalFloorAboveMeasuredMessage(pct, measured, resolvedModel);
 }
 
 /**
