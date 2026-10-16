@@ -629,6 +629,62 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
+
+    describe('forced retrieval', () => {
+      it('turns forced retrieval on when a lake is picked on a session that never set it', async () => {
+        // Matches create: without this the search is left to the model, and a turn that skips it
+        // is answered without the lake and nothing tells the user so.
+        const { update, adapters } = makeAdapters({}, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope: ['datalake:research'] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).toMatchObject({
+          retrievalTags: ['datalake:research'],
+          lakeScopeExplicit: true,
+          forceKnowledgeRetrieval: true,
+        });
+      });
+
+      it.each([
+        ['an empty scope', []],
+        ['a cleared scope', null],
+      ])('leaves it unset for %s', async (_label, lakeScope) => {
+        const { update, adapters } = makeAdapters({}, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+
+      it('turns it on over a stored false', async () => {
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false }, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope: ['datalake:research'] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: true });
+      });
+
+      it('lets an opt-out in the same request win', async () => {
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true }, []);
+
+        await updateSession(
+          user,
+          { id: 'session-1', lakeScope: ['datalake:research'], forceKnowledgeRetrieval: false } as never,
+          adapters as never
+        );
+
+        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: false });
+      });
+
+      it('does not turn it on for a scope derived from an attached file', async () => {
+        const { update, adapters } = makeAdapters({}, [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+
+        await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+    });
   });
 
   describe('includeLibraryFiles', () => {

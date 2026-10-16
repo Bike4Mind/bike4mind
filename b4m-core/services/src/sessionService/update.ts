@@ -14,6 +14,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { sessionGroundsOnNoLake } from '../dataLakeService/narrowLakeAccessToSession';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+import { resolveLakeScopeForcedRetrieval } from './resolveLakeScopeForcedRetrieval';
 import {
   filterAccessibleKnowledgeIds,
   type FilterAccessibleKnowledgeIdsAdapters,
@@ -180,6 +181,16 @@ export const updateSession = async (
   if (lakeScopeRequested) {
     update.retrievalTags = lakeScope ?? [];
     update.lakeScopeExplicit = lakeScope !== null;
+    // A fresh pick overrides a stored `false` (the picker is hidden while the mode is off); only
+    // a value sent in this request wins.
+    if (forceKnowledgeRetrieval === undefined) {
+      const forced = resolveLakeScopeForcedRetrieval({
+        forceKnowledgeRetrieval: undefined,
+        retrievalTags: update.retrievalTags,
+        lakeScopeExplicit: update.lakeScopeExplicit,
+      });
+      if (forced !== undefined) update.forceKnowledgeRetrieval = forced;
+    }
   }
   update.lastUpdated = new Date();
 
