@@ -174,7 +174,8 @@ export async function extractLakeMemoryForBatch(
     const embed = createMementoEmbedder(apiKeyTable, logger);
 
     const extractor = new LakeMemoryExtractionService(logger);
-    // Every extraction call is billed to the lake owner (their org seat when present).
+    // Every extraction call is billed to the lake owner (their org seat when present), even when a
+    // grantee's upload triggered it: extraction is lake-owned work.
     const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
     if (!owner) {
       logger.warn('[lakeMemory] lake owner not found; skipping extraction', { dataLakeId: params.dataLakeId });
