@@ -90,6 +90,7 @@ export default function GitHubRepositoryPickerModal() {
     () => installations.filter(installation => !installation.violation),
     [installations]
   );
+  const installButtonLabel = installations.length === 0 ? 'Install the GitHub app' : 'Install on another account';
   const hasOrganizationInstallation = installations.some(installation => installation.accountType === 'Organization');
 
   const filteredInstallations = useMemo(() => {
@@ -394,19 +395,19 @@ export default function GitHubRepositoryPickerModal() {
               })}
               <Button
                 data-testid="github-repo-picker-install-btn"
-                variant="outlined"
-                color="neutral"
+                variant={installations.length === 0 ? 'solid' : 'outlined'}
+                color={installations.length === 0 ? 'primary' : 'neutral'}
                 startDecorator={<GitHubIcon />}
                 disabled={!data?.installUrl}
                 onClick={() => leaveForGitHub(data?.installUrl)}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                Install on another account
+                {installButtonLabel}
               </Button>
               {!hasOrganizationInstallation && (
                 <Typography level="body-xs" color="neutral">
-                  An organization repository needs an owner to install the App on that organization. Use &quot;Install
-                  on another account&quot; to pick the org and request it.
+                  An organization repository needs an owner to install the App on that organization. Use &quot;
+                  {installButtonLabel}&quot; to pick the org and request it.
                 </Typography>
               )}
             </Stack>
