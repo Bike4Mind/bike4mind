@@ -84,8 +84,8 @@ describe('filterIntegrations', () => {
 describe('counts', () => {
   it('counts live entries, models and the roadmap for the count line', () => {
     const counts = galleryCounts(deriveGallery(viewer(), {}));
-    expect(counts).toEqual({ integrations: 12, models: MODEL_PROVIDERS.length, roadmap: 19 });
-    expect(countLine(counts)).toBe(`12 integrations, ${MODEL_PROVIDERS.length} models, 19 on the roadmap`);
+    expect(counts).toEqual({ integrations: 12, models: MODEL_PROVIDERS.length, roadmap: 18 });
+    expect(countLine(counts)).toBe(`12 integrations, ${MODEL_PROVIDERS.length} models, 18 on the roadmap`);
     expect(countLine({ integrations: 1, models: 1, roadmap: 0 })).toBe('1 integration, 1 model, 0 on the roadmap');
   });
 });

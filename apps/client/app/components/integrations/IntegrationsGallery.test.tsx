@@ -116,7 +116,7 @@ describe('IntegrationsGallery', () => {
     expect(within(group('dev-tools')).getByTestId('integrations-row-github')).toBeInTheDocument();
     expect(within(group('coming-soon')).getByTestId('integrations-row-hubspot')).toBeInTheDocument();
     expect(screen.getByTestId('integrations-count-line')).toHaveTextContent(
-      /^12 integrations, 12 models, 19 on the roadmap\.$/
+      /^12 integrations, 12 models, 18 on the roadmap\.$/
     );
   });
 
@@ -230,7 +230,7 @@ describe('IntegrationsGallery', () => {
     renderGallery();
     await userEvent.click(screen.getByTestId('integrations-status-filter-btn'));
     expect(await screen.findByTestId('integrations-status-option-connected')).toHaveTextContent(/^Connected1$/);
-    expect(screen.getByTestId('integrations-status-option-coming-soon')).toHaveTextContent(/^Coming soon19$/);
+    expect(screen.getByTestId('integrations-status-option-coming-soon')).toHaveTextContent(/^Coming soon18$/);
   });
 
   it('toggles a request and shows the request count', async () => {
