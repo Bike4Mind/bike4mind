@@ -57,7 +57,16 @@ export const shouldReplaceGenerationJob = <T extends Pick<PollableGenerationJob,
 ): boolean => {
   if (!existing) return true;
   if (isTerminalGenerationState(existing.state) && !isTerminalGenerationState(incoming.state)) return false;
-  if (movesLiveStateBackwards(existing.state, incoming.state)) return false;
+  if (movesLiveStateBackwards(existing.state, incoming.state)) {
+    // A sync submit marks the job `running` before the provider answers; a retryable failure then resets it to
+    // `pending` with submitAttemptedAt cleared, so the engine accepts a cancel and retries it
+    // (b4m-core/services/src/generationJobs/engine.ts). Take that newer snapshot so the card stops showing a stale
+    // `running` with Cancel hidden. Frames carry no newer timestamp and are still refused by `patch`.
+    if (existing.state === 'running' && incoming.state === 'pending') {
+      return Date.parse(incoming.updated_at) > Date.parse(existing.updated_at);
+    }
+    return false;
+  }
   return Date.parse(incoming.updated_at) >= Date.parse(existing.updated_at);
 };
 

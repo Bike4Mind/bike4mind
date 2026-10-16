@@ -98,6 +98,24 @@ describe('a cancel racing the job to completion', () => {
   });
 });
 
+// A sync submit marks the song `running`, then the engine resets a retryable submit failure to `pending` so it can be
+// retried and cancelled again. The card must take that newer snapshot; the frames `patch` refuses are not the only
+// way it hears about the reset.
+describe('a sync submit the engine resets for a retry', () => {
+  it('takes a strictly newer pending over the cached running', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    const reset = musicJob({ state: 'pending', updated_at: LATER });
+    expect(reconcileFetchedMusicGeneration(queryClient, reset)).toBe(reset);
+    upsertMusicGeneration(queryClient, reset);
+    expect(detail()?.state).toBe('pending');
+  });
+
+  it('still refuses a pending snapshot that is not newer', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running', updated_at: LATER }));
+    expect(reconcileFetchedMusicGeneration(queryClient, musicJob({ state: 'pending' })).state).toBe('running');
+  });
+});
+
 describe('music gallery list', () => {
   const listOf = (...jobs: MusicGeneration[]): MusicGenerationList => ({
     pages: [{ data: jobs, next_cursor: null }],
