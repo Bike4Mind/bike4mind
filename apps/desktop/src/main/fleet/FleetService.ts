@@ -55,6 +55,7 @@ export class FleetService {
   async initialize(): Promise<void> {
     this.consent = (await this.deps.settings.read()).consent;
     this.config = await this.deps.readConfig();
+    if (!this.consent) await this.deps.queue.clear();
     this.pending = await this.deps.queue.size();
     this.publish();
     if (this.status() === 'active' && this.pending > 0) this.schedule(0);
@@ -122,7 +123,7 @@ export class FleetService {
     this.pending = await this.deps.queue.size();
     this.publish();
     if (this.status() !== 'active') return;
-    if (this.pending >= MAX_BATCH_EVENTS) this.schedule(0);
+    if (this.failures === 0 && this.pending >= MAX_BATCH_EVENTS) this.schedule(0);
     else if (this.timer === null) this.schedule(FLUSH_DELAY_MS);
   }
 
@@ -157,7 +158,7 @@ export class FleetService {
       if (!config) break;
       const batch = await this.deps.queue.peek();
       this.pending = await this.deps.queue.size();
-      if (!batch) break;
+      if (!batch || this.status() !== 'active') break;
       const ids = batch.events.map(event => event.eventId);
       const body = toOtlpLogs(batch, {
         appVersion: this.deps.appVersion,

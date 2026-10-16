@@ -427,7 +427,11 @@ export function registerChat(
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: event => {
       broadcast(event);
-      hooks.observeStream?.(event);
+      try {
+        hooks.observeStream?.(event);
+      } catch {
+        logger.warn('FLEET: activity observer failed');
+      }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { app, ipcMain } from 'electron';
 import type { ChatStreamEvent } from '@shared/chat';
 import type { FleetState } from '@shared/fleet';
@@ -41,7 +41,7 @@ function configPath(): string {
 
 function tilde(path: string): string {
   const home = homedir();
-  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+  return path.startsWith(`${home}${sep}`) ? `~${path.slice(home.length)}` : path;
 }
 
 export interface RegisteredFleet {
@@ -64,7 +64,7 @@ export function registerFleet(): RegisteredFleet {
 
   const service = new FleetService({
     settings: new FleetSettingsStore(userDataFile(join(userData, 'fleet-integration.json')), logger),
-    queue: new ActivityQueue(userDataFile(join(userData, 'fleet-activity-queue.json'))),
+    queue: new ActivityQueue(userDataFile(join(userData, 'fleet-activity-queue.json')), Date.now, logger),
     client: new FleetClient(),
     readConfig: () => readFleetConfig(path),
     configPath: tilde(path),

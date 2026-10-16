@@ -1,7 +1,7 @@
 /**
  * The Fleet activity wire contract, mirrored so a batch is checked here before it is sent.
  *
- * Must stay in sync with Fleet's `POST /api/integrations/bike4mind/v1/activity` validator: a
+ * Must stay in sync with Fleet's OTLP `POST /v1/logs` validator: a
  * batch Fleet would reject is a batch this side would otherwise retry forever.
  */
 

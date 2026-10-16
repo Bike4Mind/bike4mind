@@ -286,7 +286,43 @@ describe('FleetService consent gate', () => {
     await h.service.record([event(), event()]);
     expect(h.service.getState().pending).toBe(0);
     expect(h.sent).toHaveLength(0);
-    expect(h.queueFile.contents).toBeNull();
+    expect(h.queueFile.contents).toBe('[]');
+  });
+
+  it.each([null, '{}', '{"consent":null}', '{"consent":"true"}', ''])('defaults sharing off for %s', async raw => {
+    const settings = new FleetSettingsStore(memoryFile(raw), { warn: () => undefined });
+    expect(await settings.read()).toEqual({ consent: false });
+  });
+
+  it('keeps opt-out last during a record write, then retains no old events on restart', async () => {
+    const h = await harness();
+    await h.service.setConsent(true);
+    const write = h.queueFile.write.bind(h.queueFile);
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const writing = vi.fn(async (value: string) => {
+      if (value !== '[]') await blocked;
+      await write(value);
+    });
+    h.queueFile.write = writing;
+    const record = h.service.record([event()]);
+    await vi.waitFor(() => expect(writing).toHaveBeenCalledTimes(1));
+    const optOut = h.service.setConsent(false);
+    await h.service.record([event()]);
+    release();
+    await Promise.all([record, optOut]);
+    expect(h.service.recording()).toBe(false);
+    expect(h.service.getState().pending).toBe(0);
+    expect(await new ActivityQueue(h.queueFile).size()).toBe(0);
+    await h.service.setConsent(true);
+    await h.service.sendNow();
+    expect(h.sent).toEqual([]);
+    await h.service.record([event()]);
+    await h.service.sendNow();
+    expect(h.sent).toHaveLength(1);
+    expect(eventIds(h.sent[0].body)).toHaveLength(1);
   });
 
   it('turning consent off empties the unsent queue', async () => {
@@ -335,6 +371,23 @@ describe('FleetService sending', () => {
     await h.service.record([event()]);
     await h.service.sendNow();
     h.timers.at(-1)!.callback();
+    await vi.waitFor(() => expect(h.timers.at(-1)?.ms).toBe(FLUSH_DELAY_MS * 2));
+  });
+
+  it('keeps the retry timer when further records fill the queue', async () => {
+    const h = await harness(() => response(503));
+    await h.service.setConsent(true);
+    await h.service.record([event()]);
+    await h.service.sendNow();
+    const retry = h.timers.at(-1)!;
+    const timerCount = h.timers.length;
+    await h.service.record(Array.from({ length: 24 }, event));
+    await h.service.record([event()]);
+    expect(h.timers).toHaveLength(timerCount);
+    expect(h.timers.at(-1)).toBe(retry);
+    expect(h.sent).toHaveLength(1);
+    retry.callback();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(2));
     await vi.waitFor(() => expect(h.timers.at(-1)?.ms).toBe(FLUSH_DELAY_MS * 2));
   });
 

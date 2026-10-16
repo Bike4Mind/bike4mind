@@ -101,9 +101,48 @@ describe('ActivityRecorder', () => {
     on.recorder.observe(ev({ type: 'tool-end', call: call({ status: 'error' }) }));
     expect(on.recorded).toEqual([]);
   });
+
+  it('does not record a completed reply after sharing is disabled during repository lookup', async () => {
+    let enabled = true;
+    let resolve!: (repository: { owner: string; name: string }) => void;
+    const repository = new Promise<{ owner: string; name: string }>(done => {
+      resolve = done;
+    });
+    const record = vi.fn();
+    const recorder = new ActivityRecorder({
+      enabled: () => enabled,
+      record,
+      repositoryFor: () => repository,
+      now: () => T0,
+    });
+    recorder.observe(ev({ type: 'start' }));
+    recorder.observe(ev({ type: 'done', content: '' }));
+    enabled = false;
+    resolve({ owner: 'team', name: 'app' });
+    await repository;
+    await new Promise<void>(done => setImmediate(done));
+    expect(record).not.toHaveBeenCalled();
+  });
 });
 
 describe('parseRemote', () => {
+  it.each([
+    'file:///Users/test/projects/team/app.git',
+    'C:/Users/test/projects/team/app',
+    'C:\\Users\\test\\projects\\team\\app',
+    'git@host:/team/app.git',
+    'git@host:~/team/app.git',
+    'git@host:~other/team/app.git',
+    'ftp://host/team/app.git',
+    'ssh:///team/app.git',
+  ])('ignores unsupported remote %s', remote => {
+    expect(parseRemote(remote)).toBeNull();
+  });
+
+  it.each(['https', 'http', 'ssh', 'git', 'git+ssh', 'ssh+git'])('accepts %s network remotes', scheme => {
+    expect(parseRemote(`${scheme}://host/team/app.git`)).toEqual({ owner: 'team', name: 'app' });
+  });
+
   it('keeps only owner and name, whatever the remote form', () => {
     expect(parseRemote('git@github.com:acme/app.git')).toEqual({ owner: 'acme', name: 'app' });
     expect(parseRemote('https://github.com/acme/app')).toEqual({ owner: 'acme', name: 'app' });

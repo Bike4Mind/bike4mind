@@ -26,9 +26,12 @@ export function useFleetState(): FleetState | null {
   const [state, setState] = useState<FleetState | null>(null);
   useEffect(() => {
     let current = true;
-    void window.b4m.fleet.refresh().then(next => {
-      if (current) setState(next);
-    });
+    void window.b4m.fleet
+      .refresh()
+      .then(next => {
+        if (current) setState(next);
+      })
+      .catch(() => console.warn('FLEET: failed to refresh activity state'));
     const unsubscribe = window.b4m.fleet.onStateChanged(next => setState(next));
     return () => {
       current = false;
@@ -69,6 +72,8 @@ export function FleetIntegrationCard() {
     setBusy(true);
     try {
       await action();
+    } catch {
+      console.warn('FLEET: activity action failed');
     } finally {
       setBusy(false);
     }
@@ -116,7 +121,7 @@ export function FleetIntegrationCard() {
             onChange={event => void run(() => window.b4m.fleet.setConsent(event.target.checked))}
             endDecorator="Share activity with Fleet"
             slotProps={{
-              input: { 'aria-label': 'Share activity with Fleet', 'data-testid': 'fleet-consent-switch' } as never,
+              input: { 'aria-label': 'Share activity with Fleet', 'data-testid': 'fleet-consent-switch' },
             }}
             sx={{ flex: 1 }}
           />

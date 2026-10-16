@@ -15,13 +15,18 @@ export function parseRemote(remote: string): RepositoryName | null {
   const scp = /^[^@\s/]+@[^:\s]+:(.+)$/.exec(trimmed);
   let path: string;
   if (scp) {
+    if (scp[1].startsWith('/') || scp[1].startsWith('~')) return null;
     path = scp[1];
   } else {
+    let url: URL;
     try {
-      path = new URL(trimmed).pathname;
+      url = new URL(trimmed);
     } catch {
       return null;
     }
+    if (!['https:', 'http:', 'ssh:', 'git:', 'git+ssh:', 'ssh+git:'].includes(url.protocol) || !url.hostname)
+      return null;
+    path = url.pathname;
   }
   const parts = path
     .replace(/\.git\/?$/, '')

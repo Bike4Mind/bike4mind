@@ -11,55 +11,79 @@ export const MAX_QUEUED_EVENTS = 5000;
  */
 export class ActivityQueue {
   private events: ActivityEvent[] | null = null;
+  private loading: Promise<ActivityEvent[]> | null = null;
+  private operation: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly file: VaultFile,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly logger: { warn(message: string): void } = console
   ) {}
 
-  async size(): Promise<number> {
-    return (await this.load()).length;
+  size(): Promise<number> {
+    return this.ordered(async () => (await this.load()).length);
   }
 
   async push(events: readonly ActivityEvent[]): Promise<void> {
     if (events.length === 0) return;
-    const queued = await this.load();
-    queued.push(...events);
-    if (queued.length > MAX_QUEUED_EVENTS) queued.splice(0, queued.length - MAX_QUEUED_EVENTS);
-    await this.persist();
+    const snapshot = [...events];
+    return this.ordered(async () => {
+      const queued = await this.load();
+      queued.push(...snapshot);
+      if (queued.length > MAX_QUEUED_EVENTS) queued.splice(0, queued.length - MAX_QUEUED_EVENTS);
+      await this.persist();
+    });
   }
 
   /** The next batch Fleet would accept. Events Fleet would now refuse (too old) are dropped first. */
-  async peek(): Promise<ActivityBatch | null> {
-    const queued = await this.load();
-    const now = this.now();
-    const valid = queued.filter(event => isValidEvent(event, now));
-    if (valid.length !== queued.length) {
-      this.events = valid;
-      await this.persist();
-    }
-    return nextBatch(valid);
+  peek(): Promise<ActivityBatch | null> {
+    return this.ordered(async () => {
+      const queued = await this.load();
+      const now = this.now();
+      const valid = queued.filter(event => isValidEvent(event, now));
+      if (valid.length !== queued.length) {
+        this.events = valid;
+        await this.persist();
+      }
+      return nextBatch(valid);
+    });
   }
 
-  async remove(eventIds: readonly string[]): Promise<void> {
+  remove(eventIds: readonly string[]): Promise<void> {
     const drop = new Set(eventIds);
-    this.events = (await this.load()).filter(event => !drop.has(event.eventId));
-    await this.persist();
+    return this.ordered(async () => {
+      this.events = (await this.load()).filter(event => !drop.has(event.eventId));
+      await this.persist();
+    });
   }
 
-  async clear(): Promise<void> {
-    this.events = [];
-    await this.persist();
+  clear(): Promise<void> {
+    return this.ordered(async () => {
+      this.events = [];
+      await this.persist();
+    });
+  }
+
+  // Order mutations as well as writes, including callers waiting on the initial disk read.
+  private ordered<T>(action: () => Promise<T>): Promise<T> {
+    const result = this.operation.then(action);
+    this.operation = result.catch(() => undefined);
+    return result;
   }
 
   private async load(): Promise<ActivityEvent[]> {
     if (this.events) return this.events;
+    return (this.loading ??= this.readFromDisk());
+  }
+
+  private async readFromDisk(): Promise<ActivityEvent[]> {
     let events: ActivityEvent[] = [];
     try {
       const raw = await this.file.read();
       const parsed: unknown = raw ? JSON.parse(raw) : null;
       if (Array.isArray(parsed)) events = parsed as ActivityEvent[];
     } catch {
+      this.logger.warn('FLEET: activity queue unreadable, starting empty');
       events = [];
     }
     this.events = events;
@@ -67,6 +91,9 @@ export class ActivityQueue {
   }
 
   private async persist(): Promise<void> {
-    await this.file.write(JSON.stringify(this.events ?? [])).catch(() => undefined);
+    const snapshot = JSON.stringify(this.events ?? []);
+    await this.file.write(snapshot).catch(() => {
+      this.logger.warn('FLEET: failed to write activity queue');
+    });
   }
 }
