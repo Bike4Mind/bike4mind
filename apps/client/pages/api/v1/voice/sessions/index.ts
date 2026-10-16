@@ -10,7 +10,6 @@ import {
   fabFileRepository,
   projectRepository,
   sessionRepository,
-  userRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -34,7 +33,7 @@ import {
   NotFoundError,
 } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
-import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -196,11 +195,8 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
     await settlePriorVoiceHold(session);
   }
 
-  if (enforceCredits && !reuseHold) {
-    if ((req.user?.currentCredits ?? 0) < reservedCredits) {
-      throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
-    }
-    await userRepository.incrementCredits(req.user.id, -reservedCredits);
+  if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
+    throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
   }
 
   let createResult;
@@ -217,9 +213,6 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       ...(req.user.voiceSystemPromptOverride ? { systemPromptOverride: req.user.voiceSystemPromptOverride } : {}),
     });
   } catch (error) {
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     const errDetail =
       error instanceof Error
         ? { message: error.message, stack: error.stack, name: error.name }
@@ -233,25 +226,23 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // shape to the published response schema at compile time.
   const clientBootstrap: VoiceClientBootstrap = createResult.clientBootstrap as ElevenLabsClientBootstrap;
 
-  // A reconnect leaves the original reservation record untouched so end-reconciliation
-  // measures the full call duration, not just the post-reconnect segment.
+  // The reserve and the hold that records it commit together, after the provider call, so a
+  // failure anywhere before this point has nothing to refund. A reconnect keeps the original hold
+  // so end-reconciliation measures the full call duration, not just the post-reconnect segment.
   // Drops any realtime marker explicitly: a prior realtime hold with no reserve is never claimed, so
   // its marker would otherwise survive and this ElevenLabs hold would settle as realtime.
   if (!reuseHold) {
-    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt: holdStartedAt,
+    const opened = await reserveVoiceHold({
+      userId: req.user.id,
+      sessionId: session.id,
+      priorStartedAt: priorHoldStartedAt,
+      reservedCredits: enforceCredits ? reservedCredits : null,
+      startedAt: holdStartedAt,
       realtime: false,
+      unaffordable: () =>
+        insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
     if (!opened) {
-      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
-      if (enforceCredits) {
-        await refundLostVoiceHoldReserve(req.logger, {
-          userId: req.user.id,
-          sessionId: String(session.id),
-          refund: reservedCredits,
-        });
-      }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }
   }
