@@ -29,7 +29,7 @@ function withImageCapabilities(model: ModelInfo): ModelInfo {
   return { ...model, image: getImageModelCapabilities(model.id) };
 }
 
-async function buildCallerModelList(userId: string | null): Promise<CallerModelList> {
+async function buildCallerModelList(userId: string | null, enforceCredits: boolean): Promise<CallerModelList> {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
@@ -38,13 +38,10 @@ async function buildCallerModelList(userId: string | null): Promise<CallerModelL
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
-  const [listedModels, settings] = await Promise.all([
-    getAvailableModels(apiKeys, modelCatalogListingOptions()),
-    getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] }),
-  ]);
+  const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
   // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
   // an unpriced text model settles at $0, so the picker must not offer it either.
-  const offered = getSettingsValue('enforceCredits', settings)
+  const offered = enforceCredits
     ? listedModels.filter(model => !isUnpricedTextModel(model))
     : listedModels;
   const models = offered.map(withImageCapabilities);
@@ -59,7 +56,10 @@ export async function getCallerModelList(
   userId: string | null,
   logger: { log: (message: string) => void }
 ): Promise<CallerModelList> {
-  const cacheKey = CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID);
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const enforceCredits = Boolean(getSettingsValue('enforceCredits', settings));
+  // The flag is in the key so toggling enforceCredits takes effect immediately, not after the TTL.
+  const cacheKey = `${CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID)}:credits-${enforceCredits ? 'on' : 'off'}`;
 
   const cached = await cacheRepository.findOne({ key: cacheKey });
   if (cached) {
@@ -68,7 +68,7 @@ export async function getCallerModelList(
   }
 
   logger.log(`Cache miss for key: ${cacheKey}`);
-  const payload = await buildCallerModelList(userId);
+  const payload = await buildCallerModelList(userId, enforceCredits);
 
   // Don't cache an empty result. If every backend timed out (network blip, all
   // providers slow at once), caching `{ models: [] }` for 60s would hide healthy
