@@ -137,6 +137,10 @@ export interface IMcpConnection {
   displayName: string;
   /** Normalized: lowercased host, no fragment, no userinfo. */
   url: string;
+  /**
+   * Lowercased hostname without the port (`URL.hostname`); what host patterns and the blocklist
+   * match, so they apply to every port on the host.
+   */
   urlHost: string;
   transport: McpConnectionTransport;
   detectedTransport?: McpConnectionDetectedTransport;

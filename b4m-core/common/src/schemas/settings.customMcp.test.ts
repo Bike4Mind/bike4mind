@@ -52,6 +52,14 @@ describe('customMcpPolicy', () => {
     expect(parsed).toMatchObject({ mode: 'allowlist', allowedHostPatterns: ['*.example.com'] });
   });
 
+  it('normalizes host patterns and rejects invalid ones', () => {
+    expect(
+      entry.schema.parse({ allowedHostPatterns: [' *.Example.COM '], blockedHostPatterns: ['Bad.Example.com'] })
+    ).toMatchObject({ allowedHostPatterns: ['*.example.com'], blockedHostPatterns: ['bad.example.com'] });
+    expect(entry.schema.safeParse({ allowedHostPatterns: ['example.com/mcp'] }).success).toBe(false);
+    expect(entry.schema.safeParse({ blockedHostPatterns: ['*'] }).success).toBe(false);
+  });
+
   it('rejects an unknown mode and an out-of-range connection cap', () => {
     expect(entry.schema.safeParse({ mode: 'everything' }).success).toBe(false);
     expect(entry.schema.safeParse({ maxConnectionsPerUser: -1 }).success).toBe(false);
@@ -82,6 +90,15 @@ describe('platform-only custom MCP settings', () => {
     expect(settingsMap.customMcpBlockedHosts.schema.parse('{}')).toEqual({ hosts: [] });
   });
 
+  it('customMcpBlockedHosts normalizes entries and rejects anything but a host pattern', () => {
+    const schema = settingsMap.customMcpBlockedHosts.schema;
+    expect(schema.parse({ hosts: [' Evil.Example.com', '*.BAD.test'] })).toEqual({
+      hosts: ['evil.example.com', '*.bad.test'],
+    });
+    expect(schema.safeParse({ hosts: ['https://evil.example.com'] }).success).toBe(false);
+    expect(schema.safeParse({ hosts: ['evil.example.com:443'] }).success).toBe(false);
+  });
+
   it('customMcpPresetClients is a sensitive string', () => {
     const entry = settingsMap.customMcpPresetClients;
     expect(entry.isSensitive).toBe(true);
@@ -92,7 +109,10 @@ describe('platform-only custom MCP settings', () => {
   it('customMcpAllowPrivateNetworks defaults closed and validates CIDRs', () => {
     const schema = settingsMap.customMcpAllowPrivateNetworks.schema;
     expect(schema.parse('{}')).toEqual({ cidrs: [], allowHttp: false });
-    expect(schema.safeParse({ cidrs: ['10.0.0.0/8', '192.168.1.0/24', 'fd00::/8'] }).success).toBe(true);
+    expect(schema.safeParse({ cidrs: ['10.0.0.0/8', '192.168.1.0/24', 'fd12:3456::/32'] }).success).toBe(true);
+    for (const cidr of ['999.999.999.999/8', ':/0', '0.0.0.0/0', '::/0', '169.254.0.0/16']) {
+      expect(schema.safeParse({ cidrs: [cidr] }).success).toBe(false);
+    }
     expect(schema.safeParse({ cidrs: ['10.0.0.0'] }).success).toBe(false);
     expect(schema.safeParse({ cidrs: ['10.0.0.0/33'] }).success).toBe(false);
     expect(schema.safeParse({ cidrs: ['example.com/8'] }).success).toBe(false);

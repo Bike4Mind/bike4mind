@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -1128,9 +1129,9 @@ export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
 export const CustomMcpPolicySchema = z.object({
   mode: z.enum(CUSTOM_MCP_POLICY_MODES).default('presets_only'),
   /** Host patterns (`example.com`, `*.example.com`) a URL must match when `mode` is `allowlist`. */
-  allowedHostPatterns: z.array(z.string()).default([]),
+  allowedHostPatterns: McpHostPatternListSchema.default([]),
   /** Checked in every mode, after the platform `customMcpBlockedHosts`. */
-  blockedHostPatterns: z.array(z.string()).default([]),
+  blockedHostPatterns: McpHostPatternListSchema.default([]),
   allowUnauthenticated: z.boolean().default(true),
   /** false drops every tool not annotated read-only at offering time. */
   allowWriteTools: z.boolean().default(true),
@@ -1153,21 +1154,18 @@ export function isCustomMcpEnabled(
 }
 
 export const CustomMcpBlockedHostsSchema = z.object({
-  hosts: z.array(z.string()).default([]),
+  hosts: McpHostPatternListSchema.default([]),
 });
 
 export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
 
-const IPV4_CIDR = /^(\d{1,3}\.){3}\d{1,3}\/(\d|[12]\d|3[0-2])$/;
-const IPV6_CIDR = /^[0-9a-fA-F:.]*:[0-9a-fA-F:.]*\/(\d{1,2}|1[01]\d|12[0-8])$/;
-
-/** Self-host only; hosted deployments never reach private networks regardless of this value. */
+/**
+ * Self-host only; hosted deployments never reach private networks regardless of this value. Each
+ * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never covers a cloud metadata
+ * address (see customMcpHosts.ts).
+ */
 export const CustomMcpAllowPrivateNetworksSchema = z.object({
-  cidrs: z
-    .array(
-      z.string().refine(v => IPV4_CIDR.test(v) || IPV6_CIDR.test(v), { message: 'Must be a CIDR such as 10.0.0.0/8' })
-    )
-    .default([]),
+  cidrs: z.array(CustomMcpPrivateCidrSchema).max(100).default([]),
   allowHttp: z.boolean().default(false),
 });
 
