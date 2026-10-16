@@ -135,8 +135,9 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
         } catch (authError) {
           // verifyJwtToken refuses an authenticated session for reasons the caller can act on
-          // (MFA enrollment, policy consent) with a ForbiddenError; relaying it as 401 makes the
-          // CLI report an expired session and tell the user to sign in again, which cannot help.
+          // (MFA enrollment, account dispute or suspension) with a ForbiddenError; relaying it as
+          // 401 makes the CLI report an expired session and tell the user to sign in again, which
+          // cannot help.
           // The message is server-authored guidance (sanitizeErrorMessage would blank it).
           if (authError instanceof ForbiddenError) {
             res.status(403).json({ error: authError.message });
