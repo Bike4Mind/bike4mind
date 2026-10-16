@@ -103,6 +103,7 @@ const ModelChip: React.FC<{ displayName: string; replaces?: string }> = ({ displ
   // already names the model that answered.
   const chip = (
     <Chip
+      data-testid="message-model-chip"
       className="model-chip-web"
       size="sm"
       variant="soft"
@@ -122,7 +123,13 @@ const ModelChip: React.FC<{ displayName: string; replaces?: string }> = ({ displ
       {displayName}
     </Chip>
   );
-  return replaces ? <Tooltip title={`Replaces ${replaces}`}>{chip}</Tooltip> : chip;
+  return replaces ? (
+    <Tooltip data-testid="message-model-chip-replaces-tooltip" title={`Replaces ${replaces}`}>
+      {chip}
+    </Tooltip>
+  ) : (
+    chip
+  );
 };
 
 // The phone actions sheet: rows tall enough for a finger, no frame of their own inside the sheet.

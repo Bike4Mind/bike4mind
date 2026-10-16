@@ -6,6 +6,15 @@ export interface AnsweringModelLabel {
 }
 
 /**
+ * The id of the model that produced the reply: answeredBy when a deprecated-model redirect swapped
+ * one in, else the recorded model. Anything that names or prices the reply reads this, not
+ * model.name, which keeps the requested id (ChatCompletionProcess sets answeredBy).
+ */
+export function answeringModelId(promptMeta: Pick<PromptMeta, 'model'> | null | undefined): string | undefined {
+  return promptMeta?.model?.answeredBy || promptMeta?.model?.name || undefined;
+}
+
+/**
  * The model name a reply should carry: the model that answered, plus the model it replaced when a
  * deprecated-model redirect swapped one in. Null when the turn recorded no model.
  */

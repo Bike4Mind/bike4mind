@@ -4336,6 +4336,79 @@ describe('ChatCompletionProcess', () => {
       expect(optsSeen[4].preferUntriedBackend).toBe(true);
     });
 
+    it('a redirected turn that falls back over several hops credits the reply to the final hop', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      });
+
+      // Hop 1 fails too; hop 2 answers.
+      let hopN = 0;
+      mockedGetLlmWithFallback.mockImplementation(async () => {
+        hopN++;
+        const id = `hop-model-${hopN}`;
+        const answers = hopN >= 2;
+        return {
+          model: {
+            id,
+            type: 'text',
+            name: `Hop ${hopN}`,
+            backend: ModelBackend.Anthropic,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi
+              .fn()
+              .mockImplementation(
+                async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                  if (!answers) throw new Error('ServiceUnavailableException: hop outage');
+                  await cb(['Hi!']);
+                }
+              ),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: id,
+          },
+          attempt: 1,
+        } as any;
+      });
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4_1,
+          type: 'text',
+          name: 'GPT-4.1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(hopN).toBe(2);
+      expect(mockQuest.promptMeta.model).toMatchObject({ name: 'hop-model-2', answeredBy: 'hop-model-2' });
+    });
+
     // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop
     // can land on a model that rejects function calling.
     it.each([

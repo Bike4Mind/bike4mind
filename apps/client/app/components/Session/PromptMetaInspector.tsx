@@ -141,7 +141,7 @@ const PromptMetaInspector = () => {
 
 ## Model Configuration
 - **Model**: ${promptMeta.model?.name || 'N/A'}
-- **Temperature**: ${promptMeta.model?.parameters?.temperature ?? 'N/A'}
+${promptMeta.model?.answeredBy ? `- **Answered by**: ${promptMeta.model.answeredBy}\n` : ''}- **Temperature**: ${promptMeta.model?.parameters?.temperature ?? 'N/A'}
 - **Top P**: ${promptMeta.model?.parameters?.topP ?? 'N/A'}
 - **Max Tokens**: ${promptMeta.model?.parameters?.maxTokens ?? 'N/A'}
 
@@ -317,6 +317,11 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                       <Chip size="md" variant="soft" color="primary">
                         {promptMeta.model?.name || 'N/A'}
                       </Chip>
+                      {promptMeta.model?.answeredBy && (
+                        <Chip size="md" variant="soft" color="neutral" sx={{ ml: 1 }}>
+                          Answered by {promptMeta.model.answeredBy}
+                        </Chip>
+                      )}
                       <Stack direction="row" spacing={1} flexWrap="wrap" mt={1}>
                         <Chip size="sm" variant="soft" color="neutral" startDecorator={<Thermostat />}>
                           Temp: {promptMeta.model?.parameters?.temperature ?? 'N/A'}

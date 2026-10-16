@@ -156,3 +156,35 @@ describe('MessageContent - fallback note reload wiring', () => {
     expect(screen.queryByTestId('fallback-model-note-chip')).toBeNull();
   });
 });
+
+describe('MessageContent - reply model chip', () => {
+  const renderWithModel = (model: NonNullable<IChatHistoryItem['promptMeta']>['model']) =>
+    render(
+      <TestWrapper>
+        <MessageContent
+          sessionId="session-1"
+          messageData={{ ...baseMessage, promptMeta: { model } } as IChatHistoryItem}
+          index={0}
+          onDelete={vi.fn()}
+          onPinToggle={vi.fn()}
+          onSendMessage={vi.fn()}
+          isLastMessage
+          model="gpt-4o"
+          totalMessages={1}
+          canUseAdminTools={false}
+        />
+      </TestWrapper>
+    );
+
+  it('a redirected reply is labelled with the model that answered, not the one requested', () => {
+    renderWithModel({ name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' });
+
+    expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-3.5-flash');
+  });
+
+  it('a reply nothing replaced is labelled with the requested model', () => {
+    renderWithModel({ name: 'gemini-2.5-pro' });
+
+    expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-2.5-pro');
+  });
+});

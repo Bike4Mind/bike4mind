@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { answeringModelLabel } from './answeringModel';
+import { answeringModelId, answeringModelLabel } from './answeringModel';
 
 const names: Record<string, string> = {
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -29,5 +29,15 @@ describe('answeringModelLabel', () => {
   it('returns null when no model was recorded', () => {
     expect(answeringModelLabel(undefined, displayName)).toBeNull();
     expect(answeringModelLabel({}, displayName)).toBeNull();
+  });
+});
+
+describe('answeringModelId', () => {
+  it('is the model that answered when a redirect replaced the requested one, else the requested model', () => {
+    expect(answeringModelId({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } })).toBe(
+      'gemini-3.5-flash'
+    );
+    expect(answeringModelId({ model: { name: 'gemini-2.5-pro' } })).toBe('gemini-2.5-pro');
+    expect(answeringModelId(undefined)).toBeUndefined();
   });
 });

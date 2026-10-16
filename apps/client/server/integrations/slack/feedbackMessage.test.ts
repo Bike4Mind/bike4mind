@@ -41,6 +41,11 @@ describe('buildPromptMetaSummary', () => {
     expect(summary).toBe('Model: claude-sonnet-5');
   });
 
+  it('names the model that answered a redirected turn beside the requested one', () => {
+    const summary = buildPromptMetaSummary({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
+    expect(summary).toBe('Model: gemini-2.5-pro\nAnswered by: gemini-3.5-flash');
+  });
+
   it('returns "none" for an undefined promptMeta', () => {
     expect(buildPromptMetaSummary(undefined)).toBe('none');
   });

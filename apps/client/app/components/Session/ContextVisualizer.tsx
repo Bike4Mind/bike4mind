@@ -3,6 +3,7 @@ import { Box, Typography, Stack, Button } from '@mui/joy';
 import { PromptMeta } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
+import { answeringModelId } from '@client/app/utils/answeringModel';
 
 interface ContextVisualizerProps {
   promptMeta: PromptMeta;
@@ -22,7 +23,8 @@ const ContextVisualizer: React.FC<ContextVisualizerProps> = ({ promptMeta }) => 
     const actualOutputTokens = promptMeta.tokenUsage?.actualOutputTokens || outputTokens;
 
     // Get model info from repository if available, otherwise fall back to promptMeta
-    const modelInfo = modelInfoRepo?.find(m => m.id === promptMeta.model?.name);
+    const answeredById = answeringModelId(promptMeta);
+    const modelInfo = modelInfoRepo?.find(m => m.id === answeredById);
 
     // Get actual model context window and max tokens from model info or promptMeta
     const contextWindow = modelInfo?.contextWindow || promptMeta.model?.contextWindow || 200000;
@@ -199,7 +201,7 @@ const ContextVisualizer: React.FC<ContextVisualizerProps> = ({ promptMeta }) => 
   };
 
   const boxes = generateBoxes(viewMode);
-  const modelName = contextData.modelInfo?.name || promptMeta.model?.name || 'Unknown Model';
+  const modelName = contextData.modelInfo?.name || answeringModelId(promptMeta) || 'Unknown Model';
   const contextLimit = viewMode === 'tokens' ? contextData.contextWindow : contextData.contextWindow * 4;
   const totalUsed = viewMode === 'tokens' ? contextData.totalUsed : contextData.totalUsed * 4;
 
