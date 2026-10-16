@@ -122,6 +122,11 @@ describe('POST /api/files/generate-presigned-url - ai:generate-only key', () => 
     expect(signedInput()).toMatchObject({ ContentType: 'image/png', ContentLength: 2048 });
   });
 
+  it('makes the presigned PUT create-only', async () => {
+    await run(png({ fileSize: 2048 }), generateOnly);
+    expect(signedInput()).toMatchObject({ IfNoneMatch: '*' });
+  });
+
   it('admits a png exactly at the cap', async () => {
     await run(png({ fileSize: BARE_UPLOAD_MAX_BYTES }), generateOnly);
     expect(h.createFabFile).toHaveBeenCalledTimes(1);

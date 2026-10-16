@@ -144,7 +144,12 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     Key: fileKey,
     // Bound only for the narrow ai:generate upload: S3 then rejects a PUT whose type or length
     // differs from what was validated. Every other caller keeps the unbound presign.
-    ...(provenance && { ContentType: provenance.contentType, ContentLength: data.fileSize }),
+    ...(provenance && {
+      ContentType: provenance.contentType,
+      ContentLength: data.fileSize,
+      // Create-only: the PUT fails if the key exists, so a scanned object cannot be overwritten.
+      IfNoneMatch: '*',
+    }),
   });
 
   // Same owner rule as fabFileService.createFabFile, which this direct create bypasses.
