@@ -42,6 +42,16 @@ vi.mock('@bike4mind/database', () => ({
 
 await import('../agents');
 
+const OWNER_ONLY_FIELDS = {
+  systemPrompt: 'secret prompt',
+  currentCredits: 500,
+  memoryJournal: [{ id: 'm1' }],
+  worldMemory: [{ id: 'w1' }],
+  pendingMessages: [{ id: 'p1' }],
+  tavernSessionId: 'session-1',
+  users: [{ userId: 'someone', permissions: ['read'] }],
+};
+
 describe('GET /api/sessions/[id]/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -50,21 +60,22 @@ describe('GET /api/sessions/[id]/agents', () => {
     mockRefs.findById.mockImplementation(async (id: string) => ({
       id,
       userId: id === 'mine' ? 'viewer' : 'other',
-      tavernSessionId: `session-${id}`,
+      name: `agent-${id}`,
+      ...OWNER_ONLY_FIELDS,
     }));
   });
 
   // A session can hold agents the caller does not own and was never shared, so this is the widest
-  // read path for the owner-only session pointer.
-  it("strips tavernSessionId from attached agents the caller does not own, keeping the caller's own", async () => {
+  // read path for owner-only agent fields.
+  it("returns attached agents the caller does not own through the viewer allowlist, keeping the caller's own whole", async () => {
     const { req, res } = createMocks({ method: 'GET', query: { id: 'session-1' } });
     Object.assign(req, { user: { id: 'viewer' } });
 
     await mockRefs.getHandler!(req as unknown as Request, res as unknown as Response);
 
     const { agents } = res._getJSONData();
-    expect(agents[0]).toMatchObject({ id: 'mine', tavernSessionId: 'session-mine' });
-    expect(agents[1]).toMatchObject({ id: 'theirs' });
-    expect(agents[1]).not.toHaveProperty('tavernSessionId');
+    expect(agents[0]).toEqual({ id: 'mine', userId: 'viewer', name: 'agent-mine', ...OWNER_ONLY_FIELDS });
+    expect(agents[1]).toMatchObject({ id: 'theirs', name: 'agent-theirs' });
+    for (const field of Object.keys(OWNER_ONLY_FIELDS)) expect(agents[1]).not.toHaveProperty(field);
   });
 });
