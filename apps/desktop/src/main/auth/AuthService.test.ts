@@ -366,6 +366,8 @@ function buildWithSharedClient(options: { file?: VaultFile; refreshToken: Return
   const file = options.file ?? memoryFile();
   const vault = new TokenVault(cipher, file, silentLogger);
   const states: AuthState[] = [];
+  // The service's onTokensCleared as wired to each built client, for exercising the env guard.
+  const cleared: Array<(reason: string) => void> = [];
 
   const service = new AuthService({
     vault,
@@ -376,6 +378,7 @@ function buildWithSharedClient(options: { file?: VaultFile; refreshToken: Return
     onStateChanged: state => states.push(state),
     createDeviceFlowClient: () => device,
     createApiClient: (baseUrl, tokenStore, onTokensCleared) => {
+      if (onTokensCleared) cleared.push(onTokensCleared);
       const client = new AuthenticatedApiClient({
         baseUrl,
         tokenStore,
@@ -401,7 +404,7 @@ function buildWithSharedClient(options: { file?: VaultFile; refreshToken: Return
     },
   });
 
-  return { service, vault, file, states, accepted, device };
+  return { service, vault, file, states, accepted, device, cleared };
 }
 
 function httpError(status: number, config = {} as InternalAxiosRequestConfig): AxiosError {
@@ -498,6 +501,38 @@ describe('AuthService token refresh', () => {
       status: 'signed-out',
       error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
     });
+    service.dispose();
+  });
+
+  it('ends the session when another instance empties the vault under the proactive exchange', async () => {
+    const file = memoryFile();
+    const other = new TokenVault(cipher, file, silentLogger);
+    // The other instance signs out mid-exchange: the shared file loses the blob, then the
+    // rotation this one already held comes back rejected.
+    const refreshToken = vi.fn(async () => {
+      await other.clearTokens(HOSTED);
+      throw httpError(401);
+    });
+    const { service, vault } = await signedIn(refreshToken, file);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+    });
+    expect(await vault.reloadTokens(HOSTED)).toBeNull();
+    service.dispose();
+  });
+
+  it('ignores a clear reported by a client built for an environment the user has left', async () => {
+    const { service, cleared } = await signedIn(vi.fn(), memoryFile());
+    await service.setEnvironment({ preset: 'custom', customUrl: 'https://other.example.com' });
+    const before = service.getState();
+
+    cleared[0]('reported by the client built for the previous environment');
+
+    expect(service.getState()).toEqual(before);
     service.dispose();
   });
 

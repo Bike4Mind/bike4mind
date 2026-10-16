@@ -485,7 +485,14 @@ export class AuthService {
     const api = this.api;
     const generation = this.signInGeneration;
     const tokens = await this.currentTokens();
-    if (!api || !tokens) return;
+    if (!api || generation !== this.signInGeneration) return;
+    if (!tokens) {
+      // Still signed-in, but the vault no longer holds this environment's tokens: another
+      // instance sharing it signed out. Show signed-out rather than stopping the timer over
+      // nothing, which would leave the UI signed-in until restart.
+      this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
+      return;
+    }
 
     try {
       await api.refreshSession(tokens.accessToken);
@@ -495,8 +502,15 @@ export class AuthService {
     } catch (err) {
       // A sign-out during the exchange is the user's own doing, not a session that ended.
       if (api !== this.api || generation !== this.signInGeneration) return;
-      // Revoked: the client has already cleared the vault and called handleTokensCleared.
-      if (err instanceof SessionRevokedError) return;
+      // Revoked. When the server rejects the refresh token the client clears the vault and
+      // reports it through handleTokensCleared itself. An empty vault with no such report means
+      // another instance removed the tokens - a sign-out elsewhere that nothing else announces.
+      if (err instanceof SessionRevokedError) {
+        if (this.state.status === 'signed-in' && !(await this.currentTokens())) {
+          this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
+        }
+        return;
+      }
       if (err instanceof NotAuthenticatedError) {
         // The vault emptied under this refresh - a sign-out in another instance sharing it.
         this.endSession('the stored tokens were removed by another process', SIGNED_OUT_ELSEWHERE_MESSAGE);
