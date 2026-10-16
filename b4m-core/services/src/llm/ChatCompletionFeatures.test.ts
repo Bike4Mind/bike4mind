@@ -3639,6 +3639,24 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
   });
 
+  it('blames the operator floor when the top score lands exactly on the measured floor', async () => {
+    // 0.58 is exactly 3-small's measured 58% floor. The measured floor keeps a score on the line,
+    // so the configured 75 is what emptied this turn and the reader is told. Pins the boundary: a
+    // strict `>` would read a top sitting exactly on the measured floor as an ordinary miss.
+    const ctx = makeCtx({
+      scores: [0.58],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(1);
+    expect(quest.promptMeta?.retrievalFloorRejection).toEqual({
+      floorPct: 75,
+      measuredPct: 58,
+      embeddingModel: 'text-embedding-3-small',
+    });
+  });
+
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
     // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
     // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
