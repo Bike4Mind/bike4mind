@@ -717,6 +717,7 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicRecordMfaFailedAttempt: (userId: string) => Promise<IUserDocument | null>;
   atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
+  atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the

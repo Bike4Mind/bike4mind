@@ -4,7 +4,6 @@ import {
   generateBackupCodes,
   hashBackupCode,
   userEligibleForMFA,
-  clearFailedAttempts,
 } from './utils';
 import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
@@ -94,20 +93,20 @@ export async function verifyMFASetup(
       throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
     }
 
-    // Enable MFA. `user` came from findByIdWithMfaSecrets and carries the select:false
-    // totpSecret + backupCodes; build the write from it - and clear any failed-attempt/lockout
-    // state in this SAME write - so the secrets survive. Clearing from this function's
-    // (not-+selected) return value would omit and `$set`-replace-wipe the secrets, leaving
-    // totpEnabled:true with no secret and permanently bricking sign-in.
-    const updatedMFA = clearFailedAttempts(mfa);
-    updatedMFA.totpEnabled = true;
-    updatedMFA.lastUsedAt = new Date();
-
-    const updatedUser = await userRepository.update({
-      id: user.id,
-      mfa: updatedMFA,
-      updatedAt: new Date(),
-    });
+    // Field-level write, NOT a whole-`mfa` `$set`: rebuilding the subdocument from `user` (or,
+    // worse, from a secret-less echo) risks wiping the select:false totpSecret/backupCodes and
+    // would clear attempts reserved since the snapshot. Enabling MFA plus clearing the
+    // attempt/lockout state touches only those fields, leaving the secrets untouched.
+    const updatedUser = await userRepository.update(
+      {
+        id: user.id,
+        'mfa.totpEnabled': true,
+        'mfa.failedAttempts': 0,
+        'mfa.lastUsedAt': new Date(),
+        updatedAt: new Date(),
+      },
+      { unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] }
+    );
 
     if (!updatedUser) {
       throw new Error('Failed to enable MFA.');

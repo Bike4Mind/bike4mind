@@ -1,7 +1,10 @@
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import { matchTOTPStep } from './utils';
 
-export type MfaAttemptRepository = Pick<IUserRepository, 'atomicReserveMfaAttempt' | 'atomicClaimTotpStep'>;
+export type MfaAttemptRepository = Pick<
+  IUserRepository,
+  'atomicReserveMfaAttempt' | 'atomicClaimTotpStep' | 'atomicConsumeBackupCode'
+>;
 
 /**
  * A second-factor attempt failed AFTER it was counted toward the lockout: the lockout refused

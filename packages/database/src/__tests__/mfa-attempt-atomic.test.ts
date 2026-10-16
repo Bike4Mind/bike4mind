@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { MFA_LOCKOUT_DURATION_MS, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
+import { MFA_ATTEMPT_RESET_WINDOW_MS, MFA_LOCKOUT_DURATION_MS, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
 import { User, userRepository } from '../models/auth/UserModel';
 import { setupMongoTest } from '../__test__/utils';
 
@@ -65,7 +65,7 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
       expect((await readMfa()).failedAttempts).toBe(MFA_MAX_FAILED_ATTEMPTS);
     });
 
-    it('allows reserving again once the lockout has expired', async () => {
+    it('re-locks on an attempt made after the lockout expired, while still inside the reset window', async () => {
       await User.updateOne(
         { _id: userId },
         {
@@ -79,7 +79,30 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
 
       const { reserved, user } = await userRepository.atomicReserveMfaAttempt(userId);
       expect(reserved).toBe(true);
-      expect(user!.mfa!.failedAttempts).toBeGreaterThan(0);
+      // The last failure is inside the reset window, so the count continues rather than resetting:
+      // the attempt pushes it past the max and the user is locked again.
+      expect(user!.mfa!.failedAttempts).toBe(MFA_MAX_FAILED_ATTEMPTS + 1);
+      expect(new Date(user!.mfa!.lockedUntil!).getTime()).toBeGreaterThan(Date.now());
+
+      const next = await userRepository.atomicReserveMfaAttempt(userId);
+      expect(next.reserved).toBe(false);
+    });
+
+    it('resets the count to 1 when the last failure is older than the reset window', async () => {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'mfa.failedAttempts': MFA_MAX_FAILED_ATTEMPTS,
+            'mfa.lastFailedAttempt': new Date(Date.now() - MFA_ATTEMPT_RESET_WINDOW_MS - 1000),
+          },
+        }
+      );
+
+      const { reserved, user } = await userRepository.atomicReserveMfaAttempt(userId);
+      expect(reserved).toBe(true);
+      expect(user!.mfa!.failedAttempts).toBe(1);
+      expect(user!.mfa!.lockedUntil ?? null).toBeNull();
     });
 
     it('reports reserved:false with a null user for an unknown id', async () => {
@@ -107,6 +130,60 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
 
       expect(results.filter(Boolean)).toHaveLength(1);
       expect(await readTotpLastStep()).toBe(500);
+    });
+  });
+
+  describe('atomicConsumeBackupCode', () => {
+    it('removes a stored code exactly once', async () => {
+      expect(await userRepository.atomicConsumeBackupCode(userId, 'h1')).toBe(true);
+      expect((await readMfa()).backupCodes).toEqual([]);
+      expect(await userRepository.atomicConsumeBackupCode(userId, 'h1')).toBe(false);
+    });
+
+    it('does not remove a code that is not stored', async () => {
+      expect(await userRepository.atomicConsumeBackupCode(userId, 'not-a-code')).toBe(false);
+      expect((await readMfa()).backupCodes).toEqual(['h1']);
+    });
+
+    it('lets exactly one of several concurrent consumes of the same code win', async () => {
+      await User.updateOne({ _id: userId }, { $set: { 'mfa.backupCodes': ['h1', 'h2'] } });
+
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => userRepository.atomicConsumeBackupCode(userId, 'h1'))
+      );
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect((await readMfa()).backupCodes).toEqual(['h2']);
+    });
+  });
+
+  describe('field-level success write', () => {
+    it('clears the attempt/lockout fields without touching the secrets or backup codes', async () => {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $set: {
+            'mfa.failedAttempts': 2,
+            'mfa.lastFailedAttempt': new Date(),
+            'mfa.lockedUntil': new Date(Date.now() + 60_000),
+          },
+        }
+      );
+
+      await userRepository.update(
+        { id: userId, 'mfa.failedAttempts': 0, 'mfa.lastUsedAt': new Date() },
+        { unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] }
+      );
+
+      const mfa = await readMfa();
+      expect(mfa.failedAttempts).toBe(0);
+      expect(mfa.lockedUntil ?? null).toBeNull();
+      expect(mfa.lastFailedAttempt ?? null).toBeNull();
+      // The select:false secrets and the stored backup set survive, because the write never
+      // rebuilds the `mfa` subdocument.
+      expect(mfa.totpEnabled).toBe(true);
+      expect(mfa.totpSecret).toBe(TOTP_SECRET);
+      expect(mfa.backupCodes).toEqual(['h1']);
     });
   });
 

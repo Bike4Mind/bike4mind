@@ -28,13 +28,14 @@ const lockedUser = {
   mfa: { failedAttempts: 3, lockedUntil: new Date(Date.now() + 60_000) },
 } as unknown as IUserDocument;
 
-// update echoes back the merged user so verifyMFA can return it. Reserve/claim default to success.
-const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean } = {}) => {
-  const { reserved = true, claimed = true } = overrides;
+// update echoes back the merged user so verifyMFA can return it. Reserve/claim/consume default to success.
+const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean; consumed?: boolean } = {}) => {
+  const { reserved = true, claimed = true, consumed = true } = overrides;
   return {
     update: vi.fn(async (u: unknown) => u as IUserDocument),
     atomicReserveMfaAttempt: vi.fn(async () => ({ reserved, user: reserved ? reservedUser : lockedUser })),
     atomicClaimTotpStep: vi.fn(async () => claimed),
+    atomicConsumeBackupCode: vi.fn(async () => consumed),
   };
 };
 
@@ -95,18 +96,39 @@ describe('verifyMFA', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
-  it('falls through to a backup code when the TOTP step was already claimed', async () => {
+  it('accepts a backup code (case-insensitive), consumes it atomically, and never rewrites the stored set', async () => {
     const repo = makeRepo({ claimed: false });
     const result = await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo);
+    expect(result.verified).toBe(true);
     expect(result.usedBackupCode).toBe(hashBackupCode('ABCDE12345'));
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.lastTotpStep).toBeUndefined();
+    expect(repo.atomicConsumeBackupCode).toHaveBeenCalledWith('user-1', hashBackupCode('ABCDE12345'));
+    // The success write must not carry the backup set: rebuilding it from this pre-reservation
+    // snapshot would restore a code a concurrent request just consumed.
+    const data = repo.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(data).not.toHaveProperty('mfa');
   });
 
-  it('claims the TOTP step for the user id', async () => {
-    const repo = makeRepo();
-    await verifyMFA({ user: makeUser(), token: currentToken() }, repo);
-    expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', expect.any(Number));
+  it('rejects a backup code that a concurrent request already consumed', async () => {
+    const repo = makeRepo({ claimed: false, consumed: false });
+    const error = await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+    expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('claims the exact matched time step, not the current one', async () => {
+    const nowMs = 1_700_000_000_000; // 20s into a 30s step, clear of the boundary
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    try {
+      const repo = makeRepo();
+      const step = Math.floor(nowMs / 1000 / 30);
+      const token = speakeasy.totp({ secret: SECRET, encoding: 'base32', time: Math.floor(nowMs / 1000) });
+      await verifyMFA({ user: makeUser(), token }, repo);
+      expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', step);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -118,9 +140,9 @@ describe('verifyMFA', () => {
       const repo = makeRepo();
       const user = { ...makeUser(), totpLastStep: 7 } as unknown as IUserDocument;
       await verifyMFA({ user, token: token() }, repo);
-      const persisted = repo.update.mock.calls[0][0] as Record<string, unknown> & { mfa: Record<string, unknown> };
-      expect(persisted).not.toHaveProperty('totpLastStep');
-      expect(persisted.mfa).not.toHaveProperty('lastTotpStep');
+      const data = repo.update.mock.calls[0][0] as Record<string, unknown>;
+      expect(data).not.toHaveProperty('totpLastStep');
+      expect(data).not.toHaveProperty('mfa');
     }
   );
 
@@ -164,9 +186,9 @@ describe('verifyMFA', () => {
 
   // Regression: the select:false MFA-secret hardening bricked MFA because the endpoints
   // cleared failed attempts in a SEPARATE update built from verifyMFA's (not-+selected)
-  // return value, wiping totpSecret/backupCodes via `$set: { mfa }`. The clear now happens
-  // inside verifyMFA's single write, sourced from the secret-bearing input user.
-  it('clears failed-attempt/lockout state AND preserves the secrets in the same write', async () => {
+  // return value, wiping totpSecret/backupCodes via `$set: { mfa }`. The clear is now a
+  // field-level write that never touches the `mfa` subdocument at all.
+  it('clears failed-attempt/lockout state with a field-level write that cannot wipe the secrets', async () => {
     const repo = makeRepo();
     const user = makeUser({
       failedAttempts: 2,
@@ -174,14 +196,15 @@ describe('verifyMFA', () => {
       lockedUntil: new Date(Date.now() + 1000),
     });
     await verifyMFA({ user, token: currentToken() }, repo);
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    // Secrets must survive the write - this is the field that regressed.
-    expect(persisted.mfa!.totpSecret).toBe(SECRET);
-    expect(persisted.mfa!.backupCodes).toEqual(BACKUP_CODES);
-    // Attempt/lockout state cleared in the SAME write (no secret-less follow-up update).
-    expect(persisted.mfa!.failedAttempts).toBe(0);
-    expect(persisted.mfa!.lockedUntil).toBeUndefined();
-    expect(persisted.mfa!.lastFailedAttempt).toBeUndefined();
-    expect(persisted.mfa!.lastUsedAt).toBeInstanceOf(Date);
+    const [data, options] = repo.update.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      { unset?: string[] },
+    ];
+    // Only the attempt/lockout fields are written - there is no whole-`mfa` `$set` that could
+    // rebuild (and so wipe) the select:false secrets or the stored backup set.
+    expect(data).not.toHaveProperty('mfa');
+    expect(data['mfa.failedAttempts']).toBe(0);
+    expect(data['mfa.lastUsedAt']).toBeInstanceOf(Date);
+    expect(options?.unset).toEqual(expect.arrayContaining(['mfa.lastFailedAttempt', 'mfa.lockedUntil']));
   });
 });

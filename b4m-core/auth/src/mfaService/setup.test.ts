@@ -36,6 +36,7 @@ const makeRepo = (overrides: { reserved?: boolean; claimed?: boolean } = {}) => 
     update: vi.fn(async (u: unknown) => u as IUserDocument),
     atomicReserveMfaAttempt: vi.fn(async () => ({ reserved, user: reserved ? reservedUser : lockedUser })),
     atomicClaimTotpStep: vi.fn(async () => claimed),
+    atomicConsumeBackupCode: vi.fn(async () => true),
   };
 };
 
@@ -85,19 +86,28 @@ describe('verifyMFASetup', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
-  it('claims the TOTP step for the user id', async () => {
-    const repo = makeRepo();
-    await verifyMFASetup(makePendingUser(), currentToken(), repo);
-    expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', expect.any(Number));
+  it('claims the exact matched time step, not the current one', async () => {
+    const nowMs = 1_700_000_000_000; // 20s into a 30s step, clear of the boundary
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    try {
+      const repo = makeRepo();
+      const step = Math.floor(nowMs / 1000 / 30);
+      const token = speakeasy.totp({ secret: SECRET, encoding: 'base32', time: Math.floor(nowMs / 1000) });
+      await verifyMFASetup(makePendingUser(), token, repo);
+      expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', step);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never writes a replay step in the enable update, even when the user has totpLastStep', async () => {
     const repo = makeRepo();
     const user = { ...makePendingUser(), totpLastStep: 7 } as unknown as IUserDocument;
     await verifyMFASetup(user, currentToken(), repo);
-    const persisted = repo.update.mock.calls[0][0] as Record<string, unknown> & { mfa: Record<string, unknown> };
-    expect(persisted).not.toHaveProperty('totpLastStep');
-    expect(persisted.mfa).not.toHaveProperty('lastTotpStep');
+    const data = repo.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(data).not.toHaveProperty('totpLastStep');
+    expect(data).not.toHaveProperty('mfa');
   });
 
   describe('failures after the attempt was reserved', () => {
@@ -134,18 +144,20 @@ describe('verifyMFASetup', () => {
   // Regression: enrolling MFA must not lose the secret. The endpoint used to clear failed
   // attempts in a separate update built from verifyMFASetup's (not-+selected) return value,
   // which wiped totpSecret/backupCodes via `$set: { mfa }` and left totpEnabled:true with no
-  // secret - permanently bricking sign-in. The single enable-write now preserves the secrets
-  // and clears attempt/lockout state itself.
-  it('preserves totpSecret/backupCodes and clears attempt state in the enable write', async () => {
+  // secret - permanently bricking sign-in. The enable write now touches only the
+  // attempt/lockout fields, so it never rewrites the `mfa` subdocument (or its secrets).
+  it('enables MFA and clears attempt state with a field-level write that cannot wipe the secrets', async () => {
     const repo = makeRepo();
     const user = makePendingUser({ failedAttempts: 1, lastFailedAttempt: new Date() });
     await verifyMFASetup(user, currentToken(), repo);
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.totpEnabled).toBe(true);
-    expect(persisted.mfa!.totpSecret).toBe(SECRET);
-    expect(persisted.mfa!.backupCodes).toEqual(BACKUP_CODES);
-    expect(persisted.mfa!.failedAttempts).toBe(0);
-    expect(persisted.mfa!.lastFailedAttempt).toBeUndefined();
-    expect(persisted.mfa!.lastUsedAt).toBeInstanceOf(Date);
+    const [data, options] = repo.update.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      { unset?: string[] },
+    ];
+    expect(data).not.toHaveProperty('mfa');
+    expect(data['mfa.totpEnabled']).toBe(true);
+    expect(data['mfa.failedAttempts']).toBe(0);
+    expect(data['mfa.lastUsedAt']).toBeInstanceOf(Date);
+    expect(options?.unset).toEqual(expect.arrayContaining(['mfa.lastFailedAttempt', 'mfa.lockedUntil']));
   });
 });

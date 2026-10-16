@@ -439,6 +439,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
+   * exactly once per code, so a backup code cannot be consumed by two requests at once. A
+   * whole-document write from a pre-read snapshot would instead restore a code another request
+   * had already spent, so consumption must be this targeted `$pull`.
+   */
+  async atomicConsumeBackupCode(userId: string, codeHash: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, 'mfa.backupCodes': codeHash },
+      { $pull: { 'mfa.backupCodes': codeHash } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   async findByStripeCustomerId(stripeCustomerId: string) {
     const result = await this.model.findOne({ stripeCustomerId });
     return result?.toJSON() ?? null;
