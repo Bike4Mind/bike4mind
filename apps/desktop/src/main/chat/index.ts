@@ -411,6 +411,7 @@ export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'se
     media,
     videoJobs,
     activity,
+    sidebarSections,
     mcp,
     browser,
     artifacts,
@@ -535,9 +536,6 @@ export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'se
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
-    await sidebarSections.forgetSession(sessionId).catch((error: unknown) => {
-      logger.error('Could not drop a deleted session from the sidebar sections', error);
-    });
   });
   registerSidebarIpc(ipcMain, sidebarSections);
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
