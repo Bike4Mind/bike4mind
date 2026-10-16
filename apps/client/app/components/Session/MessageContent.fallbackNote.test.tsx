@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -186,5 +186,21 @@ describe('MessageContent - reply model chip', () => {
     renderWithModel({ name: 'gemini-2.5-pro' });
 
     expect(screen.getByTestId('message-model-chip')).toHaveTextContent('gemini-2.5-pro');
+  });
+
+  it('names the replaced model in a tooltip on a redirected reply', async () => {
+    renderWithModel({ name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' });
+
+    fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Replaces gemini-2.5-pro');
+  });
+
+  it('shows no replacement tooltip when nothing was replaced', () => {
+    renderWithModel({ name: 'gemini-2.5-pro' });
+
+    fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });
