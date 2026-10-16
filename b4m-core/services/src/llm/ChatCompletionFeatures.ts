@@ -71,6 +71,7 @@ import {
   DATALAKE_TAG_PREFIX,
   materializePromptMetaSession,
   ModelBackend,
+  type WorkspaceDeniedToolsTable,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -362,8 +363,13 @@ export interface IChatCompletionServiceOptions {
   slackWebhookUrl: string;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
-  /** `{ surface id: tool names }` denied to sessions on that surface, unioned with `session.disabledTools`. */
-  workspaceDeniedTools?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * `{ surface id: tool names }` denied to sessions on that surface, unioned with `session.disabledTools`.
+   * Required on purpose: it is an options property every construction site must answer, so a new site
+   * that forgets it is a compile error rather than a silent hole in the surface denials. The open-core
+   * value is the generated empty table.
+   */
+  workspaceDeniedTools: WorkspaceDeniedToolsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,
