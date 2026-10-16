@@ -364,25 +364,22 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       }
     }
 
-    // Abort and timeout still return a result carrying the partial usage, so they settle what ran.
-    // ponytail: root spend on a thrown run is unbilled (ReActAgent keeps partial usage private);
-    // expose it on the thrown error if that gap matters. Sub-LLM spend is always billed.
-    const rootUsage = result?.completionInfo;
+    // A run that throws (hard timeout or provider error mid root-LLM call) has no result, so its
+    // root spend comes from the agent's running totals, which hold every turn that completed.
+    const rootUsage = result?.completionInfo ?? agent.toCheckpoint();
     await settleCompletion(reservation, req, {
       sessionId,
       model: modelInfo.id,
       usd:
-        (rootUsage
-          ? completionUsd(modelInfo, {
-              inputTokens: rootUsage.totalInputTokens,
-              outputTokens: rootUsage.totalOutputTokens,
-              cacheReadInputTokens: rootUsage.totalCacheReadTokens,
-              cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
-              turnUsage: rootUsage.turnUsage,
-            })
-          : 0) + replUsage.totalCostUsd,
-      inputTokens: rootUsage?.totalInputTokens ?? 0,
-      outputTokens: rootUsage?.totalOutputTokens ?? 0,
+        completionUsd(modelInfo, {
+          inputTokens: rootUsage.totalInputTokens,
+          outputTokens: rootUsage.totalOutputTokens,
+          cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+          cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+          turnUsage: rootUsage.turnUsage,
+        }) + replUsage.totalCostUsd,
+      inputTokens: rootUsage.totalInputTokens,
+      outputTokens: rootUsage.totalOutputTokens,
     });
 
     const totalLatencyMs = Date.now() - t0;

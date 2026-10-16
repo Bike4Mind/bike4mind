@@ -25,6 +25,8 @@ const {
     reserve: vi.fn(),
     settle: vi.fn(),
     replCostUsd: 0,
+    // The agent's running totals, read by the route when agent.run throws.
+    checkpoint: { totalInputTokens: 0, totalOutputTokens: 0 },
   },
 }));
 meter.reserve.mockImplementation(async () => ({ reservedCredits: 10, refund: meter.refund }));
@@ -56,6 +58,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 vi.mock('@bike4mind/agents', () => ({
   ReActAgent: class {
     run = mockAgentRun;
+    toCheckpoint = () => meter.checkpoint;
   },
   ReplSession: class {
     constructor(opts: unknown) {
@@ -266,6 +269,7 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     vi.clearAllMocks();
     meter.denied.clear();
     meter.replCostUsd = 0.25;
+    meter.checkpoint = { totalInputTokens: 0, totalOutputTokens: 0 };
     mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
     mockBuildDataLakeTools.mockReturnValue({});
@@ -318,13 +322,16 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     });
   });
 
-  it('settles only the sub-LLM spend when the agent throws', async () => {
+  it('settles the root turns that completed plus sub-LLM spend when the agent throws', async () => {
+    meter.checkpoint = { totalInputTokens: 4000, totalOutputTokens: 500 };
     mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
 
     const res = await call({ authorization: 'Bearer t' });
 
     expect(res.statusCode).toBe(500);
-    expect(meter.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 0.25, inputTokens: 0, outputTokens: 0 }));
+    expect(meter.settle).toHaveBeenCalledWith(
+      expect.objectContaining({ usd: 4000 * 0.001 + 500 * 0.002 + 0.25, inputTokens: 4000, outputTokens: 500 })
+    );
   });
 
   it('refunds in full when the sandbox cannot be constructed', async () => {
