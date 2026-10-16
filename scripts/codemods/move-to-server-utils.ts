@@ -31,6 +31,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
 export const CLIENT_SERVER = 'apps/client/server';
@@ -294,7 +295,7 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
   return { changed: pending.map(p => p.file), warnings };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.error('Usage: pnpm tsx scripts/codemods/move-to-server-utils.ts <old apps/client/server path>...');
