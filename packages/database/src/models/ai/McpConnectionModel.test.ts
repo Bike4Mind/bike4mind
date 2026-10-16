@@ -444,6 +444,14 @@ describe('McpConnectionModel', () => {
       expect(stepUp?.lastError).toMatchObject({ code: 'insufficient_scope', requiredScope: 'read write' });
     });
 
+    it('refuses to store blocked_by_policy', async () => {
+      await expect(
+        mcpConnectionRepository.create(
+          baseConnection({ status: 'blocked_by_policy' as unknown as IMcpConnectionDocument['status'] })
+        )
+      ).rejects.toThrow(/status/);
+    });
+
     it('setStatus records lastError and clears it on connected', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const failed = await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', {

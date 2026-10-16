@@ -32,14 +32,28 @@ export type McpOAuthClientMode = (typeof MCP_OAUTH_CLIENT_MODES)[number];
 export const MCP_API_KEY_SCHEMES = ['Bearer', 'raw'] as const;
 export type McpApiKeyScheme = (typeof MCP_API_KEY_SCHEMES)[number];
 
-export const MCP_CONNECTION_STATUSES = [
-  'pending_auth',
-  'connected',
-  'needs_reconnect',
-  'error',
-  'blocked_by_policy',
-] as const;
+/**
+ * Stored lifecycle states. Policy blocking is deliberately not one of them: policy changes (an org
+ * tightening its allowlist, a platform host block) would otherwise need a sweep to set it and
+ * another to undo it. It is derived at read and offer time by {@link effectiveMcpConnectionStatus}.
+ */
+export const MCP_CONNECTION_STATUSES = ['pending_auth', 'connected', 'needs_reconnect', 'error'] as const;
 export type McpConnectionStatus = (typeof MCP_CONNECTION_STATUSES)[number];
+
+export type McpConnectionEffectiveStatus = McpConnectionStatus | 'blocked_by_policy';
+
+/** Structural, so the policy evaluator's richer verdict (with a reason) fits as is. */
+export interface McpPolicyVerdictLike {
+  allowed: boolean;
+}
+
+/** The status to show or act on: the stored one, unless the current policy blocks the connection. */
+export function effectiveMcpConnectionStatus(
+  connection: Pick<IMcpConnection, 'status'>,
+  policyVerdict: McpPolicyVerdictLike
+): McpConnectionEffectiveStatus {
+  return policyVerdict.allowed ? connection.status : 'blocked_by_policy';
+}
 
 export const MCP_TOOL_APPROVAL_MODES = ['default', 'always_allow', 'always_ask'] as const;
 export type McpToolApprovalMode = (typeof MCP_TOOL_APPROVAL_MODES)[number];
@@ -283,7 +297,7 @@ export interface IMcpConnectionPublic {
     };
     apiKey?: { headerName: string; scheme?: McpApiKeyScheme; last4: string };
   };
-  status: McpConnectionStatus;
+  status: McpConnectionEffectiveStatus;
   lastError?: IMcpConnectionLastError;
   serverInfo?: IMcpConnectionServerInfo;
   /** `inputSchema` is present only when the view was built from a full read. */
@@ -301,7 +315,11 @@ export interface IMcpConnectionPublic {
  * Build the client-safe view field by field. An allowlist rather than an omit, so a secret field
  * added to the document later stays server-side until someone deliberately exposes it here.
  */
-export function toMcpConnectionPublic(doc: IMcpConnectionDocument | IMcpConnectionSummary): IMcpConnectionPublic {
+export function toMcpConnectionPublic(
+  doc: IMcpConnectionDocument | IMcpConnectionSummary,
+  /** Pass the current policy verdict so the view reports `blocked_by_policy`; omitted, the stored status. */
+  policyVerdict?: McpPolicyVerdictLike
+): IMcpConnectionPublic {
   const { oauth, apiKey } = doc.auth ?? { kind: 'none' };
   return {
     id: doc.id,
@@ -333,7 +351,7 @@ export function toMcpConnectionPublic(doc: IMcpConnectionDocument | IMcpConnecti
         : {}),
       ...(apiKey ? { apiKey: { headerName: apiKey.headerName, scheme: apiKey.scheme, last4: apiKey.last4 } } : {}),
     },
-    status: doc.status,
+    status: policyVerdict ? effectiveMcpConnectionStatus(doc, policyVerdict) : doc.status,
     lastError: doc.lastError,
     serverInfo: doc.serverInfo,
     tools: doc.tools ?? [],

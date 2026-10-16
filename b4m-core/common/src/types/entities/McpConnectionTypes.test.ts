@@ -6,6 +6,8 @@ import {
   RESERVED_MCP_CONNECTION_SLUGS,
   toMcpConnectionPublic,
   toMcpDisplayUrl,
+  effectiveMcpConnectionStatus,
+  MCP_CONNECTION_STATUSES,
   type IMcpConnectionDocument,
 } from './McpConnectionTypes';
 import { McpServerName } from './McpServerTypes';
@@ -96,6 +98,12 @@ describe('toMcpConnectionPublic', () => {
     expect(view.auth.apiKey).toEqual({ headerName: 'X-Api-Key', scheme: 'raw', last4: 'wxyz' });
   });
 
+  it('reports blocked_by_policy only when given a blocking verdict', () => {
+    expect(toMcpConnectionPublic(doc).status).toBe('connected');
+    expect(toMcpConnectionPublic(doc, { allowed: true }).status).toBe('connected');
+    expect(toMcpConnectionPublic(doc, { allowed: false }).status).toBe('blocked_by_policy');
+  });
+
   it('omits auth sub-objects the connection does not have', () => {
     const view = toMcpConnectionPublic({ ...doc, auth: { kind: 'none' } });
     expect(view.auth).toEqual({ kind: 'none' });
@@ -113,5 +121,16 @@ describe('toMcpDisplayUrl', () => {
     ['https://example.com', 'https://example.com/'],
   ])('%s -> %s', (url, expected) => {
     expect(toMcpDisplayUrl(url)).toBe(expected);
+  });
+});
+
+describe('effectiveMcpConnectionStatus', () => {
+  it('is never stored', () => {
+    expect(MCP_CONNECTION_STATUSES).not.toContain('blocked_by_policy');
+  });
+
+  it.each(MCP_CONNECTION_STATUSES)('a blocking verdict overrides %s', status => {
+    expect(effectiveMcpConnectionStatus({ status }, { allowed: false })).toBe('blocked_by_policy');
+    expect(effectiveMcpConnectionStatus({ status }, { allowed: true })).toBe(status);
   });
 });
