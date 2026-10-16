@@ -708,10 +708,13 @@ export function LakeInfoPanel({
             </Tooltip>
           )}
           {/* Reset files have no passages and no error until the rebuild commits or finally fails,
-              so without this chip a lake mid-rebuild reads as having nothing to rebuild. */}
+              so without this chip a lake mid-rebuild reads as having nothing to rebuild. The
+              tooltip says the rebuild has not FINISHED rather than that it is running: a file whose
+              queue send was rejected keeps the same fresh stamp and is indistinguishable from a
+              working one in this count. */}
           {(lake.canRebuild || lake.canManage) && rebuildingCount > 0 && (
             <Tooltip
-              title="These files' passages are being rebuilt. They are not searchable until the rebuild finishes."
+              title="These files were reset for a rebuild that has not finished yet, so they are not searchable. If a rebuild never finishes, they are offered as 'to rebuild' again within a couple of hours."
               size="sm"
             >
               <Chip

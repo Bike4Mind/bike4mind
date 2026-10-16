@@ -1146,6 +1146,18 @@ describe('nextRebuildPoll', () => {
     expect(nextRebuildPoll(201, start).interval).toBe(30_000);
   });
 
+  it('does not poll at the fast cadence on a backlog that is only rebuilds in flight', () => {
+    // A file whose queue send was rejected keeps a fresh stamp and no error for the full 2h stale
+    // window, so it is in the backlog and the badge has to keep polling - but nothing about it needs
+    // watching every 5s, and each tick is a full lake rescan. Repairable work still sets the pace
+    // when there is any, in flight or not.
+    expect(nextRebuildPoll(1, start, 1).interval).toBe(30_000);
+    expect(nextRebuildPoll(60, start, 60).interval).toBe(30_000);
+    expect(nextRebuildPoll(1, start, 0).interval).toBe(5_000);
+    expect(nextRebuildPoll(2, start, 1).interval).toBe(5_000);
+    expect(nextRebuildPoll(60, start, 1).interval).toBe(15_000);
+  });
+
   it('stops immediately when there was never a backlog to drain', () => {
     expect(nextRebuildPoll(0, start).interval).toBe(false);
   });
