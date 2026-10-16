@@ -30,14 +30,14 @@ COPY patches ./patches
 COPY scripts/link-premium-overlays.mjs ./scripts/
 RUN if ls packages/premium/*/package.json >/dev/null 2>&1; then \
       apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
-      && node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+      && B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
     else \
       pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
     fi
 
 # 3) Source. The copy restores apps/client/package.json, so declare the overlay again for turbo.
 COPY . .
-RUN node scripts/link-premium-overlays.mjs
+RUN B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
