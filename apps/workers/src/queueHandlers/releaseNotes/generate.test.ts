@@ -150,6 +150,15 @@ describe('triageReleaseNotes / writeReleaseNotes', () => {
     expect(complete.mock.calls[0][0]).toContain('You write the customer-facing release notes');
     expect(draft.headline).toBe('Faster search');
   });
+
+  it('asks the model for a specific, hype-free headline', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(editorialReply([1]));
+    await writeReleaseNotes([pr(1)], new Map([[1, 'Search is quicker.']]), complete);
+    const prompt: string = complete.mock.calls[0][0];
+    expect(prompt).toContain('single most important change in concrete terms');
+    expect(prompt).toContain('no exclamation marks');
+    expect(prompt).toContain('at most 120 characters');
+  });
 });
 
 describe('extractJson', () => {

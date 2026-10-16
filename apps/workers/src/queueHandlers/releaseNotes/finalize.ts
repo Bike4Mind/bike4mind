@@ -7,19 +7,19 @@ import {
   type ReleaseNotesJobPayload,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { MAX_HEADLINE_CHARS } from './limits';
 import type { ReleaseNoteDraft } from './generate';
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
 const FEAT_OR_FIX_TITLE = /^(?:feat|fix)(?:\([^)]*\))?!?:/i;
-const MAX_HEADLINE_CHARS = 120;
 
 // Marketing filler the model reaches for when it has nothing specific to say. Keep in sync with the
 // headline rules in buildEditorialPrompt (generate.ts).
 const HYPE_WORDS =
   /\b(?:exciting|excited|amazing|awesome|incredible|thrilled|powerful|seamless(?:ly)?|revolutionary|game[- ]chang\w*|cutting[- ]edge|next[- ]level|supercharg\w*|unleash\w*|delight\w*)\b/i;
 const GENERIC_HEADLINE =
-  /\b(?:new features|(?:updates|fixes|improvements|enhancements) and (?:fixes|improvements|enhancements|new features)|latest (?:update|release)|this release|(?:your |our |the )?ai workspace)\b/i;
+  /^(?:bug fixes|minor (?:updates|fixes|improvements|changes)|various (?:updates|fixes|improvements|changes)|what'?s new)[.!]?$|\b(?:new features|(?:updates|fixes|improvements|enhancements) and (?:\w+ )?(?:fixes|improvements|enhancements|new features)|latest (?:update|release)|this release|(?:your |our |the )?ai workspace)\b/i;
 
 /** Reasons the copy reads as generic or hype; empty when it is specific and plain. */
 export function findGenericCopy(field: 'headline' | 'summary', text: string): string[] {
@@ -38,11 +38,27 @@ export function findGenericCopy(field: 'headline' | 'summary', text: string): st
   return reasons;
 }
 
-/** Headline built from the most important surviving item, for when the model cannot write a specific one. */
-function headlineFromItems(items: ReleaseNote['items']): string {
-  const top = [...items].sort((a, b) => a.importance - b.importance)[0];
-  const text = top.text.replace(/[.!\s]+$/, '');
-  return text.length <= MAX_HEADLINE_CHARS ? text : `${text.slice(0, MAX_HEADLINE_CHARS - 3).trimEnd()}...`;
+/**
+ * Headline built from the items when the model cannot write a specific one: the most important item that
+ * already reads as a headline, else the most important item.
+ */
+function headlineFromItems(items: ReleaseNote['items'], logger: Logger): string {
+  const ordered = [...items].sort((a, b) => a.importance - b.importance);
+  // Prefer an item that already reads as a headline, so the fallback does not reintroduce hype or an "!".
+  const pick = ordered.find(item => findGenericCopy('headline', item.text).length === 0);
+  if (!pick) {
+    logger.warn('[releaseNotes] no item reads as a specific headline; using the most important one anyway', {
+      reasons: findGenericCopy('headline', ordered[0].text),
+    });
+  }
+  const text = (pick ?? ordered[0]).text.replace(/[.!\s]+$/, '');
+  if (text.length <= MAX_HEADLINE_CHARS) return text;
+  // trimEnd, then drop a lone high surrogate so the cut never ends on half of an astral character.
+  const cut = text
+    .slice(0, MAX_HEADLINE_CHARS - 3)
+    .trimEnd()
+    .replace(/[\uD800-\uDBFF]$/, '');
+  return `${cut}...`;
 }
 
 export type FinalizeResult = { kind: 'repair'; reasons: string[] } | { kind: 'ok'; note: ReleaseNote };
@@ -51,7 +67,7 @@ export type FinalizeResult = { kind: 'repair'; reasons: string[] } | { kind: 'ok
  * Turns a generated draft into a storable note: scrub, denylist, embargo and status. A denylist hit in
  * an item drops that item; a hit in the headline or summary returns `repair` so the caller can regenerate.
  * Generic or hype copy also returns `repair`, except on the `lastAttempt`, where a generic headline is
- * rebuilt from the top item and a hype summary is dropped, so the release still gets a note.
+ * rebuilt from the items and a hype summary is dropped, so the release still gets a note.
  */
 export function finalizeReleaseNote(
   draft: ReleaseNoteDraft,
@@ -89,16 +105,17 @@ export function finalizeReleaseNote(
     });
   }
 
-  const genericReasons = [...findGenericCopy('headline', headline), ...findGenericCopy('summary', summary)];
-  if (genericReasons.length && items.length) {
-    if (!lastAttempt) return { kind: 'repair', reasons: genericReasons };
-    logger.warn('[releaseNotes] copy still generic after a rewrite; using the top item as the headline', {
+  const headlineReasons = findGenericCopy('headline', headline);
+  const summaryReasons = findGenericCopy('summary', summary);
+  if ((headlineReasons.length || summaryReasons.length) && items.length) {
+    if (!lastAttempt) return { kind: 'repair', reasons: [...headlineReasons, ...summaryReasons] };
+    logger.warn('[releaseNotes] copy still generic after a rewrite; rebuilding the headline from the items', {
       releaseTag: payload.releaseTag,
-      reasons: genericReasons,
+      reasons: [...headlineReasons, ...summaryReasons],
     });
-    if (findGenericCopy('headline', headline).length) headline = headlineFromItems(items);
+    if (headlineReasons.length) headline = headlineFromItems(items, logger);
     // The items carry the detail, so no summary beats a hype one.
-    if (findGenericCopy('summary', summary).length) summary = '';
+    if (summaryReasons.length) summary = '';
   }
 
   if (items.length === 0 && payload.prs.some(pr => FEAT_OR_FIX_TITLE.test(pr.title))) {

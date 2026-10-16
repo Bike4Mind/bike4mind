@@ -175,6 +175,22 @@ describe('generic and hype copy', () => {
     expect(findGenericCopy('headline', headline)).not.toEqual([]);
   });
 
+  // Short filler with no "and" in it: only the whole-headline rule catches these.
+  it.each(['Bug fixes', 'Minor updates', 'Various improvements', "What's new", 'bug fixes.'])(
+    'rejects the bare filler headline %j',
+    headline => {
+      expect(findGenericCopy('headline', headline)).not.toEqual([]);
+    }
+  );
+
+  // One word between the two nouns used to defeat the "X and Y" rule.
+  it.each(['Bug fixes and performance improvements', 'Performance improvements and bug fixes'])(
+    'rejects the headline %j',
+    headline => {
+      expect(findGenericCopy('headline', headline)).not.toEqual([]);
+    }
+  );
+
   it.each([
     'New Federated-Admin Endpoint Streamlines Admin Console Access',
     'Share skills with your team in the Skill Market',
@@ -217,6 +233,36 @@ describe('generic and hype copy', () => {
     const result = run(draft({ headline: 'This release', items: [item('a'.repeat(200))] }), config, payload(), true);
 
     expect(result.kind === 'ok' && result.note.headline).toHaveLength(120);
+  });
+
+  it('does not split an astral character when it truncates the fallback headline', () => {
+    const text = 'a'.repeat(116) + String.fromCodePoint(0x1f600) + 'z'.repeat(10);
+    const result = run(draft({ headline: 'This release', items: [item(text)] }), config, payload(), true);
+
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.note.headline.endsWith('...')).toBe(true);
+    const before = result.note.headline.slice(0, -3);
+    const last = before.charCodeAt(before.length - 1);
+    expect(last < 0xd800 || last > 0xdbff).toBe(true);
+  });
+
+  it('skips an item whose text reads as hype when building the fallback headline', () => {
+    const items = [
+      { ...item('Voice mode works seamlessly across devices.'), importance: 1 },
+      { ...item('Share skills with your team in the Skill Market.'), importance: 2 },
+    ];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Share skills with your team in the Skill Market');
+  });
+
+  it('falls back to the most important item when no item reads as a specific headline', () => {
+    const items = [{ ...item('Yahoo! Mail import is here.'), importance: 1 }];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Yahoo! Mail import is here');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('specific headline'), expect.anything());
   });
 
   it('checks the denylist before generic copy, so a denylist hit still asks for a rewrite', () => {
