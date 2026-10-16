@@ -77,6 +77,7 @@ vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () =
 // Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
+    admits: async (id: string) => !meter.denied.has(id),
     assert: async (id: string) => {
       if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
     },
@@ -87,12 +88,13 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => meter.settle(charge),
 }));
 
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import handler from '../rlm-answer';
 import { SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 type Json = Record<string, unknown>;
 
-function makeReqRes(headers: Record<string, string>) {
+function makeReqRes(headers: Record<string, string>, body: Json = { query: 'who contradicts whom?' }) {
   const res = {
     statusCode: 200,
     body: undefined as Json | undefined,
@@ -107,15 +109,15 @@ function makeReqRes(headers: Record<string, string>) {
   };
   const req = {
     headers,
-    body: { query: 'who contradicts whom?' },
+    body,
     user: { id: 'user-1' },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
   return { req, res };
 }
 
-const call = (headers: Record<string, string>) => {
-  const { req, res } = makeReqRes(headers);
+const call = (headers: Record<string, string>, body?: Json) => {
+  const { req, res } = makeReqRes(headers, body);
   // The mocked baseApi chain returns the raw handler, so `.post` IS the function.
   return (handler as unknown as (r: unknown, s: unknown) => Promise<unknown>)(req, res).then(() => res);
 };
@@ -299,6 +301,62 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     await expect(call({ authorization: 'Bearer t' })).rejects.toMatchObject({ statusCode: 403 });
     expect(meter.reserve).not.toHaveBeenCalled();
     expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('400s an explicit model missing from the catalog instead of substituting one', async () => {
+    await expect(call({ authorization: 'Bearer t' }, { query: 'q', model: 'not-a-model' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(meter.reserve).not.toHaveBeenCalled();
+    expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('skips a refused default and runs the next admitted fallback', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: MODEL, pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+      { id: 'other-sonnet', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+    ] as never);
+    meter.denied.add(MODEL);
+
+    const res = await call({ authorization: 'Bearer t' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.model).toBe('other-sonnet');
+  });
+
+  it('403s only when no fallback candidate is admitted', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: MODEL, pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+      { id: 'other-sonnet', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+    ] as never);
+    meter.denied.add(MODEL);
+    meter.denied.add('other-sonnet');
+
+    await expect(call({ authorization: 'Bearer t' })).rejects.toMatchObject({ statusCode: 403 });
+    expect(meter.reserve).not.toHaveBeenCalled();
+  });
+
+  it('sizes the root ceiling on the execution budget, since a turn may run many tool calls', async () => {
+    await call({ authorization: 'Bearer t' }, { query: 'q', budget: { max_executions: 10, max_cost_usd: 1 } });
+    await call({ authorization: 'Bearer t' }, { query: 'q', budget: { max_executions: 100, max_cost_usd: 1 } });
+
+    const [few, many] = meter.reserve.mock.calls.map(c => c[1] as number);
+    // 90 more executions, each re-read by up to 4 turns at 3000 tokens, at $3/MTok.
+    expect(many - few).toBeCloseTo(90 * 4 * 3000 * 3e-6, 6);
+  });
+
+  it('charges the root ceiling when a completed run reports no root usage', async () => {
+    mockAgentRun.mockResolvedValueOnce({
+      finalAnswer: 'ok',
+      steps: [],
+      completionInfo: { iterations: 1, toolCalls: 0, reachedMaxIterations: false },
+    });
+
+    await call({ authorization: 'Bearer t' });
+
+    const reservedUsd = meter.reserve.mock.calls[0][1] as number;
+    // The reservation is the root ceiling plus the $5 default sub-LLM budget.
+    expect(meter.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: reservedUsd - 5 + 0.25 }));
   });
 
   it('reserves the root ceiling plus the whole sub-LLM budget', async () => {

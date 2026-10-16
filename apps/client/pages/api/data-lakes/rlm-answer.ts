@@ -11,7 +11,7 @@ import {
   recordReplSandboxUnavailable,
 } from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -89,8 +89,8 @@ const RlmAnswerInput = z.object({
 
 const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 // No hardcoded fallback model id - `getAvailableModels()` returns the live
-// roster, so if DEFAULT_MODEL isn't found we pick the first available model
-// whose id contains "sonnet" (or fall back to the first available, period).
+// roster, so when no model is requested we try DEFAULT_MODEL, then any
+// available Sonnet, then the rest, taking the first the caller is admitted to.
 // Avoids a stale-id failure mode when Anthropic deprecates a specific dated
 // snapshot.
 // 25 matches the per-session execution budget; v1 ran with 12 and clipped
@@ -98,18 +98,32 @@ const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 const DEFAULT_MAX_ITERATIONS = 25;
 const ROOT_MAX_TOKENS = 4096;
 const ROOT_HISTORY_ITERATIONS = 4;
-// codeExecuteTool truncates stdout to ~7K chars, ~3K tokens at the 2.5 chars/token estimate.
+const DEFAULT_MAX_EXECUTIONS = 25;
+// codeExecuteTool caps stdout plus error to ~7K chars, ~3K tokens at the 2.5 chars/token estimate.
 const OBSERVATION_TOKEN_CAP = 3000;
 
 /**
- * Worst-case root-agent spend: every iteration emits ROOT_MAX_TOKENS and re-reads the base prompt
- * plus the kept history at its cap. Must stay >= real spend: settlement clamps to the hold, so any
- * overrun past it is free.
+ * Worst-case root-agent spend. Must stay >= real spend: settlement clamps to the hold, so any overrun
+ * past it is free. Every iteration emits ROOT_MAX_TOKENS and re-reads the base prompt plus the kept
+ * history. ReActAgent runs every tool_use in a turn with no per-turn cap, so the observation term is
+ * bounded per run instead: only a code execution yields a full observation, the session allows
+ * maxExecutions of them, and each is re-read by at most ROOT_HISTORY_ITERATIONS later turns. A call
+ * that runs no code (empty code, budget spent, sandbox gone) gets a short fixed observation, taken as
+ * no larger than the tool_use that asked for it, so kept output is counted twice.
  */
-function rootCeilingUsd(modelInfo: ModelInfo, baseMessages: IMessage[], maxIterations: number): number {
-  const perIterationInput =
-    estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * (ROOT_MAX_TOKENS + OBSERVATION_TOKEN_CAP);
-  return getTextModelCost(modelInfo, maxIterations * perIterationInput, maxIterations * ROOT_MAX_TOKENS);
+function rootCeilingUsd(
+  modelInfo: ModelInfo,
+  baseMessages: IMessage[],
+  maxIterations: number,
+  maxExecutions: number
+): number {
+  const perIterationInput = estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * 2 * ROOT_MAX_TOKENS;
+  const observationInput = ROOT_HISTORY_ITERATIONS * maxExecutions * OBSERVATION_TOKEN_CAP;
+  return getTextModelCost(
+    modelInfo,
+    maxIterations * perIterationInput + observationInput,
+    maxIterations * ROOT_MAX_TOKENS
+  );
 }
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
@@ -184,21 +198,31 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
 
     // --- Resolve the root LLM backend ---
     const models = await getAvailableModels(apiKeyTable);
-    const requestedModel = parsed.model ?? DEFAULT_MODEL;
-    let modelInfo = models.find(m => m.id === requestedModel);
-    if (!modelInfo) {
-      // Live fallback: prefer any available Sonnet, else the first
-      // available model. Avoids hardcoding a dated model id that could
-      // go stale when Anthropic deprecates a specific snapshot.
-      modelInfo = models.find(m => /sonnet/i.test(m.id)) ?? models[0];
+    const admission = await createModelAdmission(req.user, models);
+    let modelInfo: ModelInfo | undefined;
+    if (parsed.model) {
+      // An explicitly requested model is never silently swapped for another one.
+      modelInfo = models.find(m => m.id === parsed.model);
+      if (!modelInfo) throw new BadRequestError(`Model "${parsed.model}" is not available`);
+      await admission.assert(modelInfo.id);
+    } else {
+      const preferred = models.find(m => m.id === DEFAULT_MODEL);
+      const candidates = [
+        ...(preferred ? [preferred] : []),
+        ...models.filter(m => m !== preferred && /sonnet/i.test(m.id)),
+        ...models.filter(m => m !== preferred && !/sonnet/i.test(m.id)),
+      ];
+      if (candidates.length === 0) {
+        return res.status(500).json({ error: 'No model available for data-lake answers' });
+      }
+      for (const candidate of candidates) {
+        if (await admission.admits(candidate.id)) {
+          modelInfo = candidate;
+          break;
+        }
+      }
+      if (!modelInfo) throw new ForbiddenError('No available model is accessible for data-lake answers');
     }
-    if (!modelInfo) {
-      return res.status(500).json({
-        error: `Model "${requestedModel}" not available, and no fallback model could be resolved`,
-        availableModelIds: models.slice(0, 10).map(m => m.id),
-      });
-    }
-    await (await createModelAdmission(req.user, models)).assert(modelInfo.id);
     const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
     if (!llm) {
       return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });
@@ -216,15 +240,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     // --- Reserve credits: root-agent ceiling plus the whole sub-LLM budget ---
     const maxIterations = parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS;
     const maxCostUsd = parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD;
+    const maxExecutions = parsed.budget?.max_executions ?? DEFAULT_MAX_EXECUTIONS;
     const baseMessages: IMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: parsed.query },
     ];
-    const reservation = await reserveCompletionCredits(
-      req,
-      rootCeilingUsd(modelInfo, baseMessages, maxIterations) + maxCostUsd,
-      'data-lake answers'
-    );
+    const rootCeiling = rootCeilingUsd(modelInfo, baseMessages, maxIterations, maxExecutions);
+    const reservation = await reserveCompletionCredits(req, rootCeiling + maxCostUsd, 'data-lake answers');
 
     // --- Construct a per-request ReplSession ---
     // `executor: 'isolated'` is load-bearing, not a preference. The code this
@@ -266,7 +288,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         // ordinarily finish in under a second.
         executorOptions: { toolMinBudgetMs: { subAgentQuery: SUB_LLM_HTTP_TIMEOUT_MS } },
         budget: {
-          maxExecutions: parsed.budget?.max_executions ?? 25,
+          maxExecutions,
           maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
           maxCostUsd,
         },
@@ -367,18 +389,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     // A run that throws (hard timeout or provider error mid root-LLM call) has no result, so its
     // root spend comes from the agent's running totals, which hold every turn that completed.
     const rootUsage = result?.completionInfo ?? agent.toCheckpoint();
+    // A run that completed but reports no root usage cannot be priced, so it is charged the root
+    // ceiling rather than nothing (as createRequestCompletionMeter does).
+    const rootUnreported =
+      !!result && !rootUsage.totalInputTokens && !rootUsage.totalOutputTokens && !rootUsage.turnUsage?.length;
+    if (rootUnreported) {
+      req.logger.warn(`[rlm-answer] ${modelInfo.id} reported no usage; charging the root ceiling`);
+    }
     await settleCompletion(reservation, req, {
       sessionId,
       model: modelInfo.id,
       provider: modelInfo.backend,
       usd:
-        completionUsd(modelInfo, {
-          inputTokens: rootUsage.totalInputTokens,
-          outputTokens: rootUsage.totalOutputTokens,
-          cacheReadInputTokens: rootUsage.totalCacheReadTokens,
-          cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
-          turnUsage: rootUsage.turnUsage,
-        }) + replUsage.totalCostUsd,
+        (rootUnreported
+          ? rootCeiling
+          : completionUsd(modelInfo, {
+              inputTokens: rootUsage.totalInputTokens,
+              outputTokens: rootUsage.totalOutputTokens,
+              cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+              cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+              turnUsage: rootUsage.turnUsage,
+            })) + replUsage.totalCostUsd,
       inputTokens: rootUsage.totalInputTokens,
       outputTokens: rootUsage.totalOutputTokens,
     });
