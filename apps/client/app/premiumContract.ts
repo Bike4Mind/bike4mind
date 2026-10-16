@@ -1,3 +1,4 @@
+import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -256,7 +257,7 @@ export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly 
  * Nothing is written onto the session, so a copy or move takes on its destination's denials.
  * Entries from several overlays are merged.
  */
-export type PremiumWorkspaceDeniedTools = Readonly<Record<string, readonly string[]>>;
+export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
 
 /**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one

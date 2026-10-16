@@ -56,13 +56,13 @@ describe('premium workspace denied tools', () => {
   it('emits the empty form when no overlay is present', () => {
     mkdirSync(join(sandbox, 'packages/premium'), { recursive: true });
 
-    expect(generate()).toContain('premiumWorkspaceDeniedTools: PremiumWorkspaceDeniedTools = {}');
+    expect(generate()).toContain('premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = {}');
   });
 
   it('emits the empty form when an overlay declares none', () => {
     writeOverlay('silent', {});
 
-    expect(generate()).toContain('premiumWorkspaceDeniedTools: PremiumWorkspaceDeniedTools = {}');
+    expect(generate()).toContain('premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = {}');
   });
 
   it('emits the declared table as data, without importing the overlay', () => {
@@ -72,6 +72,17 @@ describe('premium workspace denied tools', () => {
 
     expect(generated).toContain(`"example-workspace": ["tool_a", "tool_b"]`);
     expect(generated).not.toContain('@bike4mind/premium-alpha');
+  });
+
+  // The workers import this file, and eslint bans them from the UI layer. A type import from
+  // `@client/app` drags react into their graph through a gitignored file no linter reads.
+  it('takes its type from core, never from the client app', () => {
+    writeOverlay('alpha', { workspaceDeniedTools: { 'example-workspace': ['tool_a'] } });
+
+    const generated = generate();
+
+    expect(generated).toContain(`from '@bike4mind/common'`);
+    expect(generated).not.toContain('@client/app');
   });
 
   it('merges across overlays and drops duplicates', () => {

@@ -605,7 +605,7 @@ const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*$/i;
 
 function generateWorkspaceDeniedTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
-  const typeImport = `import type { PremiumWorkspaceDeniedTools } from '@client/app/premiumContract';`;
+  const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
   const field = 'workspaceDeniedTools';
 
   const merged = new Map();
@@ -652,7 +652,7 @@ function generateWorkspaceDeniedTools(packages) {
   const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
   writeFile(
     outPath,
-    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceDeniedTools: PremiumWorkspaceDeniedTools = ${body};\n`
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = ${body};\n`
   );
 }
 
