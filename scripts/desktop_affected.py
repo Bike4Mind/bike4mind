@@ -133,6 +133,8 @@ def affected(base, head):
         return True
     roots = old_roots | new_roots
     for path in paths:
+        # Desktop bundles no markdown and reads none at runtime, so markdown-only changes
+        # cannot affect it. Revisit if a root starts consuming markdown as input.
         if path.endswith(('.md', '.mdx')):
             continue
         if any(path.startswith(folder + '/') for folder in roots):
