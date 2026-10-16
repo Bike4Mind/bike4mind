@@ -47,8 +47,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const updated = await partnerSignupRuleRepository.update({ id, ...data });
       // Null => the row was deleted between check and write (or never existed). 404 rather
-      // than a 200 with an empty body. update() is the single source of truth here, so no
-      // separate findById pre-check is needed.
+      // than a 200 with an empty body. update() decides existence; the findById above only
+      // reads the stored plan.
       if (!updated) throw new NotFoundError('Partner signup rule not found');
 
       // A conditions change (credits/entitlements/enabled) must apply now, not after the TTL.
