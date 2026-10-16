@@ -1,4 +1,4 @@
-import { DATA_LAKE_TOOL_NAMES, DELEGATION_TOOLS, detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, detectAgentMentions, detectSkillMentions } from '@bike4mind/common';
 
 /**
  * Blog intent in the message itself. Two branches: a word-boundary match on `blog` and its close
@@ -193,7 +193,7 @@ export function shouldOfferDelegation(input: {
   deniedTools?: readonly string[];
 }): boolean {
   if (input.disableUserIntegrations) return false;
-  if (input.deniedTools?.includes(DELEGATION_TOOLS[0])) return false;
+  if (input.deniedTools?.includes('delegate_to_agent')) return false;
   if ((input.allowedAgents?.length ?? 0) > 0) return true;
   if ((input.sessionAgentIds?.length ?? 0) > 0) return true;
   return mentionsDelegatableAgent(input.message, input.delegatableAgentNames);
