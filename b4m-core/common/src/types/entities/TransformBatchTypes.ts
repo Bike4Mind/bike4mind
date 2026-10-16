@@ -1,6 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import type { CreditHoldRecord } from './CreditHolderTypes';
+import type { CompletionSource } from '../analytics';
 
 /**
  * Lifecycle of a submitted Anthropic Message Batch, tracked locally so the
@@ -67,6 +68,8 @@ export interface ITransformBatch extends IMongoDocument {
   creditHold?: CreditHoldRecord | null;
   /** The API key that submitted the batch, for the settlement ledger row. */
   apiKeyId?: string;
+  /** Ledger `source` resolved from the submit request; absent for web (JWT) submits. */
+  usageSource?: CompletionSource;
 }
 
 export interface ITransformBatchRepository extends IBaseRepository<ITransformBatch> {

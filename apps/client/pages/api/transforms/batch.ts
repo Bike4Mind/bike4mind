@@ -2,14 +2,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
-import type { IMessage, ModelInfo } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, type IMessage, type ModelInfo } from '@bike4mind/common';
 import {
   completionCeilingUsd,
   createModelAdmission,
   isCreditsEnforced,
   reserveCompletionCredits,
 } from '@server/billing/meterPlatformCompletion';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { z } from 'zod';
 
@@ -66,9 +66,6 @@ const BatchSubmitSchema = z.object({
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
 const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
   const body = BatchSubmitSchema.parse(req.body);
-  if (new Set(body.requests.map(r => r.client_ref)).size !== body.requests.length) {
-    throw new BadRequestError('Each request must have a unique client_ref');
-  }
 
   const apiKey = Config.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === 'not-configured') {
@@ -128,6 +125,7 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
       // generationJobs/sweep.ts if consumers stop polling to completion.
       creditHold: reservation.hold,
       apiKeyId: req.apiKeyInfo?.keyId,
+      usageSource: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
     });
   } catch (error) {
     req.logger.error(`[transforms/batch] Failed to persist batch ${anthropicBatchId} after submit`, error);

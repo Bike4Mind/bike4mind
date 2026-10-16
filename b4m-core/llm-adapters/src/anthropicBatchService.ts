@@ -43,6 +43,8 @@ export interface BatchSubmitResult {
 }
 
 export interface BatchItemResult {
+  /** Our `custom_id`; unique within the batch, unlike `clientRef`. */
+  customId: string;
   clientRef: string;
   status: 'done' | 'failed';
   /** Concatenated text content when `status === "done"`. */
@@ -195,13 +197,13 @@ export class AnthropicBatchService {
     const stream = await this.api.messages.batches.results(anthropicBatchId);
     for await (const item of stream) {
       const clientRef = refByCustomId.get(item.custom_id) ?? item.custom_id;
-      results.push(this.toItemResult(clientRef, item.result));
+      results.push({ ...this.toItemResult(clientRef, item.result), customId: item.custom_id });
     }
 
     return { processingStatus: 'ended', counts, results };
   }
 
-  private toItemResult(clientRef: string, result: MessageBatchResult): BatchItemResult {
+  private toItemResult(clientRef: string, result: MessageBatchResult): Omit<BatchItemResult, 'customId'> {
     switch (result.type) {
       case 'succeeded': {
         const msg = result.message;
