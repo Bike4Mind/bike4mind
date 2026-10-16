@@ -69,7 +69,7 @@ const handler = baseApi().post(async (req, res) => {
   const attachmentList = quest?.attachmentList;
   const attachment = attachmentList?.attachments.find(candidate => candidate.id === attachmentId);
   if (!attachmentList || !attachment) {
-    logger.error('[Web MCP Delete] Attachment is not in any listed attachment set for this session', {
+    logger.warn('[Web MCP Delete] Attachment is not in any listed attachment set for this session', {
       sessionId,
       attachmentId,
     });
