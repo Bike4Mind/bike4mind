@@ -718,7 +718,11 @@ const MessageContent: React.FC<ContentProps> = memo(
     };
 
     const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
-    const answeringModel = answeringModelLabel(messageData.promptMeta, getModelDisplayName);
+    const answeringModel = answeringModelLabel(
+      messageData.promptMeta,
+      getModelDisplayName,
+      messageData.type === 'error'
+    );
 
     // The More options entries, shared by the desktop menu and the phone actions sheet so the two
     // cannot drift. Delete stays apart: the sheet lists Report before it.

@@ -90,6 +90,7 @@ import {
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -2318,11 +2319,20 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
-      // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
-      // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
-      // turn is not credited to the model it replaced.
-      if (modelInfo.id !== model && quest.promptMeta?.model) {
-        quest.promptMeta.model.answeredBy = modelInfo.id;
+      // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
+      // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
+      if (quest.promptMeta && resolvedModelId !== model) {
+        quest.promptMeta.redirectedFrom ??= model;
+        if (quest.promptMeta.model) {
+          Object.assign(quest.promptMeta.model, buildPromptMetaModel(modelInfo));
+        }
+      }
+      if (quest.promptMeta?.redirectedFrom) {
+        this.sendStatusUpdate(
+          quest,
+          `${quest.promptMeta.redirectedFrom} is unavailable; answering with ${resolvedModelId}`,
+          { statusAt: new Date() }
+        );
       }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
@@ -4628,7 +4638,6 @@ export class ChatCompletionProcess {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
-              if (quest.promptMeta!.model!.answeredBy) quest.promptMeta!.model!.answeredBy = currentModel.id;
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
@@ -6369,9 +6378,6 @@ export class ChatCompletionProcess {
       quest.status = 'done';
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
-      // Same rule for the redirect record: the successor ran but produced no reply, so the chip must
-      // not credit it as the answering model.
-      if (quest.promptMeta?.model) quest.promptMeta.model.answeredBy = undefined;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.
