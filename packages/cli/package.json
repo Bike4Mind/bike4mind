@@ -4,7 +4,7 @@
   "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
-  "license": "UNLICENSED",
+  "license": "BUSL-1.1",
   "author": "Bike4Mind",
   "repository": {
     "type": "git",
