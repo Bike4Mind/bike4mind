@@ -238,7 +238,7 @@ const baseOptions = {
   tokenizer: mockTokenizer as any,
   // The contributed surface denials. Only the cases that set `mockSession.surface` to a key in here
   // resolve anything; every other test leaves the session with no surface at all.
-  workspaceDeniedTools: { 'denied-surface': ['notion__search'] },
+  workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
 };
 
 describe('ChatCompletionProcess', () => {
@@ -6284,6 +6284,8 @@ describe('ChatCompletionProcess', () => {
       priorToolNames?: string[];
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
+      disabledTools?: string[];
+      surface?: string;
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -6294,6 +6296,8 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockClear();
 
       mockSession.agentIds = params.sessionAgentIds ?? [];
+      mockSession.disabledTools = params.disabledTools;
+      mockSession.surface = params.surface;
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
         getModelInfo: vi.fn().mockResolvedValue([]),
@@ -6366,6 +6370,28 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // The final tool pass strips only the schema, so a denylist entry for delegate_to_agent has to
+    // withhold the "Agent Delegation" prompt section here as well - otherwise the model is named a
+    // tool it cannot call. The predicate is unit-tested in autoAddedToolGating.test.ts; these pin
+    // that the chat call site actually feeds it the resolved denials.
+    it('does NOT expose delegate_to_agent when the session denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        disabledTools: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    it('does NOT expose delegate_to_agent when the surface denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        surface: 'delegation-denied-surface',
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     // An @mention is only a delegation signal when it names an agent the store can actually run.
