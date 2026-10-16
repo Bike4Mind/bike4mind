@@ -1,5 +1,4 @@
 import {
-  ApiKeyType,
   supportedSoundGenerationVendor,
   supportedVoiceGenerationVendor,
   type SoundGenerationVendor,
@@ -7,21 +6,11 @@ import {
 } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
+import { AUDIO_VENDOR_API_KEY_TYPE, type AudioVendor } from './audioVendorApiKeyType';
 
 export type UsableAudioProviders = {
   speech: VoiceGenerationVendor[];
   soundEffects: SoundGenerationVendor[];
-};
-
-type AudioVendor = VoiceGenerationVendor | SoundGenerationVendor;
-
-/**
- * The stored key type each audio vendor needs, resolved per user first and then from the admin key
- * (getEffectiveApiKey). /api/ai/sound-effects reads it too; resolveTtsProvider (/api/ai/tts) picks the same types.
- */
-export const AUDIO_VENDOR_API_KEY_TYPE: Record<AudioVendor, ApiKeyType> = {
-  openai: ApiKeyType.openai,
-  elevenlabs: ApiKeyType.elevenlabs,
 };
 
 /**

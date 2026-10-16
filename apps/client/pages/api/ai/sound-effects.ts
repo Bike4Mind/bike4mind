@@ -14,7 +14,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
-import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/listUsableAudioProviders';
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
 
 // Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
 // billed, then could be neither labelled nor saved.
