@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import {
   AuthenticatedApiClient,
+  NotAuthenticatedError,
   type AuthTokens,
   type DeviceFlowClient,
   type RefreshTokenResponse,
@@ -470,6 +471,22 @@ describe('AuthService token refresh', () => {
     });
     expect(await vault.reloadTokens(HOSTED)).toBeNull();
     expect(silentLogger.warn).toHaveBeenCalledWith(expect.stringContaining('HTTP 401'));
+  });
+
+  it('stays quietly signed-out when the user signs out while a refresh is pending', async () => {
+    let fail: (error: Error) => void = () => {};
+    const refreshToken = vi.fn(() => new Promise<RefreshTokenResponse>((_resolve, reject) => (fail = reject)));
+    const { service, vault } = await signedIn(refreshToken);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    await service.signOut();
+    fail(new NotAuthenticatedError('not logged in'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(service.getState()).toMatchObject({ status: 'signed-out', error: undefined });
+    expect(await vault.reloadTokens(HOSTED)).toBeNull();
+    service.dispose();
   });
 
   it('shows signed-out when the client clears the tokens on a request 401, instead of staying signed-in', async () => {

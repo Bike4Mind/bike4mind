@@ -482,16 +482,18 @@ export class AuthService {
   private async refreshNow(): Promise<void> {
     this.refreshTimer = null;
     const api = this.api;
+    const generation = this.signInGeneration;
     const tokens = await this.currentTokens();
     if (!api || !tokens) return;
 
     try {
       await api.refreshSession(tokens.accessToken);
-      if (api !== this.api) return;
+      if (api !== this.api || generation !== this.signInGeneration) return;
       this.refreshAttempt = 0;
       await this.scheduleProactiveRefresh();
     } catch (err) {
-      if (api !== this.api) return;
+      // A sign-out during the exchange is the user's own doing, not a session that ended.
+      if (api !== this.api || generation !== this.signInGeneration) return;
       // Revoked: the client has already cleared the vault and called handleTokensCleared.
       if (err instanceof SessionRevokedError) return;
       if (err instanceof NotAuthenticatedError) {
