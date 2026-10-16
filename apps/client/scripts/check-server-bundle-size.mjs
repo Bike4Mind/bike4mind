@@ -27,11 +27,16 @@
  * the 80s is visible before the budget cliff.
  */
 
+import { realpathSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-/** Lambda's hard cap on unzipped deployment-package bytes. Not raisable. */
+/**
+ * Lambda's hard cap on unzipped deployment-package bytes. Not raisable.
+ * Same limit as `scripts/check-opennext-build.mjs`, which spells it `250 * 1024 * 1024`;
+ * keep the two in sync.
+ */
 export const LAMBDA_UNZIPPED_LIMIT_BYTES = 262144000;
 
 /** Fraction of the limit we allow before the budget is considered breached. */
@@ -50,35 +55,36 @@ const SERVER_FUNCTIONS_ROOT = join(REPO_ROOT, 'apps/client/.open-next/server-fun
  *
  * `over-limit` means AWS itself would reject the package; `over-budget` means we are inside the
  * red zone we refuse to operate in, with headroom left to react; `near-budget` is a warning only.
- * `totalBytes` in the result is `measuredBytes + reserveBytes`, the figure every status is judged on.
+ * `judgedBytes` in the result is `measuredBytes + reserveBytes`, the figure every status is judged on.
  */
 export function evaluateBudget({
-  totalBytes: measuredBytes,
+  measuredBytes,
   reserveBytes = 0,
   limitBytes = LAMBDA_UNZIPPED_LIMIT_BYTES,
   budgetFraction = DEFAULT_BUDGET_FRACTION,
   warnFraction = DEFAULT_WARN_FRACTION,
 }) {
-  const totalBytes = measuredBytes + reserveBytes;
+  const judgedBytes = measuredBytes + reserveBytes;
   const budgetBytes = Math.floor(limitBytes * budgetFraction);
   const warnBytes = Math.floor(limitBytes * warnFraction);
   const status =
-    totalBytes > limitBytes
+    judgedBytes > limitBytes
       ? 'over-limit'
-      : totalBytes > budgetBytes
+      : judgedBytes > budgetBytes
         ? 'over-budget'
-        : totalBytes > warnBytes
+        : judgedBytes > warnBytes
           ? 'near-budget'
           : 'ok';
   return {
     status,
-    totalBytes,
+    judgedBytes,
     measuredBytes,
     reserveBytes,
     limitBytes,
     budgetBytes,
-    percentOfLimit: (totalBytes / limitBytes) * 100,
-    headroomBytes: limitBytes - totalBytes,
+    warnBytes,
+    percentOfLimit: (judgedBytes / limitBytes) * 100,
+    headroomBytes: limitBytes - judgedBytes,
   };
 }
 
@@ -91,15 +97,18 @@ export function failsBudget(status) {
 
 /**
  * Parse the --reserve-mib value into bytes. `undefined` (flag absent) and '' (flag passed from an
- * unset CI variable) both mean no allowance; anything else must be a non-negative number.
+ * unset CI variable) both mean no allowance; anything else must be a plain non-negative decimal
+ * number of MiB, so a typo in the repository variable fails loudly instead of being read as some
+ * other value (`Number()` alone would take "0x10" as 16 and "1e3" as 1000).
  */
 export function parseReserveMib(value) {
-  if (value === undefined || value.trim() === '') return 0;
-  const mib = Number(value);
-  if (!Number.isFinite(mib) || mib < 0) {
+  if (value === undefined) return 0;
+  const trimmed = value.trim();
+  if (trimmed === '') return 0;
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
     throw new Error(`--reserve-mib must be a non-negative number of MiB, got "${value}"`);
   }
-  return Math.round(mib * MIB);
+  return Math.round(Number(trimmed) * MIB);
 }
 
 /** The worst status across several bundles, since one oversized package fails the whole deploy. */
@@ -109,18 +118,23 @@ export function worstStatus(statuses) {
 
 const megabytes = bytes => (bytes / MIB).toFixed(1);
 
-/** Recursively collect [relativePath, bytes] for every regular file under `root`. */
+/**
+ * Recursively collect [relativePath, bytes] for every regular file under `root`.
+ * Must stay in sync with `bundleSize` in `scripts/check-opennext-build.mjs`, which measures the
+ * same output: a symlinked directory contributes nothing to the zipped package, and a symlinked
+ * file is counted at its target's size. Over-reporting can only fail a bundle that would have
+ * fit; under-reporting would pass one the deploy then rejects.
+ */
 async function collectFiles(root) {
   const files = [];
   const walk = async dir => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
-      // Symlinks are dereferenced by the packager, but counting a target twice would overstate
-      // the total, so they are skipped here and the budget margin absorbs the difference.
       if (entry.isDirectory()) {
         await walk(full);
-      } else if (entry.isFile()) {
-        files.push([relative(root, full), (await stat(full)).size]);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        const stats = await stat(full).catch(() => null);
+        if (stats?.isFile()) files.push([relative(root, full), stats.size]);
       }
     }
   };
@@ -149,12 +163,12 @@ function label(dir) {
 
 async function measure(dir, reserveBytes) {
   const files = await collectFiles(dir);
-  const totalBytes = files.reduce((sum, [, bytes]) => sum + bytes, 0);
+  const measuredBytes = files.reduce((sum, [, bytes]) => sum + bytes, 0);
   return {
     dir,
     fileCount: files.length,
     contributors: topContributors(files),
-    ...evaluateBudget({ totalBytes, reserveBytes }),
+    ...evaluateBudget({ measuredBytes, reserveBytes }),
   };
 }
 
@@ -163,12 +177,13 @@ function report(result) {
   console.log(`  ${megabytes(result.measuredBytes)} MB unzipped across ${result.fileCount} files`);
   if (result.reserveBytes) {
     console.log(
-      `  + ${megabytes(result.reserveBytes)} MB reserve for bytes not in this build = ${megabytes(result.totalBytes)} MB judged`
+      `  + ${megabytes(result.reserveBytes)} MB reserve for bytes not in this build = ${megabytes(result.judgedBytes)} MB judged`
     );
   }
   console.log(
     `  limit ${megabytes(result.limitBytes)} MB, budget ${megabytes(result.budgetBytes)} MB ` +
-      `(${(DEFAULT_BUDGET_FRACTION * 100).toFixed(0)}%), now ${result.percentOfLimit.toFixed(1)}% ` +
+      `(${(DEFAULT_BUDGET_FRACTION * 100).toFixed(0)}%), warn ${megabytes(result.warnBytes)} MB ` +
+      `(${(DEFAULT_WARN_FRACTION * 100).toFixed(0)}%), now ${result.percentOfLimit.toFixed(1)}% ` +
       `with ${megabytes(result.headroomBytes)} MB headroom`
   );
   console.log('  heaviest paths:');
@@ -179,7 +194,7 @@ function report(result) {
 
 function summarize(result) {
   return (
-    `${label(result.dir)} is ${megabytes(result.totalBytes)} MB unzipped${result.reserveBytes ? ' with reserve' : ''} ` +
+    `${label(result.dir)} is ${megabytes(result.judgedBytes)} MB unzipped${result.reserveBytes ? ' with reserve' : ''} ` +
     `(${result.percentOfLimit.toFixed(1)}% of Lambda's ${megabytes(result.limitBytes)} MB unzipped limit, ` +
     `budget ${megabytes(result.budgetBytes)} MB). Trim it or move the Next server to container-image ` +
     `packaging; the limit itself cannot be raised.`
@@ -190,16 +205,22 @@ async function main() {
   const args = process.argv.slice(2);
   const enforce = args.includes('--enforce');
   const dirArg = args.find(a => a.startsWith('--dir='));
-  const reserveArg = args.find(a => a.startsWith('--reserve-mib='));
+  const reserveArg = args.find(a => a === '--reserve-mib' || a.startsWith('--reserve-mib='));
 
+  if (reserveArg === '--reserve-mib') {
+    console.error('::error::--reserve-mib needs a value, e.g. --reserve-mib=64');
+    process.exit(2);
+  }
+
+  const reserveValue = reserveArg?.slice('--reserve-mib='.length);
   let reserveBytes;
   try {
-    reserveBytes = parseReserveMib(reserveArg?.slice('--reserve-mib='.length));
+    reserveBytes = parseReserveMib(reserveValue);
   } catch (error) {
     console.error(`::error::${error.message}`);
     process.exit(2);
   }
-  if (reserveArg && reserveBytes === 0) {
+  if (reserveValue !== undefined && reserveValue.trim() === '') {
     console.log(
       '::warning::--reserve-mib is empty, so no allowance is applied for bytes the deployed bundle carries ' +
         'that this build does not. The measured size may undercount the deployed one.'
@@ -256,7 +277,7 @@ async function writeStepSummary(results) {
   const rows = results.map(
     r =>
       `| ${label(r.dir)} | ${megabytes(r.measuredBytes)} MB | ${megabytes(r.reserveBytes)} MB | ` +
-      `${r.percentOfLimit.toFixed(1)}% | ` +
+      `${megabytes(r.judgedBytes)} MB | ${r.percentOfLimit.toFixed(1)}% | ` +
       `${megabytes(r.headroomBytes)} MB | ${r.status} |`
   );
   const heaviest = results
@@ -267,8 +288,8 @@ async function writeStepSummary(results) {
     [
       '### Server bundle vs Lambda unzipped limit',
       '',
-      '| bundle | unzipped | reserve | of limit | headroom | status |',
-      '| --- | --- | --- | --- | --- | --- |',
+      '| bundle | unzipped | reserve | judged | of limit | headroom | status |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
       ...rows,
       '',
       '<details><summary>Heaviest paths</summary>',
@@ -283,7 +304,9 @@ async function writeStepSummary(results) {
   );
 }
 
-// Only run when invoked directly, so the exported helpers stay importable from tests.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Only run when invoked directly, so the exported helpers stay importable from tests. argv[1] keeps
+// the path as given, while import.meta.url is the resolved one, so a symlinked invocation would not
+// match and main() would be skipped - a silent pass for a gate. Resolve both sides instead.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   await main();
 }
