@@ -47,6 +47,7 @@ import {
   pairDataLakeTools,
   isClaudeModelId,
   questGenerationJobs,
+  resolveWorkspaceDeniedTools,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -123,6 +124,7 @@ import { resolveCorrectionContext } from './buildCorrectionContext';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
+import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -223,18 +225,12 @@ import {
 import {
   TelemetryBuilder,
   mapBackendToProvider,
-  categorizeToolError,
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
   performanceFromPromptMeta,
+  buildToolInvocationTelemetry,
 } from '../telemetry';
-import type {
-  ToolTelemetry,
-  ToolErrorCategory,
-  SystemPromptDetail,
-  DataLakeGroundingMode,
-  IAttachmentDelivery,
-} from '@bike4mind/common';
+import type { SystemPromptDetail, DataLakeGroundingMode, IAttachmentDelivery } from '@bike4mind/common';
 import {
   buildAlwaysOnFloorDetails,
   buildInjectedBlockDetails,
@@ -726,12 +722,18 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
  * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
  * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
  * so neither source can re-enable what the other denies. Undefined when both are empty, matching
- * how `sessionDisabledTools` was passed before.
+ * how `sessionDisabledTools` was passed before. `surfaceDeniedTools` is what the session's current surface
+ * denies (see `resolveWorkspaceDeniedTools`).
  */
-export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+export function resolveDeniedTools(
+  sessionDisabledTools: unknown,
+  requestDeniedTools?: string[],
+  surfaceDeniedTools?: readonly string[]
+): string[] | undefined {
   const merged = new Set([
     ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
     ...(requestDeniedTools ?? []),
+    ...(surfaceDeniedTools ?? []),
   ]);
   return merged.size > 0 ? [...merged] : undefined;
 }
@@ -1004,6 +1006,7 @@ export class ChatCompletionProcess {
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
+  private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private statusManager: StatusManager | null = null;
@@ -1055,6 +1058,7 @@ export class ChatCompletionProcess {
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.abilityGetter = options.abilityGetter;
+    this.workspaceDeniedTools = options.workspaceDeniedTools;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getMcpClient = options.getMcpClient;
@@ -2045,7 +2049,11 @@ export class ChatCompletionProcess {
       const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
-      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
+      const deniedTools = resolveDeniedTools(
+        session.disabledTools,
+        parsedBody.deniedTools,
+        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools)
+      );
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -3086,6 +3094,9 @@ export class ChatCompletionProcess {
         sessionAgentIds: session.agentIds,
         message,
         delegatableAgentNames: fullAgentStore.getAgentNames(),
+        // Names cannot gate this tool (it is pushed as an object), so a denylist entry for it only
+        // takes effect in the final build pass - read it here too, and skip the section entirely.
+        deniedTools,
       });
       // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
       // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
@@ -3184,8 +3195,9 @@ export class ChatCompletionProcess {
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
       // would let one configuration's searches cap another's.
       const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      const toolFailureGuard = createToolFailureGuard();
       if (allTools && !isResearchMode) {
-        allTools = webSearchBudget.apply(allTools);
+        allTools = toolFailureGuard.apply(webSearchBudget.apply(allTools));
       }
 
       // Local (Ollama) models are small and easily confused by tools they weren't
@@ -4344,6 +4356,7 @@ export class ChatCompletionProcess {
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
         webSearchBudget.reset();
+        toolFailureGuard.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -6040,63 +6053,10 @@ export class ChatCompletionProcess {
 
             // M4: Tool execution telemetry
             if (toolHealthData.size > 0 || (quest.promptMeta?.functionCalls?.length ?? 0) > 0) {
-              const toolTelemetryMap = new Map<string, ToolTelemetry>();
-
-              // Populate from function calls (invocations)
-              for (const fc of quest.promptMeta?.functionCalls ?? []) {
-                const toolName = fc.name ?? 'unknown';
-                const existing = toolTelemetryMap.get(toolName);
-                if (existing) {
-                  existing.invocationCount++;
-                  existing.successCount++; // Assume success if no error
-                } else {
-                  toolTelemetryMap.set(toolName, {
-                    toolName,
-                    isMcpTool: toolName.includes(':') || toolName.startsWith('mcp_'),
-                    mcpServerName: toolName.includes(':') ? toolName.split(':')[0] : undefined,
-                    invocationCount: 1,
-                    successCount: 1,
-                    failureCount: 0,
-                    totalDurationMs: 0, // Not tracked per-call yet
-                    maxDurationMs: 0,
-                    retryCount: 0,
-                  });
-                }
-              }
-
-              // Merge with tool health data (failures, errors)
-              for (const [toolName, health] of toolHealthData) {
-                const existing = toolTelemetryMap.get(toolName);
-                if (existing) {
-                  existing.failureCount = health.failureCount;
-                  if (!health.available) {
-                    existing.successCount = Math.max(0, existing.invocationCount - health.failureCount);
-                  }
-                  if (health.lastError) {
-                    existing.lastError = sanitizeTelemetryError(health.lastError, 200);
-                    const errorCategory = categorizeToolError(health.lastError);
-                    existing.errorCategories = [errorCategory];
-                  }
-                } else if (health.failureCount > 0) {
-                  // Tool failed without successful invocation
-                  const errorCategories: ToolErrorCategory[] = health.lastError
-                    ? [categorizeToolError(health.lastError)]
-                    : [];
-                  toolTelemetryMap.set(toolName, {
-                    toolName,
-                    isMcpTool: toolName.includes(':') || toolName.startsWith('mcp_'),
-                    mcpServerName: toolName.includes(':') ? toolName.split(':')[0] : undefined,
-                    invocationCount: health.failureCount,
-                    successCount: 0,
-                    failureCount: health.failureCount,
-                    totalDurationMs: 0,
-                    maxDurationMs: 0,
-                    retryCount: 0,
-                    lastError: health.lastError ? sanitizeTelemetryError(health.lastError, 200) : undefined,
-                    errorCategories: errorCategories.length > 0 ? errorCategories : undefined,
-                  });
-                }
-              }
+              const toolTelemetryMap = buildToolInvocationTelemetry(
+                quest.promptMeta?.functionCalls ?? [],
+                toolHealthData
+              );
 
               // Enrich web_fetch with content-size + truncation metrics aggregated from the
               // citables it emitted. Silent truncation is invisible in invocation/success counts alone.

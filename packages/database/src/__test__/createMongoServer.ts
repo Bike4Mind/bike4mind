@@ -82,8 +82,9 @@ export const MONGO_TEST_TIMEOUT_MS = 60_000;
  * Standalone mongod behind the port-collision retry above. The default choice; reach for
  * `createMongoReplSet` only when transactionality is the thing under test.
  *
- * A suite that asserts on, drops, or recreates indexes MUST settle the model's autoIndex build
- * first, right after connecting:
+ * A suite that asserts on, drops, or recreates indexes - or whose code under test relies on a
+ * unique index for correctness (Cache `key` behind the fixed-window limiter) - MUST settle the
+ * model's autoIndex build first, right after connecting:
  *
  *   await mongoose.connect(server.getUri());
  *   await MyModel.init();

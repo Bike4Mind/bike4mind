@@ -14,6 +14,8 @@ export interface CommandSuggestion {
    * distinguish skill invocations from built-in slash commands.
    */
   isSkill?: boolean;
+  /** Small status chip after the command, e.g. a Skill Market "update available" note. */
+  badge?: { label: string; color: 'primary' | 'danger' | 'neutral' };
 }
 
 export interface CommandSuggestionsProps {

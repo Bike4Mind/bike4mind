@@ -19,6 +19,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./remote": {
+      "import": {
+        "types": "./dist/remote/index.d.mts",
+        "default": "./dist/remote/index.mjs"
+      },
+      "require": {
+        "types": "./dist/remote/index.d.cts",
+        "default": "./dist/remote/index.cjs"
+      }
+    },
     "./atlassian/constants": {
       "import": {
         "types": "./dist/atlassian/constants.d.mts",
@@ -72,6 +82,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "unzipper": "^0.12.5",

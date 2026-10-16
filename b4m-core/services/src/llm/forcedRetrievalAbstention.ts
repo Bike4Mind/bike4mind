@@ -38,7 +38,9 @@ export const FORCED_RETRIEVAL_NO_CONTEXT_RULES =
  *   Only here is a flat "not covered" honest.
  *
  * Deliberately NOT emitted for the two non-failures: an empty prompt, and a turn carrying attached
- * files (where skipping lake retrieval is the intended behaviour and the attachment is the source).
+ * files in a chat with no chosen lake (where skipping lake retrieval is the intended behaviour and
+ * the attachment is the source). A lake-chosen chat that attaches a file DOES get the block when it
+ * grounds nothing.
  */
 export function forcedRetrievalNoContextPrompt(finding: ForcedRetrievalNoContextFinding): string {
   const body =

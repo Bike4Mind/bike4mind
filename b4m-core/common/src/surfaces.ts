@@ -73,6 +73,23 @@ export function normalizeSurfaceId(surface: string | null | undefined): SurfaceI
   return surface ? surface : null;
 }
 
+/**
+ * A contributed `{ surface id: tool names }` table of tools denied to sessions on that surface. The
+ * one home for the shape, so the generated table and both the server and the client can name it
+ * without reaching into `apps/client/app` (workers must not import the UI layer).
+ */
+export type WorkspaceDeniedToolsTable = Readonly<Record<string, readonly string[]>>;
+
+/** Tools a contributed `WorkspaceDeniedToolsTable` denies to a session on `surface`. */
+export function resolveWorkspaceDeniedTools(
+  surface: string | null | undefined,
+  table: WorkspaceDeniedToolsTable | null | undefined
+): string[] {
+  const id = normalizeSurfaceId(surface);
+  if (id === null || !table || !Object.prototype.hasOwnProperty.call(table, id)) return [];
+  return [...table[id]];
+}
+
 /** The registered workspace for `surface`, or undefined for a surface this repo does not know. */
 export function getWorkspaceSurface(surface: string | null | undefined): WorkspaceSurface | undefined {
   const id = normalizeSurfaceId(surface);

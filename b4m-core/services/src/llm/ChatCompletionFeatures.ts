@@ -70,8 +70,10 @@ import {
   forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  retrievalTagsNameALake,
   materializePromptMetaSession,
   ModelBackend,
+  type WorkspaceDeniedToolsTable,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -97,6 +99,7 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
@@ -371,6 +374,13 @@ export interface IChatCompletionServiceOptions {
   createCompletionMeter?: (opts: { organizationId: string | null; featureLabel: string }) => CompletionMeter;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
+  /**
+   * `{ surface id: tool names }` denied to sessions on that surface, unioned with `session.disabledTools`.
+   * Required on purpose: it is an options property every construction site must answer, so a new site
+   * that forgets it is a compile error rather than a silent hole in the surface denials. The open-core
+   * value is the generated empty table.
+   */
+  workspaceDeniedTools: WorkspaceDeniedToolsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,
@@ -1798,8 +1808,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
-// Metadata rows listed when the candidates can be chosen by relevance: the ANN query ranks this
-// many files down to the cap above. Metadata only (no chunks), so it is cheap next to the scan.
+// Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
+// many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
+// each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
 const FORCED_RETRIEVAL_MAX_LISTED_FILES = 1000;
 // Chunk hits requested from the ANN query - several per candidate file, so a few chunk-dense
 // documents cannot fill the pool alone and leave the cap short of distinct files.
@@ -1996,7 +2007,7 @@ interface ForcedRetrievalCoverage {
    */
   moreFilesBeyondCap: boolean;
   candidateSelection: ForcedRetrievalCandidateSelection;
-  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick available, else the cap. */
+  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick or several lakes, else the cap. */
   listingLimit: number;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
@@ -2231,8 +2242,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       reasons.push(
         cutAtCandidateCap
           ? `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
-              'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
-              'of the library is never reached'
+              'selected alphabetically by file name (taken in turn from each lake when several are in scope) - so the ' +
+              'same documents are considered on every turn and the rest of the library is never reached'
           : `more than ${coverage.listingLimit} documents matched; only the first ${coverage.listingLimit} by file ` +
               `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
               'so the rest of the library is never reached'
@@ -2418,7 +2429,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * Cuts the servable files (in stable scan order) down to FORCED_RETRIEVAL_MAX_CANDIDATE_FILES.
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
-   * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
+   * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
@@ -2853,12 +2864,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const query = message?.trim();
     if (!query) return [];
 
-    // Skip when the turn carries attached files - the question is about the
-    // attachment (e.g. "read this figure"), not the curated library. Forcing lake
-    // retrieval here injects off-topic context and emits spurious citations for
-    // sources the answer never used. The model can still call search_knowledge_base
-    // itself if it genuinely needs the library alongside the attachment.
-    if (quest.fabFileIds && quest.fabFileIds.length > 0) {
+    // Skip when the turn carries attached files and the chat did not choose a lake - the question is
+    // about the attachment (e.g. "read this figure"), and grounding it against every reachable lake
+    // injects off-topic context and spurious citations for sources the answer never used. The model
+    // can still call search_knowledge_base itself if it genuinely needs the library alongside the
+    // attachment.
+    //
+    // A chat with a chosen lake scope keeps retrieving: the picker records the choice
+    // (`lakeScopeExplicit`) and a lake start leaves the caller's library off. The test is the tag
+    // SHAPE, not how the tag got there - a session whose `datalake:` tag was derived from an attached
+    // file also passes the library-off arm. A tag that names no lake (a content tag, or no tags at
+    // all) keeps the skip. Prefixes are matched by identity only: a lake's file-tag prefix is known
+    // only after the access read below, which this pre-access check deliberately precedes.
+    const lakeChosen =
+      retrievalTagsNameALake(this.retrievalTags, []) &&
+      (!!this.lakeScopeExplicit || this.includeLibraryFiles === false);
+    if (quest.fabFileIds && quest.fabFileIds.length > 0 && !lakeChosen) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
       this.recordForcedSkip(quest, 'attached_files');
       return [];
@@ -3007,14 +3028,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    similarity below, but the ORDER still matters: on a lake larger than the listing limit
       //    it decides which files are considered at all, so it must be stable turn to turn. With a
       //    relevance pick available the listing is wider and an ANN query cuts it to the cap (see
-      //    selectForcedRetrievalCandidates); without one the listing IS the cut.
+      //    selectForcedRetrievalCandidates); without one the cut is by name (fair across lakes, see below).
       //    The widening cannot wait on index queryability: the embedding model whose index would be
       //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
-      //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
+      //    is the wider listing whenever the setting is on or the scope spans several lakes, even on a
+      //    turn that falls back by name.
       const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
-      const listingLimit = relevanceSelectionAvailable
-        ? FORCED_RETRIEVAL_MAX_LISTED_FILES
-        : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
+      // A by-name cut over several lakes takes its slots in turn from each lake, so one lake whose
+      // names sort first cannot fill the cap alone. That needs a listing wider than the cap to pick from.
+      const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+      // Counted by lake id, not by scope arm: a registry lake arrives as both its meta-tag and its
+      // prefix, which lakeOrderScopes keeps as two arms.
+      const spansSeveralLakes = new Set(lakes.map(lake => lake.id)).size > 1;
+      const listingLimit =
+        relevanceSelectionAvailable || spansSeveralLakes
+          ? FORCED_RETRIEVAL_MAX_LISTED_FILES
+          : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       const listFiles = (restrictToDataLake: boolean) =>
         db.fabfiles.search(
           user.id,
@@ -3194,8 +3223,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         : { servable: modelMatchedFiles, superseded: [] };
       // The cap applies HERE, after every partition above, so a withheld, foreign-model or
       // superseded file never takes a candidate slot from one that can actually be served.
+      // Ordered fairly across lakes BEFORE the cut, not only inside it: the chunk scan below spends
+      // its budget down this order, so a scope under the cap would otherwise still let a chunk-heavy
+      // first lake exhaust the budget. Library rows stay behind the lake rows when the lake listing
+      // was prioritized above. The relevance pick re-ranks, so the order only binds by-name scans.
+      const fairByName = <F extends { id: string; tags?: { name: string }[] }>(byName: F[]): F[] => {
+        const lakeRows = prioritizeLakeFiles ? byName.filter(f => lakeFileIds.has(f.id)) : byName;
+        const libraryRows = prioritizeLakeFiles ? byName.filter(f => !lakeFileIds.has(f.id)) : [];
+        const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
+        return [...ordered, ...libraryRows];
+      };
       const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
-        collapse.servable,
+        spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
         relevanceSelectionAvailable

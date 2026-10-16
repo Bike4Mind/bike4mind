@@ -5,6 +5,7 @@ import {
   getWorkspaceSurface,
   normalizeSurfaceId,
   OPTI_SURFACE,
+  resolveWorkspaceDeniedTools,
   WORKSPACE_SURFACES,
 } from './surfaces';
 
@@ -81,5 +82,35 @@ describe('checkSurfaceTransition', () => {
       ok: false,
       status: 400,
     });
+  });
+});
+
+describe('resolveWorkspaceDeniedTools', () => {
+  const table = { 'example-workspace': ['tool_a', 'tool_b'], other: ['tool_c'] };
+
+  it('returns the tools denied for a matching surface', () => {
+    expect(resolveWorkspaceDeniedTools('example-workspace', table)).toEqual(['tool_a', 'tool_b']);
+  });
+
+  it('returns nothing for the main list, whatever its stored form', () => {
+    expect(resolveWorkspaceDeniedTools(undefined, table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools(null, table)).toEqual([]);
+  });
+
+  it('returns nothing for an unknown surface or a missing table', () => {
+    expect(resolveWorkspaceDeniedTools('unknown', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('example-workspace', undefined)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('example-workspace', {})).toEqual([]);
+  });
+
+  it('does not read inherited object keys', () => {
+    expect(resolveWorkspaceDeniedTools('constructor', table)).toEqual([]);
+    expect(resolveWorkspaceDeniedTools('toString', table)).toEqual([]);
+  });
+
+  it('returns a copy, so callers cannot mutate the table', () => {
+    resolveWorkspaceDeniedTools('example-workspace', table).push('tool_z');
+    expect(table['example-workspace']).toEqual(['tool_a', 'tool_b']);
   });
 });

@@ -56,7 +56,8 @@ if args[:2] == ['release', 'download']:
         self.assertEqual(actions, ['create', 'upload', 'download', 'edit', 'view'])
         create = next(call for call in calls if call[:2] == ['release', 'create'])
         self.assertIn('--draft', create)
-        self.assertIn('Bike4Mind Desktop 0.1.1', create)
+        self.assertEqual(create[create.index('--title') + 1], 'v0.1.1')
+        self.assertEqual(create[2], 'desktop-v0.1.1')
         edit = next(call for call in calls if call[:2] == ['release', 'edit'])
         self.assertIn('--latest=true', edit)
 

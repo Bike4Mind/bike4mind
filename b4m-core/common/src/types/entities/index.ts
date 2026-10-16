@@ -4,6 +4,7 @@ export * from './ArtifactRepositoryTypes';
 export * from './CitableSourceTypes';
 export * from './AgentTypes';
 export * from './SkillTypes';
+export * from './SkillMarketTypes';
 export * from './AgentOpsSettingsTypes';
 export * from './AppFileTypes';
 export * from './CacheTypes';

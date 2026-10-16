@@ -88,7 +88,13 @@ export function buildSubagentLatticeToolPool(
    * (both callers already hold it) rather than here, so this helper stays synchronous and I/O-free -
    * the property the eager once-per-execution build relies on (see the note above).
    */
-  toolAvailability?: BuildSharedToolsOptions['toolAvailability']
+  toolAvailability?: BuildSharedToolsOptions['toolAvailability'],
+  /**
+   * The run's session denials. The pool is granted from the SUBAGENT's own `allowedTools`, so it
+   * never passes through the parent's `enabledTools` filter - without this, a tool the session's
+   * surface denies reaches a delegated agent anyway.
+   */
+  deniedTools?: readonly string[]
 ): ICompletionOptionTools[] {
   // Clear `agentStore` so `buildSharedTools` short-circuits *before* its subagent
   // injection branch. With an `agentStore` present it would build a subagent LLM
@@ -108,7 +114,10 @@ export function buildSubagentLatticeToolPool(
   // Defensive: the opt-in pool must contain ONLY the Lattice tools. The
   // `agentStore` short-circuit above already prevents delegate/coordinate
   // injection, so this filter is now a guard against a future path that resolves
-  // extra tools before the short-circuit.
+  // extra tools before the short-circuit. The denials are subtracted here rather
+  // than at the point of grant because the pool is the only place they can be
+  // applied to a tool the subagent opted into by name.
   const latticeNames = new Set<string>(LATTICE_TOOL_NAMES);
-  return built.filter(tool => latticeNames.has(tool.toolSchema.name));
+  const denied = new Set(deniedTools ?? []);
+  return built.filter(tool => latticeNames.has(tool.toolSchema.name) && !denied.has(tool.toolSchema.name));
 }

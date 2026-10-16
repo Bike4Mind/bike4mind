@@ -435,6 +435,15 @@ describe('GitHubConnectAction', () => {
       expect(h.startChatWithLake).toHaveBeenCalledWith('lake1');
     });
 
+    it('hands the created session to a caller-supplied completion instead of navigating', () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT });
+      const onChatStarted = vi.fn();
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} onChatStarted={onChatStarted} />);
+
+      fireEvent.click(screen.getByTestId('github-ask-about-repo-btn'));
+      expect(h.startChatWithLake).toHaveBeenCalledWith('lake1', { onCreated: onChatStarted });
+    });
+
     it('is hidden during a first sync, which has not finished landing the repo', () => {
       h.connection.current = connected({ status: 'syncing', lastSyncedAt: null });
       wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);

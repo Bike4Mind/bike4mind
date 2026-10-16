@@ -262,7 +262,11 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 
@@ -2004,6 +2008,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

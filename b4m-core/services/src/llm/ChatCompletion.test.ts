@@ -237,6 +237,9 @@ const baseOptions = {
   user: mockUser as any,
   sessionId: 'session1',
   tokenizer: mockTokenizer as any,
+  // The contributed surface denials. Only the cases that set `mockSession.surface` to a key in here
+  // resolve anything; every other test leaves the session with no surface at all.
+  workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
 };
 
 describe('ChatCompletionProcess', () => {
@@ -1693,6 +1696,56 @@ describe('ChatCompletionProcess', () => {
   });
 
   describe('process', () => {
+    // Wiring test: the chat turn wraps its tools in the consecutive-failure guard, so a tool the
+    // model keeps calling with inputs it cannot handle stops running (toolFailureGuard.ts).
+    it('stops running a tool after repeated consecutive failures within a turn', async () => {
+      const impl = vi.fn().mockRejectedValue(new Error('parse error'));
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([
+        {
+          toolFn: impl,
+          toolSchema: { name: 'math_evaluate', description: 'math', parameters: { type: 'object', properties: {} } },
+        },
+      ]);
+      const errors: string[] = [];
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          for (let i = 0; i < 8; i++) {
+            await opts.tools[0].toolFn({ expression: `bad ${i}` }).catch((e: Error) => errors.push(e.message));
+          }
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      buildToolsSpy.mockRestore();
+
+      expect(impl).toHaveBeenCalledTimes(4);
+      expect(errors).toHaveLength(8);
+      expect(errors[7]).toContain('Not run: "math_evaluate"');
+    });
+
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
@@ -6493,6 +6546,8 @@ describe('ChatCompletionProcess', () => {
       priorToolNames?: string[];
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
+      disabledTools?: string[];
+      surface?: string;
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -6503,6 +6558,8 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockClear();
 
       mockSession.agentIds = params.sessionAgentIds ?? [];
+      mockSession.disabledTools = params.disabledTools;
+      mockSession.surface = params.surface;
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
         getModelInfo: vi.fn().mockResolvedValue([]),
@@ -6575,6 +6632,28 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // The final tool pass strips only the schema, so a denylist entry for delegate_to_agent has to
+    // withhold the "Agent Delegation" prompt section here as well - otherwise the model is named a
+    // tool it cannot call. The predicate is unit-tested in autoAddedToolGating.test.ts; these pin
+    // that the chat call site actually feeds it the resolved denials.
+    it('does NOT expose delegate_to_agent when the session denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        disabledTools: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    it('does NOT expose delegate_to_agent when the surface denies it, even with an allowlist', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'Tell me about treatment options',
+        allowedAgents: ['researcher'],
+        surface: 'delegation-denied-surface',
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     // An @mention is only a delegation signal when it names an agent the store can actually run.
@@ -6797,11 +6876,15 @@ describe('ChatCompletionProcess', () => {
       skipAutoOffers?: boolean;
       disabledTools?: string[];
       connectedMcpTools?: boolean;
+      /** The session's `surface`; a key in `baseOptions.workspaceDeniedTools` resolves denials. */
+      surface?: string;
       /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
       deniedFromBuild?: boolean;
     }) => {
       const previousDisabledTools = mockSession.disabledTools;
+      const previousSurface = mockSession.surface;
       mockSession.disabledTools = opts.disabledTools;
+      mockSession.surface = opts.surface;
       const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
         name,
         toolFn: vi.fn(),
@@ -6872,6 +6955,7 @@ describe('ChatCompletionProcess', () => {
         buildToolsSpy.mockRestore();
         buildToolPromptSpy.mockRestore();
         mockSession.disabledTools = previousDisabledTools;
+        mockSession.surface = previousSurface;
       }
     };
 
@@ -6898,6 +6982,27 @@ describe('ChatCompletionProcess', () => {
       expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
     });
 
+    // The contributed table is read once, into the same `deniedTools` local the session denylist
+    // feeds, so a turn on a denied surface loses the tool even though nothing is stored on the
+    // session. Dropping the surface argument at that one site re-opens every surface denial.
+    it('threads the surface denials through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'denied-surface' });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__search']);
+    });
+
+    it('unions the surface denials with the session denylist', async () => {
+      const { passedOptions } = await runWithOptions({
+        surface: 'denied-surface',
+        disabledTools: ['notion__create_page'],
+      });
+      expect(passedOptions?.sessionDisabledTools?.sort()).toEqual(['notion__create_page', 'notion__search']);
+    });
+
+    it('leaves a session on an unnamed surface with no denials', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'other-surface' });
+      expect(passedOptions?.sessionDisabledTools).toBeUndefined();
+    });
+
     it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
       const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
@@ -6921,6 +7026,17 @@ describe('ChatCompletionProcess', () => {
         deniedFromBuild: true,
       });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    // Same for the contributed denials: they ride the same options, so the tool must be gone from
+    // the prompt as well as from the build.
+    it('keeps a surface-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        surface: 'denied-surface',
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__create_page']);
     });
   });
 
@@ -8860,6 +8976,16 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
 });
 
 describe('resolveDeniedTools', () => {
+  it('unions the surface denials with the session and request denylists', () => {
+    expect(resolveDeniedTools(['tool_a'], ['tool_b'], ['tool_b', 'tool_c'])?.sort()).toEqual([
+      'tool_a',
+      'tool_b',
+      'tool_c',
+    ]);
+    expect(resolveDeniedTools(undefined, undefined, ['tool_c'])).toEqual(['tool_c']);
+    expect(resolveDeniedTools(undefined, undefined, [])).toBeUndefined();
+  });
+
   it('unions the session denylist with the request deniedTools', () => {
     expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
       'create_data_lake',

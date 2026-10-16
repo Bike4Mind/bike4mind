@@ -153,13 +153,14 @@ const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', '
 
 // `-K` reads options from a file, which can hold `--data`; the `--url-query` and `--variable`
 // families read one into the URL, and `--expand-*` runs a template over variables.
-const CURL_SENDS =
-  /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
+const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
 // GNU wget accepts any unambiguous prefix, so `--post-f` means `--post-file`.
 const WGET_SENDS = /^--(post|body)/;
 
 /** Options that run a script given inline, which can open a socket no scan of the text sees. */
 const DASH_C = /^-[a-zA-Z]*c/;
+// Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
+const SHELL_C = /^[+-][a-zA-Z]*c/;
 const INLINE_SCRIPT: Record<string, RegExp> = {
   node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   ruby: /^-[a-zA-Z]*e/,
@@ -167,10 +168,10 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
   php: /^-r/,
   bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   osascript: /^-e/,
-  sh: DASH_C,
-  bash: DASH_C,
-  zsh: DASH_C,
-  dash: DASH_C,
+  sh: SHELL_C,
+  bash: SHELL_C,
+  zsh: SHELL_C,
+  dash: SHELL_C,
 };
 
 /**
@@ -202,6 +203,12 @@ const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
   node: ['--require', '--import'],
   bun: ['--require', '--preload'],
   bash: ['--rcfile', '--init-file'],
+};
+
+/** Common long options that take no value, so the word after one is not assumed to be its value. */
+const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
+  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
+  bun: ['--watch', '--hot', '--smol'],
 };
 
 /** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
@@ -239,17 +246,21 @@ function plainWord(arg: string | undefined): boolean {
 }
 
 /**
- * An interpreter's options up to its first operand. A value-taking option swallows the rest of its
- * cluster (`ruby -rset x.rb`) or its next argument (`python3 -W ignore -c ...`), so neither the
- * swallowed word nor a later script argument is read as one of the interpreter's own options. An
- * unrecognised long option is assumed to take the next word, so a script after it cannot end the
- * option prefix early (`node --loader ./x.mjs -e ...` still runs `-e`).
+ * An interpreter's options, and the operands after them (a script file and its arguments). A
+ * value-taking option swallows the rest of its cluster (`ruby -rset x.rb`) or its next argument
+ * (`python3 -W ignore -c ...`), so neither the swallowed word nor a later script argument is read
+ * as one of the interpreter's own options. An unrecognised long option is assumed to take the next
+ * word, so a script after it cannot end the option prefix early (`node --loader ./x.mjs -e ...`
+ * still runs `-e`).
  */
-function interpreterOptions(program: string, args: readonly string[]): string[] {
+function interpreterOptions(program: string, args: readonly string[]): { options: string[]; operands: string[] } {
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
+  // Shells also take flags as `+e`, which turn an option off rather than ending the options.
+  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
   const options: string[] = [];
-  for (let i = 0; i < args.length; i++) {
+  let i = 0;
+  for (; i < args.length; i++) {
     const arg = args[i];
     // `bash -oc pipefail '...'` is `-o pipefail` plus `-c`: `o` takes the next word and the letters
     // after it stay flags, unlike the glued value other interpreters read.
@@ -258,12 +269,21 @@ function interpreterOptions(program: string, args: readonly string[]): string[] 
       i += [...arg.slice(1)].filter(letter => letter === 'o' || letter === 'O').length;
       continue;
     }
-    if (!arg.startsWith('-')) break;
+    // A lone `-` is the stdin operand, not an option.
+    if (arg === '-' || (!arg.startsWith('-') && !(plusFlags && arg.startsWith('+')))) break;
     options.push(flagRun(arg, letters));
     if (takesNextArgument(program, arg)) i++;
-    else if (arg.startsWith('--') && arg !== '--' && !arg.includes('=') && plainWord(args[i + 1])) i++;
+    else if (
+      arg.startsWith('--') &&
+      arg !== '--' &&
+      !arg.includes('=') &&
+      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      plainWord(args[i + 1])
+    ) {
+      i++;
+    }
   }
-  return options;
+  return { options, operands: args.slice(i) };
 }
 
 /**
@@ -288,9 +308,7 @@ const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
  */
 function readsStdin(node: Node): boolean {
   if (
-    node.namedChildren.some(
-      child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution'
-    )
+    node.namedChildren.some(child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution')
   ) {
     return true;
   }
@@ -426,13 +444,16 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
-  const options = interpreterOptions(program, args);
+  const { options, operands } = interpreterOptions(program, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
+  // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
+  const scriptOperand =
+    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
   if (
     stdin &&
     STDIN_SCRIPT.test(program) &&
-    args.every(arg => arg.startsWith('-') || STDIN_SCRIPT_ARG.test(arg))
+    (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
   ) {
     return `${program} reading a script from stdin`;
   }

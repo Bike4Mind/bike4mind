@@ -13,7 +13,7 @@ describe('describeDriveConnection', () => {
   it('reads a clean connected sync as healthy', () => {
     expect(describeDriveConnection(conn())).toEqual({
       label: 'Connected',
-      title: 'Syncing the Google Drive folder "Handbook"',
+      title: 'Kept in sync with the Google Drive folder "Handbook"',
       color: 'success',
     });
   });
@@ -29,7 +29,7 @@ describe('describeDriveConnection', () => {
     expect(label).toBe('Stopped short');
     expect(title).toContain('last sync stopped short');
     expect(title).toContain('rate-limiting');
-    expect(title).not.toContain('Syncing the Google Drive folder');
+    expect(title).not.toContain('Kept in sync with the Google Drive folder');
   });
 
   it('keeps the badge wording and severity for a genuinely broken connection', () => {

@@ -159,6 +159,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),
+  countRebuildingFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
@@ -297,6 +298,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    incrementCurrentStorage: vi.fn(),
     addMemberRaisingSeats: vi.fn(),
     addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
@@ -308,6 +310,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findPlanHolderOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),
   });
 
