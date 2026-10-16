@@ -184,6 +184,40 @@ describe('ServerSubagentOrchestrator in-process child tool gate', () => {
     expect(childCalls.find(c => c.name === 'send_slack_message')?.result).toMatch(/^Error:/);
   });
 
+  it('runs an unapproved confirming-server tool for an agent whose exclusiveMcpServers claims it', async () => {
+    const orchestrator = new ServerSubagentOrchestrator({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [makeTool('github__list_issues')],
+      toolPermissions: { approvedTools: [], deniedTools: [] },
+    });
+
+    await orchestrator.delegateToAgent({
+      task: 't',
+      agentDef: { ...makeAgentDef(), exclusiveMcpServers: ['github'] },
+      thoroughness: 'quick',
+    });
+
+    expect(ran).toEqual(['github__list_issues']);
+    expect(childCalls.find(c => c.name === 'github__list_issues')?.result).toBe('github__list_issues ok');
+  });
+
+  it('refuses the same tool for an agent without exclusiveMcpServers', async () => {
+    const orchestrator = new ServerSubagentOrchestrator({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [makeTool('github__list_issues')],
+      toolPermissions: { approvedTools: [], deniedTools: [] },
+    });
+
+    await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef(), thoroughness: 'quick' });
+
+    expect(ran).toEqual([]);
+    expect(childCalls.find(c => c.name === 'github__list_issues')?.result).toMatch(/needs the user's approval/);
+  });
+
   it('leaves the child ungated when the parent is ungated (no toolPermissions)', async () => {
     const orchestrator = new ServerSubagentOrchestrator({
       userId: 'u1',
