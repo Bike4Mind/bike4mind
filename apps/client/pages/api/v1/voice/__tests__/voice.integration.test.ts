@@ -756,9 +756,9 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     const { res, run } = fireEnd();
     await run();
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      { id: SESSION_ID, voiceReservedCredits: null, voiceSessionStartedAt: null },
-      { unset: ['voiceBilledCredits'] }
-    );
+    // Conditional on the hold this request read, so a hold opened since is not cleared.
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, expect.any(Date));
+    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
 });

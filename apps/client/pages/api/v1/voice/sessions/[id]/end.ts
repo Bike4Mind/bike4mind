@@ -30,11 +30,9 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   // Already reconciled (no hold left) or nothing was reserved (enforceCredits off):
   // clear any stale marker so the session stops counting as an active voice call. The realtime
   // billed-credits marker goes too, or the sweep would price a later ElevenLabs hold as realtime.
+  // Claimed on the start read above, so a hold a concurrent bootstrap opened since is left alone.
   if (reserved <= 0 || !startedAt) {
-    await sessionRepository.update(
-      { id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null },
-      { unset: ['voiceBilledCredits'] }
-    );
+    if (startedAt) await sessionRepository.claimVoiceHold(session.id, startedAt);
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
