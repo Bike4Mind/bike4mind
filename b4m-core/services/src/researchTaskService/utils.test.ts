@@ -286,6 +286,25 @@ describe('findExistingResearchData utils', () => {
         expect(result!.file.fileSize).toBe(25);
       });
 
+      it('warns when the rewrite commit matches no live row', async () => {
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue({ ...mockFabFile, fileSize: 10 });
+        mockFabFilesRepo.commitContentRewrite.mockResolvedValue(null);
+
+        await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(25),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          mockUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(mockUsersRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('matched no live row'));
+      });
+
       it('keeps the previous crawl, with a warning, when the growth would exceed the quota', async () => {
         const file = { ...mockFabFile, fileSize: 10 };
         mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);

@@ -106,7 +106,11 @@ export async function findOrUpdateExistingResearchData(
           ContentType: contentType,
           ContentLength: newSize,
         });
-        await commitContentRewrite({ fabFileId: existingFile.id, newSize }, adapters.db);
+        const committed = await commitContentRewrite({ fabFileId: existingFile.id, newSize }, adapters.db);
+        if (!committed) {
+          // The row vanished (soft-deleted) after it was read: the bytes are uploaded but nothing was charged.
+          logger?.warn?.(`Content rewrite of FabFile ${existingFile.id} matched no live row; storage not charged`);
+        }
         existingFile.fileSize = newSize;
       }
 

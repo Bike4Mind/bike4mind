@@ -122,6 +122,10 @@ describe('assertRewriteFits', () => {
     await expect(assertRewriteFits(row, 0.1 * MB, makeDb(null, stored), owner(5 * MB))).resolves.toBeUndefined();
   });
 
+  it('never refuses a same-size rewrite, even over quota', async () => {
+    await expect(assertRewriteFits(row, 0.5 * MB, makeDb(null, stored), owner(5 * MB))).resolves.toBeUndefined();
+  });
+
   it.each([['complete', legacy]])(
     'never refuses a shrink of a legacy %s unstamped row near the quota',
     async (_label, fields) => {

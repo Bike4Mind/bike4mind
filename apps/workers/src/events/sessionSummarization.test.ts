@@ -214,7 +214,6 @@ describe('sessionSummarization summary-file lookup', () => {
     );
   });
 
-  // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
   it('skips a re-summary that would grow the file past the quota, keeping the old file', async () => {
     h.fabFileStore.push({ id: 'fabfile-owner', userId: OWNER, sessionId: SESSION_ID, tags: [] });
     h.updateFabFile.mockRejectedValueOnce(
@@ -239,6 +238,7 @@ describe('sessionSummarization summary-file lookup', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not created or updated'));
   });
 
+  // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
   // reconcileLakeTags (called inside updateFabFile) preserves existing membership regardless of
   // what this door sends, so re-summarization can just pass the session's own tags through as-is
   // without silently evicting a lake-indexed file it never actually left.
