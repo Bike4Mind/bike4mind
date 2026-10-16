@@ -846,6 +846,23 @@ const failedFileFields = (errorMessage: string): { error: string; isVectorizing:
   isVectorizing: false,
 });
 
+/**
+ * One arm of "a rebuild was stamped and has not committed": `in-flight`, for a stamp inside
+ * REBUILD_PENDING_STALE_MS (countRebuildingFilesByScope), and `stale`, for an older one
+ * (findConvergencePausedFilesByScope's STALE-PENDING arm). Both also require an empty `error`, which
+ * is what splits them from countFailedFilesByScope. One predicate because the two arms are
+ * complements by construction, and that complementarity is the whole reason the three counts can be
+ * read side by side: two hand-written copies 150 lines apart are free to drift.
+ *
+ * Each caller computes its own `cutoff`, so the arms are cut at slightly different instants - a file
+ * landing in the milliseconds between them is counted by both once, and by the stale arm alone on
+ * every read after that.
+ */
+const rebuildPendingArm = (cutoff: Date, arm: 'in-flight' | 'stale') => ({
+  chunkRebuildRequestedAt: arm === 'in-flight' ? { $gte: cutoff } : { $lt: cutoff },
+  error: { $in: [null, ''] },
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -2854,10 +2871,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
-            {
-              chunkRebuildRequestedAt: { $lt: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
-              error: { $in: [null, ''] },
-            },
+            rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'stale'),
           ],
           // Keeps a REPAIRED file out of the wave. `$not: {$gt: 0}` deliberately also matches a null
           // or absent count, so a legacy file carrying the marker is offered the repair rather than
@@ -3016,8 +3030,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
       archivedAt: null,
-      chunkRebuildRequestedAt: { $gte: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
-      error: { $in: [null, ''] },
+      ...rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'in-flight'),
     });
   }
 
