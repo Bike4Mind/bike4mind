@@ -1,0 +1,263 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Context } from 'aws-lambda';
+
+// `processSubagentDispatch` admission and billing: a dispatched subagent (or DAG node) runs
+// only on a model its user may run and a balance that covers its first iteration, and its
+// own token spend - plus that of any subagent it delegates in-process - is charged to the
+// payer's wallet. Harness mirrors agentExecutor.abortDeadline.test.ts.
+
+const benignStub: ProxyHandler<object> = {
+  get(_, key) {
+    if (key === 'then') return undefined;
+    return `mock-${String(key)}`;
+  },
+};
+
+vi.mock('sst', () => ({
+  Resource: new Proxy({} as Record<string, unknown>, {
+    get() {
+      return new Proxy({}, benignStub);
+    },
+  }),
+}));
+
+vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
+  ApiGatewayManagementApiClient: class {
+    send() {
+      return Promise.resolve({});
+    }
+  },
+  PostToConnectionCommand: class {
+    constructor(public input: unknown) {}
+  },
+}));
+
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
+  getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
+}));
+
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+
+const onDagNodeTerminalMock = vi.fn().mockResolvedValue(undefined);
+vi.mock('./agentExecutorDag', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutorDag')>('./agentExecutorDag');
+  return { ...actual, onDagNodeTerminal: (...args: unknown[]) => onDagNodeTerminalMock(...args) };
+});
+
+const testModel = {
+  id: 'test-model',
+  type: 'text',
+  name: 'Test',
+  backend: 'anthropic',
+  max_tokens: 64_000,
+  contextWindow: 200_000,
+  pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+};
+
+vi.mock('@bike4mind/llm-adapters', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/llm-adapters')>('@bike4mind/llm-adapters');
+  return {
+    ...actual,
+    getAvailableModels: vi.fn().mockResolvedValue([testModel]),
+    getLlmByModel: vi.fn().mockReturnValue({ currentModel: '' }),
+  };
+});
+
+const deductCreditsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/services', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    ...actual,
+    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+    creditService: { ...actual.creditService, deductCreditsWithOrgSupport: deductCreditsMock },
+  };
+});
+
+const delegateToAgentMock = vi.fn();
+const buildSharedToolsMock = vi.fn().mockReturnValue([]);
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
+  class MockOrchestrator {
+    constructor(public deps: unknown) {}
+    delegateToAgent(...args: unknown[]) {
+      return delegateToAgentMock(...args);
+    }
+  }
+  return {
+    ...actual,
+    resolveToolAvailability: vi.fn().mockResolvedValue({}),
+    buildSharedTools: (...args: unknown[]) => buildSharedToolsMock(...args),
+    ServerSubagentOrchestrator: MockOrchestrator,
+  };
+});
+
+const childDoc = {
+  id: 'child-1',
+  status: 'pending',
+  abortedAt: null,
+  userId: 'user-1',
+  sessionId: 'session-1',
+  questId: 'quest-1',
+  organizationId: null,
+  parentExecutionId: 'parent-1',
+  dagNodeId: 'node-b',
+  model: 'test-model',
+  subagentConfig: { agentName: 'researcher', thoroughness: 'quick' },
+};
+
+vi.mock('@bike4mind/database', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+  const repo = actual.agentExecutionRepository;
+  vi.spyOn(repo, 'findById').mockResolvedValue(childDoc as never);
+  vi.spyOn(repo, 'claimExecution').mockResolvedValue(true as never);
+  vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'markComplete').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
+  vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100_000 } as never);
+  vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue({
+    id: 'session-1',
+    userId: 'user-1',
+    disableUserIntegrations: true,
+  } as never);
+  vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
+  vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
+});
+
+function dagNodeDispatchEvent() {
+  return {
+    Records: [
+      {
+        messageId: 'msg-1',
+        body: JSON.stringify({
+          kind: 'dag_node_dispatch',
+          childExecutionId: 'child-1',
+          connectionId: 'conn-1',
+          dagNodeId: 'node-b',
+        }),
+      },
+    ],
+  } as never;
+}
+
+const context = { getRemainingTimeInMillis: () => 600_000 } as unknown as Context;
+
+const childResult = {
+  agentName: 'researcher',
+  model: 'test-model',
+  finalAnswer: 'found it',
+  steps: [],
+  completionInfo: {
+    totalCredits: 7,
+    totalInputTokens: 10,
+    totalOutputTokens: 5,
+    totalTokens: 15,
+    iterations: 1,
+    toolCalls: 0,
+    reachedMaxIterations: false,
+  },
+};
+
+async function dispatch() {
+  const { handler } = await import('./agentExecutor');
+  await handler(dagNodeDispatchEvent(), context);
+  const { agentExecutionRepository } = await import('@bike4mind/database');
+  return { markFailed: vi.mocked(agentExecutionRepository.markFailed) };
+}
+
+describe('processSubagentDispatch admission and billing', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    delegateToAgentMock.mockResolvedValue(childResult);
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValue([testModel] as never);
+  });
+
+  it("charges a completed subagent's token spend to the payer's wallet", async () => {
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'text_generation_usage',
+        user: expect.objectContaining({ id: 'user-1' }),
+        credits: 7,
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        questId: 'quest-1',
+      }),
+      expect.anything()
+    );
+  });
+
+  it('charges the spend of a subagent this one delegates in-process', async () => {
+    await dispatch();
+    const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+      onSubagentCredits: (credits: number, meta?: { model: string; inputTokens: number; outputTokens: number }) => void;
+    };
+    deductCreditsMock.mockClear();
+
+    callbacks.onSubagentCredits(4, { model: 'test-model', inputTokens: 2, outputTokens: 1 });
+    await vi.waitFor(() =>
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 4, inputTokens: 2, outputTokens: 1 }),
+        expect.anything()
+      )
+    );
+  });
+
+  it('refuses a subagent on a disabled model before it runs', async () => {
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValue([{ ...testModel, disabled: true }] as never);
+
+    const { markFailed } = await dispatch();
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Model "test-model" is not available to this user' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a subagent on a model gated to an entitlement the user does not hold', async () => {
+    const { adminSettingsRepository } = await import('@bike4mind/database');
+    vi.mocked(adminSettingsRepository.findOne).mockResolvedValueOnce({
+      settingValue: [{ id: 'test-model', enabled: true, allowedEntitlements: ['medlib:pro'] }],
+    } as never);
+
+    const { markFailed } = await dispatch();
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Model "test-model" is not available to this user' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('hands its own delegations only the models this user may run', async () => {
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      testModel,
+      { ...testModel, id: 'paused-model', disabled: true },
+    ] as never);
+
+    await dispatch();
+
+    const deps = buildSharedToolsMock.mock.calls[0][0] as { subagentModels: Array<{ id: string }> };
+    expect(deps.subagentModels.map(m => m.id)).toEqual(['test-model']);
+  });
+
+  it('refuses a subagent whose balance cannot cover its first iteration when credits are enforced', async () => {
+    const { adminSettingsRepository, User } = await import('@bike4mind/database');
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+      (async (key: string) => key === 'enforceCredits') as never
+    );
+    vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 1 } as never);
+
+    const { markFailed } = await dispatch();
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', { message: 'Insufficient credits to run subagent' });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+  });
+});

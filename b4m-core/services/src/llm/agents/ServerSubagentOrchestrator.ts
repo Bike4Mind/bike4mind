@@ -483,6 +483,42 @@ export class ServerSubagentOrchestrator {
     return parent;
   }
 
+  /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
+  private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
+    if (!completionInfo.totalCredits && this.deps.availableModels) {
+      const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
+      if (modelInfo) {
+        const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
+          completionInfo;
+        // Cache-aware so this fallback stays on the same basis as the cache-aware
+        // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
+        // fallback-computed credit sits next to a cache-aware cost in the same row.
+        // NB (OpenAI): OpenAI's prompt_tokens already includes cached_tokens, so
+        // passing the cache-read count again here double-counts the cached portion.
+        // That shape is shared with the main cliCompletions credit path, so credits
+        // stay consistent across the two paths rather than diverging - matching the
+        // primary path is deliberate; do not "fix" it here in isolation.
+        // Per request when the agent reports it: long-context tiers are chosen per request.
+        const usdCost = turnUsage?.length
+          ? getTurnsCost(modelInfo, turnUsage)
+          : getTextModelCost(
+              modelInfo,
+              totalInputTokens,
+              totalOutputTokens,
+              totalCacheReadTokens ?? 0,
+              totalCacheWriteTokens ?? 0
+            );
+        completionInfo.totalCredits = usdToCredits(usdCost);
+      } else {
+        // Model absent from availableModels: credits stay unset and the delegation's
+        // cost is lost from the usage events. Warn so the miss rate is observable (#152).
+        this.deps.logger.warn(
+          `🤖⚠️ [SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
+        );
+      }
+    }
+  }
+
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
 
@@ -692,39 +728,7 @@ export class ServerSubagentOrchestrator {
       const result = await agent.run(taskWithFiles, { maxIterations, signal: combinedSignal, maxHistoryIterations: 4 });
       const duration = Date.now() - startTime;
 
-      // Compute credits from token usage if model info is available
-      if (!result.completionInfo.totalCredits && this.deps.availableModels) {
-        const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
-        if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
-            result.completionInfo;
-          // Cache-aware so this fallback stays on the same basis as the cache-aware
-          // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
-          // fallback-computed credit sits next to a cache-aware cost in the same row.
-          // NB (OpenAI): OpenAI's prompt_tokens already includes cached_tokens, so
-          // passing the cache-read count again here double-counts the cached portion.
-          // That shape is shared with the main cliCompletions credit path, so credits
-          // stay consistent across the two paths rather than diverging - matching the
-          // primary path is deliberate; do not "fix" it here in isolation.
-          // Per request when the agent reports it: long-context tiers are chosen per request.
-          const usdCost = turnUsage?.length
-            ? getTurnsCost(modelInfo, turnUsage)
-            : getTextModelCost(
-                modelInfo,
-                totalInputTokens,
-                totalOutputTokens,
-                totalCacheReadTokens ?? 0,
-                totalCacheWriteTokens ?? 0
-              );
-          result.completionInfo.totalCredits = usdToCredits(usdCost);
-        } else {
-          // Model absent from availableModels: credits stay unset and the delegation's
-          // cost is lost from the usage events. Warn so the miss rate is observable (#152).
-          this.deps.logger.warn(
-            `🤖⚠️ [SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
-          );
-        }
-      }
+      this.priceCompletion(result.completionInfo, effectiveModel);
 
       const summary = this.summarizeResult(result, agentDef);
 
@@ -772,18 +776,25 @@ export class ServerSubagentOrchestrator {
             .map(s => s.content)
             .join('\n\n') || 'Agent timed out before producing results.';
 
+        // The tokens spent before the timeout are billed like a completed run's.
+        const usage = agent.toCheckpoint();
         const partialResult: AgentResult = {
           finalAnswer: partialAnswer,
           steps: agent.getSteps(),
           completionInfo: {
-            totalTokens: agent.getTokenUsage(),
-            totalInputTokens: 0,
-            totalOutputTokens: 0,
+            totalTokens: usage.totalTokens,
+            totalInputTokens: usage.totalInputTokens,
+            totalOutputTokens: usage.totalOutputTokens,
+            totalCacheReadTokens: usage.totalCacheReadTokens,
+            totalCacheWriteTokens: usage.totalCacheWriteTokens,
+            turnUsage: usage.turnUsage,
+            totalCredits: usage.totalCredits > 0 ? usage.totalCredits : undefined,
             iterations: 0,
             toolCalls: agent.getToolCallCount(),
             reachedMaxIterations: false,
           },
         };
+        this.priceCompletion(partialResult.completionInfo, effectiveModel);
 
         const summary = this.summarizeResult(partialResult, agentDef);
         const partialServerResult: ServerAgentExecutionResult = {

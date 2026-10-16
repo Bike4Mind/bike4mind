@@ -98,6 +98,13 @@ export interface ToolBuilderDeps {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /**
+   * The models a delegated subagent may run on, when narrower than `precomputed.models`
+   * (which also prices media and tool usage, so it stays the full catalog). The Agent
+   * Executor passes the user's runnable models here; a subagent pinned to any other
+   * model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
+   */
+  subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
@@ -566,7 +573,8 @@ export function buildSharedTools(
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
   const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
 
-  const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
+  const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
+  const subagentModelInfo = subagentModels?.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
     modelInfo: subagentModelInfo,
     logger,
@@ -586,7 +594,7 @@ export function buildSharedTools(
     onCredits: callbacks.onSubagentCredits
       ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
       : undefined,
-    availableModels: deps.precomputed?.models,
+    availableModels: subagentModels,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -616,7 +624,7 @@ export function buildSharedTools(
       logger,
       parentTools,
       getSignal: getAbortSignal,
-      availableModels: deps.precomputed?.models,
+      availableModels: subagentModels,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,

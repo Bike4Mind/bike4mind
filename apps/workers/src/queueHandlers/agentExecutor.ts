@@ -70,6 +70,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { getUserEntitlements } from '@server/entitlements';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -77,6 +78,7 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import {
   ReActAgent,
   type AgentCheckpoint,
+  type AgentResult,
   type AgentStep,
   type GatedToolCall,
   type IterationResult,
@@ -134,7 +136,7 @@ import {
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
-import type { ModelInfo } from '@bike4mind/common';
+import { filterRunnableModels, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
@@ -687,11 +689,10 @@ async function loadMcpToolsForSession(
  *   iteration (see `deductCreditsWithOrgSupport`), so here the re-fetch catches a
  *   member who crosses the cap mid-invocation, before ever reaching a delegate/
  *   coordinate call.
- * - A dispatched subagent does NOT deduct its own iterations to the org wallet yet
- *   (Phase 1 known gap - it only bumps its own audit counter via
- *   `incrementCreditsUsed`), so here the re-fetch cannot see this subagent's own
- *   spend; it only picks up billing from the parent or a concurrent execution for
- *   the same member since the entry-gate snapshot.
+ * - A dispatched subagent deducts its spend only once its run ends
+ *   (`chargeSubagentTokens`), so here the re-fetch cannot see this subagent's own
+ *   in-flight spend; it picks up billing from the parent, finished delegations, or a
+ *   concurrent execution for the same member since the entry-gate snapshot.
  * Extracted as a standalone function so this behavior is directly unit testable
  * without spinning up either handler.
  */
@@ -1057,6 +1058,17 @@ async function processExecution(
     // miss the lookup and throw instead of running on the mapped replacement.
     const resolvedModelId = resolveDeprecatedModelId(execution.model, 'agentExecutor');
     const modelInfo = models.find((m: { id: string }) => m.id === resolvedModelId);
+    const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
+    if (modelInfo && !runnableModels.includes(modelInfo)) {
+      logger.warn('[AgentExecutor] Model is disabled or not accessible to this user; refusing execution', {
+        model: resolvedModelId,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: `Model "${resolvedModelId}" is not available to this user`,
+      });
+      await sendWs('failed', { executionId, reason: 'model_unavailable' });
+      return;
+    }
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: execution.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
     llm.currentModel = resolvedModelId;
@@ -1489,9 +1501,20 @@ async function processExecution(
           totalCredits: credits,
         });
         // In-process subagents are by definition NOT background (background always
-        // dispatches), so the rollup applies - match PR 1's behaviour. The rollup
-        // updates the parent's audit counter only; `creditService.deductCreditsWithOrgSupport`
-        // is not yet called for subagent tokens (Phase 1 known gap).
+        // dispatches), so the rollup applies - match PR 1's behaviour. Charged here and
+        // not in `onSubagentCredits`: that callback also sees a dispatched child's result,
+        // which `processSubagentDispatch` has already charged.
+        await chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: result.model,
+            completionInfo: result.completionInfo,
+          },
+          logger
+        );
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
@@ -1511,6 +1534,24 @@ async function processExecution(
         // info, or stack fragments. `timedOut` is a typed signal so downstream
         // consumers don't substring-match `message`.
         await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
+        // A timed-out subagent spent tokens up to the timeout; they are charged like a completed run's.
+        if (partialResult) {
+          await chargeSubagentTokens(
+            {
+              user: user as IUserDocument,
+              organization,
+              sessionId: execution.sessionId,
+              questId: execution.questId,
+              model: partialResult.model,
+              completionInfo: partialResult.completionInfo,
+            },
+            logger
+          );
+          const partialCredits = partialResult.completionInfo.totalCredits ?? 0;
+          if (partialCredits > 0) {
+            await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
+          }
+        }
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
@@ -1718,6 +1759,7 @@ async function processExecution(
         adminSettingsEnforceCredits: false, // Agent executor handles billing per-iteration, not per-tool
         models,
       },
+      subagentModels: runnableModels,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
       // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
@@ -3293,6 +3335,76 @@ async function fireDagNodeTerminalOnRefusal(args: {
 }
 
 /**
+ * The catalog models this user may run: the admission rule a chat turn applies to its
+ * model (`ChatCompletionInvoke`), via `filterRunnableModels`. Runs and subagents are
+ * refused, or fall back to the parent's model, rather than run on anything else.
+ */
+async function loadRunnableModels(models: ModelInfo[], user: IUserDocument, logger: Logger): Promise<ModelInfo[]> {
+  const setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' }).catch(err => {
+    logger.warn('[AgentExecutor] failed to read model configurations', { err });
+    return null;
+  });
+  const configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+  const isAdmin = user.isAdmin ?? false;
+  const needsEntitlements = !isAdmin && configurations.some(config => (config.allowedEntitlements?.length ?? 0) > 0);
+  const entitlementKeys = needsEntitlements
+    ? await getUserEntitlements(user).catch(err => {
+        logger.warn('[AgentExecutor] entitlement lookup failed; treating the user as holding none', { err });
+        return [];
+      })
+    : [];
+  return filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys);
+}
+
+/**
+ * Debits a subagent's own LLM spend from the run's payer (the org pool when org-billed),
+ * the same wallet the parent's iterations settle against. Logged rather than thrown, so a
+ * billing failure never replaces the subagent's terminal status.
+ */
+async function chargeSubagentTokens(
+  args: {
+    user: IUserDocument;
+    organization: Parameters<typeof creditService.deductCreditsWithOrgSupport>[0]['organization'];
+    sessionId: string;
+    questId: string;
+    model: string;
+    completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+  },
+  logger: Logger
+): Promise<void> {
+  const credits = args.completionInfo.totalCredits ?? 0;
+  if (credits <= 0) return;
+  await creditService
+    .deductCreditsWithOrgSupport(
+      {
+        type: 'text_generation_usage',
+        user: args.user,
+        organization: args.organization,
+        credits,
+        sessionId: args.sessionId,
+        questId: args.questId,
+        model: args.model,
+        inputTokens: args.completionInfo.totalInputTokens ?? 0,
+        outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+      },
+      {
+        db: {
+          creditTransactions: creditTransactionRepository,
+          users: userRepository,
+          organizations: organizationRepository,
+        },
+      }
+    )
+    .catch(err =>
+      logger.error('[AgentExecutor] failed to charge subagent usage', {
+        credits,
+        model: args.model,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+}
+
+/**
  * Runs a subagent that was dispatched to its own Lambda (either via `background: true`
  * or via the parent's mid-poll handoff when running out of time). The child doc
  * already has `subagentConfig` populated by the orchestrator; we resolve the agent
@@ -3304,12 +3416,11 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * handoff path (in `processExecution`) polls this execution's terminal status
  * and injects the result into the parent's tool history.
  *
- * Credit billing: this updates the child's own `totalCreditsUsed` audit counter
- * via `incrementCreditsUsed`. A DAG parent rolls this counter up when the DAG
- * hook wakes it (see the DAG resume path in `processExecution`). Generated-media
- * cost IS deducted from the wallet (see `settleSubagentMediaUsage`); the agent's
- * own token spend is not yet (Phase 1 known gap - a future PR will add its
- * `creditService.deductCreditsWithOrgSupport`).
+ * Credit billing: the child's token spend (`chargeSubagentTokens`) and generated
+ * media (`settleSubagentMediaUsage`) are deducted from the payer's wallet, and the
+ * child's own `totalCreditsUsed` audit counter is updated via `incrementCreditsUsed`.
+ * A DAG parent rolls that counter up when the DAG hook wakes it (see the DAG resume
+ * path in `processExecution`); the rollup is audit only, never a second charge.
  *
  * KNOWN LIMITATION - no per-iteration checkpointing or self-dispatch.
  * Unlike the top-level `processExecution`, this handler runs `agent.run()` to
@@ -3490,6 +3601,39 @@ async function processSubagentDispatch(
     ]);
     const childModel = resolveDeprecatedModelId(child.model, 'agentExecutorChild');
     const modelInfo = models.find((m: { id: string }) => m.id === childModel);
+
+    // The parent's admission rules, applied to this child's own model and balance: the model
+    // must be runnable by this user, and with enforcement on the balance must cover the first
+    // iteration (see `nextIterationCredits`), not merely be above zero.
+    const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
+    const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
+    const refusal =
+      modelInfo && !runnableModels.includes(modelInfo)
+        ? { message: `Model "${childModel}" is not available to this user`, error: 'model_unavailable' }
+        : enforceCredits && modelInfo && availableCredits < nextIterationCredits(modelInfo, 0)
+          ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
+          : null;
+    if (refusal) {
+      logger.warn('[SubagentDispatch] Refusing to start subagent', { model: childModel, reason: refusal.error });
+      await agentExecutionRepository.markFailed(childExecutionId, { message: refusal.message });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: refusal.error,
+        isTimeout: false,
+      });
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId,
+        parentExecutionId: dagParentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+      });
+      return;
+    }
+
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
     llm.currentModel = childModel;
@@ -3628,6 +3772,7 @@ async function processSubagentDispatch(
       llm,
       model: childModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
+      subagentModels: runnableModels,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
       // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent
@@ -3711,6 +3856,24 @@ async function processSubagentDispatch(
       // a lake-access row - but wired now so the native-tool path anticipated below does not
       // start emitting half-linked audit rows. NEVER `child.questId` (#1867).
       questId: child.linkedQuestId,
+      // This subagent's own in-process delegations (no tracker is wired here, so the
+      // orchestrator never dispatches them and this is their only charge).
+      onSubagentCredits: (credits, meta) =>
+        void chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: child.sessionId,
+            questId: child.questId,
+            model: meta?.model ?? child.model,
+            completionInfo: {
+              totalCredits: credits,
+              totalInputTokens: meta?.inputTokens ?? 0,
+              totalOutputTokens: meta?.outputTokens ?? 0,
+            },
+          },
+          logger
+        ),
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: childModel,
@@ -3881,13 +4044,13 @@ async function processSubagentDispatch(
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
-      availableModels: models,
+      availableModels: runnableModels,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and
       // falls back to pairing this child's backend with the grandchild's model id
       // - the 404 that the pairing fix exists to prevent, one level down.
       resolveBackend: (modelId: string) => {
-        const info = models.find((m: { id: string }) => m.id === modelId);
+        const info = runnableModels.find((m: { id: string }) => m.id === modelId);
         return info
           ? getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo: info, logger, endUserId: child.userId })
           : null;
@@ -3978,6 +4141,18 @@ async function processSubagentDispatch(
       const runAborted = abortController.signal.aborted;
       await settleMediaCost();
       const credits = result.completionInfo.totalCredits ?? 0;
+      // Every exit with a result (completed, aborted, timed out) spent these tokens.
+      await chargeSubagentTokens(
+        {
+          user: user as IUserDocument,
+          organization,
+          sessionId: child.sessionId,
+          questId: child.questId,
+          model: result.model,
+          completionInfo: result.completionInfo,
+        },
+        logger
+      );
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4042,12 +4217,8 @@ async function processSubagentDispatch(
       });
       // Update the child's own audit counter. `markComplete` stores the result
       // snapshot with `totalCredits`; `incrementCreditsUsed` updates the
-      // top-level `totalCreditsUsed` field used by cap/billing queries.
-      //
-      // KNOWN GAP (Phase 1): no `creditService.deductCreditsWithOrgSupport`
-      // call here - dispatched-subagent tokens are audited only, not deducted
-      // from the user/org wallet. Tracked as a Phase 2 follow-up. Generated
-      // media is deducted separately (`settleMediaCost` above).
+      // top-level `totalCreditsUsed` field used by cap/billing queries. The wallet
+      // was charged above; generated media separately (`settleMediaCost`).
       if (credits > 0) {
         await agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits);
       }

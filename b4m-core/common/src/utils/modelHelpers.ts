@@ -1,4 +1,4 @@
-import { IMAGE_MODELS, ImageModels } from '../models';
+import { IMAGE_MODELS, ImageModels, type ModelInfo } from '../models';
 import { EXTENDED_GPT_IMAGE_QUALITIES, OPENAI_IMAGE_MODELS, type ExtendedGptImageQuality } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
 import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
@@ -201,6 +201,26 @@ export function isModelAccessible(
   const normalizedKeys = entitlementKeys.map(normalizeEntitlementKey);
   const normalizedAllowedEntitlements = (model.allowedEntitlements ?? []).map(normalizeEntitlementKey);
   return normalizedKeys.some(key => normalizedAllowedEntitlements.includes(key));
+}
+
+/**
+ * The catalog models a user may run: not disabled, and accessible under the admin
+ * `llmModelConfigurations` row when one exists (a model with no row is unrestricted).
+ * The same rule `ChatCompletionInvoke` applies to a chat turn's model.
+ */
+export function filterRunnableModels(
+  models: ModelInfo[],
+  configurations: LLMModelConfig[],
+  userTags: string[],
+  isAdmin: boolean,
+  entitlementKeys: string[]
+): ModelInfo[] {
+  const configById = new Map(configurations.map(config => [config.id, config]));
+  return models.filter(model => {
+    if (model.disabled) return false;
+    const config = configById.get(model.id);
+    return !config || isModelAccessible(config, userTags, isAdmin, entitlementKeys);
+  });
 }
 
 /**

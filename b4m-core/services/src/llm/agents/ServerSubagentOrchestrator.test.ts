@@ -611,6 +611,40 @@ describe('ServerSubagentOrchestrator', () => {
 
       expect(result.completionInfo.totalCredits).toBe(99);
     });
+
+    it('prices the tokens a timed-out run spent, so a timeout is not free', async () => {
+      const abort = Object.assign(new Error('aborted'), { name: 'AbortError' });
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(abort);
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.summary).toContain('Partial results');
+      expect(result.completionInfo.totalCredits).toBeCloseTo(
+        usdToCredits(getTextModelCost(model, 12_000, 3_000, 0, 0)),
+        10
+      );
+    });
   });
 
   /**

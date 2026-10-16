@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import type { ServerSubagentTracker } from '@bike4mind/services/llm';
 
 // Drives the real `handler` through a continuation message so the top-level `processExecution`
 // builds its toolDeps, and asserts what it hands `buildSharedTools`. Module mocks mirror
@@ -93,11 +94,14 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
+const deductCreditsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     ...actual,
     apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+    creditService: { ...actual.creditService, deductCreditsWithOrgSupport: deductCreditsMock },
   };
 });
 
@@ -167,6 +171,9 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentRepository, 'listForUser').mockResolvedValue([] as never);
   vi.spyOn(actual.agentRepository, 'listForOrganization').mockResolvedValue([] as never);
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
+  vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(repo, 'markComplete').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -349,6 +356,101 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('model access and subagent billing', () => {
+    const runModel = { id: 'claude-sonnet-5', type: 'text', name: 'Sonnet', backend: 'anthropic' };
+
+    async function runWithModels(models: unknown[], configurations?: unknown[]) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce(models as never);
+      if (configurations) {
+        vi.mocked(adminSettingsRepository.findOne).mockResolvedValueOnce({ settingValue: configurations } as never);
+      }
+      const { handler } = await import('./agentExecutor');
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      return { markFailed: vi.mocked(agentExecutionRepository.markFailed) };
+    }
+
+    it('refuses a run on a disabled model before any tool or model work', async () => {
+      const { markFailed } = await runWithModels([{ ...runModel, disabled: true }]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a run on a model gated to a tag the user does not hold', async () => {
+      const { markFailed } = await runWithModels(
+        [runModel],
+        [{ id: 'claude-sonnet-5', enabled: true, allowedUserTags: ['pro'] }]
+      );
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('offers delegation only the models this user may run', async () => {
+      await runWithModels([runModel, { ...runModel, id: 'paused-model', disabled: true }]);
+
+      const deps = buildSharedToolsMock.mock.calls[0][0] as { subagentModels: Array<{ id: string }> };
+      expect(deps.subagentModels.map(m => m.id)).toEqual(['claude-sonnet-5']);
+    });
+
+    async function subagentTracker() {
+      await runWithModels([runModel]);
+      return (buildSharedToolsMock.mock.calls[0][1] as { subagentTracker: ServerSubagentTracker }).subagentTracker;
+    }
+
+    const childResult = {
+      agentName: 'researcher',
+      model: 'claude-sonnet-5',
+      finalAnswer: 'found it',
+      steps: [],
+      completionInfo: {
+        totalCredits: 7,
+        totalInputTokens: 10,
+        totalOutputTokens: 5,
+        totalTokens: 15,
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+      },
+    } as unknown as Parameters<ServerSubagentTracker['onComplete']>[0]['result'];
+
+    it("charges an in-process subagent's tokens to the run's payer", async () => {
+      const tracker = await subagentTracker();
+      await tracker.onComplete({ childExecutionId: 'child-1', result: childResult });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          user: expect.objectContaining({ id: 'user-1' }),
+          credits: 7,
+          model: 'claude-sonnet-5',
+          inputTokens: 10,
+          outputTokens: 5,
+          questId: 'quest-1',
+        }),
+        expect.anything()
+      );
+    });
+
+    it("charges a timed-out in-process subagent's partial spend", async () => {
+      const tracker = await subagentTracker();
+      await tracker.onFailure({
+        childExecutionId: 'child-1',
+        error: 'aborted',
+        isTimeout: true,
+        partialResult: childResult,
+      });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
     });
   });
 
