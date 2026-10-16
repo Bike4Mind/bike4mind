@@ -111,7 +111,11 @@ export interface IntentClassifierAdapters {
 }
 
 class CascadeExhaustedError extends Error {
-  constructor(public readonly attempts: Array<{ modelId: string; error: string }>) {
+  constructor(
+    public readonly attempts: Array<{ modelId: string; error: string }>,
+    /** Provider calls the failed attempts still made (and are billed for). */
+    public readonly usage: IntentClassifierCallUsage[] = []
+  ) {
     super(`intentClassifier: cascade exhausted (${attempts.length} attempts)`);
   }
 }
@@ -207,7 +211,7 @@ export async function classifyIntent(
     }
   }
 
-  throw new CascadeExhaustedError(attempts);
+  throw new CascadeExhaustedError(attempts, usage);
 }
 
 async function classifyWithBackend(

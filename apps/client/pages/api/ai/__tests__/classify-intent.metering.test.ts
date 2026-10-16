@@ -95,10 +95,14 @@ vi.mock('@bike4mind/services/llm/intentClassifier', () => ({
   INTENT_CLASSIFIER_CALLS_PER_MODEL: 2,
   CascadeExhaustedError: class extends Error {
     attempts = [];
+    constructor(public usage: Array<{ modelId: string; inputTokens?: number; outputTokens?: number }> = []) {
+      super('cascade exhausted');
+    }
   },
 }));
 
 const { default: handler } = await import('@pages/api/ai/classify-intent');
+const { CascadeExhaustedError } = await import('@bike4mind/services/llm/intentClassifier');
 
 async function call() {
   const { req, res } = createMocks({ method: 'POST', body: { message: 'what is the weather in Paris?' } });
@@ -180,6 +184,35 @@ describe('POST /api/ai/classify-intent metering', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
+  });
+
+  it('settles the usage of a failed cascade instead of refunding the hold', async () => {
+    m.complete.mockRejectedValue(
+      new CascadeExhaustedError([{ modelId: 'ops-model', inputTokens: 200, outputTokens: 10 }])
+    );
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(503);
+    expect(m.settle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'ops-model',
+        usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+        inputTokens: 200,
+        outputTokens: 10,
+      })
+    );
+    expect(m.release).not.toHaveBeenCalled();
+  });
+
+  it('refunds the hold when a failed cascade reached no provider', async () => {
+    m.complete.mockRejectedValue(new CascadeExhaustedError([]));
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(503);
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.release).toHaveBeenCalledOnce();
   });
 
   it('serves a cache hit without a hold, a settle or a usage event', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { ILogger } from '@bike4mind/observability';
 import type { ModelInfo } from '@bike4mind/common';
 import type { ApiKeyTable, ICompletionBackend } from '@bike4mind/llm-adapters';
-import { classifyIntent } from './intentClassifier';
+import { CascadeExhaustedError, classifyIntent } from './intentClassifier';
 import { IntentClassifierCache } from './intentClassifier.cache';
 
 const backends = new Map<string, ICompletionBackend>();
@@ -52,6 +52,21 @@ describe('classifyIntent usage reporting', () => {
       { modelId: 'model-a', inputTokens: 40 },
       { modelId: 'model-b', inputTokens: 120, outputTokens: 30 },
     ]);
+  });
+
+  it('attaches the usage of failed attempts to CascadeExhaustedError', async () => {
+    backends.set(
+      'model-a',
+      backend(async cb => {
+        await cb([''], { inputTokens: 40 });
+        throw new Error('provider down');
+      })
+    );
+
+    const err = await classifyIntent({ userId: 'u1', message: 'hi' }, adapters(['model-a'])).catch(e => e);
+
+    expect(err).toBeInstanceOf(CascadeExhaustedError);
+    expect(err.usage).toEqual([{ modelId: 'model-a', inputTokens: 40 }]);
   });
 
   it('reports no usage on a cache hit', async () => {

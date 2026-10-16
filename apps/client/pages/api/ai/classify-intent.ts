@@ -8,6 +8,7 @@ import {
   CascadeExhaustedError,
   INTENT_CLASSIFIER_CALLS_PER_MODEL,
   INTENT_CLASSIFIER_MAX_TOKENS,
+  type IntentClassifierCallUsage,
 } from '@bike4mind/services/llm/intentClassifier';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
@@ -110,6 +111,28 @@ const handler = baseApi()
     );
     const reservation = await reserveCompletionCredits(req, ceilingUsd, 'intent classification');
 
+    // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
+    const settleUsage = async (usage: IntentClassifierCallUsage[], model: string) => {
+      const usd = usage.reduce((sum, call) => {
+        const modelInfo = availableModels.find(m => m.id === call.modelId);
+        if (!modelInfo) return sum;
+        return call.inputTokens || call.outputTokens
+          ? sum + completionUsd(modelInfo, call)
+          : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
+      }, 0);
+      if (usd <= 0) {
+        await reservation.refund();
+        return;
+      }
+      await settleCompletion(reservation, req, {
+        model,
+        provider: availableModels.find(m => m.id === model)?.backend ?? 'unknown',
+        usd,
+        inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
+        outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+      });
+    };
+
     let result: Awaited<ReturnType<typeof classifyIntent>>;
     try {
       result = await classifyIntent(input, {
@@ -119,36 +142,20 @@ const handler = baseApi()
         config: classifierConfig,
       });
     } catch (err) {
-      await reservation.refund();
       if (err instanceof CascadeExhaustedError) {
+        // Failed attempts that reached a provider still cost money.
+        await settleUsage(err.usage, err.usage[err.usage.length - 1]?.modelId ?? 'unknown');
         req.logger.error('[classify-intent] cascade exhausted', { attempts: err.attempts });
         return res.status(503).json({ error: 'cascade exhausted', attempts: err.attempts });
       }
+      await reservation.refund();
       const msg = err instanceof Error ? err.message : String(err);
       req.logger.error('[classify-intent] failed', { error: msg });
       return res.status(500).json({ error: msg });
     }
 
     const { usage, ...decision } = result;
-    // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
-    const usd = usage.reduce((sum, call) => {
-      const modelInfo = availableModels.find(m => m.id === call.modelId);
-      if (!modelInfo) return sum;
-      return call.inputTokens || call.outputTokens
-        ? sum + completionUsd(modelInfo, call)
-        : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
-    }, 0);
-    if (usd <= 0) {
-      await reservation.refund();
-    } else {
-      await settleCompletion(reservation, req, {
-        model: decision.classifierModel,
-        provider: availableModels.find(m => m.id === decision.classifierModel)?.backend ?? 'unknown',
-        usd,
-        inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
-        outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
-      });
-    }
+    await settleUsage(usage, decision.classifierModel);
 
     return res.status(200).json({
       decision,
