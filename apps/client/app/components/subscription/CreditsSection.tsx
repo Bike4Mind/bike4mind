@@ -9,6 +9,7 @@ import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import PaymentButton from '../Credits/PaymentButton';
 import { formatPlanPrice, pricePerThousandCredits, sharedPackRate } from './billingFormat';
 
@@ -112,8 +113,16 @@ export const CreditsSection = ({ transactions, transactionsLoading, onClose }: C
                               letterSpacing: '-0.01em',
                               fontVariantNumeric: 'tabular-nums',
                               color: 'text.primary',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 0.75,
                             }}
                           >
+                            <CreditIcon
+                              aria-hidden
+                              data-testid={`credits-pack-${pkg.id}-icon`}
+                              sx={{ fontSize: '1.1em', color: 'subscription.creditsModal.iconFill' }}
+                            />
                             {formatCreditAmount(pkg.credits)}
                           </Typography>
                           <Typography component="span" level="body-xs" sx={{ color: 'text.tertiary', mt: 0.25 }}>

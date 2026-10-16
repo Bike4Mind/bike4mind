@@ -72,6 +72,17 @@ describe('CreditsSection', () => {
     expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 58,333 credits for $35');
   });
 
+  it('marks each pack credit count with the decorative credit icon', () => {
+    renderSection();
+    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+      const icon = screen.getByTestId(`credits-pack-${id}-icon`);
+      expect(screen.getByTestId(`credits-pack-${id}`)).toContainElement(icon);
+      expect(icon).toHaveAttribute('aria-hidden', 'true');
+    }
+    // Decorative: the radio's accessible name is still the number and "credits".
+    expect(screen.getByRole('radio', { name: /58,333\s*credits/ })).toBeInTheDocument();
+  });
+
   it('states the per-1,000 rate computed from the packs, with no best-value badge', () => {
     renderSection();
     expect(screen.getByTestId('credits-pack-rate')).toHaveTextContent(

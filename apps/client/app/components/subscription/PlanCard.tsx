@@ -2,6 +2,7 @@ import { Box, Chip, Sheet, Typography } from '@mui/joy';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { formatPlanPrice } from './billingFormat';
 
@@ -107,7 +108,17 @@ const PlanCard = ({
         ) : null}
 
         {credits ? (
-          <Typography level="body-sm" sx={{ mt: 1.5, fontWeight: 500, color: 'text.primary' }}>
+          <Typography
+            level="body-sm"
+            startDecorator={
+              <CreditIcon
+                aria-hidden
+                data-testid="plan-card-credit-icon"
+                sx={{ fontSize: '1.125rem', color: 'subscription.creditsModal.iconFill' }}
+              />
+            }
+            sx={{ mt: 1.5, fontWeight: 500, color: 'text.primary' }}
+          >
             {t('subscription_modal.credits_per_month', { credits: formatCreditAmount(credits) })}
           </Typography>
         ) : null}

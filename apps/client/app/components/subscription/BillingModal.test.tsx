@@ -115,6 +115,9 @@ describe('BillingModal', () => {
     expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
     expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Free');
     expect(screen.getByTestId('billing-balance')).toHaveTextContent('5,000');
+    const icon = screen.getByTestId('billing-balance-icon');
+    expect(screen.getByTestId('billing-balance')).toContainElement(icon);
+    expect(icon).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('leads with credit top-ups when the user has a plan in good standing', () => {

@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { ReactNode, RefObject, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
@@ -231,6 +232,15 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
                 {t('billing.balance', 'Balance')}
               </Typography>
               <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mt: 0.5 }}>
+                <CreditIcon
+                  aria-hidden
+                  data-testid="billing-balance-icon"
+                  sx={{
+                    alignSelf: 'center',
+                    fontSize: { xs: '1.5rem', sm: '1.875rem' },
+                    color: 'subscription.creditsModal.iconFill',
+                  }}
+                />
                 <Typography
                   component="span"
                   sx={{
