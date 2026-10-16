@@ -9,15 +9,22 @@ import {
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useCallback } from 'react';
 
+/** History-state flag for an open that did not ask for a section (the account menu's Billing row). */
+const OVERVIEW_STATE_KEY = 'billingOverview';
+
 /**
  * The billing view named by the current URL's `?billing=` param, plus setters that write it.
  * Opening pushes a history entry (Back closes the modal); closing replaces it so the closed
  * modal is not a Back target.
+ *
+ * `focusSection` is false only for an in-app open made with `{ focusSection: false }`. The flag lives
+ * in history state, not the URL, so a pasted or shared `?billing=` link still lands on its section.
  */
 export function useBillingView() {
   const router = useRouter();
   const location = useRouterState({ select: state => state.location });
   const view = parseBillingView((location.search as Record<string, unknown>)[BILLING_SEARCH_PARAM]);
+  const focusSection = !(location.state as Record<string, unknown> | undefined)?.[OVERVIEW_STATE_KEY];
 
   const hrefFor = useCallback(
     (next: BillingView | undefined) => {
@@ -27,10 +34,14 @@ export function useBillingView() {
     [router]
   );
 
-  const openView = useCallback((next: BillingView) => router.history.push(hrefFor(next)), [router, hrefFor]);
+  const openView = useCallback(
+    (next: BillingView, options: { focusSection?: boolean } = {}) =>
+      router.history.push(hrefFor(next), options.focusSection === false ? { [OVERVIEW_STATE_KEY]: true } : undefined),
+    [router, hrefFor]
+  );
   const closeView = useCallback(() => router.history.replace(hrefFor(undefined)), [router, hrefFor]);
 
-  return { view, openView, closeView };
+  return { view, focusSection, openView, closeView };
 }
 
 /**
@@ -39,10 +50,10 @@ export function useBillingView() {
  * so every open state has a URL.
  */
 const BillingDeepLinkModals = () => {
-  const { view, closeView } = useBillingView();
+  const { view, focusSection, closeView } = useBillingView();
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
-  return <BillingModal open={isCreditsEnabled && !!view} focus={view ?? 'credits'} onClose={closeView} />;
+  return <BillingModal open={isCreditsEnabled && !!view} focus={focusSection ? view : undefined} onClose={closeView} />;
 };
 
 export default BillingDeepLinkModals;

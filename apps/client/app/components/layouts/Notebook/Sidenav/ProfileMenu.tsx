@@ -508,7 +508,8 @@ const ProfileMenu = () => {
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
                 closeToTrigger();
-                openBillingView('credits');
+                // A general open: Billing starts at the top on the balance and plan, not on a section.
+                openBillingView('credits', { focusSection: false });
               }}
             />
           )}

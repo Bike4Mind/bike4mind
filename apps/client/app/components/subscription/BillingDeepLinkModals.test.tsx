@@ -3,16 +3,23 @@ import { render, screen, fireEvent, renderHook } from '@testing-library/react';
 import BillingDeepLinkModals, { useBillingView } from './BillingDeepLinkModals';
 
 const mocks = vi.hoisted(() => ({
-  location: { pathname: '/notebooks/n1', searchStr: '', search: {} as Record<string, unknown>, hash: '' },
+  location: {
+    pathname: '/notebooks/n1',
+    searchStr: '',
+    search: {} as Record<string, unknown>,
+    hash: '',
+    state: undefined as Record<string, unknown> | undefined,
+  },
   push: vi.fn(),
   replace: vi.fn(),
   creditsEnabled: true,
 }));
 
-function setLocation(searchStr: string, hash = '') {
+function setLocation(searchStr: string, hash = '', state?: Record<string, unknown>) {
   mocks.location.searchStr = searchStr;
   mocks.location.search = Object.fromEntries(new URLSearchParams(searchStr));
   mocks.location.hash = hash;
+  mocks.location.state = state;
 }
 
 vi.mock('@tanstack/react-router', () => ({
@@ -25,9 +32,9 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => mocks.creditsEnabled }));
 
 vi.mock('@client/app/components/subscription/BillingModal', () => ({
-  default: ({ open, focus, onClose }: { open: boolean; focus: string; onClose: () => void }) =>
+  default: ({ open, focus, onClose }: { open: boolean; focus?: string; onClose: () => void }) =>
     open ? (
-      <div data-testid="billing-modal" data-focus={focus}>
+      <div data-testid="billing-modal" data-focus={focus ?? 'none'}>
         <button data-testid="billing-modal-close" onClick={onClose} />
       </div>
     ) : null,
@@ -49,6 +56,12 @@ describe('BillingDeepLinkModals', () => {
     setLocation(`?billing=${view}`);
     render(<BillingDeepLinkModals />);
     expect(screen.getByTestId('billing-modal')).toHaveAttribute('data-focus', view);
+  });
+
+  it('opens without a section focus when the in-app open asked for the overview', () => {
+    setLocation('?billing=credits', '', { billingOverview: true });
+    render(<BillingDeepLinkModals />);
+    expect(screen.getByTestId('billing-modal')).toHaveAttribute('data-focus', 'none');
   });
 
   it('ignores an unknown view', () => {
@@ -82,6 +95,12 @@ describe('useBillingView', () => {
   it('opens a view by pushing a URL that carries it', () => {
     const { result } = renderHook(() => useBillingView());
     result.current.openView('plans');
-    expect(mocks.push).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=plans');
+    expect(mocks.push).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=plans', undefined);
+  });
+
+  it('marks an overview open in history state, leaving the URL a plain deep link', () => {
+    const { result } = renderHook(() => useBillingView());
+    result.current.openView('credits', { focusSection: false });
+    expect(mocks.push).toHaveBeenCalledWith('/notebooks/n1?projectId=p1&billing=credits', { billingOverview: true });
   });
 });

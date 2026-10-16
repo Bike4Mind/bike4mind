@@ -246,10 +246,10 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     expect(teams.nextElementSibling).toBe(invite);
   });
 
-  it('opens the credits view through the URL', () => {
+  it('opens Billing through the URL without asking it to jump to a section', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-billing'));
-    expect(billing.openView).toHaveBeenCalledWith('credits');
+    expect(billing.openView).toHaveBeenCalledWith('credits', { focusSection: false });
     expect(analytics.mutate).toHaveBeenCalledWith({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
   });
 });

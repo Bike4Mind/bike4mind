@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   subscriptions: [] as unknown[],
   subscriptionsPending: false,
   subscriptionsError: false,
+  plansLoading: false,
+  reducedMotion: false,
   refetch: vi.fn(),
   credits: 5000,
 }));
@@ -29,6 +31,9 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
     isFetching: false,
     refetch: state.refetch,
   }),
+}));
+vi.mock('@client/app/hooks/data/stripe', () => ({
+  useGetSubscriptionPlans: () => ({ isLoading: state.plansLoading }),
 }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 1000 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
@@ -55,7 +60,7 @@ const subRow = (overrides: Partial<IUserSubscription> = {}) =>
     ...overrides,
   }) as unknown as IUserSubscription;
 
-const renderModal = (focus: BillingView = 'credits') =>
+const renderModal = (focus?: BillingView) =>
   render(
     <TestWrapper>
       <BillingModal open focus={focus} onClose={vi.fn()} />
@@ -73,7 +78,17 @@ describe('BillingModal', () => {
     state.subscriptions = [];
     state.subscriptionsPending = false;
     state.subscriptionsError = false;
+    state.plansLoading = false;
+    state.reducedMotion = false;
     state.refetch.mockClear();
+    window.matchMedia = vi.fn((query: string) => ({
+      matches: query.includes('reduce') && state.reducedMotion,
+      media: query,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
   });
 
@@ -141,6 +156,35 @@ describe('BillingModal', () => {
     renderModal(focus);
     expect(screen.getByTestId(headingId)).toHaveFocus();
     expect(scrolled.at(-1)).toBe(screen.getByTestId(`billing-section-${focus}`));
+  });
+
+  it('leaves focus on the dialog and does not scroll when no section was asked for', () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    renderModal();
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('billing-section-plans-heading')).not.toHaveFocus();
+    expect(screen.getByTestId('billing-section-credits-heading')).not.toHaveFocus();
+  });
+
+  it('holds the sections until the plan prices load, so a deep-link scroll lands on a settled layout', () => {
+    state.plansLoading = true;
+    renderModal('credits');
+    expect(screen.getByTestId('plans-section-skeleton')).toBeInTheDocument();
+    expect(sectionOrder()).toEqual([]);
+  });
+
+  it.each([
+    [false, 'smooth'],
+    [true, 'auto'],
+  ] as const)('scrolls the banner action with reduced motion %s as %s', (reduced, behavior) => {
+    state.reducedMotion = reduced;
+    state.credits = 10;
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    renderModal();
+    fireEvent.click(screen.getByTestId('billing-low-balance-action'));
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior, block: 'start' });
   });
 
   it('holds the frame with skeletons until the subscription state is known', () => {

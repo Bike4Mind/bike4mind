@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { ReactNode, RefObject, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
+import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
@@ -15,10 +16,18 @@ import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 
 interface BillingModalProps {
   open: boolean;
-  /** Section to scroll to and focus on open: `?billing=credits|plans` or the entry point's intent. */
-  focus: BillingView;
+  /**
+   * Section to scroll to and focus on open, only when the entry explicitly asked for one (a `?billing=`
+   * deep link, or a wrapper/banner that names a section). Undefined leaves Joy Modal's initial focus on
+   * the dialog and the body at the top.
+   */
+  focus?: BillingView;
   onClose: () => void;
 }
+
+/** `'auto'` (instant) for users who asked the OS for reduced motion. */
+const scrollBehavior = (): ScrollBehavior =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 
 const statLabelSx = {
   textTransform: 'uppercase',
@@ -39,7 +48,8 @@ const Section = ({
   title: string;
   subtitle: string;
   headingRef: RefObject<HTMLHeadingElement | null>;
-  /** Scroll here and focus the heading on mount, and again whenever this becomes the target. */
+  /** Scroll here and focus the heading on mount, and again whenever this becomes the target. Instant, not
+   * animated: the dialog is just opening, so there is no position to animate from. */
   isFocusTarget: boolean;
   children: ReactNode;
 }) => {
@@ -86,7 +96,8 @@ const Section = ({
  * The Billing modal: one scrolling view that always opens on the user's current state (balance and
  * plan), then sells. Without a plan in good standing the plans section leads, since a subscription is
  * the upgrade; with one, credit top-ups lead and plan changes follow. `focus` only scrolls - it never
- * reorders - so `?billing=credits` and `?billing=plans` land on the same page.
+ * reorders - so `?billing=credits` and `?billing=plans` land on the same page. Without `focus` (the
+ * account menu's Billing row) the view opens at the top, on the balance and plan.
  *
  * The dialog has a fixed size (full-screen sheet on phones) and only the body scrolls, so loading
  * states and section order never resize it.
@@ -95,6 +106,7 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   const { t } = useTranslation();
   const transactions = useGetCreditTransactions({ enabled: open });
   const subscriptions = useGetSubscriptions({ enabled: open });
+  const plans = useGetSubscriptionPlans({ enabled: open });
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
   const noCredits = credits <= 0;
@@ -108,14 +120,17 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   const planUnknown = subscriptions.isError && !subscriptions.data;
   // A failed payment keeps plans on top: fixing the card is the action that matters.
   const plansFirst = !planUnknown && (!currentSubscription || hasPaymentIssue);
-  const ready = !subscriptions.isPending;
+  // Waits for the plan prices too (PlansSection reads the same cached queries), so PlansSection never
+  // swaps its own skeleton for cards after mount: a deep-link scroll to a section below the plans would
+  // otherwise land on a position that moves. isLoading, not isPending: a disabled query stays pending.
+  const ready = !subscriptions.isPending && !plans.isLoading;
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const scrollTo = (view: BillingView) => {
     const heading = (view === 'plans' ? plansHeadingRef : creditsHeadingRef).current;
-    heading?.closest('section')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    heading?.closest('section')?.scrollIntoView?.({ behavior: scrollBehavior(), block: 'start' });
     heading?.focus({ preventScroll: true });
   };
 

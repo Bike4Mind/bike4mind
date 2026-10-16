@@ -30,7 +30,8 @@ export function useStripePortal() {
   });
 }
 
-export function useGetSubscriptionPlans() {
+export function useGetSubscriptionPlans(options: { enabled?: boolean } = {}) {
+  const { enabled = true } = options;
   const enforceCredits = useGetSettingsValue('enforceCredits');
 
   return useQuery({
@@ -41,6 +42,6 @@ export function useGetSubscriptionPlans() {
     },
     staleTime: 1000 * 60 * 60 * 1, // 1 hour
     // Don't fetch subscription plans if enforceCredits is false
-    enabled: typeof enforceCredits === 'boolean' && enforceCredits,
+    enabled: enabled && typeof enforceCredits === 'boolean' && enforceCredits,
   });
 }
