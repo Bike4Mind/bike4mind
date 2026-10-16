@@ -59,6 +59,7 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
       }}
     >
       <MenuButton
+        data-testid="session-agents-dropdown-toggle"
         variant="outlined"
         aria-label={iconOnly ? 'Agents' : undefined}
         sx={{
