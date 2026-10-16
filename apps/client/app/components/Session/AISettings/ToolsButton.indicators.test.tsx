@@ -180,3 +180,15 @@ describe('ToolsButton session-denied tools', () => {
     expect(lastMount().disabledTools).toBeUndefined();
   });
 });
+
+describe('ToolsButton in a crowded composer row', () => {
+  it('keeps its width instead of letting flex squeeze it', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('session-tools-dropdown-toggle')).toHaveStyle({ flexShrink: '0' });
+  });
+});
