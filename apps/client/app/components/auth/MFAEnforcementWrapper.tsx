@@ -23,6 +23,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const queryClient = useQueryClient();
   const [showMFASetup, setShowMFASetup] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  // The server answers an unenrolled session with a 403 instead of this tab's settings query
+  // seeing the toggle. That refusal is authoritative even if the status query then errors.
+  const [enrollmentRefused, setEnrollmentRefused] = useState(false);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -77,6 +80,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   useEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
+        setEnrollmentRefused(true);
         void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
         void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
       }),
@@ -119,8 +123,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
     setIsLoading(false);
 
-    // If MFA query failed (and we were checking), skip enforcement (allow normal app access)
-    if (shouldCheckMFA && mfaQueryFailed) {
+    // If MFA query failed (and we were checking), skip enforcement (allow normal app access) -
+    // unless the server itself already refused a call for enrollment, which settles the question.
+    if (shouldCheckMFA && mfaQueryFailed && !enrollmentRefused) {
       return;
     }
 
@@ -153,6 +158,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     setupMFAIsError,
     adminSettings,
     adminSettingsLoading,
+    enrollmentRefused,
   ]);
 
   const handleMFAVerification = (token: string) => {
@@ -238,9 +244,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     );
   }
 
-  // If MFA is enforced and user hasn't configured it, block access
-  // But only if the MFA query succeeded (don't block if query failed)
-  if (enforceMFA && !mfaQueryFailed && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
+  // If MFA is enforced and user hasn't configured it, block access.
+  // A failed status query normally leaves the app alone, but an observed enrollment refusal is
+  // the server telling us this session owes enrollment, so it blocks regardless.
+  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
     return (
       <Box
         sx={{
