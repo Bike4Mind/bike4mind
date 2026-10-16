@@ -4,7 +4,7 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
 import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { isGeneratedLakeTagPrefix, type RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
 /**
  * What the scoped lake is and the lake-level actions on it - the home those actions never had
@@ -46,15 +46,17 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
         >
           {lakeVisibilityLabel(lake)}
         </Chip>
-        <Chip
-          size="sm"
-          variant="soft"
-          color="neutral"
-          sx={{ fontSize: '11px' }}
-          data-testid="datalake-selected-lake-prefix"
-        >
-          {lake.fileTagPrefix}
-        </Chip>
+        {!isGeneratedLakeTagPrefix(lake) && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="neutral"
+            sx={{ fontSize: '11px' }}
+            data-testid="datalake-selected-lake-prefix"
+          >
+            {lake.fileTagPrefix}
+          </Chip>
+        )}
       </Stack>
 
       <Stack direction="row" gap={0.5} flexWrap="wrap">

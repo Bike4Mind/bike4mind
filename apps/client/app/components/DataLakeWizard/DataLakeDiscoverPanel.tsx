@@ -4,6 +4,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import { isGeneratedLakeTagPrefix } from '@bike4mind/common';
 import { useBrowsePublicDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatBytes } from '@client/app/utils/folderTreeParser';
@@ -141,9 +142,17 @@ export default function DataLakeDiscoverPanel() {
                       </Typography>
                     )}
                     <Stack direction="row" gap={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
-                      <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                        {lake.fileTagPrefix}
-                      </Chip>
+                      {!isGeneratedLakeTagPrefix(lake) && (
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color="neutral"
+                          sx={{ fontSize: '10px' }}
+                          data-testid={`datalake-discover-prefix-${lake.id}`}
+                        >
+                          {lake.fileTagPrefix}
+                        </Chip>
+                      )}
                       {lake.ownerDisplayName && !lake.isOwn && (
                         <Chip
                           size="sm"
