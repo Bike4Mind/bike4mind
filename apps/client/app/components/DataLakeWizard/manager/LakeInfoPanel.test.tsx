@@ -568,6 +568,17 @@ describe('LakeInfoPanel - origin chip', () => {
     expect(screen.getByTestId('datalake-origin-chip-lake-1')).toHaveTextContent('Connector-fed');
   });
 
+  it('hides the generated gh- prefix chip on a GitHub connector lake but keeps a typed prefix', () => {
+    renderPanel({ ...baseLake, origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.queryByTestId('datalake-manager-prefix-chip-lake-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('gh-1a2b3c4d:')).not.toBeInTheDocument();
+  });
+
+  it('keeps the prefix chip on a curated lake whose prefix looks generated', () => {
+    renderPanel({ ...baseLake, origin: 'curated', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.getByTestId('datalake-manager-prefix-chip-lake-1')).toHaveTextContent('gh-1a2b3c4d:');
+  });
+
   it('shows no origin chip for a curated lake', () => {
     renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
 

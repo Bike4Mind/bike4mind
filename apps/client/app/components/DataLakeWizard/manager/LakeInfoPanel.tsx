@@ -50,7 +50,7 @@ import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatus
 import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
-import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import { isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
@@ -531,9 +531,17 @@ export function LakeInfoPanel({
               {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
             </Chip>
           )}
-          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
-            {lake.fileTagPrefix}
-          </Chip>
+          {!isGeneratedLakeTagPrefix(lake) && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-prefix-chip-${lake.id}`}
+            >
+              {lake.fileTagPrefix}
+            </Chip>
+          )}
           {lake.requiredUserTag && (
             <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '11px' }}>
               {lake.requiredUserTag}
