@@ -81,6 +81,18 @@ describe('S3Storage browser-facing signing endpoint', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('binds a PUT to its declared byte length when one is given', async () => {
+    const url = new URL(
+      await new S3Storage('exports-bucket').getSignedUrl('uploads/fixture.txt', 'put', { ContentLength: 1234 })
+    );
+    expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).toContain('content-length');
+  });
+
+  it('leaves a PUT without a declared length unbound', async () => {
+    const url = new URL(await new S3Storage('exports-bucket').getSignedUrl('uploads/fixture.txt', 'put'));
+    expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';')).not.toContain('content-length');
+  });
+
   it('keeps server signing private when a browser endpoint is configured', async () => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', 'http://localhost:19000');
     const storage = new S3Storage('exports-bucket', 'us-east-2');

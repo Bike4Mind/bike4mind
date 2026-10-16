@@ -95,15 +95,6 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
     try {
       setIsImporting(true);
 
-      // Get presigned URL from API with options
-      const response = await api.post('/api/notebooks/import', options);
-
-      if (!response.data.success) {
-        throw new Error(response.data.message || 'Failed to get upload URL');
-      }
-
-      const { uploadUrl, importId } = response.data;
-
       let content: ArrayBuffer;
       let contentType = 'application/json';
 
@@ -131,8 +122,18 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
         const encoder = new TextEncoder();
         content = encoder.encode(jsonData).buffer;
       }
+      const body = new Blob([content], { type: contentType });
 
-      await uploadFileToUrl(uploadUrl, new Blob([content], { type: contentType }), contentType, {
+      // The upload URL is bound to the exact byte length PUT below.
+      const response = await api.post('/api/notebooks/import', { ...options, size: body.size });
+
+      if (!response.data.success) {
+        throw new Error(response.data.message || 'Failed to get upload URL');
+      }
+
+      const { uploadUrl, importId } = response.data;
+
+      await uploadFileToUrl(uploadUrl, body, contentType, {
         onUploadProgress: event => {
           if (event.total) {
             setUploadProgress(Math.round((event.loaded / event.total) * 100));

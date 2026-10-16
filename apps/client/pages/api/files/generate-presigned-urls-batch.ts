@@ -294,15 +294,20 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
         req.ability!
       );
 
+      // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
       const command = new PutObjectCommand({
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
+        ContentLength: fileItem.fileSize,
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL
       // (S3/MinIO isn't browser-reachable). Shared with the single-file path (createFabFile)
       // so the two upload entry points can't diverge.
-      const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: EXPIRES });
+      const presignedUrl = await getSignedUrl(s3Client, command, {
+        expiresIn: EXPIRES,
+        signableHeaders: new Set(['content-length']),
+      });
       const url = resolveBrowserUploadUrl(file.id, presignedUrl);
 
       return {

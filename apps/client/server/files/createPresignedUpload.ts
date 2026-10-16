@@ -150,17 +150,14 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const ext = mime.extension(mimeType);
   const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
 
+  // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
   const command = new PutObjectCommand({
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
-    // Bound only for the narrow ai:generate upload: S3 then rejects a PUT whose type or length
-    // differs from what was validated. Every other caller keeps the unbound presign.
-    ...(provenance && {
-      ContentType: provenance.contentType,
-      ContentLength: data.fileSize,
-      // Create-only: the PUT fails if the key exists, so a scanned object cannot be overwritten.
-      IfNoneMatch: '*',
-    }),
+    ContentLength: data.fileSize,
+    // The narrow ai:generate upload also binds its validated type, and is create-only: the PUT fails
+    // if the key exists, so a scanned object cannot be overwritten.
+    ...(provenance && { ContentType: provenance.contentType, IfNoneMatch: '*' }),
   });
 
   // Create File metadata, status will be set to `pending` by default
@@ -188,13 +185,12 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   );
 
   const expiresIn = provenance ? BARE_PRESIGNED_UPLOAD_EXPIRES_IN : PRESIGNED_UPLOAD_EXPIRES_IN;
-  // The presigner leaves content-type unsigned by default, so it must be opted in for the bound
-  // type above to hold.
-  const url = await getSignedUrl(
-    s3Client,
-    command,
-    provenance ? { expiresIn, signableHeaders: new Set(['content-type']) } : { expiresIn }
-  );
+  // The presigner leaves these headers unsigned by default, so they must be opted in for the bound
+  // length (and type) above to hold.
+  const url = await getSignedUrl(s3Client, command, {
+    expiresIn,
+    signableHeaders: new Set(provenance ? ['content-length', 'content-type'] : ['content-length']),
+  });
 
   await logEvent(
     {

@@ -185,15 +185,22 @@ export class S3Storage extends BaseStorage {
       audience,
       ACL,
       ContentType,
+      ContentLength,
       ResponseContentDisposition,
     }: {
       expiresIn?: number;
       audience?: 'browser';
       ACL?: ObjectCannedACL;
       ContentType?: string;
+      /**
+       * PUT only: signs the exact byte length, so S3 refuses (403) an upload of any other size.
+       * This is what makes a declared upload size, and the size and quota checks run on it, binding.
+       */
+      ContentLength?: number;
       ResponseContentDisposition?: string;
     } = {}
   ): Promise<string> {
+    const bindLength = method !== 'get' && ContentLength !== undefined;
     return await getSignedUrl(
       audience === 'browser' ? this.presignS3 : this.s3,
       method !== 'get'
@@ -202,6 +209,7 @@ export class S3Storage extends BaseStorage {
             Key: path,
             ACL,
             ContentType,
+            ContentLength,
           })
         : new GetObjectCommand({
             Bucket: this.bucketName,
@@ -210,6 +218,7 @@ export class S3Storage extends BaseStorage {
           }),
       {
         expiresIn,
+        ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );
   }

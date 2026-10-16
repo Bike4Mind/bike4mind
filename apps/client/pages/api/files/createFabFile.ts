@@ -122,9 +122,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               });
               return filepath;
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+            generateSignedUrl: (
+              filepath: string,
+              expireInSeconds: number,
+              mode?: 'get' | 'put',
+              options?: { ContentLength?: number }
+            ) =>
               getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
+                ContentLength: options?.ContentLength,
               }),
           },
           // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the

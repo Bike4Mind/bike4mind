@@ -65,6 +65,7 @@ const handler = baseApi().post(
       const presignedUrl = await storage.getSignedUrl(fileKey, 'put', {
         expiresIn: 600,
         ContentType: data.mimeType,
+        ContentLength: data.fileSize,
       });
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.

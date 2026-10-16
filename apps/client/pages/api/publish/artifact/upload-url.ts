@@ -175,6 +175,7 @@ const handler = baseApi().post(async (req, res) => {
         draftId,
         path: file.path,
         mimeType: file.mimeType,
+        size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
       return { path: file.path, url, expiresAt };

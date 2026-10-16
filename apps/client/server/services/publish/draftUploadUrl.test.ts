@@ -79,12 +79,14 @@ describe('mintDraftUploadUrl', () => {
       draftId: 'd1',
       path: 'index.html',
       mimeType: 'text/html',
+      size: 2048,
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
     });
     expect(url).toBe('https://s3.example/presigned-put');
     expect(storage.getSignedUrl).toHaveBeenCalledWith('drafts/d1/index.html', 'put', {
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
       ContentType: 'text/html',
+      ContentLength: 2048,
     });
   });
 
@@ -97,6 +99,7 @@ describe('mintDraftUploadUrl', () => {
       draftId: 'd1',
       path: 'assets/app.js',
       mimeType: 'text/javascript',
+      size: 12,
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
     });
 
@@ -117,6 +120,7 @@ describe('mintDraftUploadUrl', () => {
       draftId: 'd1',
       path: 'index.html',
       mimeType: 'text/html',
+      size: 12,
       expiresIn: 300,
     });
     const token = new URLSearchParams(url.split('?')[1]).get('token') ?? '';

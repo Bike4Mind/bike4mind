@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { getSettingsMap } from '@bike4mind/utils';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -165,6 +166,13 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
     h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+  });
+
+  it('binds the declared fileSize into the signature, so S3 refuses a PUT of any other length', async () => {
+    await run({ files: [file({ fileSize: 1234 })], dataLakeSlug: 'acme-2026' }, makeRes().res);
+    const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
+    expect((command as { input: { ContentLength?: number } }).input.ContentLength).toBe(1234);
+    expect(options?.signableHeaders?.has('content-length')).toBe(true);
   });
 
   it('stamps the lake org as owner of every file uploaded into an org lake', async () => {

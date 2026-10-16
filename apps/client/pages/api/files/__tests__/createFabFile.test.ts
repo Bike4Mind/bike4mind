@@ -418,5 +418,7 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
     expect(h.signUrl).toHaveBeenCalledTimes(1);
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
 });

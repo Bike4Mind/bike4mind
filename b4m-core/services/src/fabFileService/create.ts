@@ -96,7 +96,13 @@ export interface CreateFabFileAdapters {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
-    generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;
+    /** `ContentLength` binds a PUT to that byte length (see S3Storage.getSignedUrl). */
+    generateSignedUrl: (
+      path: string,
+      expireInSeconds: number,
+      type?: 'get' | 'put',
+      options?: { ContentLength?: number }
+    ) => Promise<string>;
     upload: (
       path: string,
       content: string | Buffer,
@@ -262,7 +268,8 @@ export const prepareFabFile = async (
       buildData.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
     }
   } else {
-    buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put');
+    // Bound to the declared size, the one the size and storage checks above ran on.
+    buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
   }
 
   return buildData;

@@ -68,7 +68,11 @@ export function verifyDraftUploadToken(token: string): DraftUploadClaims | null 
  *  satisfied structurally by S3Storage (fab-pipeline), so this module stays
  *  decoupled from the concrete storage class and is trivial to unit-test. */
 export interface DraftUploadStorage {
-  getSignedUrl(path: string, method: 'put', options: { expiresIn: number; ContentType: string }): Promise<string>;
+  getSignedUrl(
+    path: string,
+    method: 'put',
+    options: { expiresIn: number; ContentType: string; ContentLength: number }
+  ): Promise<string>;
 }
 
 export interface MintDraftUploadUrlInput {
@@ -78,6 +82,8 @@ export interface MintDraftUploadUrlInput {
   draftId: string;
   path: string;
   mimeType: string;
+  /** Declared byte length, the one the size and quota checks ran on; the hosted PUT is bound to it. */
+  size: number;
   expiresIn: number;
 }
 
@@ -95,5 +101,6 @@ export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promis
   return input.storage.getSignedUrl(input.key, 'put', {
     expiresIn: input.expiresIn,
     ContentType: input.mimeType,
+    ContentLength: input.size,
   });
 }

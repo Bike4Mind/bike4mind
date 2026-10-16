@@ -1,4 +1,5 @@
 import { Permission } from '@bike4mind/common';
+import { BadRequestError } from '@server/utils/errors';
 import { Session } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -11,14 +12,15 @@ import type { Request, Response } from 'express';
 
 interface IParams {
   source: string;
+  size?: string;
 }
 
 /**
  * Ceiling for a proxied history upload. Deliberately NOT the `MaxFileSize` admin setting the
  * fab-file and app-file proxies use: that defaults to 20MB and describes user file uploads,
  * while a real ChatGPT export is routinely far larger, so reusing it would silently break the
- * feature on self-host. The hosted presigned path has no cap at all, so this is a self-host-only
- * limit whose job is bounding disk use, not policing content.
+ * feature on self-host. The hosted presigned PUT is bound to the declared size under the same
+ * ceiling; its job is bounding disk use, not policing content.
  */
 export const MAX_HISTORY_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1 GB
 
@@ -36,7 +38,7 @@ const historyImportKey = (userId: string, source: string): string => `${userId}/
 const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
   .get(
     asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
-      const { source } = req.query;
+      const { source, size } = req.query;
       if (!isKnownSource(source)) {
         throw new Error('Invalid source');
       }
@@ -48,8 +50,16 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
       // key it burns is not the key the PUT handler lands the bytes under.
       let url = '';
       if (process.env.B4M_SELF_HOST !== 'true') {
+        // The hosted PUT is bound to the declared size and held to the self-host proxy's ceiling.
+        const bytes = Number(size);
+        if (!Number.isInteger(bytes) || bytes <= 0 || bytes > MAX_HISTORY_UPLOAD_BYTES) {
+          throw new BadRequestError('size must be the upload byte length, at most 1 GB');
+        }
         const s3 = new S3Storage(Resource.historyImportBucket.name);
-        url = await s3.getSignedUrl(historyImportKey(String(req.user?.id), source), 'put', { expiresIn: 600 });
+        url = await s3.getSignedUrl(historyImportKey(String(req.user?.id), source), 'put', {
+          expiresIn: 600,
+          ContentLength: bytes,
+        });
       }
 
       return res.json({ success: true, url: resolveBrowserHistoryImportUploadUrl(source, url) });

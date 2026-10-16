@@ -117,6 +117,11 @@ describe('POST /api/users/:id/upload-photo - stored photoUrl deref guard', () =>
     expect(mockAppFileFindOneAndDelete).not.toHaveBeenCalled();
     // The stale/foreign key is still cleared off the profile.
     expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: OWN }, { $unset: { photoUrl: 1 } });
+    // The PUT is bound to the declared fileSize, so S3 refuses a larger photo.
+    expect(mockStorageGetSignedUrl).toHaveBeenCalledWith(expect.any(String), 'put', {
+      expiresIn: 600,
+      ContentLength: 123,
+    });
   });
 
   it('deletes the previous photo file when an admin re-uploads for another user', async () => {

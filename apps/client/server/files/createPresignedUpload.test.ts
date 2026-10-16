@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { KnowledgeType, StorageLimitError } from '@bike4mind/common';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
@@ -79,6 +80,14 @@ describe('createPresignedUpload - owning organization', () => {
     await createPresignedUpload(req, upload() as never);
 
     expect(created()).not.toHaveProperty('organizationId');
+  });
+
+  it('binds the declared fileSize into the signature, so S3 refuses a PUT of any other length', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    await createPresignedUpload(req, upload() as never);
+    const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
+    expect((command as { input: { ContentLength?: number } }).input.ContentLength).toBe(10);
+    expect(options?.signableHeaders?.has('content-length')).toBe(true);
   });
 });
 
