@@ -57,10 +57,9 @@ export function gateSubagentTools(
 
     const toolFn: ICompletionOptionTools['toolFn'] = async (parameters, apiKey) => {
       const verdict = classifyToolPermission(toolName, permissions.approvedTools, permissions.deniedTools);
-      if (
-        verdict === 'allowed' ||
-        (verdict === 'needs_approval' && claimedServers.includes(confirmingServerOf(toolName) ?? ''))
-      ) {
+      const confirmingServer = confirmingServerOf(toolName);
+      const isClaimedConfirmingTool = confirmingServer !== undefined && claimedServers.includes(confirmingServer);
+      if (verdict === 'allowed' || (verdict === 'needs_approval' && isClaimedConfirmingTool)) {
         return tool.toolFn(parameters, apiKey);
       }
 

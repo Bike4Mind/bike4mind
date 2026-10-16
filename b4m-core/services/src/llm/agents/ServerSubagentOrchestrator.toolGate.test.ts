@@ -114,6 +114,13 @@ describe('gateSubagentTools', () => {
     expect(ran).toEqual([]);
   });
 
+  it('does not let an empty-string claim exempt a tool that belongs to no confirming server', async () => {
+    expect(await runGated('notion__create_page', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(await runGated('mcp__github__create_issue', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(await runGated('send_slack_message', [], [], [''])).toMatch(/needs the user's approval/);
+    expect(ran).toEqual([]);
+  });
+
   it('runs an external tool the parent approved', async () => {
     expect(await runGated('send_slack_message', ['send_slack_message'], [])).toBe('send_slack_message ok');
   });
