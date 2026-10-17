@@ -19,6 +19,7 @@ import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
+import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
@@ -62,11 +63,15 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipA
         | 'computeDataLakeStats'
         | 'commitContentRewrite'
         | 'findChargeState'
+        | 'setOwnerOrganizationIfUnchanged'
       >;
       /** Charges a content rewrite to the file's OWNER, who may not be `user` (an update share). */
       users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
       organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
-      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      dataLakes: Pick<
+        IDataLakeRepository,
+        'findByDatalakeTag' | 'findByDatalakeTags' | 'setStats' | 'activateIfDraft' | 'find'
+      >;
       // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
       // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
@@ -196,6 +201,16 @@ export const updateFabFile = async (
           }
         );
 
+  // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
+  // quota-gated before the write like any other growth of that pool.
+  if (lakeTags) {
+    await assertStorageOwnerTransferFits(
+      fabFile,
+      lakeTags.tagsToPersist.map(t => t.name),
+      db
+    );
+  }
+
   const changes: Partial<IFabFileDocument> = {
     ...contentChanges,
     ...params,
@@ -227,6 +242,8 @@ export const updateFabFile = async (
   // assigned into updatedFabFile above - is always the true final array; commit() only needs to
   // recompute stats for any new join.
   if (lakeTags) {
+    const transfer = await reassignStorageOwner(fabFile.id, db);
+    if (transfer) updatedFabFile.organizationId = transfer.nextOrganizationId;
     await lakeTags.commit();
   }
 

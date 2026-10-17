@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const LAKE = {
   id: 'lake-1',
@@ -15,48 +16,49 @@ const LAKE = {
 // to carry a real grant.
 const ADMIN = { userId: 'admin-1', isAdmin: true };
 
-const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
-  dataLakes: {
-    findById: vi.fn(async () => ({ ...LAKE })),
-    delete: vi.fn(async () => {}),
-    find: vi.fn(async () => [] as never),
-  },
-  dataLakeAccessGrants: {
-    listByLake: vi.fn(async () => [] as never),
-    removeAllForLake: vi.fn(async () => {}),
-  },
-  dataLakeFindings: {
-    deleteForLake: vi.fn(async () => 0),
-    deleteForPurgedDocuments: vi.fn(async () => 0),
-  },
-  dataLakeCorpusActions: {
-    deleteForLake: vi.fn(async () => 0),
-  },
-  lakeSkippedFiles: {
-    deleteForLake: vi.fn(async () => 0),
-  },
-  batches: {
-    find: vi.fn(async () => [] as never),
-    delete: vi.fn(async () => {}),
-  },
-  fabFiles: {
-    // Called twice: the main sweep, then the mid-sweep-joiner re-check (step 3b). A real DB would
-    // find nothing left the second time once the ids above are hard-deleted; the mock mirrors that
-    // rather than replaying the same ids forever.
-    findIdsByDataLakeTag: vi
-      .fn()
-      .mockResolvedValueOnce(fileIds)
-      .mockResolvedValue([] as never),
-    hardDeleteOneById: vi.fn(async () => true),
-    findById: vi.fn(async () => undefined as never),
-    pullTagsByFabFileId: vi.fn(async () => {}),
-    findStorageKeysByIds: vi.fn(async () => [] as never),
-  },
-  fabFileChunks: {
-    deleteManyByFabFileId: vi.fn(async () => {}),
-    clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
-  },
-});
+const makeDb = (fileIds: string[] = ['f1', 'f2']) =>
+  withStorageOwnerFakes({
+    dataLakes: {
+      findById: vi.fn(async () => ({ ...LAKE })),
+      delete: vi.fn(async () => {}),
+      find: vi.fn(async () => [] as never),
+    },
+    dataLakeAccessGrants: {
+      listByLake: vi.fn(async () => [] as never),
+      removeAllForLake: vi.fn(async () => {}),
+    },
+    dataLakeFindings: {
+      deleteForLake: vi.fn(async () => 0),
+      deleteForPurgedDocuments: vi.fn(async () => 0),
+    },
+    dataLakeCorpusActions: {
+      deleteForLake: vi.fn(async () => 0),
+    },
+    lakeSkippedFiles: {
+      deleteForLake: vi.fn(async () => 0),
+    },
+    batches: {
+      find: vi.fn(async () => [] as never),
+      delete: vi.fn(async () => {}),
+    },
+    fabFiles: {
+      // Called twice: the main sweep, then the mid-sweep-joiner re-check (step 3b). A real DB would
+      // find nothing left the second time once the ids above are hard-deleted; the mock mirrors that
+      // rather than replaying the same ids forever.
+      findIdsByDataLakeTag: vi
+        .fn()
+        .mockResolvedValueOnce(fileIds)
+        .mockResolvedValue([] as never),
+      hardDeleteOneById: vi.fn(async () => true),
+      findById: vi.fn(async () => undefined as never),
+      pullTagsByFabFileId: vi.fn(async () => {}),
+      findStorageKeysByIds: vi.fn(async () => [] as never),
+    },
+    fabFileChunks: {
+      deleteManyByFabFileId: vi.fn(async () => {}),
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
+    },
+  });
 
 /** Records every row/chunk delete as `<kind>:<id>` so both ORDER and PAIRING are assertable. */
 const traceDeletes = (db: ReturnType<typeof makeDb>) => {
@@ -107,6 +109,39 @@ describe('cleanupDeletedDataLake', () => {
     // `findIdsByDataLakeTag` still names it and the sweep resumes there rather than no-opping.
     expect(order).toEqual(['row:f1', 'chunks:f1']);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalledWith('f2');
+  });
+
+  it('sends a spared survivor back to its uploader once it is stripped of the last org lake it was in', async () => {
+    const db = makeDb([]);
+    db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, organizationId: 'org-sales' }));
+    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    const survivor = {
+      id: 's1',
+      userId: 'u1',
+      organizationId: 'org-sales',
+      fileSize: 500,
+      storageChargedAt: new Date('2026-10-10'),
+      status: 'complete',
+      createdAt: new Date('2026-10-09'),
+    };
+    db.fabFiles.findById = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...survivor,
+        tags: [
+          { name: 'datalake:sales', strength: 1 },
+          { name: 'datalake:mine', strength: 1 },
+        ],
+      })
+      .mockResolvedValue({ ...survivor, tags: [{ name: 'datalake:mine', strength: 1 }] });
+    db.fabFiles.pullTagsByFabFileId = vi.fn(async () => 1 as never);
+    db.dataLakes.findByDatalakeTags.mockResolvedValue([{ id: 'lake-mine', datalakeTag: 'datalake:mine' }]);
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith('s1', expect.anything(), undefined);
+    expect(db.organizations.incrementCurrentStorage).toHaveBeenCalledWith('org-sales', -500);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('u1', 500);
   });
 
   it('is a no-op when the lake is already gone', async () => {

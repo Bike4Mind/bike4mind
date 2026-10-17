@@ -15,6 +15,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * DELETE /api/data-lakes/:id/files/:fabFileId
@@ -54,6 +55,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
 
       const removal = await dataLakeService.removeFileFromDataLake(actor, lake.id, fabFileId, {
         db: {
+          ...storageOwnerTransferDb,
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           fabFiles: fabFileRepository,
@@ -88,6 +90,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
 
       const addition = await dataLakeService.addFileToDataLake(actor, lake.id, fabFileId, {
         db: {
+          ...storageOwnerTransferDb,
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           fabFiles: fabFileRepository,

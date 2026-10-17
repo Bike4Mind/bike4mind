@@ -2,6 +2,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { SettingScopeLevel, type IDataLakeDocument, type IScopedSetting, type ScopeRef } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { toggleTags } from './toggleTags';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -42,7 +43,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
   const store = new Map(filesWithToJSON.map(f => [f.id, { ...f, tags: [...f.tags] }]));
 
   return {
-    db: {
+    db: withStorageOwnerFakes({
       fabFiles: {
         shareable: { findAllUpdateAccessByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
@@ -83,7 +84,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
       // Wired unconditionally so a test can assert on it without rebuilding the fixture; degrades
       // to "no event recorded" the same way an absent repo would if a caller genuinely omitted it.
       lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue({}) },
-    },
+    }),
     store,
   };
 };
@@ -797,10 +798,10 @@ describe('toggleTags - admission contract', () => {
     base.db.dataLakes.find = vi.fn().mockResolvedValue([lakeDoc]);
     return {
       ...base,
-      db: {
+      db: withStorageOwnerFakes({
         ...base.db,
         ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, off ? [] : [enforcing]),
-      },
+      }),
     };
   };
 

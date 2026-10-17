@@ -27,6 +27,7 @@ import { evaluateConnectorCopyDeletion } from '@server/integrations/google/drive
 import { getFilesStorage } from '@server/utils/storage';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 // Shared by the connector ingests: driveLakeIngest.ts and githubLakeIngest.ts (via githubLakeSlice.ts).
 
@@ -139,7 +140,7 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
       membershipActor,
       lake,
       staleCopy.id,
-      { db: { fabFiles: fabFileRepository, ...lakeMembershipAuditDb }, logger },
+      { db: { ...storageOwnerTransferDb, ...lakeMembershipAuditDb }, logger },
       { origin: 'connector' }
     );
 

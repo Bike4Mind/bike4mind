@@ -3678,6 +3678,26 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return prior ? prior.toJSON() : null;
   }
 
+  async setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean> {
+    // `null` matches a missing field, so a row read without one compares equal to the stored doc.
+    // No includeDeleted: a tombstone's bytes were already refunded, so it has nothing to move.
+    const result = await this.fabFileModel.updateOne(
+      {
+        _id: fabFileId,
+        ...(expected.organizationId ? { organizationId: expected.organizationId } : PERSONAL_STORAGE_FILTER),
+        fileSize: expected.fileSize ?? null,
+        storageChargedAt: expected.storageChargedAt ?? null,
+        status: expected.status ?? null,
+      },
+      nextOrganizationId ? { $set: { organizationId: nextOrganizationId } } : { $unset: { organizationId: '' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.

@@ -95,8 +95,16 @@ vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPr
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
-  dataLakeRepository: { touchIfStable: mockTouchIfStable },
-  fabFileRepository: { findById: mockFindFile },
+  dataLakeRepository: { touchIfStable: mockTouchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
+  fabFileRepository: { findById: mockFindFile, setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeMembershipRemovalRepository: {},
   scopedSettingsRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => {

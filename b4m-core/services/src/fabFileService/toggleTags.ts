@@ -28,6 +28,7 @@ import {
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
+import type { StorageOwnerTransferDb } from './reassignStorageOwner';
 
 const fabFileToggleTagsSchema = z.object({
   ids: z.array(z.string()),
@@ -35,8 +36,10 @@ const fabFileToggleTagsSchema = z.object({
 });
 
 interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
-    LakeMembershipAuditAdapters['db'] & {
+    LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
       fabFiles: Pick<
         IFabFileRepository,
         | 'shareable'
