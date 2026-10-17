@@ -510,7 +510,7 @@ export class McpConnectionCapError extends ConflictError {
 /** The slug is already taken for this owner (the `mcpconn_owner_slug` unique index). */
 export class McpConnectionSlugConflictError extends ConflictError {
   constructor(readonly slug: string) {
-    super(`A connection with the slug "${slug}" already exists`, { slug });
+    super(`A connection with the slug "${slug}" already exists`, { code: 'slug_taken', slug });
     this.name = 'McpConnectionSlugConflictError';
   }
 }
