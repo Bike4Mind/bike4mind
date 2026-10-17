@@ -418,9 +418,9 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
         // Same reference guard as updatePreferences: a newer write or server echo must stand.
         if (store.currentUser && store.currentUser.preferences === fullPreferences) {
           store.setCurrentUser({ ...store.currentUser, preferences: previousPreferences });
-        } else {
-          void queryClient.invalidateQueries({ queryKey: ['identify'] });
         }
+        // previousPreferences may be an earlier write's optimistic value, so always ask for a reconcile.
+        void queryClient.invalidateQueries({ queryKey: ['identify'] });
         // Restore the visible language explicitly: a user with no saved server language has
         // nothing for the server-read effect to apply. The suppression flag keeps the
         // write-back effect from echoing the rollback to the server.
