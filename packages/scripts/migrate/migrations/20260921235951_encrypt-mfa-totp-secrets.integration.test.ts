@@ -80,6 +80,23 @@ describe('encrypt-mfa-totp-secrets migration (real DB)', () => {
     expect(await storedSecret(plainId)).toBe(first);
   });
 
+  it('does not overwrite a secret a concurrent re-enrollment wrote after the scan', async () => {
+    const reEnrolled = encryptSecret(ALREADY_ENCRYPTED_PLAINTEXT, KEY);
+    const userId = await insertUser('re-enrolled', reEnrolled);
+    // The scan saw the pre-re-enrollment plaintext; the row now holds the new ciphertext.
+    const findSpy = vi.spyOn(User, 'find').mockReturnValueOnce({
+      select: () => ({ lean: async () => [{ _id: userId, mfa: { totpSecret: PLAIN_SECRET } }] }),
+    } as unknown as ReturnType<typeof User.find>);
+
+    try {
+      await migration.up();
+    } finally {
+      findSpy.mockRestore();
+    }
+
+    expect(await storedSecret(userId)).toBe(reEnrolled);
+  });
+
   it('leaves plaintext in place without throwing when no key is configured', async () => {
     configureSecretsAtRest(undefined);
     const plainId = await insertUser('plain', PLAIN_SECRET);

@@ -82,7 +82,7 @@ describe('mfa.totpSecret encryption at rest', () => {
       await expectStoredEncrypted(TOTP_SECRET);
     });
 
-    it('a snapshot writer re-encrypts the decrypted secret it read (passkey, verify)', async () => {
+    it('a snapshot writer re-encrypts the decrypted secret it read (passkey, regenerate-backup-codes)', async () => {
       await userRepository.update({ id: userId, mfa: mfaWith(TOTP_SECRET) });
       const firstCiphertext = await readStoredSecret();
 

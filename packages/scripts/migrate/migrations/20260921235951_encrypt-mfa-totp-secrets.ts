@@ -32,7 +32,9 @@ const migration: MigrationFile = {
     // keyless install is a supported posture whose new enrollments are stored plaintext too (see
     // encryptAtRest), and a throw here would block every migration sorted after this one (the
     // invariant BackfillOAuthClientTokenEndpointAuthMethod's test guards). Managed stages always
-    // carry the key; a self-host that adds one later re-encrypts as users re-enroll.
+    // carry the key. A self-host that adds one later keeps these rows plaintext until each user
+    // re-enrolls or rewrites mfa (passkey sign-in, backup-code regeneration); a TOTP sign-in alone
+    // does not re-encrypt.
     if (!isSecretsAtRestConfigured()) {
       console.warn(
         `SECRET_ENCRYPTION_KEY is not configured; leaving ${pending.length} plaintext TOTP secret(s) unencrypted`

@@ -1240,7 +1240,7 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
 /**
  * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
  * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
- * that setupMFA and the snapshot writers (passkey, verify, regenerate-backup-codes) use, and the
+ * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
  * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
  * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
  */
