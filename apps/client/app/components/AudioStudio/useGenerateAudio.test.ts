@@ -8,7 +8,9 @@ const { mocks } = vi.hoisted(() => ({
     toastInfo: vi.fn(),
     toastError: vi.fn(),
     toastSuccess: vi.fn(),
+    toastWarning: vi.fn(),
     getState: vi.fn(),
+    invalidateQueries: vi.fn(),
   },
 }));
 
@@ -17,11 +19,12 @@ vi.mock('sonner', () => ({
     info: (...a: unknown[]) => mocks.toastInfo(...a),
     error: (...a: unknown[]) => mocks.toastError(...a),
     success: (...a: unknown[]) => mocks.toastSuccess(...a),
+    warning: (...a: unknown[]) => mocks.toastWarning(...a),
   },
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: (...a: unknown[]) => mocks.invalidateQueries(...a) }),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -32,6 +35,8 @@ vi.mock('@client/app/stores/useAudioGenSettings', () => ({
   useAudioGenSettings: { getState: () => mocks.getState() },
 }));
 
+import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGenerateAudio } from './useGenerateAudio';
 
 // A 4xx from the route arrives as an axios error carrying the JSON error body.
@@ -44,8 +49,8 @@ const axiosFailure = (status: number, data: unknown) =>
     config: { headers: new AxiosHeaders() },
   });
 
-const generate = async (text = 'hello') => {
-  const { result } = renderHook(() => useGenerateAudio());
+const generate = async (text = 'hello', mode: AudioGenMode = 'tts') => {
+  const { result } = renderHook(() => useGenerateAudio(mode));
   await act(async () => {
     await result.current.generate(text);
   });
@@ -54,7 +59,7 @@ const generate = async (text = 'hello') => {
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.getState.mockReturnValue({ mode: 'tts', ttsProvider: 'openai', voice: '', format: 'mp3' });
+  mocks.getState.mockReturnValue({ ttsProvider: 'openai', voice: '', format: 'mp3' });
   URL.createObjectURL = vi.fn(() => 'blob:audio');
   URL.revokeObjectURL = vi.fn();
 });
@@ -181,7 +186,7 @@ describe('useGenerateAudio credit exhaustion', () => {
 
 describe('useGenerateAudio sound effects', () => {
   beforeEach(() => {
-    mocks.getState.mockReturnValue({ mode: 'sound-effects', durationSeconds: 3, promptInfluence: 0.5 });
+    mocks.getState.mockReturnValue({ durationSeconds: 3, promptInfluence: 0.5 });
   });
 
   it('requests base64 JSON and plays the inline audio from a blob URL', async () => {
@@ -189,7 +194,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab-2' },
     });
 
-    const result = await generate();
+    const result = await generate('hello', 'sound-effects');
 
     expect(mocks.post).toHaveBeenCalledWith(
       '/api/ai/sound-effects',
@@ -211,7 +216,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { delivery: 'url', url: 'https://s3/sfx.mp3', bytes: 9_000_000, contentType: 'audio/mpeg' },
     });
 
-    const result = await generate();
+    const result = await generate('hello', 'sound-effects');
 
     expect(result.current.result).toMatchObject({ url: 'https://s3/sfx.mp3', isObjectUrl: false, saved: false });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
@@ -223,7 +228,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false, saveSkippedReason: 'storage_limit' },
     });
 
-    await generate();
+    await generate('hello', 'sound-effects');
 
     expect(mocks.toastInfo).toHaveBeenCalledWith(
       'Sound effect generated, but your storage is full so it was not saved to Files.'
@@ -233,7 +238,7 @@ describe('useGenerateAudio sound effects', () => {
   it('shows the generic too-large message on a 413', async () => {
     mocks.post.mockRejectedValue(axiosFailure(413, { error: 'too big' }));
 
-    await generate();
+    await generate('hello', 'sound-effects');
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'The generated audio was too large to return. Try again, or use shorter text.'
@@ -250,5 +255,116 @@ describe('useGenerateAudio tts save outcome', () => {
     await generate();
 
     expect(mocks.toastInfo).toHaveBeenCalledWith('Audio generated, but saving to Files failed.');
+  });
+});
+
+describe('useGenerateAudio unmount', () => {
+  it('revokes the blob of a response that arrived after the tab unmounted', async () => {
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false } });
+      await pending;
+    });
+
+    // The unmount cleanup runs before the response exists, so only the settle path can free this one.
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio');
+  });
+
+  // The clip was billed and stored server-side, so a tab that unmounted mid-request must
+  // still confirm the save and refresh Files - there is just no player left to hold it.
+  it('still confirms a clip that settled after the tab unmounted', async () => {
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab-3' } });
+      await pending;
+    });
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: fabFileKeys.all });
+    // No player is left to own the blob, so the settle path frees it instead of storing it.
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:audio');
+  });
+
+  describe('a clip that settles after the tab unmounted', () => {
+    const settleAfterUnmount = async (data: Record<string, unknown>, mode: 'tts' | 'sound-effects' = 'tts') => {
+      let settle: (value: unknown) => void = () => {};
+      mocks.post.mockReturnValue(new Promise(resolve => (settle = resolve)));
+      const { result, unmount } = renderHook(() => useGenerateAudio(mode));
+      let pending: Promise<void> = Promise.resolve();
+      act(() => {
+        pending = result.current.generate('hello');
+      });
+      unmount();
+      await act(async () => {
+        settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', ...data } });
+        await pending;
+      });
+    };
+
+    it('warns that an unsaved clip is gone rather than calling it generated', async () => {
+      await settleAfterUnmount({ saved: false });
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Audio finished after you left, but it was not saved to your Files.'
+      );
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['storage_limit', 'your storage is full'],
+      ['file_too_large', 'it was too large to save'],
+      ['error', 'saving it failed'],
+    ])('says a clip whose save was skipped (%s) is gone, and why', async (saveSkippedReason, cause) => {
+      await settleAfterUnmount({ saved: false, saveSkippedReason });
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        `Audio finished after you left, but it was not saved to your Files (${cause}).`
+      );
+      expect(mocks.toastInfo).not.toHaveBeenCalled();
+    });
+
+    it('reports a provider fallback, then that the unsaved clip is gone', async () => {
+      await settleAfterUnmount({ saved: false, provider: 'openai', fallbackFrom: 'elevenlabs' });
+
+      expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('was unavailable'));
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Audio finished after you left, but it was not saved to your Files.'
+      );
+      expect(mocks.toastInfo.mock.invocationCallOrder[0]).toBeLessThan(mocks.toastWarning.mock.invocationCallOrder[0]);
+    });
+
+    it('names a sound effect in the warning', async () => {
+      await settleAfterUnmount({ saved: false }, 'sound-effects');
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Sound effect finished after you left, but it was not saved to your Files.'
+      );
+    });
+
+    it('still reports a provider fallback', async () => {
+      await settleAfterUnmount({ saved: true, fabFileId: 'fab-4', provider: 'openai', fallbackFrom: 'elevenlabs' });
+
+      expect(mocks.toastInfo).toHaveBeenCalledWith(expect.stringContaining('was unavailable'));
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Audio generated and saved to your Files.');
+    });
   });
 });
