@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BEDROCK_ANTHROPIC_PREFIX, claudeFamilyVersion } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
@@ -331,8 +332,10 @@ export type ChatModelName = z.infer<typeof supportedChatModels>;
  */
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
+const CLAUDE_ID_PREFIX = new RegExp(`^${BEDROCK_ANTHROPIC_PREFIX}claude-`);
+
 /** Claude ids, direct (`claude-...`) or on Bedrock (`anthropic.claude-...`, optionally region-prefixed). */
-export const isClaudeModelId = (model: string): boolean => /^(?:(?:[a-z-]+\.)?anthropic\.)?claude-/.test(model);
+export const isClaudeModelId = (model: string): boolean => CLAUDE_ID_PREFIX.test(model);
 
 /**
  * Models that support OpenAI's `reasoning_effort` request parameter.
@@ -553,7 +556,12 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
 
 // Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
 // and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
-const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
+const NO_FORCED_TOOL_CHOICE_VERSIONS: ReadonlySet<string> = new Set([
+  'opus-5-5',
+  'sonnet-5-5',
+  'fable-5-1',
+  'mythos-5-1',
+]);
 
 /**
  * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
@@ -565,7 +573,8 @@ const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fa
  * just carries no thinking block.
  */
 export function supportsForcedToolChoice(modelId: string): boolean {
-  return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
+  const version = claudeFamilyVersion(modelId.replace(/^[^/]*\//, ''));
+  return version === null || !NO_FORCED_TOOL_CHOICE_VERSIONS.has(version);
 }
 
 /**
