@@ -1,3 +1,4 @@
+import { format } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FleetClient, type FetchPort, type IngestOutcome } from './FleetClient';
 
@@ -49,7 +50,7 @@ describe('FleetClient', () => {
     }
   });
 
-  it('retries with no status when fetch throws, and logs nothing that carries the key', async () => {
+  it('never logs the API key when fetch throws, and retries with no status', async () => {
     const spies = (['log', 'info', 'warn', 'error'] as const).map(method =>
       vi.spyOn(console, method).mockImplementation(() => undefined)
     );
@@ -59,7 +60,8 @@ describe('FleetClient', () => {
     const result = await client.sendLogs(ORIGIN, KEY, {});
     expect(result).toEqual({ kind: 'retry', status: null });
     expect(JSON.stringify(result)).not.toContain(KEY);
-    for (const spy of spies) expect(JSON.stringify(spy.mock.calls)).not.toContain(KEY);
+    // util.format renders an Error's message and stack, which JSON.stringify drops
+    for (const spy of spies) expect(spy.mock.calls.map(call => format(...call)).join('\n')).not.toContain(KEY);
   });
 
   it('aborts a request still pending after 15 seconds and retries', async () => {
