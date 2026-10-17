@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { MongoClient, ObjectId } from 'mongodb';
 import { withTransaction } from '@bike4mind/db-core';
 import { KnowledgeType } from '@bike4mind/common';
-import { createMongoReplSet } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
 // #1802 Phase 2: unlike confirmChunkClaim.test.ts (sequential setup-then-check, standalone Mongo),
@@ -17,7 +17,8 @@ let externalClient: MongoClient;
 beforeAll(async () => {
   server = await createMongoReplSet();
   const uri = server.getUri();
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   // A genuinely separate driver connection/session - the takeover below must NOT be able to run
   // inside chunkFabfile's transaction, or this test would not be testing concurrency at all.
   externalClient = new MongoClient(uri);

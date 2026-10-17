@@ -16,6 +16,7 @@ import { User, Session, Quest, FabFile, NotebookCurationJob, CreditTransaction }
 import { Logger } from '@bike4mind/observability';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 const { notify } = vi.hoisted(() => ({ notify: vi.fn().mockResolvedValue(undefined) }));
@@ -66,7 +67,8 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
   beforeAll(async () => {
     mongo = await createMongoReplSet();
     process.env.NOTEBOOK_MONGO_URI = mongo.getUri();
-    await mongoose.connect(mongo.getUri());
+    await mongoose.connect(mongo.getUri(), { autoIndex: false });
+    await settleAutoIndexBuilds(mongoose);
     await Promise.all([NotebookCurationJob.init(), FabFile.init(), CreditTransaction.init()]);
     try {
       await s3.send(new CreateBucketCommand({ Bucket: 'notebook-proof' }));

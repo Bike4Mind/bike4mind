@@ -18,6 +18,7 @@ import { CurationType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { NotebookCurationService } from '../../../../b4m-core/services/src/notebookCurationService';
@@ -64,7 +65,8 @@ function service(job = 'job') {
 }
 beforeAll(async () => {
   mongo = await createMongoReplSet();
-  await mongoose.connect(mongo.getUri());
+  await mongoose.connect(mongo.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   await Promise.all([NotebookCurationJob.init(), FabFile.init(), CreditTransaction.init()]);
 });
 afterAll(async () => {
