@@ -1729,6 +1729,36 @@ export class ChatCompletionProcess {
    */
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
+  /**
+   * Refunds the credit reservation this run still holds, if any. The amount is claimed
+   * synchronously before the await, so a caller giving up on a stuck run and the run's own
+   * error rollback cannot both refund it. A run that later reconciles bills the full actual.
+   */
+  public async releaseReservedCredits(questId: string, logger: Logger): Promise<void> {
+    const amount = this.reservedCredits;
+    const ownerId = this.reservedCreditsOwnerId;
+    if (amount <= 0 || !ownerId) return;
+    this.reservedCredits = 0;
+    // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
+    // that later reaches settlement reads this snapshot, and a stale one (still holding the
+    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // settlement can charge against the restored balance.
+    if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
+    try {
+      const rollbackMethod =
+        this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
+      await rollbackMethod.incrementCredits(ownerId, amount);
+      logger.info(`Rolled back ${amount} reserved credits for quest ${questId}`);
+    } catch (rollbackError) {
+      // The refund never landed, so a later settlement must not charge against it.
+      if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits -= amount;
+      logger.error(
+        `CRITICAL: Failed to rollback ${amount} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
+        rollbackError
+      );
+    }
+  }
+
   public async process({
     body,
     logger,
@@ -1738,6 +1768,7 @@ export class ChatCompletionProcess {
     externalTools,
     videoToolConfigResolver,
     musicToolConfigResolver,
+    abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1754,6 +1785,13 @@ export class ChatCompletionProcess {
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    /**
+     * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
+     * way the cancel watcher does: process() releases or reconciles its own credit reservation,
+     * but writes no further quest state, so the caller must settle the quest (see the wait path
+     * in apps/client/pages/api/chat.ts).
+     */
+    abortSignal?: AbortSignal;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -1831,6 +1869,9 @@ export class ChatCompletionProcess {
     const saveQuest = async (quest: IChatHistoryItemDocument): Promise<IChatHistoryItemDocument | null> => {
       // Use the mutex to serialize the save operations
       return await questSaveMutex.runExclusive(async () => {
+        // Once the caller aborts (the wait=true deadline), the caller owns the quest's terminal
+        // state; a late heartbeat or final save here would write `running`/`stopped` over it.
+        if (abortSignal?.aborted) return quest;
         // If quest has researchModeResults, ensure they're saved
         if (quest.researchModeResults?.length) {
           logger.info(
@@ -4408,6 +4449,9 @@ export class ChatCompletionProcess {
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
+      // Plain abort(), not abort(reason): a custom reason would surface as a non-abort error.
+      if (abortSignal?.aborted) abortController.abort();
+      else abortSignal?.addEventListener('abort', () => abortController.abort(), { once: true });
 
       // Store reference to the AbortController in a map using questId as key
       // This is used for actual request cancellation when a quest is stopped
@@ -5781,19 +5825,23 @@ export class ChatCompletionProcess {
           // Clamp computed BEFORE the usage event so the event can carry the
           // written-off portion; summing creditsCharged alone would over-count
           // collected revenue whenever the clamp fires.
+          // Claim the reservation before any await: releaseReservedCredits (a caller abandoning a
+          // stuck turn) must not refund what this settlement already accounts for.
+          const reservedAtSettlement = this.reservedCredits;
+          this.reservedCredits = 0;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
             ? computeSettlementDelta(
-                this.reservedCredits,
+                reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
               )
-            : { delta: this.reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
           if (writtenOffCredits > 0) {
             logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
-              shortfall: totalCreditsUsed - this.reservedCredits,
+              shortfall: totalCreditsUsed - reservedAtSettlement,
               available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
               writtenOff: writtenOffCredits,
             });
@@ -5853,7 +5901,7 @@ export class ChatCompletionProcess {
                 this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
               reconciledHolder = await reconcileMethod.incrementCredits(this.reservedCreditsOwnerId, delta);
               logger.info(
-                `⚖️ Credits reconciled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCreditsUsed}, delta=${delta}`
+                `Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
             }
 
@@ -5918,12 +5966,10 @@ export class ChatCompletionProcess {
               }
             );
 
-            // Reset reservation state after successful reconciliation
-            this.reservedCredits = 0;
             this.reservedCreditHolder = null;
           } catch (creditError) {
             logger.error(
-              `🚨 Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${this.reservedCredits} reserved). Manual reconciliation needed.`,
+              `Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${reservedAtSettlement} reserved). Manual reconciliation needed.`,
               creditError
             );
             // Do not re-throw: balance already adjusted at reservation time
@@ -6321,20 +6367,16 @@ export class ChatCompletionProcess {
       const totalResponseTime = Date.now() - processStartTime;
 
       // Rollback reserved credits if we never completed reconciliation
-      if (this.reservedCredits > 0 && this.reservedCreditsOwnerId) {
-        try {
-          const rollbackMethod =
-            this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
-          await rollbackMethod.incrementCredits(this.reservedCreditsOwnerId, this.reservedCredits);
-          logger.info(`💰 Rolled back ${this.reservedCredits} reserved credits for quest ${questId} due to error`);
-          this.reservedCredits = 0;
-          this.reservedCreditHolder = null;
-        } catch (rollbackError) {
-          logger.error(
-            `🚨 CRITICAL: Failed to rollback ${this.reservedCredits} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
-            rollbackError
-          );
-        }
+      await this.releaseReservedCredits(questId, logger);
+      if (abortSignal?.aborted) {
+        // Drain any in-flight save before handing the quest's terminal state to the caller: a
+        // heartbeat that cleared the fence just before the abort would otherwise write `running`
+        // back over the caller's settle. Every save after this returns early (still fenced).
+        await questSaveMutex.runExclusive(async () => {});
+        // The caller ended the turn and settles the quest from what streamed; an error reply
+        // written here would be kept as content (and saveQuest is fenced anyway).
+        logger.warn(`Quest ${questId} ended by caller abort`, { error: err });
+        return;
       }
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;

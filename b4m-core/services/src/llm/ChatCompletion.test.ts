@@ -2039,6 +2039,281 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.status).toBe('stopped');
     });
 
+    describe('caller abortSignal (wait=true deadline)', () => {
+      function arrangeTurn({ hangUntilAbort = false }: { hangUntilAbort?: boolean } = {}) {
+        let signalSeen: AbortSignal | undefined;
+        let markBackendCalled: () => void = () => {};
+        const backendCalled = new Promise<void>(resolve => {
+          markBackendCalled = resolve;
+        });
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts) => {
+          signalSeen = opts.abortSignal;
+          markBackendCalled();
+          await new Promise<void>((resolve, reject) => {
+            const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            if (opts.abortSignal?.aborted) return fail();
+            opts.abortSignal?.addEventListener('abort', fail, { once: true });
+            // hangUntilAbort leaves the turn open until the caller aborts, so a test can advance
+            // virtual time past the streaming heartbeat without the turn completing first.
+            if (!hangUntilAbort) setTimeout(resolve, 3000);
+          });
+        });
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        return { complete, body, backendCalled, getSignalSeen: () => signalSeen };
+      }
+
+      it('aborting the caller signal aborts the backend call', async () => {
+        const { body, backendCalled, getSignalSeen } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        expect(getSignalSeen()?.aborted).toBe(false);
+        external.abort();
+
+        await expect(run).resolves.not.toThrow();
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('writes no quest update after the caller aborts', async () => {
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('waits for an in-flight quest save before returning on the caller abort', async () => {
+        vi.useFakeTimers();
+        try {
+          const { body, backendCalled } = arrangeTurn({ hangUntilAbort: true });
+          // Hold the write the heartbeat starts, so the save mutex stays locked across the abort.
+          let holdWrites = false;
+          let writeStarted = false;
+          let releaseWrite: (value: unknown) => void = () => {};
+          mockDb.quests.update.mockImplementation(() => {
+            if (!holdWrites) return Promise.resolve(undefined);
+            writeStarted = true;
+            return new Promise(resolve => {
+              releaseWrite = resolve;
+            });
+          });
+          const external = new AbortController();
+          let resolved = false;
+          const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+          run.then(
+            () => {
+              resolved = true;
+            },
+            () => {
+              resolved = true;
+            }
+          );
+
+          await backendCalled;
+          holdWrites = true;
+          // One heartbeat: its save clears the not-yet-aborted fence and enters the save mutex.
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(writeStarted).toBe(true);
+
+          external.abort();
+          holdWrites = false; // only the write already in flight stays held
+          await vi.advanceTimersByTimeAsync(0);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          // The write is still pending, so the drain must keep process() from resolving yet.
+          expect(resolved).toBe(false);
+
+          releaseWrite(mockQuest);
+          await run;
+          expect(resolved).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('aborts the backend signal at once when the caller signal is already aborted', async () => {
+        const { body, getSignalSeen, complete } = arrangeTurn();
+        const external = new AbortController();
+        external.abort();
+
+        await expect(
+          service.process({ body, logger: mockLogger, abortSignal: external.signal })
+        ).resolves.not.toThrow();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('does not persist the success-path status when the backend resolves on abort', async () => {
+        const { body, complete } = arrangeTurn();
+        let markStreamed: () => void = () => {};
+        const streamed = new Promise<void>(resolve => {
+          markStreamed = resolve;
+        });
+        complete.mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          markStreamed();
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal?.aborted) return resolve();
+            opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await streamed;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('refunds a real reservation when the caller aborts the turn', async () => {
+        vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
+          (key: string) => key === 'enforceCredits'
+        );
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 550 }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        external.abort();
+        await run;
+
+        // Held before the turn, returned when the caller cut it off - no charge for an aborted turn.
+        expect(incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -50);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', 50);
+      });
+    });
+
+    describe('releaseReservedCredits', () => {
+      type ReservationFields = { reservedCredits: number; reservedCreditsOwnerId: string };
+
+      it('refunds once under concurrent calls', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        let release: (value: unknown) => void = () => {};
+        const incrementCredits = vi.fn().mockReturnValue(
+          new Promise(resolve => {
+            release = resolve;
+          })
+        );
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        const first = service.releaseReservedCredits('q1', mockLogger);
+        const second = service.releaseReservedCredits('q1', mockLogger);
+        release({ id: 'owner-id', currentCredits: 50 });
+        await Promise.all([first, second]);
+
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+      });
+
+      it('is a no-op with nothing reserved', async () => {
+        const incrementCredits = vi.fn();
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).not.toHaveBeenCalled();
+      });
+
+      it('keeps the refunded balance so a later settlement bills the actual instead of writing it off', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        // The balance the reservation held it at: 50 had already come out of a 60 balance.
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'owner-id', currentCredits: 60 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
+        // What the still-running process() computes at settlement. A zeroed holder would floor the
+        // debit at zero and give the turn away; the restored balance charges the real 30.
+        const { delta, writtenOffCredits } = computeSettlementDelta(
+          0,
+          30,
+          fields.reservedCreditHolder?.currentCredits ?? 0
+        );
+        expect(delta).toBe(-30);
+        expect(writtenOffCredits).toBe(0);
+      });
+
+      it('resolves and logs CRITICAL when the refund fails, without refunding twice', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        const incrementCredits = vi.fn().mockRejectedValue(new Error('db down'));
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await expect(service.releaseReservedCredits('q1', mockLogger)).resolves.toBeUndefined();
+        // The claim zeroed the counter even though the write failed, so a retry cannot double-refund.
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'), expect.anything());
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+      });
+
+      it('restores the holder snapshot when the refund fails', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        mockDb.users = { ...mockDb.users, incrementCredits: vi.fn().mockRejectedValue(new Error('db down')) };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(10);
+      });
+    });
+
     describe('Research Mode cancellation', () => {
       const RESEARCH_MODEL = 'gpt-4-research';
 

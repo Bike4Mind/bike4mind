@@ -318,7 +318,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 ## Tips for Development
 
-1. **Poll quests, don&apos;t block on chat.** By default \`POST /api/chat\` returns immediately with a queued ACK whose \`id\` is the quest id. Poll \`GET /api/v1/quests/{id}\` until it is terminal to get the response, or pass \`wait: true\` to block and receive the completed turn inline.
+1. **Poll quests, don&apos;t block on chat.** By default \`POST /api/chat\` returns immediately with a queued ACK whose \`id\` is the quest id. Poll \`GET /api/v1/quests/{id}\` until it is terminal to get the response, or pass \`wait: true\` to block and receive the completed turn inline. A \`wait: true\` turn is bounded at about 45 seconds; a longer one is ended and answered with a 504 carrying its \`quest_id\`, so send long or tool-heavy turns async.
 
 2. **Use streaming for better UX.** Pass \`stream: true\` in chat requests and listen for \`streamed_chat_completion\` WebSocket actions to display the reply as it arrives.
 
