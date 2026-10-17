@@ -79,4 +79,25 @@ describe('ReActAgent observation toolFailed flag', () => {
     });
     expect(failedByTool(iteration.allSteps)).toEqual(expected);
   });
+
+  // A throw from the deferred-tool resolver escapes the tool-level catch, so the parallel
+  // batch reports a rejected result - the path that does not go through `takeToolFailure`.
+  it.each([
+    ['runIteration', (agent: ReActAgent, options: object) => agent.runIteration('go', options).then(r => r.allSteps)],
+    ['run', (agent: ReActAgent, options: object) => agent.run('go', options).then(r => r.steps)],
+  ])('marks a rejected parallel result but not a cancelled one (%s)', async (_label, execute) => {
+    const context: AgentContext = {
+      ...createContext(),
+      llm: createOneBatchLlm([
+        { id: 'r1', name: 'resolver_fails' },
+        { id: 'r2', name: 'resolver_aborts' },
+      ]),
+      tools: [],
+      unknownToolResolver: async name => {
+        throw new Error(name === 'resolver_aborts' ? 'The operation was aborted' : 'resolver unavailable');
+      },
+    };
+    const steps = await execute(new ReActAgent(context), { parallelExecution: true, isReadOnlyTool: () => true });
+    expect(failedByTool(steps)).toEqual({ resolver_fails: true, resolver_aborts: false });
+  });
 });
