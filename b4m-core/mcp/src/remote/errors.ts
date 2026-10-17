@@ -1,3 +1,5 @@
+import type { McpConnectionErrorCode } from '@bike4mind/common';
+
 export type RemoteMcpErrorCode =
   | 'invalid_url'
   | 'ssrf_blocked'
@@ -7,6 +9,13 @@ export type RemoteMcpErrorCode =
   | 'protocol'
   | 'size_cap'
   | 'upstream_5xx';
+
+/**
+ * COMPILE-TIME GUARD: every code is storable as `McpConnection.lastError.code`. Adding a code here
+ * without adding it to MCP_CONNECTION_ERROR_CODES in common fails the typecheck.
+ */
+type AssertStorable<T extends McpConnectionErrorCode> = T;
+export type StorableRemoteMcpErrorCode = AssertStorable<RemoteMcpErrorCode>;
 
 /** Base class for every failure `RemoteMcpClient` surfaces; `code` is stable and safe to show or log. */
 export class RemoteMcpError extends Error {
