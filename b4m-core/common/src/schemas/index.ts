@@ -18,6 +18,7 @@ export * from './session';
 export * from './user';
 export * from './settings';
 export * from './customMcpHosts';
+export * from './customMcpPolicy';
 export * from './zod';
 export * from './promptMeta';
 export * from './analytics';

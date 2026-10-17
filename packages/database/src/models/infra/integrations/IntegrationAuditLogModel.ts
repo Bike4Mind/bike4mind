@@ -45,6 +45,10 @@ export interface CustomMcpAuditMetadata {
   durationMs?: number;
   approval?: 'auto' | 'user' | 'remembered';
   policyVerdict?: string;
+  /** Discovery: tools kept, tools refused (bad name, duplicate, over a cap), tools new or changed. */
+  toolCount?: number;
+  droppedCount?: number;
+  changedCount?: number;
 }
 
 /**
