@@ -8,9 +8,11 @@ import {
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
   mergeLakeFirstListing,
+  listLakesFirst,
   FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { lakeOrderScopes } from '../dataLakeService/lakeFairOrder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
 import type { ToolContext } from './tools/base/types';
@@ -1505,6 +1507,56 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(scanned.size).toBe(100);
       expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
       expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+    });
+
+    it('keeps library files in the fair share of a multi-lake session that never asked for "+ My files"', async () => {
+      const lakeRows = [
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('m', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('n', i)),
+      ];
+      const libraryRows = Array.from({ length: 50 }, (_, i) => fileInLake('a', i, []));
+      const ctx = makeCtx({
+        files: lakeRows,
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        const data = restrict ? lakeRows : [...libraryRows, ...lakeRows];
+        return Promise.resolve({ data, hasMore: false, total: data.length });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        []
+      );
+      stubLakeAccess(feature, [lake('m'), lake('n')]);
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('a')).length).toBeGreaterThan(0);
+      expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+    });
+
+    it('does not report a truncated listing when the union page holds every row but a lake exceeds its own share', async () => {
+      const row = (id: string) => ({ id });
+      const listing = await listLakesFirst({
+        scopes: lakeOrderScopes({
+          dataLakeTags: ['datalake:a', 'datalake:b'],
+          dataLakeTagPrefixes: [],
+          lakeMemberships: [],
+        }),
+        arms: { dataLakeTags: ['datalake:a', 'datalake:b'], dataLakeTagPrefixes: [], lakeMemberships: [] },
+        limit: 1000,
+        list: async (limit, arms) =>
+          arms.dataLakeTags.length === 2
+            ? { data: [row('a1'), row('b1')], hasMore: false }
+            : { data: [row(arms.dataLakeTags[0] === 'datalake:a' ? 'a1' : 'b1')], hasMore: limit < 1000 },
+      });
+      expect(listing.data.map(r => r.id)).toEqual(['a1', 'b1']);
+      expect(listing.hasMore).toBe(false);
     });
 
     it('issues no ANN query when the servable set already fits under the cap', async () => {

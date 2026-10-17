@@ -2072,25 +2072,29 @@ export async function listLakesFirst<
   M extends LakeOrderScopeSources['lakeMemberships'][number],
 >(args: {
   scopes: LakeOrderScope[];
+  /** Also list the lake-only union and fill the page with it; false leaves the fill to the caller's own union. */
+  includeUnion?: boolean;
   arms: LakeScopeArms<M>;
   limit: number;
   list: (limit: number, arms: LakeScopeArms<M>) => Promise<{ data: T[]; hasMore?: boolean }>;
 }): Promise<{ data: T[]; hasMore?: boolean }> {
-  const { scopes, arms, limit, list } = args;
+  const { scopes, arms, limit, list, includeUnion = true } = args;
   const listed = [...scopes].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   listed.length = Math.min(listed.length, FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS);
   const share = Math.max(1, Math.floor(limit / Math.max(1, scopes.length)));
   const [union, ...perLake] = await Promise.all([
-    list(limit, arms),
+    includeUnion ? list(limit, arms) : Promise.resolve(null),
     ...listed.map(scope => list(share, lakeScopeArms(scope, arms))),
   ]);
-  if (perLake.length === 0) return union;
+  if (perLake.length === 0) return union ?? { data: [], hasMore: false };
   return mergeLakeFirstListing(
     {
       data: [...new Map(perLake.flatMap(r => r.data).map(f => [f.id, f])).values()],
-      hasMore: perLake.some(r => r.hasMore === true),
+      // Not the per-lake hasMore: each page is capped at its share, so it flips for any lake over
+      // its share even when the union page holds every row; the union's own flag covers truncation.
+      hasMore: false,
     },
-    union,
+    union ?? { data: [], hasMore: false },
     limit
   );
 }
@@ -3091,6 +3095,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             ...this.retrievalFilter,
           }
         );
+      // An explicit "+ My files" turns the listing into a union where a large personal library,
+      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
+      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
+      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
       // One name-sorted page over the union of every lake is filled by whichever lake sorts first, so
       // a lake holding a whole page alone would leave the others out of the listing before the fair
       // cut ever runs. Each lake is therefore also listed on its own, a share of the page each.
@@ -3100,18 +3108,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           scopes: listLakesSeparately ? orderScopes : [],
           arms: unionArms,
           limit: listingLimit,
+          includeUnion: prioritizeLakeFiles || excludeLibrary,
           list: (limit, arms) => listFiles(true, limit, arms),
         });
-      // An explicit "+ My files" turns the listing into a union where a large personal library,
-      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
-      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
-      const prioritizeLakeFiles = (this.includeLibraryFiles === true && hasLakeArms) || listLakesSeparately;
       // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
       // session excludes the library; see the gating note above.
       const [lakeListing, scopeListing] = await Promise.all([
-        prioritizeLakeFiles ? listLakesOnly() : null,
+        prioritizeLakeFiles || listLakesSeparately ? listLakesOnly() : null,
         // A library-excluding scope is the lake-only listing already; listing it again adds nothing.
-        prioritizeLakeFiles && excludeLibrary ? { data: [], hasMore: false } : listFiles(excludeLibrary),
+        (prioritizeLakeFiles || listLakesSeparately) && excludeLibrary
+          ? { data: [], hasMore: false }
+          : listFiles(excludeLibrary),
       ]);
       const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
       const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
@@ -3133,8 +3140,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves. Prioritized
       // lake files sort first so a by-name candidate cut keeps them (see prioritizeLakeFiles).
       const scanOrder = [...files].sort((a, b) => {
-        const al = lakeFileIds.has(a.id);
-        if (al !== lakeFileIds.has(b.id)) return al ? -1 : 1;
+        const al = prioritizeLakeFiles && lakeFileIds.has(a.id);
+        if (al !== (prioritizeLakeFiles && lakeFileIds.has(b.id))) return al ? -1 : 1;
         const an = a.fileName ?? '';
         const bn = b.fileName ?? '';
         if (an !== bn) return an < bn ? -1 : 1;
