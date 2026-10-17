@@ -125,6 +125,42 @@ describe('StorageBreakdown', () => {
     expect(within(screen.getByTestId('storage-breakdown-row-unaccounted')).getByText('5 MB')).toBeTruthy();
   });
 
+  it('closes on a click outside and on Escape without letting Escape reach the surrounding dialog', async () => {
+    mockRefs.useGetStorageBreakdown.mockReturnValue({ data: scenario, isLoading: false, isError: false });
+    const onOuterKeyDown = vi.fn();
+    render(
+      <TestWrapper>
+        <div onKeyDown={onOuterKeyDown}>
+          <button data-testid="outside-btn">outside</button>
+          <StorageBreakdown />
+        </div>
+      </TestWrapper>
+    );
+    const toggle = screen.getByTestId('storage-breakdown-toggle-btn');
+
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByTestId('storage-breakdown-panel'));
+    expect(screen.getByTestId('storage-breakdown-panel')).toBeTruthy();
+
+    await userEvent.click(screen.getByTestId('outside-btn'));
+    expect(screen.queryByTestId('storage-breakdown-panel')).toBeNull();
+
+    await userEvent.click(toggle);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('storage-breakdown-panel')).toBeNull();
+    expect(onOuterKeyDown).not.toHaveBeenCalled();
+
+    await userEvent.keyboard('{Escape}');
+    expect(onOuterKeyDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the panel in the layout flow so it never covers the controls after it', async () => {
+    mockRefs.useGetStorageBreakdown.mockReturnValue({ data: scenario, isLoading: false, isError: false });
+    renderIt();
+    await userEvent.click(screen.getByTestId('storage-breakdown-toggle-btn'));
+    expect(getComputedStyle(screen.getByTestId('storage-breakdown-panel')).position).not.toBe('absolute');
+  });
+
   it('labels a counter below the counted files as such, without a minus sign', async () => {
     mockRefs.useGetStorageBreakdown.mockReturnValue({
       data: { ...scenario, totalBytes: 955 * MB, unaccountedBytes: -5 * MB },
