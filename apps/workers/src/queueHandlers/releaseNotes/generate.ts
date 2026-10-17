@@ -195,33 +195,26 @@ export async function writeReleaseNotes(
 
   const titles = new Map(prs.map(pr => [pr.number, pr.title]));
   const input = [...notes].map(([number, note]) => ({ number, title: titles.get(number) ?? '', note }));
-  const dropped = new Set<number>();
+  const strays = new Set<number>();
   const draft = await completeValidated(
     complete,
     buildEditorialPrompt(input, editorialFeedback),
     raw => {
       const parsed = ReleaseNoteDraftSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
-      // A stray cited number (e.g. an issue read in a PR description) is a provenance glitch: drop it, and
-      // only fail (triggering the repair retry) when an item cited sources and none of them is real.
-      const strays = new Set<number>();
-      const allUnknown = new Set<number>();
+      // sourcePrs is provenance only (never served publicly), so a stray cited number (e.g. an issue read
+      // in a PR description) is dropped with a warning rather than failing the release.
       const items = parsed.data.items.map(item => {
         const sourcePrs = item.sourcePrs.filter(n => notes.has(n));
         item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
-        if (item.sourcePrs.length && !sourcePrs.length) item.sourcePrs.forEach(n => allUnknown.add(n));
         return { ...item, sourcePrs };
       });
-      if (allUnknown.size) {
-        return { ok: false, errors: [...allUnknown].map(n => `sourcePrs references unknown change ${n}`) };
-      }
-      strays.forEach(n => dropped.add(n));
       return { ok: true, value: { ...parsed.data, items } };
     },
     usage,
     'editorial'
   );
-  if (dropped.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...dropped].join(', ')}`);
+  if (strays.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...strays].join(', ')}`);
   return { draft, usage };
 }
 
