@@ -29,7 +29,7 @@ vi.mock('../utils/toolsAdapter.js', async importOriginal => {
     ...actual,
     generateCliTools: vi.fn().mockResolvedValue({
       tools: [],
-      agentContext: { currentAgent: null, observationQueue: [] },
+      agentContext: { currentAgent: null },
     }),
   };
 });
