@@ -18,6 +18,7 @@ const {
   useGearsNavSignalMock,
   useVideoModelsMock,
   useMusicModelsMock,
+  useAudioProvidersMock,
   navigate,
   location,
   navItems,
@@ -27,6 +28,7 @@ const {
   useGearsNavSignalMock: vi.fn(),
   useVideoModelsMock: vi.fn(),
   useMusicModelsMock: vi.fn(),
+  useAudioProvidersMock: vi.fn(),
   navigate: vi.fn(),
   location: { pathname: '/new' },
   // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
@@ -44,10 +46,11 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
 vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
-// The Studio row is gated on GET /api/v1/video-models and /music-models (react-query); stubbed like the other
-// data hooks here.
+// The Studio row is gated on GET /api/v1/video-models, /music-models and /api/ai/audio-providers (react-query);
+// stubbed like the other data hooks here.
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useVideoModelsMock }));
 vi.mock('@client/app/hooks/data/musicGenerations', () => ({ useMusicModels: useMusicModelsMock }));
+vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: useAudioProvidersMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
@@ -104,6 +107,7 @@ beforeEach(() => {
   useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
   useMusicModelsMock.mockReturnValue({ data: [] });
+  useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: [] } });
   location.pathname = '/new';
   navItems.length = 0;
   entitlements.length = 0;
@@ -199,6 +203,28 @@ describe('SidenavNav Studio row', () => {
     expect(studioRow()).not.toBeInTheDocument();
     useVideoModelsMock.mockReturnValue({ data: undefined });
     useMusicModelsMock.mockReturnValue({ data: undefined });
+    useAudioProvidersMock.mockReturnValue({ data: undefined });
+    renderNav();
+    expect(studioRow()).not.toBeInTheDocument();
+  });
+
+  it('shows with only a speech provider usable, and opens on the speech tab', () => {
+    useAudioProvidersMock.mockReturnValue({ data: { speech: ['openai'], soundEffects: [] } });
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'speech' } });
+  });
+
+  it('opens on the sound effects tab when only a sound-effect provider is usable', () => {
+    useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: ['elevenlabs'] } });
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'sound-effects' } });
+  });
+
+  it('waits for the audio providers before deciding which tab to open', () => {
+    useAudioProvidersMock.mockReturnValue({ data: undefined, isPending: true });
+    useMusicModelsMock.mockReturnValue(usable);
     renderNav();
     expect(studioRow()).not.toBeInTheDocument();
   });
