@@ -188,8 +188,7 @@ export async function writeReleaseNotes(
   prs: ReleaseNotesJobPr[],
   notes: Map<number, string>,
   complete: CompleteFn,
-  editorialFeedback: string[] = [],
-  logger?: Pick<Logger, 'warn'>
+  { editorialFeedback = [], logger }: { editorialFeedback?: string[]; logger?: Pick<Logger, 'warn'> } = {}
 ): Promise<GenerateResult> {
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
   if (notes.size === 0) return { draft: { headline: '', summary: '', items: [] }, usage };
@@ -204,17 +203,19 @@ export async function writeReleaseNotes(
       const parsed = ReleaseNoteDraftSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
       // A stray cited number (e.g. an issue read in a PR description) is a provenance glitch: drop it, and
-      // only fail (triggering the repair retry) when an item is left with no real source.
-      const items = parsed.data.items.map(item => ({ ...item, sourcePrs: item.sourcePrs.filter(n => notes.has(n)) }));
-      const orphaned = items.flatMap((item, i) => (item.sourcePrs.length ? [] : parsed.data.items[i].sourcePrs));
-      if (items.some(item => !item.sourcePrs.length)) {
-        const cited = orphaned.length ? [...new Set(orphaned)].join(', ') : 'none';
-        return {
-          ok: false,
-          errors: [`an item has no sourcePrs from the list (cited: ${cited}); unknown change numbers are rejected`],
-        };
+      // only fail (triggering the repair retry) when an item cited sources and none of them is real.
+      const strays = new Set<number>();
+      const allUnknown = new Set<number>();
+      const items = parsed.data.items.map(item => {
+        const sourcePrs = item.sourcePrs.filter(n => notes.has(n));
+        item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
+        if (item.sourcePrs.length && !sourcePrs.length) item.sourcePrs.forEach(n => allUnknown.add(n));
+        return { ...item, sourcePrs };
+      });
+      if (allUnknown.size) {
+        return { ok: false, errors: [...allUnknown].map(n => `sourcePrs references unknown change ${n}`) };
       }
-      parsed.data.items.forEach((item, i) => item.sourcePrs.filter(n => !notes.has(n)).forEach(n => dropped.add(n)));
+      strays.forEach(n => dropped.add(n));
       return { ok: true, value: { ...parsed.data, items } };
     },
     usage,
@@ -234,7 +235,7 @@ export async function generateReleaseNotes(
   editorialFeedback: string[] = []
 ): Promise<GenerateResult> {
   const triage = await triageReleaseNotes(prs, complete);
-  const written = await writeReleaseNotes(prs, triage.notes, complete, editorialFeedback);
+  const written = await writeReleaseNotes(prs, triage.notes, complete, { editorialFeedback });
   return {
     draft: written.draft,
     usage: {

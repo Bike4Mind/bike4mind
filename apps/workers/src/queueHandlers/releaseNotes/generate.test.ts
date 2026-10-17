@@ -86,7 +86,7 @@ describe('generateReleaseNotes', () => {
     const complete = vi.fn().mockResolvedValue(editorialReply([99]));
 
     await expect(generateReleaseNotes([pr(7, { customerNote: 'n' })], complete)).rejects.toThrow(
-      /editorial output invalid after one repair: an item has no sourcePrs from the list \(cited: 99\)/
+      /editorial output invalid after one repair: sourcePrs references unknown change 99/
     );
     expect(complete).toHaveBeenCalledTimes(2);
   });
@@ -95,11 +95,37 @@ describe('generateReleaseNotes', () => {
     const warn = vi.fn();
     const complete = vi.fn().mockResolvedValue(editorialReply([7, 4844]));
 
-    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'Search is quicker.']]), complete, [], { warn });
+    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'Search is quicker.']]), complete, {
+      logger: { warn },
+    });
 
     expect(complete).toHaveBeenCalledTimes(1);
     expect(result.draft.items[0].sourcePrs).toEqual([7]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('4844'));
+  });
+
+  it('keeps valid numbers on a mixed item and repairs an item whose citations are all unknown', async () => {
+    const item = (text: string, sourcePrs: number[]) => ({ category: 'improved', text, importance: 1, sourcePrs });
+    const reply = (items: unknown[]) => JSON.stringify({ headline: 'Faster search', summary: 'Quicker.', items });
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(reply([item('A.', [7, 4844]), item('B.', [4845])]))
+      .mockResolvedValueOnce(reply([item('A.', [7, 4844]), item('B.', [7])]));
+
+    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'Search is quicker.']]), complete);
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1][0]).toContain('sourcePrs references unknown change 4845');
+    expect(result.draft.items.map(i => i.sourcePrs)).toEqual([[7], [7]]);
+  });
+
+  it('accepts an item with no sourcePrs', async () => {
+    const complete = vi.fn().mockResolvedValue(editorialReply([]));
+
+    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'n']]), complete);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(result.draft.items[0].sourcePrs).toEqual([]);
   });
 
   it('treats a non-JSON reply as invalid and repairs it', async () => {
@@ -156,7 +182,9 @@ describe('triageReleaseNotes / writeReleaseNotes', () => {
 
   it('writes from already-triaged notes without calling triage again', async () => {
     const complete = vi.fn().mockResolvedValueOnce(editorialReply([1]));
-    const { draft } = await writeReleaseNotes([pr(1)], new Map([[1, 'Search is quicker.']]), complete, ['fix it']);
+    const { draft } = await writeReleaseNotes([pr(1)], new Map([[1, 'Search is quicker.']]), complete, {
+      editorialFeedback: ['fix it'],
+    });
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0][0]).toContain('You write the customer-facing release notes');
     expect(draft.headline).toBe('Faster search');
