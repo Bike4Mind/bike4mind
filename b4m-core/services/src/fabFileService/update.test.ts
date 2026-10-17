@@ -491,6 +491,7 @@ describe('updateFabFile (narrowed write pins)', () => {
 
     // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
     expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
@@ -505,7 +506,7 @@ describe('updateFabFile (narrowed write pins)', () => {
     ]);
   });
 
-  it('writes the stored size alongside the rewrite patch when storage reports metadata', async () => {
+  it('keeps fileSize out of the trailing write when storage reports metadata', async () => {
     mockAdapters.storage.getMetadata = vi.fn().mockResolvedValue({ size: 8 });
     findUpdateAccessById.mockResolvedValue(textFile());
 
@@ -514,6 +515,7 @@ describe('updateFabFile (narrowed write pins)', () => {
 
     // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
     expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
