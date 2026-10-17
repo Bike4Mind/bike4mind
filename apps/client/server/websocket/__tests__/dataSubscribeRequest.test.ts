@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
 
 /**
  * Regression test for the WS subscribe handler's rotation-grace wiring: this path
@@ -28,9 +28,11 @@ vi.mock('@bike4mind/common', async importOriginal => ({
  * go red when the projection grew citables.metadata.fullContext. A new owner-only path now lands
  * in both expectations for free.
  */
+const serverOnlyQuestExclusions = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
+
 const expectedQuestExclusions = {
   ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
-  callback: false,
+  ...serverOnlyQuestExclusions,
 };
 
 const mockFindModelByCollectionName = vi.fn();
@@ -235,7 +237,7 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.returnValue');
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.error');
     // The callback belongs to whichever API key armed it, possibly a collaborator's.
-    expect(scopedFields).toEqual({ callback: false });
+    expect(scopedFields).toEqual(serverOnlyQuestExclusions);
   });
 
   it('still excludes returnValue/error when the caller only has a share on the requested session', async () => {

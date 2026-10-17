@@ -7,18 +7,20 @@ import { createMocks } from 'node-mocks-http';
  * schema is what decides which keys of the stored document reach the client.
  */
 
+type RouteHandler = (req: unknown, res: unknown) => unknown;
+
 const mockRefs = vi.hoisted(() => ({
-  patchHandler: null as null | ((req: any, res: any) => unknown),
+  patchHandler: null as null | RouteHandler,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
+  const chain: Record<string, (fn: RouteHandler) => unknown> = {
     use: () => chain,
     get: () => chain,
     post: () => chain,
     put: () => chain,
     delete: () => chain,
-    patch: (fn: any) => {
+    patch: fn => {
       mockRefs.patchHandler = fn;
       return chain;
     },
@@ -35,7 +37,7 @@ import '@pages/api/organizations/[id]/groups/[groupId]/index';
 
 const call = (body: unknown = { name: 'Renamed' }) => {
   const { req, res } = createMocks({ method: 'PATCH', query: { id: 'org1', groupId: 'g1' }, body: body as object });
-  (req as any).user = { id: 'owner1' };
+  Object.assign(req, { user: { id: 'owner1' } });
   return { res, promise: mockRefs.patchHandler!(req, res) };
 };
 

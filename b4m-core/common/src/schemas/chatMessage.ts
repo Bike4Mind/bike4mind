@@ -3,17 +3,19 @@ import type { IChatHistoryItemDocument } from '../types/entities/SessionTypes';
 import { passthroughShape } from './responseShape';
 
 /**
- * Server-only chat message fields, never sent to the client:
+ * Server-only chat message fields, never sent to the client. Also excluded from the quests
+ * data-subscription projection (apps/client/server/websocket/dataSubscribeFieldLimits.ts), so the
+ * REST and WS transports withhold the same set:
  * - `callback`: the caller's webhook URL and API key id (already `select: false` on QuestModel).
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
  */
-type ChatMessageWithheldField = 'callback' | 'embedding' | 'slackNotification';
+export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification'] as const;
 
-type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, ChatMessageWithheldField>;
+type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, (typeof CHAT_MESSAGE_WITHHELD_FIELDS)[number]>;
 
 // Held to IChatHistoryItemDocument: a new message field fails the build here until it is
-// classified, either listed below or added to ChatMessageWithheldField.
+// classified, either listed below or added to CHAT_MESSAGE_WITHHELD_FIELDS.
 const CHAT_MESSAGE_RESPONSE_FIELDS = {
   id: true,
   createdAt: true,

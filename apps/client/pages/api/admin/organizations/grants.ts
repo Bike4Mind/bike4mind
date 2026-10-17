@@ -1,5 +1,5 @@
 import { ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, passthroughField } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
@@ -12,11 +12,11 @@ const grantsResponseSchema = z.object({
   grants: z.array(
     z.object({
       id: z.string(),
-      ownerId: z.unknown(),
-      grantedBy: z.unknown().optional(),
-      grantedReason: z.unknown().optional(),
-      quantity: z.unknown(),
-      periodEndsAt: z.unknown(),
+      ownerId: passthroughField,
+      grantedBy: passthroughField,
+      grantedReason: passthroughField,
+      quantity: passthroughField,
+      periodEndsAt: passthroughField,
     })
   ),
   truncated: z.boolean(),

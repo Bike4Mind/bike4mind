@@ -16,6 +16,7 @@ export * from './subscriptionQueryFilter';
 export * from './quest';
 export * from './session';
 export * from './user';
+export * from './responseShape';
 export * from './group';
 export * from './chatMessage';
 export * from './questMasterPlan';

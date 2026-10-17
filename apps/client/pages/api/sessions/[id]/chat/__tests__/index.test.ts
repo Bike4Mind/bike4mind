@@ -7,21 +7,23 @@ import { createMocks } from 'node-mocks-http';
  * undeclared. The session manager is mocked, so these pin only the route's response boundary.
  */
 
+type RouteHandler = (req: unknown, res: unknown) => unknown;
+
 const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-  postHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | RouteHandler,
+  postHandler: null as null | RouteHandler,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
+  const chain: Record<string, (fn: RouteHandler) => unknown> = {
     use: () => chain,
     patch: () => chain,
     delete: () => chain,
-    get: (fn: any) => {
+    get: fn => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: any) => {
+    post: fn => {
       mockRefs.postHandler = fn;
       return chain;
     },
@@ -30,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
-  asyncHandler: (fn: any) => fn,
+  asyncHandler: (fn: RouteHandler) => fn,
 }));
 
 const getMessagesFromSession = vi.hoisted(() => vi.fn());
@@ -59,8 +61,7 @@ const expectStripped = (message: Record<string, unknown>) => {
 
 const call = (method: 'GET' | 'POST', body?: object) => {
   const { req, res } = createMocks({ method, query: { id: 'sess-1' }, body });
-  (req as any).user = { id: 'user-1' };
-  (req as any).ability = {};
+  Object.assign(req, { user: { id: 'user-1' }, ability: {} });
   const handler = method === 'GET' ? mockRefs.getHandler! : mockRefs.postHandler!;
   return { res, promise: handler(req, res) };
 };
