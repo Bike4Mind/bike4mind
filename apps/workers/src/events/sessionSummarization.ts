@@ -10,6 +10,7 @@ import {
   sessionRepository,
   User,
   userRepository,
+  organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -260,6 +261,7 @@ export const handler = withEventContext(async (event, logger) => {
             db: {
               fabFiles: fabFileRepository,
               users: userRepository,
+              organizations: organizationRepository,
               dataLakes: dataLakeRepository,
               adminSettings: adminSettingsRepository,
               scopedSettings: scopedSettingsRepository,
@@ -347,6 +349,7 @@ export const handler = withEventContext(async (event, logger) => {
             // #1658 forbids. Same store the updateFabFile adapter above wires.
             scopedSettings: scopedSettingsRepository,
             users: userRepository,
+            organizations: organizationRepository,
             dataLakes: dataLakeRepository,
           },
           storage: {

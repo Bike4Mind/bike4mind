@@ -1,17 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileEvents } from '@bike4mind/common';
 
-const { mockFindById, mockDeleteFabFile, mockFindUser, mockChangeStorageSize, mockLogEvent, mockRecompute } =
-  vi.hoisted(() => ({
-    mockFindById: vi.fn(),
-    mockDeleteFabFile: vi.fn(),
-    mockFindUser: vi.fn(),
-    mockChangeStorageSize: vi.fn(),
-    mockLogEvent: vi.fn(),
-    mockRecompute: vi.fn(),
-  }));
+const {
+  mockFindById,
+  mockDeleteFabFile,
+  mockFindUser,
+  mockChangeStorageSize,
+  mockLogEvent,
+  mockRecompute,
+  mockIncrementCurrentStorage,
+} = vi.hoisted(() => ({
+  mockFindById: vi.fn(),
+  mockDeleteFabFile: vi.fn(),
+  mockFindUser: vi.fn(),
+  mockChangeStorageSize: vi.fn(),
+  mockLogEvent: vi.fn(),
+  mockRecompute: vi.fn(),
+  mockIncrementCurrentStorage: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { incrementCurrentStorage: mockIncrementCurrentStorage },
   changeStorageSize: mockChangeStorageSize,
   dataLakeRepository: {},
   fabFileChunkRepository: {},
@@ -39,7 +48,7 @@ const logger = { error: vi.fn() };
 const req = { user: { id: 'u1' }, logger, ability: 'ability' } as any;
 
 /** Resolves deleteFabFile with `action`, reporting `size` freed bytes through onDeleteComplete. */
-function deleteResolves(action: string, size = 0, fabFile?: unknown) {
+function deleteResolves(action: string, size = 0, fabFile: unknown = { userId: 'u1' }) {
   mockDeleteFabFile.mockImplementation(async (_userId, _params, adapters) => {
     if (size) await adapters.onDeleteComplete(fabFile, size);
     return { action, fabFile };
@@ -66,6 +75,28 @@ describe('deleteFileForUser', () => {
       { userId: 'u1', type: FileEvents.DELETE_FILE, metadata: { fileId: FILE_ID } },
       { ability: 'ability', session: 'session' }
     );
+  });
+
+  it('refunds the org counter, not the deleting user, for an org-stamped file', async () => {
+    deleteResolves('deleted', 500, { userId: 'uploader', organizationId: 'org1' });
+
+    expect(await deleteFileForUser(req, FILE_ID)).toBe('deleted');
+
+    expect(mockIncrementCurrentStorage).toHaveBeenCalledWith('org1', -500, 'session');
+    expect(mockFindUser).not.toHaveBeenCalled();
+    expect(mockChangeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('refunds the uploader, not the deleting admin, for a personal file', async () => {
+    const uploader = { save: vi.fn() };
+    mockFindUser.mockResolvedValue(uploader);
+    deleteResolves('deleted', 500, { userId: 'uploader' });
+
+    await deleteFileForUser(req, FILE_ID);
+
+    expect(mockFindUser).toHaveBeenCalledWith('uploader');
+    expect(mockChangeStorageSize).toHaveBeenCalledWith(uploader, -500);
+    expect(mockIncrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('still reports the delete when the storage deduction fails', async () => {

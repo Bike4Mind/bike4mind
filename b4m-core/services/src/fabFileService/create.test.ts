@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes, settingsMap } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  type IOrganizationDocument,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+  settingsMap,
+} from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
@@ -656,6 +662,7 @@ describe('createFabFile - owning organization', () => {
       db: {
         // any: only the fields prepareFabFile reads are stubbed.
         users: { findById: vi.fn().mockResolvedValue({ id: 'u1' } as any) },
+        organizations: { findById: vi.fn().mockResolvedValue({ id: 'org-1', currentStorageSize: 0 } as any) },
         fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
         adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
         dataLakes: {
@@ -683,6 +690,22 @@ describe('createFabFile - owning organization', () => {
   it('never persists the caller-supplied organizationId', async () => {
     const created = await createFabFile('u1', { ...file, organizationId: 'org-from-request' }, ownerAdapters());
     expect(created).not.toHaveProperty('organizationId');
+  });
+
+  it('gates an upload into an org lake on the org quota, not the uploader', async () => {
+    const adapters = ownerAdapters();
+    // Only the quota fields checkOrganizationStorageLimit reads are stubbed.
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 1_000_000,
+    } as unknown as IOrganizationDocument);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] }, adapters)
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', owner: 'org' } });
+    expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
   });
 
   it('persists the derived owner, not the caller-supplied org, when both are present', async () => {

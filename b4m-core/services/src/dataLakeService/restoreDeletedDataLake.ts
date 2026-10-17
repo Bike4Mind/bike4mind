@@ -2,6 +2,7 @@ import type {
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -43,6 +44,7 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMe
       // would silently leave a restored file's bytes uncounted against its owner's storage quota,
       // correctable only via the admin recalculate-storage endpoint.
       users: Pick<IUserRepository, 'incrementCurrentStorage'>;
+      organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     };
   /** Re-enable the lake's Drive connection, reversing archive/delete's disable. See ports.ts. */
   enableDriveConnection?: ConnectionEnablePort;
@@ -147,7 +149,7 @@ export const restoreDeletedDataLake = async (
   // Grouped by owner, not the lake's creator - see groupStorageDeltaByOwner. Off the same restored
   // set as the membership log above, so a re-run after a crash only credits files THIS attempt
   // actually put back in the counted set.
-  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(restored, 1), logger);
+  await bestEffortAdjustOwnerStorage(db, groupStorageDeltaByOwner(restored, 1), logger);
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
   // Terminal transition only - see the note on archiveDataLake's settle step.

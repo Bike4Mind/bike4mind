@@ -1,4 +1,4 @@
-import { FileEvents, Permission } from '@bike4mind/common';
+import { chargedBytes, FileEvents, Permission, storageOwnerOf, sumStorageDeltaByOwner } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   FabFile,
@@ -13,6 +13,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
+import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
 import { getFilesStorage } from '@server/utils/storage';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -90,7 +91,8 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
           const files = await FabFile.find(ownedFilter)
             .select(
-              'filePath versions moderationStatus blockReason sourceMetadata.generatedCopyKey sourceMetadata.sessionId'
+              'filePath versions moderationStatus blockReason sourceMetadata.generatedCopyKey sourceMetadata.sessionId ' +
+                'organizationId fileSize storageChargedAt status createdAt'
             )
             .session(session);
           const user = await User.findById(userId).session(session);
@@ -101,8 +103,20 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
 
           const filePaths = files.map(file => file.filePath).filter((filePath): filePath is string => !!filePath);
 
-          // Every owned file is going, and storage only ever counted the caller's own files.
+          // Every personal file the caller owns is going, so their counter empties; an org-stamped
+          // file was billed to its org (storageOwnerOf), which gets its own refund instead.
           user.currentStorageSize = 0;
+          const orgRefunds = sumStorageDeltaByOwner(
+            files
+              .filter(file => file.organizationId)
+              .map(file => ({
+                owner: storageOwnerOf({ userId, organizationId: file.organizationId }),
+                bytes: -chargedBytes(file),
+              }))
+          );
+          for (const { owner, bytes } of orgRefunds) {
+            await adjustOwnerStorageInSession(owner, bytes, session);
+          }
 
           await Promise.all([
             user.save({ session }),

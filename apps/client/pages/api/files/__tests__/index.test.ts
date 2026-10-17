@@ -22,6 +22,8 @@ const mockRefs = vi.hoisted(() => ({
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
   baseApiOptions: undefined as unknown,
+  deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
+  incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -39,10 +41,12 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
-const fabFileDocs = vi.hoisted(() => [
-  { filePath: 'a/one.png' },
-  { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
-]);
+const fabFileDocs = vi.hoisted(
+  () =>
+    [{ filePath: 'a/one.png' }, { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } }] as Array<
+      Record<string, unknown>
+    >
+);
 
 vi.mock('@bike4mind/database', () => {
   class FabFile {
@@ -82,7 +86,10 @@ vi.mock('@bike4mind/database', () => {
   }
   class User {
     static findById = () => ({
-      session: async () => ({ save: vi.fn().mockResolvedValue(undefined), currentStorageSize: 0 }),
+      session: async () => {
+        mockRefs.deleteUser = { save: vi.fn().mockResolvedValue(undefined), currentStorageSize: 99 };
+        return mockRefs.deleteUser;
+      },
     });
   }
   return {
@@ -90,6 +97,9 @@ vi.mock('@bike4mind/database', () => {
     User,
     fabFileRepository: { __repo: 'fabFiles' },
     userRepository: { __repo: 'users' },
+    organizationRepository: {
+      incrementCurrentStorage: (...args: unknown[]) => mockRefs.incrementCurrentStorage(...args),
+    },
     projectRepository: { __repo: 'projects' },
     adminSettingsRepository: { __repo: 'adminSettings' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
@@ -242,6 +252,7 @@ describe('DELETE /api/files', () => {
     mockRefs.unpublishArgs = undefined;
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
+    mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -321,6 +332,30 @@ describe('DELETE /api/files', () => {
         'sourceMetadata.sessionId',
       ])
     );
+  });
+
+  // Storage is billed by owner: an org-stamped row was charged to its org, so deleting it must refund
+  // the org counter (not just zero the caller's), once per org with the summed charged bytes.
+  it('refunds org-stamped files to their org and empties only the personal counter', async () => {
+    const originalDocs = fabFileDocs.splice(0, fabFileDocs.length);
+    const charged = new Date('2026-10-10T00:00:00Z');
+    fabFileDocs.push(
+      { filePath: 'o/a.png', organizationId: 'org1', fileSize: 10, storageChargedAt: charged },
+      { filePath: 'o/b.png', organizationId: 'org1', fileSize: 20, storageChargedAt: charged },
+      { filePath: 'p/c.png', fileSize: 5, storageChargedAt: charged }
+    );
+    mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    try {
+      const { req, res } = invokeDelete();
+
+      await mockRefs.deleteHandler!(req, res);
+
+      expect(mockRefs.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+      expect(mockRefs.incrementCurrentStorage).toHaveBeenCalledWith('org1', -30, { __fakeSession: true });
+      expect(mockRefs.deleteUser?.currentStorageSize).toBe(0);
+    } finally {
+      fabFileDocs.splice(0, fabFileDocs.length, ...originalDocs);
+    }
   });
 
   it('completes the request without throwing', async () => {

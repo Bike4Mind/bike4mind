@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { getSettingsMap } from '@bike4mind/utils';
 import { settingsMap } from '@bike4mind/common';
 
@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
+  orgFindById: vi.fn(),
   s3ClientConfigs: [] as unknown[],
   baseApiOptions: undefined as unknown,
 }));
@@ -55,6 +56,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: (id: string) => h.orgFindById(id) },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
   scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
@@ -162,6 +164,7 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
     h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
+    h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
   });
 
   it('stamps the lake org as owner of every file uploaded into an org lake', async () => {
@@ -180,6 +183,94 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res);
 
     expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('organizationId');
+  });
+
+  describe('storage quota owner', () => {
+    const FULL_USER = { id: 'u1', isAdmin: false, tags: [], groups: [], currentStorageSize: 1_000_000_000_000 };
+    const orgLake = { ...LAKE, organizationId: 'orga', createdAt: new Date() };
+
+    it("checks an org lake's files against the org quota, not the uploader's", async () => {
+      h.assertLakeWriteAccess.mockResolvedValue(orgLake);
+      // The org has no headroom; the uploader's own counter is far over its limit too, so a
+      // regression to the user gate would ALSO refuse - the org read is what proves the owner.
+      h.orgFindById.mockResolvedValue({ id: 'orga', currentStorageSize: 0, storageLimit: 0 });
+      const { res } = makeRes();
+
+      await expect(run({ files: [file()], dataLakeSlug: 'acme-2026' }, res)).rejects.toMatchObject({
+        message: 'Organization storage limit exceeded',
+      });
+      expect(h.orgFindById).toHaveBeenCalledWith('orga');
+      expect(h.createFabFile).not.toHaveBeenCalled();
+    });
+
+    it("lets an org lake's files in on the org's headroom even when the uploader's own quota is full", async () => {
+      h.assertLakeWriteAccess.mockResolvedValue(orgLake);
+      const { res } = makeRes();
+
+      await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res, { user: FULL_USER });
+
+      expect(h.orgFindById).toHaveBeenCalledWith('orga');
+      expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("checks a personal lake's files against the uploader's quota and never reads an org", async () => {
+      const { res } = makeRes();
+
+      await expect(run({ files: [file()], dataLakeSlug: 'acme-2026' }, res, { user: FULL_USER })).rejects.toMatchObject(
+        { message: 'File size exceeds storage limit' }
+      );
+      expect(h.orgFindById).not.toHaveBeenCalled();
+      expect(h.createFabFile).not.toHaveBeenCalled();
+    });
+
+    describe('headroom per pool', () => {
+      const BYTES_PER_MB = 1_000_000;
+      // A pool with a 1 MB limit holding all but `headroom` bytes.
+      const poolWithHeadroom = (headroom: number) => ({
+        storageLimit: 1,
+        currentStorageSize: BYTES_PER_MB - headroom,
+      });
+
+      afterEach(() => {
+        h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+      });
+
+      it("sums an org lake's files against the org headroom, whatever the uploader's own quota", async () => {
+        h.assertLakeWriteAccess.mockResolvedValue(orgLake);
+        h.orgFindById.mockResolvedValue({ id: 'orga', ...poolWithHeadroom(100) });
+        const { res } = makeRes();
+
+        await expect(
+          run(
+            { files: [file({ fileSize: 60 }), file({ fileName: 'b.txt', fileSize: 60 })], dataLakeSlug: 'acme-2026' },
+            res
+          )
+        ).rejects.toMatchObject({ message: 'Organization storage limit exceeded' });
+        expect(h.createFabFile).not.toHaveBeenCalled();
+      });
+
+      it("admits a mixed batch when each pool holds exactly its own file's headroom", async () => {
+        const teamLake = { id: 'lake-2', datalakeTag: 'datalake:team', organizationId: 'org-2', createdAt: new Date() };
+        h.assertCanWriteDataLakeTags.mockResolvedValue([teamLake]);
+        h.findByDatalakeTag.mockImplementation(async (tag: string) => (tag === teamLake.datalakeTag ? teamLake : null));
+        h.orgFindById.mockResolvedValue({ id: 'org-2', ...poolWithHeadroom(60) });
+        const { res } = makeRes();
+
+        await run(
+          {
+            files: [
+              file({ fileSize: 60, tags: [{ name: 'datalake:team', strength: 1 }] }),
+              file({ fileName: 'mine.txt', fileSize: 60 }),
+            ],
+          },
+          res,
+          { user: { id: 'u1', isAdmin: false, tags: [], groups: [], ...poolWithHeadroom(60) } }
+        );
+
+        expect(h.orgFindById).toHaveBeenCalledWith('org-2');
+        expect(h.createFabFile).toHaveBeenCalledTimes(2);
+      });
+    });
   });
 
   it('gives the owner from a client meta-tag only to the file that carries it', async () => {

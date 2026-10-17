@@ -715,9 +715,8 @@ export class NotebookImportService {
           throw new Error(`exceeds the ${Math.floor(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
         }
 
-        // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
-        // path, and the org branch would be wrong anyway - orgs track no storage usage, so uploaded
-        // bytes are debited to the user.
+        // Per-user quota: imported notebooks are personal files (no organizationId is stamped on
+        // them), so the uploader's own quota applies.
         if (!this.importingUser) {
           throw new Error('no importing user resolved, refusing to skip the storage quota check');
         }

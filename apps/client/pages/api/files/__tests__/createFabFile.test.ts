@@ -37,6 +37,7 @@ vi.mock('@server/utils/storage', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: async (id: string) => ({ id, currentStorageSize: 0 }) },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
   scopedSettingsRepository: { findOverrides: h.findOverrides },
@@ -63,7 +64,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
   })),
 }));
 
-// Only the settings read is stubbed; checkStorageLimitForFile, resolveSupportedMimeType, etc.
+// Only the settings read is stubbed; checkStorageLimitForOwner, resolveSupportedMimeType, etc.
 // are real gates on this path.
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();

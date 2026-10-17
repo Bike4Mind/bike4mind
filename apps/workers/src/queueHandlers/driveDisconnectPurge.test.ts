@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   sendToQueue: vi.fn(async () => 'msg-2'),
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   dataLakeRepository: { findById: h.dlFindById },
   orgGoogleDriveConnectionRepository: {
     findByDataLakeIdAny: h.connFindByDataLakeIdAny,

@@ -111,6 +111,7 @@ function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'd
       fabFiles: db.fabfiles,
       adminSettings: db.adminSettings,
       users: db.users,
+      organizations: db.organizations,
       dataLakes: db.dataLakes,
       ...(db.scopedSettings && { scopedSettings: db.scopedSettings }),
     },

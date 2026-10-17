@@ -7,6 +7,7 @@ import {
   fabFileRepository,
   creditTransactionRepository,
   userRepository,
+  organizationRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
@@ -188,6 +189,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       fileStorageService: storageAdapter,
       creditTransactionRepository,
       userRepository,
+      organizationRepository,
       adminSettingsRepository,
       logger,
       llmService,

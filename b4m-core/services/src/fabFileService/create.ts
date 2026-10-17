@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/common';
 import {
   BadRequestError,
-  checkStorageLimitForFile,
+  checkStorageLimitForOwner,
   getFileExtension,
   getSettingsMap,
   getSettingsValue,
@@ -41,7 +41,6 @@ export const createFabFileSchema = z.object({
   fileSize: z.number(),
   type: z.enum(KnowledgeType),
   content: z.union([z.string(), z.instanceof(Buffer)]).optional(),
-  organizationId: z.string().optional(),
   /**
    * Content type of the file
    * @example 'text/markdown'
@@ -78,7 +77,8 @@ export interface CreateFabFileAdapters {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
-    organizations?: {
+    // Required: a file created into an org lake is billed to, and quota-checked against, that org.
+    organizations: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
     // 'find' is for the fallback tagger's prefix-overlap check (decideStampPrefix), not the write
@@ -171,8 +171,7 @@ export const prepareFabFile = async (
   parameters: CreateFabFileParameters,
   { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
 ) => {
-  // `organizationId` from the request is only the org whose limit to check; ownership is derived below.
-  const { organizationId: limitOrganizationId, ...params } = secureParameters(parameters, createFabFileSchema);
+  const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
 
@@ -223,8 +222,9 @@ export const prepareFabFile = async (
     });
   }
 
-  // Check storage limit - use organization limit if organizationId is provided
-  await checkStorageLimitForFile(user, params.fileSize, limitOrganizationId, db.organizations?.findById);
+  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
+    db.organizations.findById(id)
+  );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
