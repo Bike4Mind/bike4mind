@@ -131,10 +131,10 @@ const UserAuthAuditLogSchema = new Schema<IUserAuthAuditLogDocument>(
 UserAuthAuditLogSchema.index({ userId: 1, createdAt: -1 });
 UserAuthAuditLogSchema.index({ event: 1, createdAt: -1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with IntegrationAuditLog).
+// TTL index to auto-delete old audit logs after 12 months.
 UserAuthAuditLogSchema.index(
   { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
+  { expireAfterSeconds: 365 * 24 * 60 * 60 } // 365 days
 );
 
 export const UserAuthAuditLogModel: Model<IUserAuthAuditLogDocument> =
