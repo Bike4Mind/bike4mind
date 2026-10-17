@@ -15,6 +15,7 @@ import {
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
+import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -68,10 +69,11 @@ const UserNoteSchema = new Schema<IUserNote>(
 
 const MFASchema = new Schema(
   {
-    // Plaintext TOTP secret + backup codes - never serialize to a client. select:false
-    // keeps them out of every default query/response; the MFA subsystem loads them
-    // explicitly via findByIdWithMfaSecrets (+select). `totpEnabled` (not select:false)
-    // is the flag callers use to detect that MFA is configured.
+    // TOTP secret (encrypted at rest, see encryptTotpSecretInUpdate) + hashed backup codes -
+    // never serialize to a client. select:false keeps them out of every default
+    // query/response; the MFA subsystem loads them explicitly via findByIdWithMfaSecrets
+    // (+select), which decrypts the secret. `totpEnabled` (not select:false) is the flag
+    // callers use to detect that MFA is configured.
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
@@ -396,10 +398,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result ? result.toJSON() : null;
   }
 
-  /** Loads a user WITH the select:false MFA secrets - for server-side MFA verification only. */
+  /**
+   * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
+   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
+   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
-    return result ? result.toJSON() : null;
+    if (!result) return null;
+    const user: IUserDocument = result.toJSON();
+    if (user.mfa?.totpSecret) {
+      user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    return user;
   }
 
   /**
@@ -464,10 +475,21 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * still disabled. Two concurrent enrollments can otherwise interleave so that a code checked
    * against the first secret enables the second: the authenticator holds one secret and the user
    * is locked out. Matching on the verified secret makes the write refuse instead.
+   *
+   * The stored secret is random-IV ciphertext, so `totpSecret` (plaintext) can never match it in a
+   * filter. Decrypt-compare first, then condition the write on the exact stored value: a concurrent
+   * re-setup writes fresh ciphertext, so the compare-and-set still refuses.
    */
   async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+    const current = await this.model
+      .findOne({ _id: userId })
+      .select('+mfa.totpSecret')
+      .lean<{ mfa?: { totpSecret?: string } }>();
+    const storedSecret = current?.mfa?.totpSecret;
+    if (!storedSecret || decryptAtRest(storedSecret) !== totpSecret) return null;
+
     const result = await this.model.findOneAndUpdate(
-      { _id: userId, 'mfa.totpSecret': totpSecret, 'mfa.totpEnabled': false },
+      { _id: userId, 'mfa.totpSecret': storedSecret, 'mfa.totpEnabled': false },
       {
         $set: {
           'mfa.totpEnabled': true,
@@ -1215,7 +1237,44 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
   this.setUpdate(update);
 }
 
+/**
+ * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
+ * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * that setupMFA and the snapshot writers (passkey, verify, regenerate-backup-codes) use, and the
+ * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
+ * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
+ */
+function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
+  const update = this.getUpdate() as Record<string, unknown> | null;
+  if (!update || Array.isArray(update)) return;
+
+  const encryptIn = (container: Record<string, unknown> | undefined) => {
+    if (!container) return;
+    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
+    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
+      container.mfa = { ...mfa, totpSecret: encryptAtRest(mfa.totpSecret) };
+    }
+    const dotted = container['mfa.totpSecret'];
+    if (typeof dotted === 'string') {
+      container['mfa.totpSecret'] = encryptAtRest(dotted);
+    }
+  };
+
+  encryptIn(update);
+  encryptIn(update.$set as Record<string, unknown> | undefined);
+  this.setUpdate(update);
+}
+
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], stripSecretlessMfaFromUpdate);
+UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecretInUpdate);
+
+// The document-save counterpart of encryptTotpSecretInUpdate (User.create / doc.save()).
+UserSchema.pre('save', function (next) {
+  if (this.mfa?.totpSecret && this.isModified('mfa.totpSecret')) {
+    this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  next();
+});
 
 export const User =
   (mongoose.models.User as unknown as IUserModel) ?? model<IUserDocument, IUserModel>('User', UserSchema);
