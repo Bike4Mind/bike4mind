@@ -435,6 +435,26 @@ describe('FleetService sending', () => {
     expect(h.service.getState()).toMatchObject({ pending: 0, lastResult: { sent: 2 }, lastError: null });
   });
 
+  it('sends each event once when sendNow overlaps a timer flush', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const h = await harness(async () => {
+      await gate;
+      return response(200);
+    });
+    await h.service.setConsent(true);
+    await h.service.record([event(), event()]);
+    h.timers.at(-1)!.callback();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const now = h.service.sendNow();
+    release();
+    await now;
+    expect(h.sent).toHaveLength(1);
+    expect(h.service.getState()).toMatchObject({ pending: 0, lastResult: { sent: 2 } });
+  });
+
   it('retries a failed send with the same event ids, so Fleet can dedupe it', async () => {
     let fail = true;
     const h = await harness(() => response(fail ? 502 : 200));
