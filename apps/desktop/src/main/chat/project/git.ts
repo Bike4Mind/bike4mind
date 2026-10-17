@@ -319,6 +319,30 @@ export async function resolveBaseRef(directory: string): Promise<string> {
   return 'HEAD';
 }
 
+/**
+ * The branch a worktree session is based on when the user picked none: the remote's default
+ * branch when it is known, else `main`, `master`, or the checked-out branch, taking the first
+ * that exists locally. Empty only when none of those resolve, e.g. a repository with no commits.
+ */
+export async function defaultBaseBranch(directory: string): Promise<string> {
+  const candidates: string[] = [];
+  try {
+    const head = await git(directory, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
+    const name = head.trim().replace(/^refs\/remotes\/origin\//, '');
+    if (name && name !== 'HEAD') candidates.push(name);
+  } catch {
+    // No remote HEAD recorded, which is ordinary for a local-only or bare-cloned repository.
+  }
+  candidates.push('main', 'master');
+  const checkedOut = await currentBranch(directory);
+  if (checkedOut) candidates.push(checkedOut);
+
+  for (const candidate of candidates) {
+    if (await branchExists(directory, candidate)) return candidate;
+  }
+  return '';
+}
+
 /** Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does. */
 export async function fetchRemoteFor(directory: string, baseRef: string): Promise<void> {
   const remote = baseRef.includes('/') ? baseRef.split('/')[0] : null;

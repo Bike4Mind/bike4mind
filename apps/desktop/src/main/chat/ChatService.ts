@@ -61,6 +61,7 @@ import {
   branchExists,
   checkoutBranch,
   currentBranch,
+  defaultBaseBranch,
   isGitDirectory,
   listWorktrees,
   projectDisplayName,
@@ -694,9 +695,10 @@ export class ChatService {
     const directory = resolve(request.directory);
     const unusable = await unusableProjectReason(directory);
     if (unusable) return { ok: false, error: unusable };
-    const branch = (request.branch ?? '').trim();
+    let branch = (request.branch ?? '').trim();
 
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
+    if (request.workspace && !branch) branch = await defaultBaseBranch(directory);
     if (request.workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
 
     const session = await this.deps.store.create(model, {
@@ -758,8 +760,9 @@ export class ChatService {
     const movedProject = directory !== current?.directory;
     // A branch name means nothing in a repository it does not belong to, so moving the project
     // without naming a branch drops the old one rather than carrying it across.
-    const branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
+    let branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
     const workspace = request.workspace ?? current?.workspace ?? false;
+    if (workspace && !branch) branch = await defaultBaseBranch(directory);
 
     // The session's own branch is carried forward only while the base it was cut from is still
     // the one chosen: re-resolving must land in the worktree this session already has, while

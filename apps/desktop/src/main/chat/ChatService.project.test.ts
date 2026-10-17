@@ -143,6 +143,60 @@ describe('ChatService.updateProject', () => {
     expect(await listWorktrees(main)).toEqual(before);
   });
 
+  describe('worktree with no branch picked', () => {
+    async function masterRepository(name: string): Promise<string> {
+      const { main } = await repository(name);
+      await git(main, ['branch', '-m', 'main', 'master']);
+      return main;
+    }
+
+    it('defaults the base to main instead of refusing, and creates nothing', async () => {
+      const { main } = await repository('default-main');
+      const before = await listWorktrees(main);
+
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+
+      expect(created).toMatchObject({ ok: true });
+      if (!created.ok) return;
+      expect(created.session.project).toMatchObject({ branch: 'main', workspace: true, workingDirectory: main });
+      expect(await listWorktrees(main)).toEqual(before);
+
+      const id = await codeSession(main, '');
+      expect(await service.updateProject({ sessionId: id, workspace: true })).toMatchObject({ ok: true });
+      expect((await service.getSession(id))?.project?.branch).toBe('main');
+      expect(await listWorktrees(main)).toEqual(before);
+    });
+
+    it('falls back to the repository default when there is no main', async () => {
+      const main = await masterRepository('default-master');
+
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+
+      expect(created).toMatchObject({ ok: true });
+      if (!created.ok) return;
+      expect(created.session.project?.branch).toBe('master');
+    });
+
+    it('cuts a new branch from the base at session start and leaves the original checkout alone', async () => {
+      const { main } = await repository('default-start');
+      const created = await service.createCodeSession({ directory: main, workspace: true });
+      if (!created.ok) throw new Error(created.error);
+
+      const session = await store.get(created.session.id);
+      const failure = await (
+        service as unknown as { ensureWorkspace(s: unknown, name: string): Promise<{ error: string } | null> }
+      ).ensureWorkspace(session, 'add a thing');
+
+      expect(failure).toBeNull();
+      const project = (await service.getSession(created.session.id))?.project;
+      expect(project?.workspaceBranch).toBeTruthy();
+      expect(project?.workspaceBranch).not.toBe('main');
+      expect(project?.workingDirectory).not.toBe(main);
+      expect(await currentBranch(project?.workingDirectory ?? '')).toBe(project?.workspaceBranch);
+      expect(await currentBranch(main)).toBe('main');
+    });
+  });
+
   it('leaves nothing behind when the base is picked over and over', async () => {
     const { main } = await repository('alpha-rethink');
     const id = await codeSession(main);
