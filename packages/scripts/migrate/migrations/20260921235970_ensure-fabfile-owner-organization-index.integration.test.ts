@@ -44,6 +44,27 @@ describe('ensure-fabfile-owner-organization-index migration (real DB)', () => {
     expect(idx?.partialFilterExpression).toEqual({ organizationId: { $type: 'string' } });
   });
 
+  it('lets the org storage sum use the index when the match restates its partial filter', async () => {
+    await migration.up();
+    await FabFile.collection.insertOne({ organizationId: 'o1', deletedAt: null });
+
+    const plan = await FabFile.collection
+      .find({ organizationId: { $eq: 'o1', $type: 'string' }, deletedAt: null })
+      .explain();
+
+    const stages: Array<{ stage?: string; indexName?: string }> = [];
+    const walk = (node: any) => {
+      // any: explain output is an untyped driver document
+      if (!node) return;
+      stages.push(node);
+      walk(node.inputStage);
+      (node.inputStages ?? []).forEach(walk);
+    };
+    walk(plan.queryPlanner.winningPlan);
+
+    expect(stages.some(s => s.stage === 'IXSCAN' && s.indexName === INDEX_NAME)).toBe(true);
+  });
+
   it('is idempotent on re-run', async () => {
     await migration.up();
     await migration.up();

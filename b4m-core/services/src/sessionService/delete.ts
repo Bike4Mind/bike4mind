@@ -110,8 +110,7 @@ export const deleteSession = async (
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
 
-  // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
-  // so the grouping collapses to one write today.
+  // Same helper deleteDataLake debits through. One uploader's files can split across a personal owner and org owners, so this may be several writes.
   await bestEffortAdjustOwnerStorage(
     db,
     groupStorageDeltaByOwner(
