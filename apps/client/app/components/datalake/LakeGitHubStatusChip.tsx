@@ -15,7 +15,7 @@ export default function LakeGitHubStatusChip({ lakeId, organizationId }: { lakeI
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   const gitHubEnabled = !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
   const { data: connection } = useLakeGitHubConnection(lakeId, gitHubEnabled);
-  useMinuteTick(!!connection);
+  useMinuteTick(gitHubEnabled && !!connection);
   if (!gitHubEnabled || !connection) return null;
 
   const { title, color } = describeGitHubConnection(connection);

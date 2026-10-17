@@ -10,6 +10,7 @@ type DescribableGitHubConnection = {
   repositoryFullName: string;
   syncStale: boolean;
   disconnecting: boolean;
+  /** Absent means the caller has no time to show; null means never synced. */
   lastSyncedAt?: string | Date | null;
 };
 
