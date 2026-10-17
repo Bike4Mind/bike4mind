@@ -7,9 +7,12 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
+import { organizationGroupResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 
 const bodySchema = z.object({ name: z.string().trim().min(1).max(120) });
+const renameGroupResponseSchema = z.object({ group: organizationGroupResponseSchema });
 
 const handler = baseApi().patch(
   asyncHandler<{}, unknown, unknown, { id?: string; groupId?: string }>(async (req, res) => {
@@ -30,7 +33,7 @@ const handler = baseApi().patch(
     );
     // Null only if the group vanished between the service's existence check and the update (race).
     if (!updated) throw new NotFoundError('Group not found');
-    return res.status(200).json({ group: updated });
+    return respond(res, renameGroupResponseSchema, { group: updated });
   })
 );
 

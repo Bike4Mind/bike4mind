@@ -144,3 +144,50 @@ describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', ()
     expect(JSON.stringify(body)).toContain('PRIVATE TOOL OUTPUT');
   });
 });
+
+// The response schema is an allowlist: server-only and undeclared document keys must never
+// reach the client, whatever the repository hands back.
+describe('GET/PUT /api/sessions/[id]/chat/[messageId] - response schema strip', () => {
+  const withServerOnlyFields = () => ({
+    ...messageWithFunctionCalls(),
+    prompt: 'hello',
+    embedding: [0.1, 0.2, 0.3],
+    slackNotification: { channel: 'C123', threadTs: '1.2' },
+    callback: { url: 'https://hook.example.test', apiKeyId: 'key-1' },
+    __v: 7,
+  });
+
+  const expectStripped = (message: Record<string, unknown>) => {
+    expect(message).not.toHaveProperty('embedding');
+    expect(message).not.toHaveProperty('slackNotification');
+    expect(message).not.toHaveProperty('callback');
+    expect(message).not.toHaveProperty('__v');
+    expect(message).toMatchObject({ id: 'quest-1', prompt: 'hello', reply: 'hi' });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQuestFindBySessionIdAndId.mockResolvedValue(withServerOnlyFields());
+    mockQuestUpdate.mockResolvedValue(withServerOnlyFields());
+  });
+
+  it('GET withholds embedding, slackNotification, callback and undeclared keys', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expectStripped(res._getJSONData());
+  });
+
+  it('PUT withholds embedding, slackNotification, callback and undeclared keys under data', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    const { req, res } = fire({ method: 'PUT', body: { reply: 'updated' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ success: true });
+    expectStripped(body.data);
+  });
+});

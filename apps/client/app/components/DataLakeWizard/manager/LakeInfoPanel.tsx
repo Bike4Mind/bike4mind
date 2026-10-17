@@ -47,6 +47,7 @@ import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import LakeSyncStatus from '@client/app/components/datalake/LakeSyncStatus';
 import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
@@ -605,6 +606,9 @@ export function LakeInfoPanel({
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
           <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          {lake.origin === 'connector-fed' && (
+            <LakeSyncStatus lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
+          )}
           <LakeSkippedFilesChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
