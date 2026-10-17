@@ -302,7 +302,14 @@ describe('ChatService tool loop', () => {
     const sent = await service.send(id, 'build it');
     await firstRequest();
 
-    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    streams[0].write(
+      frame({
+        type: 'content',
+        text: 'Reading the config.',
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50 },
+        credits: { used: 20 },
+      })
+    );
     await driveRounds(1, () => '{"pattern":"*"}');
     const stopped = await waitFor(events, 'done');
     expect(stopped).toMatchObject({ stopReason: 'tool_turn_limit' });
@@ -310,6 +317,11 @@ describe('ChatService tool loop', () => {
     events.length = 0;
     const resumed = await service.continueReply(id);
     expect(resumed).toMatchObject({ ok: true, messageId: sent.ok && !sent.queued ? sent.messageId : '' });
+    // The resumed run opens by saying what the interrupted one had already spent, so a consumer
+    // reads the earlier part from here instead of inferring it from the resumed totals.
+    expect(await waitFor(events, 'start')).toMatchObject({
+      baseUsage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+    });
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
 
     // The resumed request replays the interrupted turn's own tool call and its result, which is
@@ -338,7 +350,12 @@ describe('ChatService tool loop', () => {
     // so the thread still draws the tool call where it happened.
     const reply = session?.messages.find(message => message.role === 'assistant');
     expect(reply?.rounds).toEqual([
-      { text: 'Reading the config.', toolCallIds: [expect.any(String)], timing: expect.any(Object) },
+      {
+        text: 'Reading the config.',
+        toolCallIds: [expect.any(String)],
+        timing: expect.any(Object),
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+      },
       { text: 'Done.', toolCallIds: [], timing: expect.any(Object) },
     ]);
   });

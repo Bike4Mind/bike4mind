@@ -9,6 +9,7 @@ import { registerAccount } from './account';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
+import { registerFleet } from './fleet';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
@@ -116,6 +117,7 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   registerAccount(auth);
   registerUsage(auth);
+  const fleet = registerFleet();
   const {
     service: chat,
     background,
@@ -124,7 +126,13 @@ void app.whenReady().then(async () => {
     pullRequests,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    observeStream: event => fleet.observe(event),
   });
+  fleet.setDirectoryResolver(async sessionId => {
+    const session = await chat.getSession(sessionId);
+    return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
+  });
+  fleet.setModelResolver(async sessionId => (await chat.getSession(sessionId))?.model ?? null);
   closeAgentBrowsers = () => browser.closeAll();
   const terminals = registerTerminals(async sessionId => {
     const session = await chat.getSession(sessionId);
@@ -190,6 +198,7 @@ void app.whenReady().then(async () => {
 
   app.once('will-quit', () => {
     auth.dispose();
+    fleet.dispose();
     chat.dispose();
     pullRequests.dispose();
     updates.dispose();

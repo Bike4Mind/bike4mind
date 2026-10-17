@@ -2,10 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { checkRateLimit } from '@server/cli/auth';
+import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { Connection } from '@bike4mind/database/social';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { ForbiddenError } from '@server/utils/errors';
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
@@ -102,6 +103,32 @@ describe('JWT rate limiting', () => {
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('JWT refusals the caller can act on', () => {
+  it('relays a forbidden refusal as 403 with its message, not a misleading 401', async () => {
+    // An MFA-owing CLI session: retrying or signing in again cannot help, so the
+    // enrollment guidance in the message must reach the user instead of "expired session".
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+      new ForbiddenError('MFA enrollment required. Set it up in the web app to continue.')
+    );
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'MFA enrollment required. Set it up in the web app to continue.',
+    });
+  });
+
+  it('relays a suspension refusal the same way, so the account state reaches the caller', async () => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new ForbiddenError('Account suspended.'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Account suspended.' });
   });
 });
 

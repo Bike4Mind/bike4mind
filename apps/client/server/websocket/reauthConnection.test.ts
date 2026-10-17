@@ -1,5 +1,5 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { UnauthorizedError } from '@bike4mind/common';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -123,6 +123,11 @@ describe('reauth_connection', () => {
 
   it('ends the connection when the session is no longer active', async () => {
     mocks.assertSessionActive.mockRejectedValue(new UnauthorizedError('Session expired'));
+    expectConnectionEnded(await invoke());
+  });
+
+  it('ends the connection when the session owes MFA enrollment', async () => {
+    mocks.verifyClaims.mockRejectedValue(new ForbiddenError('MFA enrollment required.'));
     expectConnectionEnded(await invoke());
   });
 
