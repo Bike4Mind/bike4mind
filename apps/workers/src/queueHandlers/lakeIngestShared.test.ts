@@ -16,12 +16,17 @@ const h = vi.hoisted(() => ({
   userRepoFindById: vi.fn(),
   userFindById: vi.fn(),
   changeStorageSize: vi.fn(),
+  incrementCurrentStorage: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: { findById: h.userFindById },
+  organizationRepository: {
+    findById: async (id: string) => ({ id, currentStorageSize: 0 }),
+    incrementCurrentStorage: h.incrementCurrentStorage,
+  },
+  User: { findById: (id: string) => ({ session: () => h.userFindById(id) }) },
   changeStorageSize: h.changeStorageSize,
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => fn('session'),
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},
@@ -71,7 +76,7 @@ beforeEach(() => {
   h.loadPrefixArmCandidateLakes.mockResolvedValue([]);
   h.userRepoFindById.mockResolvedValue({ id: 'u1' });
   h.deleteFabFile.mockImplementation(async (_userId, _params, adapter) => {
-    await adapter.onDeleteComplete?.({}, 100);
+    await adapter.onDeleteComplete?.({ userId: 'u1' }, 100);
     return { action: 'deleted' };
   });
 });
@@ -134,7 +139,7 @@ describe('createLakeIngestRetirer', () => {
     await expect(r.retireSupersededCopy({ id: 'old' } as never, null)).resolves.toBe('deleted');
     expect(h.removeFileFromLake).toHaveBeenCalled();
     expect(h.sessionsWithKnowledgeId).not.toHaveBeenCalled();
-    expect(r.stagedReclaimFor('u1')).toBe(100);
+    expect(r.stagedReclaimFor({ type: 'user', id: 'u1' })).toBe(100);
   });
 
   it('only unpicks a copy shared outside its owner', async () => {
@@ -151,6 +156,25 @@ describe('createLakeIngestRetirer', () => {
     await r.flushReclaimedStorage();
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), -100);
     expect(save).toHaveBeenCalled();
-    expect(r.stagedReclaimFor('u1')).toBe(0);
+    expect(r.stagedReclaimFor({ type: 'user', id: 'u1' })).toBe(0);
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  it("stages an org-stamped copy's bytes under the org and refunds the org counter, not the user", async () => {
+    h.deleteFabFile.mockImplementation(async (_userId, _params, adapter) => {
+      await adapter.onDeleteComplete?.({ userId: 'u1', organizationId: 'org1' }, 100);
+      return { action: 'deleted' };
+    });
+    const r = retirer();
+    await r.retireSupersededCopy({ id: 'old' } as never, null);
+    expect(r.stagedReclaimFor({ type: 'org', id: 'org1' })).toBe(100);
+    expect(r.stagedReclaimFor({ type: 'user', id: 'u1' })).toBe(0);
+
+    await r.flushReclaimedStorage();
+
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(r.stagedReclaimFor({ type: 'org', id: 'org1' })).toBe(0);
   });
 });

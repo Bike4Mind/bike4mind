@@ -9,6 +9,7 @@ import {
   IResearchTaskRepository,
   IResearchTaskScrape,
   IUserRepository,
+  IOrganizationRepository,
   IResearchTask,
   KnowledgeType,
   ResearchTaskStatus,
@@ -36,6 +37,7 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
     researchTasks: IResearchTaskRepository;
     researchDatas: IResearchDataRepository;
     users: IUserRepository;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
     fabFiles: IFabFileRepository;
     fileTags: IFileTagRepository;
     adminSettings: IAdminSettingsRepository;
@@ -147,7 +149,6 @@ export const downloadRelevantLinks = async (
             mimeType: fileType.mime,
             type: KnowledgeType.URL,
             fileSize: buffer.length,
-            organizationId: researchTask.organizationId,
             prefix: `research-tasks/${researchTask.id}`,
             tags: arrTags,
           };

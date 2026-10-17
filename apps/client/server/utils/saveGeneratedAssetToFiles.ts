@@ -2,6 +2,7 @@ import {
   adminSettingsRepository,
   dataLakeRepository,
   fabFileRepository,
+  organizationRepository,
   scopedSettingsRepository,
   User,
 } from '@bike4mind/database';
@@ -23,6 +24,7 @@ export function saveGeneratedAssetToFiles(
       // override would silently not apply on this door.
       scopedSettings: scopedSettingsRepository,
       users: User,
+      organizations: organizationRepository,
       dataLakes: dataLakeRepository,
     },
     storage: {

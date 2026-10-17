@@ -4,6 +4,7 @@ import {
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
+  IOrganizationDocument,
   IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
@@ -43,7 +44,11 @@ const MAX_URL_FILE_NAME_LENGTH = 200;
 export function urlFileName(title: string, mimeType: string): string {
   const extension = URL_FILE_EXTENSIONS[mimeType] ?? '';
   // eslint-disable-next-line no-control-regex
-  const base = title.replace(/[\u0000-\u001f\u007f/\\]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled page';
+  const base =
+    title
+      .replace(/[\u0000-\u001f\u007f/\\]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Untitled page';
   const stem = extension && base.toLowerCase().endsWith(extension) ? base.slice(0, -extension.length) : base;
   return `${stem.slice(0, MAX_URL_FILE_NAME_LENGTH).trim()}${extension}`;
 }
@@ -60,6 +65,9 @@ type CreateFabFileByUrlAdapters = {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
+    };
+    organizations: {
+      findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
     // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;

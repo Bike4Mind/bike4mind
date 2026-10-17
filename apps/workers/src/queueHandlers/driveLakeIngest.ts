@@ -10,6 +10,7 @@ import {
   lakeMembershipChangeEventRepository,
   lakeSkippedFileRepository,
   orgGoogleDriveConnectionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -22,9 +23,10 @@ import {
   isLakeIngestable,
   isSameDriveConnectionOwner,
   isStorageLimitError,
+  storageOwnerOf,
   type LakeSkippedFileReason,
 } from '@bike4mind/common';
-import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
 import {
@@ -1249,6 +1251,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // currentStorageSize is a snapshot read once per run, so several files that each pass the
       // storage check individually would otherwise overshoot the quota together.
       let acceptedBytes = 0;
+      // An org lake's files are stamped with, and billed to, the lake's org (ingestLakeFile), so the
+      // quota gate measures that org's pool; a personal lake's measure the connecting user's.
+      const quotaOwner = { user, organizationId: lake.organizationId || undefined };
+      const reclaimOwner = storageOwnerOf({ userId: user.id, organizationId: quotaOwner.organizationId });
+      let quotaOrganizationOnce: ReturnType<typeof organizationRepository.findById> | undefined;
+      const loadQuotaOrganization = (id: string) => (quotaOrganizationOnce ??= organizationRepository.findById(id));
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -1306,14 +1314,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           continue;
         }
 
-        // Checked against the user, not the connection's org: objectCreated debits the
-        // uploading user, and this handler's own reclaim path deducts from that same counter,
-        // so an org-scoped check here could never fire.
-        // Retires so far this run are already deleted, but their bytes are only staged in the
-        // retirer until flushReclaimedStorage after the loop - credit them now.
-        const stagedReclaim = stagedReclaimFor(user.id);
+        // Checked against the file's owner-to-be (quotaOwner), the same counter objectCreated will
+        // charge and this handler's reclaim path refunds. Retires so far this run are already
+        // deleted, but their bytes are only staged in the retirer until flushReclaimedStorage after
+        // the loop - credit the ones that return to this same owner now.
+        const stagedReclaim = stagedReclaimFor(reclaimOwner);
         try {
-          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
+          await checkStorageLimitForOwner(
+            quotaOwner,
+            Math.max(0, acceptedBytes + bytes.length - stagedReclaim),
+            loadQuotaOrganization
+          );
         } catch (error) {
           if (!isStorageLimitError(error)) throw error;
           await skip(file, 'storage_limit', bytes.length);

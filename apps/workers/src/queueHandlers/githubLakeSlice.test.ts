@@ -31,6 +31,10 @@ const h = vi.hoisted(() => ({
   getSettingsMap: vi.fn(),
   getSettingsValue: vi.fn(),
   checkStorageLimit: vi.fn(),
+  stagedReclaimFor: vi.fn(),
+  orgFindById: vi.fn(),
+  // The real owner-aware quota gate, for the tests that pin which counter it reads.
+  actualCheckForOwner: undefined as unknown as (...args: unknown[]) => Promise<void>,
   recomputeLakeStats: vi.fn(),
   decideStampPrefix: vi.fn(),
   recordTreeCounts: vi.fn(),
@@ -39,6 +43,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: (id: string) => h.orgFindById(id) },
   adminSettingsRepository: {},
   dataLakeRepository: {},
   dataLakeBatchRepository: {
@@ -65,11 +70,12 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   // hardcoded rule, so it can never be the smaller Math.min term); overridden per-test to drive
   // the min() itself below the hardcoded rule, independent of that floor.
   h.getSettingsValue.mockImplementation(actual.getSettingsValue as (...args: unknown[]) => unknown);
+  h.actualCheckForOwner = actual.checkStorageLimitForOwner as typeof h.actualCheckForOwner;
   return {
     ...actual,
     getSettingsMap: h.getSettingsMap,
     getSettingsValue: h.getSettingsValue,
-    checkStorageLimit: h.checkStorageLimit,
+    checkStorageLimitForOwner: h.checkStorageLimit,
   };
 });
 vi.mock('@bike4mind/services', () => ({
@@ -89,7 +95,7 @@ vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({
   createLakeIngestRetirer: () => ({
     retireSupersededCopy: h.retire,
     flushReclaimedStorage: h.flush,
-    stagedReclaimFor: () => 0,
+    stagedReclaimFor: h.stagedReclaimFor,
   }),
   ingestLakeFile: h.ingest,
   assertConnectorLakeWrite: h.assertWrite,
@@ -153,6 +159,8 @@ beforeEach(() => {
   });
   h.assertWrite.mockResolvedValue(undefined);
   h.checkStorageLimit.mockResolvedValue(undefined);
+  h.stagedReclaimFor.mockReturnValue(0);
+  h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
   h.recomputeLakeStats.mockResolvedValue(undefined);
   h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'gh-x:' });
   h.flush.mockResolvedValue(undefined);
@@ -419,10 +427,53 @@ describe('runGitHubLakeSlice', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
-  it('rethrows a plain BadRequestError from the storage check rather than counting a quota skip', async () => {
+  it("gates an org lake's file on the org quota, crediting that org's staged reclaim", async () => {
+    tree(blob('a.md', 's1', 40));
+    h.stagedReclaimFor.mockReturnValue(5);
+    await runGitHubLakeSlice(
+      input({ lake: { id: 'lake1', datalakeTag: 'datalake:lake1', organizationId: 'org1' }, user: { id: 'owner1' } })
+    );
+    expect(h.stagedReclaimFor).toHaveBeenCalledWith({ type: 'org', id: 'org1' });
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      { user: { id: 'owner1' }, organizationId: 'org1' },
+      Buffer.byteLength('content of s1') - 5,
+      expect.any(Function)
+    );
+  });
+
+  it("refuses an org lake's file at the ORG limit, reading the org and not the user", async () => {
+    h.checkStorageLimit.mockImplementation(h.actualCheckForOwner);
+    // A zero-byte org limit refuses everything; the user's own limit is the roomy default.
+    h.orgFindById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 0 });
     tree(blob('a.md', 's1'));
-    h.checkStorageLimit.mockRejectedValue(new BadRequestError('Organization not found'));
-    await expect(runGitHubLakeSlice(input())).rejects.toThrow('Organization not found');
+    await expect(
+      runGitHubLakeSlice(
+        input({
+          lake: { id: 'lake1', datalakeTag: 'datalake:lake1', organizationId: 'org1' },
+          user: { id: 'owner1', currentStorageSize: 0 },
+        })
+      )
+    ).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 1 });
+    expect(h.orgFindById).toHaveBeenCalledWith('org1');
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
+  it("gates a personal lake's file on the user's own quota and reclaim", async () => {
+    tree(blob('a.md', 's1'));
+    await runGitHubLakeSlice(input());
+    expect(h.stagedReclaimFor).toHaveBeenCalledWith({ type: 'user', id: 'owner1' });
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      { user: { id: 'owner1' }, organizationId: undefined },
+      expect.any(Number),
+      expect.any(Function)
+    );
+    expect(h.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-quota error from the storage check rather than counting a quota skip', async () => {
+    tree(blob('a.md', 's1'));
+    h.checkStorageLimit.mockRejectedValue(new Error('connection reset'));
+    await expect(runGitHubLakeSlice(input())).rejects.toThrow('connection reset');
     expect(h.recordSkip).not.toHaveBeenCalled();
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
     expect(h.ingest).not.toHaveBeenCalled();

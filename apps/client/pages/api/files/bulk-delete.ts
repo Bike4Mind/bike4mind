@@ -1,7 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { fabFilesService } from '@bike4mind/services';
 import {
-  changeStorageSize,
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
@@ -17,11 +16,11 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
 import { logEvent } from '@server/utils/analyticsLog';
-import { FileEvents } from '@bike4mind/common';
+import { FileEvents, storageOwnerOf, sumStorageDeltaByOwner, type StorageOwner } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { User } from '@bike4mind/database';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 const BulkDeleteFilesSchema = z.object({
   fileIds: z.array(z.string()).min(1, 'At least one file ID is required'),
@@ -49,7 +48,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       failed: [] as { id: string; error: string }[],
     };
 
-    let totalSizeToDeduct = 0;
+    // Per owner: a batch can span personal files and files owned by an org.
+    const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
     // Collected across the whole batch and recomputed once at the end, so deleting N files out of
     // one lake costs one aggregation rather than N identical ones.
     const deletedFileTagNames: (string | undefined)[] = [];
@@ -92,8 +92,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               },
               storage: getFilesStorage(),
               generatedCopies: getGeneratedCopyStore(),
-              onDeleteComplete: async (_fabFile, sizeToDeduct) => {
-                totalSizeToDeduct += sizeToDeduct;
+              onDeleteComplete: async (deleted, sizeToDeduct) => {
+                refunds.push({ owner: storageOwnerOf(deleted), bytes: -sizeToDeduct });
               },
               searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
               logger: req.logger,
@@ -133,21 +133,16 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       }
     }
 
-    // Update user storage size once after all deletions
-    if (totalSizeToDeduct > 0) {
+    // One refund per owner after all deletions; one owner's failure does not skip the others.
+    for (const { owner, bytes } of sumStorageDeltaByOwner(refunds)) {
       try {
-        await withTransaction(async session => {
-          const user = await User.findById(userId).session(session);
-          if (user) {
-            await changeStorageSize(user, -totalSizeToDeduct);
-            await user.save({ session });
-          }
-        });
+        await withTransaction(session => adjustOwnerStorageInSession(owner, bytes, session));
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        req.logger.error('Error updating user storage size after bulk delete:', {
+        req.logger.error('Error updating owner storage size after bulk delete:', {
           error: errorMessage,
-          totalSizeToDeduct,
+          owner,
+          totalSizeToDeduct: -bytes,
         });
       }
     }

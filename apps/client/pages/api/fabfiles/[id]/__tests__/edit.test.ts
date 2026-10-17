@@ -23,6 +23,7 @@ vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: h.getSignedUrl }),
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   FabFile: { findById: () => ({ where: () => h.file }) },
   withTransaction: (fn: () => unknown) => fn(),
   apiKeyRepository: {},

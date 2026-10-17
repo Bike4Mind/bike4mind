@@ -5,6 +5,7 @@ import {
   fabFileRepository,
   sessionRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
@@ -94,7 +95,7 @@ export const deleteDriveOrphans = async (orphans: DeletableDriveOrphan[], logger
 
   const storage = getFilesStorage();
   const searchIndex = selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined;
-  const swept: { id: string; userId: string; fileSize: number }[] = [];
+  const swept: { id: string; userId: string; organizationId?: string; fileSize: number }[] = [];
 
   try {
     for (const { orphan, ownerId } of orphans) {
@@ -114,7 +115,12 @@ export const deleteDriveOrphans = async (orphans: DeletableDriveOrphan[], logger
           logger,
           origin: 'connector',
           onDeleteComplete: async (fabFile, sizeToDeduct) => {
-            swept.push({ id: fabFile.id, userId: ownerId, fileSize: sizeToDeduct });
+            swept.push({
+              id: fabFile.id,
+              userId: ownerId,
+              organizationId: fabFile.organizationId,
+              fileSize: sizeToDeduct,
+            });
           },
         }
       );
@@ -128,7 +134,7 @@ export const deleteDriveOrphans = async (orphans: DeletableDriveOrphan[], logger
     }
   } finally {
     await dataLakeService.bestEffortAdjustOwnerStorage(
-      userRepository,
+      { users: userRepository, organizations: organizationRepository },
       dataLakeService.groupStorageDeltaByOwner(swept, -1),
       logger
     );
