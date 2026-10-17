@@ -139,6 +139,12 @@ export function FleetIntegrationCard() {
           </Button>
         </Stack>
 
+        {!state.consent && state.lastError && (
+          <Alert color="warning" data-testid="fleet-clear-error">
+            {state.lastError}
+          </Alert>
+        )}
+
         {state.consent && connected && (
           <Stack direction="row" spacing={1} alignItems="center" data-testid="fleet-queue">
             <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1 }}>

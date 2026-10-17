@@ -20,6 +20,44 @@ function deferred<T>() {
 }
 
 describe('ActivityQueue ordering', () => {
+  it('drops malformed disk entries while retaining valid activity', async () => {
+    let contents = JSON.stringify([
+      null,
+      1,
+      {},
+      { ...event, type: 'repository' },
+      { ...event, type: 'tool', tool: null },
+      { ...event, usage: null },
+      event,
+    ]);
+    const file: VaultFile = {
+      read: async () => contents,
+      write: async value => {
+        contents = value;
+      },
+    };
+    const queue = new ActivityQueue(file);
+    expect((await queue.peek())?.events).toEqual([event]);
+    expect(JSON.parse(contents)).toEqual([event]);
+  });
+
+  it('reports a failed clear and permits a successful retry before restart', async () => {
+    let contents = JSON.stringify([event]);
+    let fail = true;
+    const file: VaultFile = {
+      read: async () => contents,
+      write: async value => {
+        if (fail) throw new Error('disk unavailable');
+        contents = value;
+      },
+    };
+    const queue = new ActivityQueue(file, Date.now, { warn: () => undefined });
+    await expect(queue.clear()).rejects.toThrow('Failed to clear activity queue');
+    fail = false;
+    await queue.clear();
+    expect(await new ActivityQueue(file).size()).toBe(0);
+  });
+
   it('warns without file or event contents and recovers after a write failure', async () => {
     const warn = vi.fn();
     const file: VaultFile = {

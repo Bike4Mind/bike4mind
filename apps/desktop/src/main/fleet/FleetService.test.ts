@@ -374,6 +374,51 @@ describe('FleetService consent gate', () => {
     expect(h.service.getState().pending).toBe(0);
     expect(JSON.parse(h.queueFile.contents!)).toEqual([]);
   });
+
+  it('keeps sharing off across failed clears, re-enable attempts and restart', async () => {
+    const settingsFile = memoryFile();
+    const queueFile = memoryFile();
+    const write = queueFile.write.bind(queueFile);
+    let fail = false;
+    queueFile.write = async value => {
+      if (fail) throw new Error('disk unavailable');
+      await write(value);
+    };
+    const sent = vi.fn(async () => response(200));
+    const make = () =>
+      new FleetService({
+        settings: new FleetSettingsStore(settingsFile, { warn: () => undefined }),
+        queue: new ActivityQueue(queueFile, Date.now, { warn: () => undefined }),
+        client: new FleetClient(sent),
+        readConfig: async () => connected(),
+        configPath: '/test/fleet.json',
+        appVersion: '1.2.3',
+        logger: { warn: () => undefined },
+        onState: () => undefined,
+        setTimer: () => 1,
+        clearTimer: () => undefined,
+      });
+    const first = make();
+    await first.initialize();
+    await first.setConsent(true);
+    await first.record([event()]);
+    fail = true;
+    expect(await first.setConsent(false)).toMatchObject({ consent: false, lastError: expect.any(String) });
+    expect(await first.setConsent(true)).toMatchObject({ consent: false });
+    const restarted = make();
+    await restarted.initialize();
+    expect(restarted.recording()).toBe(false);
+    expect(await restarted.setConsent(true)).toMatchObject({ consent: false });
+    await restarted.sendNow();
+    expect(sent).not.toHaveBeenCalled();
+    fail = false;
+    expect(await restarted.setConsent(true)).toMatchObject({ consent: true, pending: 0, lastError: null });
+    await restarted.sendNow();
+    expect(sent).not.toHaveBeenCalled();
+    await restarted.record([event()]);
+    await restarted.sendNow();
+    expect(sent).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('FleetService sending', () => {

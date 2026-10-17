@@ -40,7 +40,13 @@ export class ActivityQueue {
     return this.ordered(async () => {
       const queued = await this.load();
       const now = this.now();
-      const valid = queued.filter(event => isValidEvent(event, now));
+      const valid = queued.filter(event => {
+        try {
+          return isValidEvent(event, now);
+        } catch {
+          return false;
+        }
+      });
       if (valid.length !== queued.length) {
         this.events = valid;
         await this.persist();
@@ -60,7 +66,7 @@ export class ActivityQueue {
   clear(): Promise<void> {
     return this.ordered(async () => {
       this.events = [];
-      await this.persist();
+      await this.persist(true);
     });
   }
 
@@ -90,10 +96,11 @@ export class ActivityQueue {
     return events;
   }
 
-  private async persist(): Promise<void> {
+  private async persist(requireSuccess = false): Promise<void> {
     const snapshot = JSON.stringify(this.events ?? []);
     await this.file.write(snapshot).catch(() => {
       this.logger.warn('FLEET: failed to write activity queue');
+      if (requireSuccess) throw new Error('Failed to clear activity queue');
     });
   }
 }

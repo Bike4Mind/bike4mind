@@ -55,7 +55,7 @@ export class FleetService {
   async initialize(): Promise<void> {
     this.consent = (await this.deps.settings.read()).consent;
     this.config = await this.deps.readConfig();
-    if (!this.consent) await this.deps.queue.clear();
+    if (!this.consent) await this.clearQueue();
     this.pending = await this.deps.queue.size();
     this.publish();
     if (this.status() === 'active' && this.pending > 0) this.schedule(0);
@@ -97,12 +97,16 @@ export class FleetService {
   }
 
   async setConsent(consent: boolean): Promise<FleetState> {
+    // Re-enabling must not make a failed opt-out clear durable as consent=true.
+    if (consent && !this.consent && !(await this.clearQueue())) {
+      this.publish();
+      return this.getState();
+    }
     this.consent = consent === true;
     await this.deps.settings.setConsent(this.consent);
     if (!this.consent) {
       this.cancelTimer();
-      await this.deps.queue.clear();
-      this.pending = 0;
+      await this.clearQueue();
     }
     this.publish();
     if (this.status() === 'active' && this.pending > 0) this.schedule(0);
@@ -129,6 +133,18 @@ export class FleetService {
 
   dispose(): void {
     this.cancelTimer();
+  }
+
+  private async clearQueue(): Promise<boolean> {
+    this.pending = 0;
+    try {
+      await this.deps.queue.clear();
+      this.lastError = null;
+      return true;
+    } catch {
+      this.lastError = 'Could not clear saved activity. Sharing stays off. Check available disk space and try again.';
+      return false;
+    }
   }
 
   /** The config only when Fleet could attribute what is sent: a file with no email would be dropped there. */
