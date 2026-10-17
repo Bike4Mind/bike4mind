@@ -393,7 +393,7 @@ describe('POST /api/mcp-connections', () => {
     expect((await createConnection({ slug: 'work_linear' })).status).toBe(201);
     const conflict = await createConnection({ slug: 'work_linear', url: 'https://mcp2.linear.app/mcp' });
     expect(conflict.status).toBe(409);
-    expect(conflict.body).toMatchObject({ slug: 'work_linear' });
+    expect(conflict.body).toMatchObject({ code: 'slug_taken', slug: 'work_linear' });
 
     expect((await createConnection()).body).toMatchObject({ slug: 'linear' });
     expect((await createConnection()).body).toMatchObject({ slug: 'linear_2' });
