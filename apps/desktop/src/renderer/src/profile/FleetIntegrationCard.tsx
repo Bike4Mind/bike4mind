@@ -119,7 +119,7 @@ export function FleetIntegrationCard() {
         <Stack direction="row" spacing={1} alignItems="center">
           <Switch
             checked={state.consent}
-            disabled={busy || !connected}
+            disabled={busy || (!connected && !state.consent)}
             onChange={event => void run(() => window.b4m.fleet.setConsent(event.target.checked))}
             endDecorator="Share activity with Fleet"
             slotProps={{

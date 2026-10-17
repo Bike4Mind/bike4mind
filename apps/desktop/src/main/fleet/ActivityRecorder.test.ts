@@ -121,6 +121,7 @@ describe('ActivityRecorder', () => {
       enabled: () => enabled,
       record,
       repositoryFor: () => repository,
+      modelFor: async () => null,
       now: () => T0,
     });
     recorder.observe(ev({ type: 'start' }));
