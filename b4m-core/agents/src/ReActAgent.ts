@@ -220,6 +220,11 @@ function observationForResult(result: ToolResult | undefined): string {
   return `Error: ${message}`;
 }
 
+/** True when `observationForResult` reported a real tool failure (not a cancellation). */
+function isFailedResult(result: ToolResult | undefined): boolean {
+  return result?.status === 'rejected' && observationForResult(result) !== CANCELLED_TOOL_RESULT;
+}
+
 /**
  * True when an error is an abort/cancellation (user stop or execution timeout)
  * rather than a real failure. Aborts are benign and must NOT be logged at error
@@ -280,6 +285,8 @@ export class ReActAgent extends EventEmitter {
   }> = [];
   /** Confidence scores collected during the current iteration (reset each iteration) */
   private iterationConfidences: number[] = [];
+  /** Ids of calls `executeToolWithQueueFallback` saw fail; drained by `takeToolFailure`. */
+  private failedToolCallIds = new Set<string>();
 
   // --- State for runIteration() / checkpoint support ---
   /** Conversation history, promoted from run()-local to instance for checkpoint/resume */
@@ -699,7 +706,11 @@ export class ReActAgent extends EventEmitter {
                       const observation = observationForResult(result);
 
                       this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(
+                        toolUse.name,
+                        observation,
+                        isFailedResult(result) || this.takeToolFailure(toolUse)
+                      );
                     }
                   } else {
                     // SEQUENTIAL EXECUTION PATH
@@ -722,7 +733,7 @@ export class ReActAgent extends EventEmitter {
                         this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
                       }
 
-                      this.emitObservationStep(toolUse.name, observation);
+                      this.emitObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     }
                   }
                 }
@@ -1297,6 +1308,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.toolCallCount = 0;
       this.confidenceLog = [];
       this.iterationConfidences = [];
+      this.failedToolCallIds.clear();
       this.lastStopReason = undefined;
       this.iterations = 0;
       this.repeatedCallGuard.reset();
@@ -1549,7 +1561,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                     const result = results.get(getToolId(toolUse));
                     const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(
+                      toolUse.name,
+                      observation,
+                      isFailedResult(result) || this.takeToolFailure(toolUse)
+                    );
                     iterationSteps.push(obsStep);
                   }
                 } else {
@@ -1575,7 +1591,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                       observation = await this.executeToolWithQueueFallback(toolUse);
                       this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
                     }
-                    const obsStep = this.buildObservationStep(toolUse.name, observation);
+                    const obsStep = this.buildObservationStep(toolUse.name, observation, this.takeToolFailure(toolUse));
                     iterationSteps.push(obsStep);
                   }
                 }
@@ -1827,7 +1843,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Build an observation step, score confidence, push to steps, and emit.
    * Returns the step for callers that need to collect iteration steps.
    */
-  private buildObservationStep(toolName: string, observation: string): AgentStep {
+  private buildObservationStep(toolName: string, observation: string, toolFailed = false): AgentStep {
     const confidence = this.scoreToolResult(toolName, observation);
     const confidenceSource: 'deterministic' | 'default' = observation.startsWith('Error:')
       ? 'deterministic'
@@ -1845,6 +1861,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         iteration: this.iterations - 1,
         confidence,
         confidenceSource,
+        ...(toolFailed ? { toolFailed: true } : {}),
       },
     };
     this.steps.push(observationStep);
@@ -1855,8 +1872,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   /**
    * Create and emit an observation step, scoring confidence for the result
    */
-  private emitObservationStep(toolName: string, observation: string): void {
-    this.buildObservationStep(toolName, observation);
+  private emitObservationStep(toolName: string, observation: string, toolFailed = false): void {
+    this.buildObservationStep(toolName, observation, toolFailed);
   }
 
   /**
@@ -1952,13 +1969,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
       );
     }
-    const observation = await this.executeToolWithQueueFallback({
+    const toolUse: ToolUseInfo = {
       id: call.id,
       name: call.name,
       arguments: typeof call.input === 'string' || call.input === undefined ? call.input : JSON.stringify(call.input),
-    });
+    };
+    const observation = await this.executeToolWithQueueFallback(toolUse);
     this.replaceLastToolResultObservation(call.id, observation);
-    this.buildObservationStep(call.name, observation);
+    this.buildObservationStep(call.name, observation, this.takeToolFailure(toolUse));
     return observation;
   }
 
@@ -1983,6 +2001,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     const avg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
     this.iterationConfidences = [];
     return avg;
+  }
+
+  /** True (once) when `executeToolWithQueueFallback` recorded this call as failed. */
+  private takeToolFailure(toolUse: ToolUseInfo): boolean {
+    return this.failedToolCallIds.delete(getToolId(toolUse));
   }
 
   /**
@@ -2029,6 +2052,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       // low-confidence error (they key off `startsWith('Error:')`), but add an explicit
       // instruction to stop retrying and PROCEED - without forcing the whole turn to end, in
       // case the missing tool was peripheral and the plan has other valid steps left.
+      this.failedToolCallIds.add(getToolId(toolUse));
       return (
         `Error: Tool "${toolUse.name}" is not available in this context and cannot be called. ` +
         `Do NOT attempt to call it again. Proceed without it — call other available tools if your ` +
@@ -2057,6 +2081,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const message = error instanceof Error ? error.message : String(error);
       observation = `Error: ${message}`;
       succeeded = false;
+      this.failedToolCallIds.add(getToolId(toolUse));
     }
 
     // Track this call's result. A changed result resets the counter (progress);
