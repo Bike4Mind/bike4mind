@@ -173,6 +173,16 @@ export interface IMcpConnectionServerInfo {
   protocolVersion?: string;
 }
 
+/**
+ * The 401 challenge from the probe of a server that wants OAuth (RFC 9728), kept for the OAuth
+ * flow. Server-supplied and untrusted: the OAuth code validates the URL before fetching it.
+ */
+export interface IMcpConnectionAuthChallenge {
+  resourceMetadataUrl?: string;
+  scope?: string;
+  at: Date;
+}
+
 /** Single-writer lease for OAuth refresh; see `acquireRefreshLease`. */
 export interface IMcpConnectionRefreshLease {
   holder: string;
@@ -216,6 +226,13 @@ export interface IMcpConnection {
   toolsFetchedAt?: Date;
   /** Tools the server listed that discovery refused (invalid name, over a cap). */
   toolsDropped?: number;
+  /**
+   * Bumped by every write to `tools` (`setToolSettings`, `updateDiscovery`). Discovery compares and
+   * sets on it as well as on the fingerprint, so a review saved while a discovery was in flight is
+   * re-merged instead of overwritten. Absent on documents written before it existed (read as 0).
+   */
+  toolsRevision?: number;
+  authChallenge?: IMcpConnectionAuthChallenge;
   enabled: boolean;
   lastUsedAt?: Date;
   refreshLease?: IMcpConnectionRefreshLease;
@@ -241,6 +258,7 @@ export const MCP_CONNECTION_LIMITS = {
   displayNameLength: 100,
   maxScopes: 50,
   requiredScopeLength: 1000,
+  authChallengeUrlLength: 2048,
 } as const;
 
 /** Dotted paths of the auth secrets. An org definition may carry none of them (members connect their own). */
@@ -468,6 +486,9 @@ export const MCP_CONNECTION_PROTECTED_FIELDS = [
   'urlEnc',
   'urlHost',
   'displayUrl',
+  'tools',
+  'toolsFingerprint',
+  'toolsRevision',
 ] as const;
 
 /** A generic repository write named a field only the dedicated McpConnection methods may touch. */
@@ -475,6 +496,14 @@ export class McpConnectionProtectedFieldError extends Error {
   constructor(readonly field: string) {
     super(`McpConnection.${field} cannot be written through a generic update; use the dedicated repository method`);
     this.name = 'McpConnectionProtectedFieldError';
+  }
+}
+
+/** Creating one more connection would pass the owner's connection cap. */
+export class McpConnectionCapError extends ConflictError {
+  constructor(readonly limit: number) {
+    super(`You can have at most ${limit} custom connections`, { code: 'connection_limit', limit });
+    this.name = 'McpConnectionCapError';
   }
 }
 
@@ -509,12 +538,38 @@ export interface McpDiscoveryUpdate {
   fingerprint: string;
   /** Fingerprint the caller read and diffed against; null for the first discovery. */
   expectedFingerprint: string | null;
+  /** `toolsRevision` the caller read and merged against (0 when the read had none). */
+  expectedRevision: number;
   detectedTransport?: McpConnectionDetectedTransport;
   serverInfo?: IMcpConnectionServerInfo;
   dropped?: number;
 }
 
+/** A rotated API key; the caller encrypts the value and derives `last4`. */
+export interface McpApiKeyUpdate {
+  headerName: string;
+  scheme: McpApiKeyScheme;
+  valueEnc: string;
+  last4: string;
+}
+
 export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnectionDocument> {
+  /**
+   * Creates a user connection only if the owner stays within `cap`. Count-then-insert races, so it
+   * inserts, re-counts, and deletes its own insert when the count is over: concurrent creates at the
+   * boundary can all fail, but the cap is never exceeded. Throws `McpConnectionCapError`.
+   */
+  createWithinUserCap(
+    data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>,
+    cap: number
+  ): Promise<IMcpConnectionDocument>;
+  /** Replaces the API key of an `api_key` connection; null when not found, not the owner's, or another kind. */
+  setApiKey(id: string, owner: McpConnectionOwner, apiKey: McpApiKeyUpdate): Promise<IMcpConnectionDocument | null>;
+  /** The probe met a 401: `pending_auth`, the challenge kept for OAuth, `lastError` saying why. */
+  setPendingAuth(
+    id: string,
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+  ): Promise<IMcpConnectionDocument | null>;
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
   findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
@@ -539,16 +594,16 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   deleteAllForUser(userId: string): Promise<number>;
   rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
   setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
-  /** Applies every entry in one atomic write. */
+  /** Applies every entry in one atomic write and bumps `toolsRevision`. */
   setToolSettings(
     id: string,
     owner: McpConnectionOwner,
     settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null>;
   /**
-   * Compare-and-set on `toolsFingerprint === expectedFingerprint`: resolves null when another
-   * discovery already moved the fingerprint, so the caller re-reads and re-diffs instead of
-   * overwriting the review choices that discovery merged.
+   * Compare-and-set on `toolsFingerprint === expectedFingerprint` AND `toolsRevision ===
+   * expectedRevision`: resolves null when another discovery or a review moved either, so the caller
+   * re-reads and re-merges instead of overwriting the review choices. Bumps `toolsRevision`.
    */
   updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
   /**
