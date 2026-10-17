@@ -64,6 +64,27 @@ describe('GET /api/organizations/[id]/groups', () => {
     expect(res._getJSONData().groups).toEqual(RESULT);
   });
 
+  it('strips undeclared group keys and keeps id, name, memberIds and memberCount', async () => {
+    listOrganizationGroups.mockResolvedValue([
+      {
+        ...RESULT[0],
+        _id: 'raw-object-id',
+        __v: 2,
+        deletedAt: new Date('2026-01-01T00:00:00Z'),
+        notInSchema: 'secret',
+      },
+    ]);
+    const { res, promise } = call({ id: 'owner1', isAdmin: false });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const [group] = res._getJSONData().groups;
+    expect(group).toEqual(RESULT[0]);
+    for (const key of ['_id', '__v', 'deletedAt', 'notInSchema']) {
+      expect(group).not.toHaveProperty(key);
+    }
+  });
+
   it('propagates a service rejection (e.g. the authorization failure) instead of returning groups', async () => {
     listOrganizationGroups.mockRejectedValue(new Error('Not authorized to manage this organization'));
 
