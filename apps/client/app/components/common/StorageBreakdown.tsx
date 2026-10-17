@@ -41,9 +41,10 @@ const StorageBreakdown: FC = () => {
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
+    const onDocumentClick = (event: MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
+    // Bubble-phase click, not pointerdown: collapsing on press shifts the layout and loses the click.
     // Portaled children (a Tooltip or Menu) would count as outside clicks if ever added here.
     // Capture phase + stopPropagation so Escape from inside closes only the panel, not an enclosing modal.
     const onKeyDown = (event: KeyboardEvent) => {
@@ -51,10 +52,10 @@ const StorageBreakdown: FC = () => {
       event.stopPropagation();
       setOpen(false);
     };
-    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('click', onDocumentClick);
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('click', onDocumentClick);
       document.removeEventListener('keydown', onKeyDown, true);
     };
   }, [open]);

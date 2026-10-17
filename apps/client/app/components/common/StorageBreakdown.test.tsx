@@ -128,10 +128,13 @@ describe('StorageBreakdown', () => {
   it('closes on click-away and on Escape from inside, leaving Escape from elsewhere to the surrounding dialog', async () => {
     mockRefs.useGetStorageBreakdown.mockReturnValue({ data: scenario, isLoading: false, isError: false });
     const onOuterKeyDown = vi.fn();
+    const onOutsideClick = vi.fn();
     render(
       <TestWrapper>
         <div onKeyDown={onOuterKeyDown}>
-          <button data-testid="outside-btn">outside</button>
+          <button data-testid="outside-btn" onClick={onOutsideClick}>
+            outside
+          </button>
           <StorageBreakdown />
         </div>
       </TestWrapper>
@@ -142,7 +145,14 @@ describe('StorageBreakdown', () => {
     await userEvent.click(screen.getByTestId('storage-breakdown-panel'));
     expect(screen.getByTestId('storage-breakdown-panel')).toBeTruthy();
 
+    // Collapsing the in-flow panel on press would shift the layout under the pointer and lose the click.
+    let panelOpenOnRelease = false;
+    screen.getByTestId('outside-btn').addEventListener('mouseup', () => {
+      panelOpenOnRelease = screen.queryByTestId('storage-breakdown-panel') !== null;
+    });
     await userEvent.click(screen.getByTestId('outside-btn'));
+    expect(panelOpenOnRelease).toBe(true);
+    expect(onOutsideClick).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('storage-breakdown-panel')).toBeNull();
 
     await userEvent.click(toggle);
