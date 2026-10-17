@@ -66,6 +66,15 @@ export interface LakeOrderScopeSources {
 }
 
 /**
+ * Bucket key of a membership arm. Keyed on the meta-tag so it merges with the dataLakeTags arm; a
+ * membership carrying only a prefix is its own lake and keys on that instead. Shared by
+ * `lakeOrderScopes` and `lakeScopeArms` so the two cannot drift.
+ */
+export function membershipScopeKey(m: LakeOrderScopeSources['lakeMemberships'][number]): string | undefined {
+  return m.datalakeTag || (m.fileTagPrefix ? `prefix:${m.fileTagPrefix}` : undefined);
+}
+
+/**
  * Collapse the caller's three scope arms into one bucket per lake. A lake reachable by both its
  * meta-tag and a membership arm must yield ONE bucket, or its files would be split in two and it
  * would draw a double share of the budget.
@@ -87,9 +96,7 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
   for (const membership of sources.lakeMemberships) {
     const datalakeTag = membership.datalakeTag || undefined;
     const fileTagPrefix = membership.fileTagPrefix || undefined;
-    // Keyed on the meta-tag so it merges with the dataLakeTags arm above; a membership carrying
-    // only a prefix is its own lake and keys on that instead.
-    const key = datalakeTag ?? (fileTagPrefix ? `prefix:${fileTagPrefix}` : undefined);
+    const key = membershipScopeKey(membership);
     if (!key) continue;
     upsert(key, { datalakeTag, fileTagPrefix });
   }
@@ -127,11 +134,7 @@ export function lakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships']
     dataLakeTagPrefixes: sources.dataLakeTagPrefixes.filter(
       prefix => prefix === scope.registryPrefix || scope.key === `prefix:${prefix}`
     ),
-    lakeMemberships: sources.lakeMemberships.filter(m => {
-      const datalakeTag = m.datalakeTag || undefined;
-      const fileTagPrefix = m.fileTagPrefix || undefined;
-      return (datalakeTag ?? (fileTagPrefix ? `prefix:${fileTagPrefix}` : undefined)) === scope.key;
-    }),
+    lakeMemberships: sources.lakeMemberships.filter(m => membershipScopeKey(m) === scope.key),
   };
 }
 

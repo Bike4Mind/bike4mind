@@ -8,6 +8,7 @@ import {
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
   mergeLakeFirstListing,
+  FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -1387,6 +1388,24 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect(content).toContain(`### b-003.pdf (ID: ${answer})`);
       const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
       expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(5);
+    });
+
+    it('bounds the per-lake listings of a session with many lakes to the cap plus the union query', async () => {
+      const keys = Array.from({ length: 12 }, (_, i) => String.fromCharCode(97 + i));
+      const files = keys.map(k => fileInLake(k, 0));
+      const ctx = makeCtx({ files, settings: { EnableDataLakeVectorSearch: false } });
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        keys.map(k => `datalake:${k}`)
+      );
+      stubLakeAccess(feature, keys.map(lake));
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledTimes(FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS + 1);
     });
 
     it('orders a multi-lake scope under the candidate cap fairly, so a chunk-heavy lake cannot spend the scan budget alone', async () => {

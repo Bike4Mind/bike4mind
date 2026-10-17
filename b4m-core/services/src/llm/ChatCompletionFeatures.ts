@@ -99,7 +99,14 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
-import { lakeOrderScopes, lakeScopeArms, orderFilesFairlyAcrossLakes } from '../dataLakeService/lakeFairOrder';
+import {
+  lakeOrderScopes,
+  lakeScopeArms,
+  orderFilesFairlyAcrossLakes,
+  type LakeOrderScope,
+  type LakeOrderScopeSources,
+  type LakeScopeArms,
+} from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
@@ -2051,6 +2058,43 @@ export function mergeLakeFirstListing<T extends { id: string }>(
   };
 }
 
+/** Most lakes listed on their own per turn; the union listing covers the rest. Each is a blocking-sort query. */
+export const FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS = 8;
+
+/**
+ * Lake rows for the candidate listing: the union page plus, when `scopes` is non-empty, one bounded
+ * page per lake (the first FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS by key) so a lake that fills the
+ * union page alone cannot leave the others out. Per-lake rows lead, deduped by id, and the union
+ * fills the rest of `limit`.
+ */
+export async function listLakesFirst<
+  T extends { id: string },
+  M extends LakeOrderScopeSources['lakeMemberships'][number],
+>(args: {
+  scopes: LakeOrderScope[];
+  arms: LakeScopeArms<M>;
+  limit: number;
+  list: (limit: number, arms: LakeScopeArms<M>) => Promise<{ data: T[]; hasMore?: boolean }>;
+}): Promise<{ data: T[]; hasMore?: boolean }> {
+  const { scopes, arms, limit, list } = args;
+  const listed = [...scopes].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  listed.length = Math.min(listed.length, FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS);
+  const share = Math.max(1, Math.floor(limit / Math.max(1, scopes.length)));
+  const [union, ...perLake] = await Promise.all([
+    list(limit, arms),
+    ...listed.map(scope => list(share, lakeScopeArms(scope, arms))),
+  ]);
+  if (perLake.length === 0) return union;
+  return mergeLakeFirstListing(
+    {
+      data: [...new Map(perLake.flatMap(r => r.data).map(f => [f.id, f])).values()],
+      hasMore: perLake.some(r => r.hasMore === true),
+    },
+    union,
+    limit
+  );
+}
+
 const citableKey = (c: CitableSource) => c.id || c.url || c.title;
 
 /**
@@ -3018,7 +3062,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           ? FORCED_RETRIEVAL_MAX_LISTED_FILES
           : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       const unionArms = { dataLakeTags, dataLakeTagPrefixes, lakeMemberships };
-      const listFiles = (restrictToDataLake: boolean, limit = listingLimit, arms: typeof unionArms = unionArms) =>
+      const listFiles = (
+        restrictToDataLake: boolean,
+        limit = listingLimit,
+        arms: LakeScopeArms<(typeof lakeMemberships)[number]> = unionArms
+      ) =>
         db.fabfiles.search(
           user.id,
           '',
@@ -3047,30 +3095,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // a lake holding a whole page alone would leave the others out of the listing before the fair
       // cut ever runs. Each lake is therefore also listed on its own, a share of the page each.
       const listLakesSeparately = spansSeveralLakes && orderScopes.length > 1;
-      const listLakesOnly = async () => {
-        const [union, ...perLake] = await Promise.all([
-          listFiles(true),
-          ...(listLakesSeparately
-            ? orderScopes.map(scope =>
-                listFiles(
-                  true,
-                  Math.max(1, Math.floor(listingLimit / orderScopes.length)),
-                  lakeScopeArms(scope, unionArms)
-                )
-              )
-            : []),
-        ]);
-        if (perLake.length === 0) return union;
-        // Each lake's own rows first so none is cut, then the union fills what is left of the page.
-        return mergeLakeFirstListing(
-          {
-            data: [...new Map(perLake.flatMap(r => r.data).map(f => [f.id, f])).values()],
-            hasMore: perLake.some(r => r.hasMore === true),
-          },
-          union,
-          listingLimit
-        );
-      };
+      const listLakesOnly = () =>
+        listLakesFirst({
+          scopes: listLakesSeparately ? orderScopes : [],
+          arms: unionArms,
+          limit: listingLimit,
+          list: (limit, arms) => listFiles(true, limit, arms),
+        });
       // An explicit "+ My files" turns the listing into a union where a large personal library,
       // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
       // lake-only listing goes first so lake files keep their slots; library files fill the rest.
