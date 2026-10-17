@@ -23,3 +23,36 @@ export async function attachPendingActionToRunQuest(
   }
   await quests.setPendingAction(questId, action);
 }
+
+/**
+ * Persists the pending action on the run's Quest, then pushes it to the client on a `progress` frame so the Confirm
+ * card renders while the run is live (the agent path has no streamed quest, and the run quest is not refetched).
+ * The write still throws on failure; a failed send only logs.
+ */
+export async function publishRunPendingAction({
+  executionId,
+  questId,
+  action,
+  questRepository,
+  sendWs,
+  logger,
+}: {
+  executionId: string | undefined;
+  questId: string | undefined;
+  action: McpPendingAction;
+  questRepository: { setPendingAction(questId: string, action: McpPendingAction): Promise<void> };
+  sendWs: (action: string, payload: Record<string, unknown>) => Promise<void>;
+  logger: Logger;
+}): Promise<void> {
+  await attachPendingActionToRunQuest(action, questId, questRepository, logger);
+  // The client keys frames by execution id, so a frame without one would match no run.
+  if (!questId || !executionId) return;
+  try {
+    await sendWs('progress', { executionId, questId, pendingAction: action });
+  } catch (error) {
+    logger.warn('[AgentPendingAction] failed to send the pending action to the client', {
+      questId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}

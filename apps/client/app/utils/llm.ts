@@ -241,6 +241,29 @@ export function addGenerationJobsToRunBubble(
 }
 
 /**
+ * Set the write-preview action an agent run just raised on its quest, so the Confirm card renders mid-run. Same
+ * matching rules as addGenerationJobsToRunBubble; the action replaces any earlier one.
+ */
+export function setPendingActionOnRunBubble(
+  queryClient: QueryClient,
+  sessionId: string,
+  questId: string,
+  pendingAction: NonNullable<IChatHistoryItemDocument['pendingAction']>
+): void {
+  queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
+    if (!current?.pages) return current;
+    const pages = current.pages.map(page => {
+      const idx = page.data.findIndex(q => q.id === questId);
+      if (idx < 0) return page;
+      const data = [...page.data];
+      data[idx] = { ...page.data[idx], pendingAction };
+      return { ...page, data };
+    });
+    return { ...current, pages };
+  });
+}
+
+/**
  * Build the optimistic quest bubble shown immediately for a freshly sent prompt.
  * Shared so callers that pre-seed the quest cache (e.g. /opti createNewSession) use the
  * exact same id/shape; the later createOptimisticQuest then replaces it in place instead
