@@ -203,6 +203,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { publishRunPendingAction } from './agentExecutor.pendingAction';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
@@ -1836,6 +1837,8 @@ async function processExecution(
         pendingSideEffects.push(sideEffect);
         allSideEffects.push(sideEffect);
       },
+      onPendingAction: action =>
+        publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
       sessionId: execution.sessionId,
       questId: runQuestId,
       onSubagentCredits: credits => {
@@ -3643,6 +3646,16 @@ async function processSubagentDispatch(
       // `settleMediaCost`).
       onToolStart: async (toolName, data) => foldSubagentMediaUsd('start', toolName, data),
       onToolFinish: async (toolName, data) => foldSubagentMediaUsd('finish', toolName, data),
+      // Same Quest the top-level run writes to: the Confirm card reads it from there.
+      onPendingAction: action =>
+        publishRunPendingAction({
+          executionId: parentId,
+          questId: child.linkedQuestId,
+          action,
+          questRepository,
+          sendWs,
+          logger,
+        }),
       sessionId: child.sessionId,
       // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
       // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes

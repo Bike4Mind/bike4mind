@@ -6,6 +6,7 @@ import {
   createOptimisticPromptBubble,
   appendReplyToLatestOptimisticBubble,
   addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
   buildOptimisticQuest,
   createOptimisticQuest,
   updateOptimisticQuest,
@@ -374,5 +375,47 @@ describe('addGenerationJobsToRunBubble', () => {
       { keysAllowedToCreate: [] }
     );
     expect(readQuests(qc)[0]).toMatchObject({ replies: ['server reply'], generationJobs: [song] });
+  });
+});
+
+describe('setPendingActionOnRunBubble', () => {
+  const action = { tool: 'create_issue', params: { title: 't' }, ts: 1 };
+  const actionOf = (qc: QueryClient, id: string) => readQuests(qc).find(q => q.id === id)?.pendingAction;
+
+  it('sets the action on the matching quest only, replacing an earlier one', () => {
+    const qc = seedQueryClient([
+      makeQuest({ id: 'other_quest' }),
+      makeQuest({ id: 'run_quest', pendingAction: { tool: 'old', params: {}, ts: 0 } }),
+    ]);
+    setPendingActionOnRunBubble(qc, sessionId, 'run_quest', action);
+    expect(actionOf(qc, 'run_quest')).toEqual(action);
+    expect(actionOf(qc, 'other_quest')).toBeUndefined();
+  });
+
+  it('is a no-op when the run quest is not cached', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'a cancelled ask');
+    setPendingActionOnRunBubble(qc, sessionId, 'not_cached', action);
+    expect(readQuests(qc).every(q => q.pendingAction === undefined)).toBe(true);
+  });
+
+  it('lets the persisted quest still replace the patched bubble', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'create an issue');
+    swapOptimisticPromptBubbleId(qc, sessionId, 'run_quest');
+    setPendingActionOnRunBubble(qc, sessionId, 'run_quest', action);
+    updateSingleQueryDataFast(
+      qc,
+      queryKey,
+      'write',
+      makeQuest({
+        id: 'run_quest',
+        replies: ['server reply'],
+        pendingAction: action,
+        updatedAt: new Date('2025-01-01'),
+      }),
+      { keysAllowedToCreate: [] }
+    );
+    expect(readQuests(qc)[0]).toMatchObject({ replies: ['server reply'], pendingAction: action });
   });
 });
