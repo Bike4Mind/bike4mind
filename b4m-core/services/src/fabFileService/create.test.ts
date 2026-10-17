@@ -694,3 +694,43 @@ describe('createFabFile - owning organization', () => {
     expect(created.organizationId).toBe('org-1');
   });
 });
+
+describe('createFabFile - organization storage limit lookup', () => {
+  beforeEach(() => invalidateSettingsCache());
+  afterEach(() => invalidateSettingsCache());
+
+  // Shaped like the real repositories: findById is a prototype method that reads `this`, so it
+  // only works when called on the adapter, not as a detached function.
+  class OrganizationsAdapter {
+    private readonly model = new Map([['org-1', { id: 'org-1', storageLimit: 1000, currentStorageSize: 0 }]]);
+    async findById(id: string) {
+      return (this.model.get(id) ?? null) as never;
+    }
+  }
+
+  it('looks the organization up through the adapter it was given', async () => {
+    const deps = {
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 }) },
+        organizations: new OrganizationsAdapter(),
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/x'), upload: vi.fn() },
+    } as unknown as CreateFabFileAdapters;
+
+    await expect(
+      createFabFile(
+        'u1',
+        {
+          fileName: 'report.md',
+          mimeType: 'text/markdown',
+          fileSize: 10,
+          type: KnowledgeType.TEXT,
+          organizationId: 'org-1',
+        },
+        deps
+      )
+    ).resolves.toMatchObject({ id: 'fab-1' });
+  });
+});
