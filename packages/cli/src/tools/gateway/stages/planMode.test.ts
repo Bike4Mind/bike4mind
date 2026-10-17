@@ -32,6 +32,12 @@ describe('planModeRefusal', () => {
     const planFile = path.join(getPlanModeFileDir(), 'plan.md');
     expect(refusal('create_file', { path: planFile })).toBeNull();
     expect(refusal('edit_local_file', { path: planFile })).toBeNull();
+    expect(refusal('delete_file', { path: planFile })).toBeNull();
+  });
+
+  it('blocks a write that escapes the plan directory through ..', () => {
+    const escaped = path.join(getPlanModeFileDir(), '..', '..', 'src', 'a.ts');
+    expect(refusal('create_file', { path: escaped })).toMatch(/blocked while plan mode/);
   });
 
   it('does not extend the plan-file exemption to a tool without a write path', () => {

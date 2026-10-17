@@ -6,7 +6,7 @@
  */
 export type ToolCategory = 'auto_approve' | 'prompt_always' | 'prompt_default';
 
-/** Where a tool comes from. Policy trusts a source's own declarations only for core and cli. */
+/** Where a tool comes from; it bounds how far the tool's own declarations are believed (toolPolicy.ts). */
 export type ToolSource =
   | { kind: 'core' }
   | { kind: 'cli' }
@@ -26,7 +26,7 @@ export type ToolEffect = 'none' | 'session' | 'read' | 'write' | 'execute';
 export type ToolDescriptor = {
   source: ToolSource;
   effect: ToolEffect;
-  /** Default approval tier. Honoured only for trusted sources. */
+  /** Default approval tier. A plugin cannot go below prompt_default; mcp and hook are prompt_always. */
   approval: ToolCategory;
   /** Reaches the network or outside the workspace. */
   openWorld?: boolean;

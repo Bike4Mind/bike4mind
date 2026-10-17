@@ -3,8 +3,8 @@ import { ToolCatalog, resolveStaticToolDescriptor } from './toolCatalog.js';
 import { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 import type { ToolDescriptor } from './toolDescriptor.js';
 
-const pluginReader: ToolDescriptor = {
-  source: { kind: 'plugin', packageName: 'example-plugin' },
+const moduleReader: ToolDescriptor = {
+  source: { kind: 'builtin-module', module: 'example' },
   effect: 'read',
   approval: 'auto_approve',
 };
@@ -23,8 +23,8 @@ describe('ToolCatalog hook namespaces', () => {
 
   it('does not let a registration downgrade a hook namespace', () => {
     const catalog = new ToolCatalog();
-    expect(() => catalog.register('agent_hook:PreToolUse', pluginReader)).toThrow(/reserved namespace/);
-    expect(() => catalog.register('skill_hook:pre-invoke', pluginReader)).toThrow(/reserved namespace/);
+    expect(() => catalog.register('agent_hook:PreToolUse', moduleReader)).toThrow(/reserved namespace/);
+    expect(() => catalog.register('skill_hook:pre-invoke', moduleReader)).toThrow(/reserved namespace/);
     expect(catalog.category('agent_hook:PreToolUse')).toBe('prompt_always');
   });
 
@@ -54,7 +54,7 @@ describe('ToolCatalog MCP and skill defaults', () => {
   });
 
   it('refuses to register into the MCP namespace', () => {
-    expect(() => new ToolCatalog().register('mcp__github__create_issue', pluginReader)).toThrow(/reserved namespace/);
+    expect(() => new ToolCatalog().register('mcp__github__create_issue', moduleReader)).toThrow(/reserved namespace/);
   });
 });
 
@@ -94,9 +94,16 @@ describe('CLI session bookkeeping and delegation categories', () => {
 describe('ToolCatalog resolution order', () => {
   it('resolves a registered descriptor first', () => {
     const catalog = new ToolCatalog();
-    catalog.register('plugin_lookup', pluginReader);
-    expect(catalog.resolve('plugin_lookup')).toBe(pluginReader);
-    expect(catalog.category('plugin_lookup')).toBe('auto_approve');
+    catalog.register('module_lookup', moduleReader);
+    expect(catalog.resolve('module_lookup')).toBe(moduleReader);
+    expect(catalog.category('module_lookup')).toBe('auto_approve');
+  });
+
+  it('applies the plugin trust ceiling to a registered plugin tool', () => {
+    const catalog = new ToolCatalog();
+    catalog.register('plugin_lookup', { ...moduleReader, source: { kind: 'plugin', packageName: 'example-plugin' } });
+    expect(catalog.category('plugin_lookup')).toBe('prompt_default');
+    expect(catalog.isReadOnly('plugin_lookup')).toBe(false);
   });
 
   it('resolves a core name from the core table', () => {
@@ -128,19 +135,19 @@ describe('ToolCatalog resolution order', () => {
 
   it('keeps registrations per instance', () => {
     const first = new ToolCatalog();
-    first.register('plugin_lookup', pluginReader);
-    expect(new ToolCatalog().resolve('plugin_lookup')).toBeUndefined();
+    first.register('module_lookup', moduleReader);
+    expect(new ToolCatalog().resolve('module_lookup')).toBeUndefined();
   });
 });
 
 describe('ToolCatalog.register', () => {
   it('refuses to re-declare a core tool', () => {
-    expect(() => new ToolCatalog().register('bash_execute', pluginReader)).toThrow(/core tool/);
+    expect(() => new ToolCatalog().register('bash_execute', moduleReader)).toThrow(/core tool/);
   });
 
   it('refuses a duplicate registration', () => {
     const catalog = new ToolCatalog();
-    catalog.register('plugin_lookup', pluginReader);
-    expect(() => catalog.register('plugin_lookup', pluginReader)).toThrow(/already has a registered descriptor/);
+    catalog.register('module_lookup', moduleReader);
+    expect(() => catalog.register('module_lookup', moduleReader)).toThrow(/already has a registered descriptor/);
   });
 });

@@ -10,14 +10,33 @@ const UNKNOWN_TOOL_CATEGORY: ToolCategory = 'prompt_default';
 
 const READ_ONLY_EFFECTS: ReadonlySet<ToolEffect> = new Set<ToolEffect>(['none', 'session', 'read']);
 
-/** Sources whose self-declared approval tier and effect are not believed. */
-function isUntrustedSource(source: ToolSource): boolean {
-  return source.kind === 'mcp' || source.kind === 'hook';
+/**
+ * How far a source's own declarations are believed. Core, cli and builtin-module tools ship in
+ * this repo and are reviewed, so their descriptor is taken as written. A plugin is third-party
+ * code the user installed and enabled: it can be trusted per tool after a prompt, but cannot
+ * skip the first prompt or claim to be read-only. MCP tools and lifecycle hooks always prompt.
+ */
+function categoryCeiling(source: ToolSource): ToolCategory | undefined {
+  switch (source.kind) {
+    case 'mcp':
+    case 'hook':
+      return 'prompt_always';
+    case 'plugin':
+      return 'prompt_default';
+    default:
+      return undefined;
+  }
+}
+
+function believesDeclaredEffect(source: ToolSource): boolean {
+  return categoryCeiling(source) === undefined;
 }
 
 export function toolCategory(descriptor: ToolDescriptor | undefined): ToolCategory {
   if (!descriptor) return UNKNOWN_TOOL_CATEGORY;
-  if (isUntrustedSource(descriptor.source)) return 'prompt_always';
+  const ceiling = categoryCeiling(descriptor.source);
+  if (ceiling === 'prompt_always') return ceiling;
+  if (ceiling === 'prompt_default' && descriptor.approval === 'auto_approve') return ceiling;
   return descriptor.approval;
 }
 
@@ -29,7 +48,7 @@ export function canTrustTool(descriptor: ToolDescriptor | undefined): boolean {
 /** Read-only tools run in plan mode and in parallel batches; the rest are blocked / sequential. */
 export function isReadOnlyTool(descriptor: ToolDescriptor | undefined): boolean {
   if (!descriptor) return true;
-  if (isUntrustedSource(descriptor.source)) return false;
+  if (!believesDeclaredEffect(descriptor.source)) return false;
   return READ_ONLY_EFFECTS.has(descriptor.effect);
 }
 

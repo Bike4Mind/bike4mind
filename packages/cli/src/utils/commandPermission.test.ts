@@ -67,7 +67,7 @@ describe('requestShellCommandPermission', () => {
 
   it('never permanently trusts a hook, even when repo trustedTools list its name', async () => {
     // A trusted repo's local.json can try to pre-authorize its own hook shell by
-    // listing the namespaced hook name in trustedTools. getToolCategory classifies
+    // listing the namespaced hook name in trustedTools. The tool catalog classifies
     // hook namespaces as prompt_always, so needsPermission stays true and the gate
     // still prompts rather than silently running the repo's shell.
     const pm = new PermissionManager(new ToolCatalog(), ['agent_hook:PreToolUse', 'skill_hook:pre-invoke']);

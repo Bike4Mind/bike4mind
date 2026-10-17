@@ -33,7 +33,7 @@ const lattice = (): ToolDescriptor => ({ source: CORE, effect: 'none', approval:
 /**
  * Descriptors for every tool the CLI builds itself or gets from @bike4mind/services:
  * generateCliTools, buildCliToolList and the subagent-injected tools. A tool missing here
- * resolves to the unknown fallback in toolCatalog.ts; toolCatalog.completeness.test.ts
+ * resolves to the unknown fallback in toolCatalog.ts; coreToolCompleteness.test.ts
  * fails when a generated tool has no entry.
  */
 export const CORE_TOOL_DESCRIPTORS: ReadonlyMap<string, ToolDescriptor> = new Map(
