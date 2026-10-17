@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { UnauthorizedError } from '@bike4mind/common';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
@@ -104,6 +104,23 @@ describe('withWebSocketContext - auth-error detection', () => {
     expect(result.statusCode).toBe(401);
   });
 
+  it('returns 403 for a ForbiddenError - an authenticated session the server refuses by policy', async () => {
+    // MFA enrollment owed and suspended accounts throw ForbiddenError. Answering 200 would let
+    // $connect hand back a socket the handler already refused (and log a benign refusal as an
+    // internal error); 403 denies the handshake and keeps the refusal in its own bucket.
+    const handler = withWebSocketContext(
+      async () => {
+        throw new ForbiddenError('MFA enrollment required.');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(403);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Forbidden' });
+  });
+
   it('preserves 200 for a non-auth error, so an established connection is not dropped', async () => {
     const handler = withWebSocketContext(
       async () => {
@@ -146,6 +163,20 @@ describe('withWebSocketContext - auth-error detection', () => {
       const handler = withWebSocketContext(
         async () => {
           throw new UnauthorizedError('Session expired');
+        },
+        { skipDatabase: true }
+      );
+
+      await handler({} as never, mockContext);
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a policy refusal at info, not error (a refused session reports it once per subscription)', async () => {
+      const handler = withWebSocketContext(
+        async () => {
+          throw new ForbiddenError('Account suspended.');
         },
         { skipDatabase: true }
       );

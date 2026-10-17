@@ -13,6 +13,7 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -72,6 +73,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       mfaPending?: boolean;
       typ?: string;
       kind?: string;
+      impersonatedBy?: string;
     };
 
     // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
@@ -126,6 +128,13 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
     // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
     assertAccountStateUsable(user);
+
+    // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
+    // ForbiddenError so a transport that maps error classes (the Function-URL adapter, the
+    // ws-completions JWT catch) answers 403 with this message rather than a generic 401.
+    if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+      throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
+    }
 
     return {
       id: user.id,

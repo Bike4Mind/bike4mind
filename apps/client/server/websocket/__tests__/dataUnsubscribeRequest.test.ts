@@ -36,6 +36,11 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 
 const mockFindById = vi.fn();
 const mockUpdateOne = vi.fn();
+// The enforceMFA gate in verifyWsAccessToken is covered in its own test; inert here.
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: async () => false,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
 vi.mock('@bike4mind/database', () => ({
   User: { findById: (...args: unknown[]) => mockFindById(...args) },
   QuerySubscription: { updateOne: (...args: unknown[]) => mockUpdateOne(...args) },
