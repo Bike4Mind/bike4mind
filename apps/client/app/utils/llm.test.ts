@@ -316,10 +316,11 @@ describe('updateOptimisticQuest (same-id re-run)', () => {
 });
 
 // Agent-mode job cards render from the bubble's generationJobs. The run pushes each new job mid-run, so the cards
-// must land on the bubble without waiting for the persisted quest to replace it.
+// must land on that run's bubble without waiting for the persisted quest to replace it.
 describe('addGenerationJobsToRunBubble', () => {
   const song = { id: 'job-song', kind: 'music' } as const;
   const clip = { id: 'job-clip', kind: 'video' } as const;
+  const jobsOf = (qc: QueryClient, id: string) => readQuests(qc).find(q => q.id === id)?.generationJobs;
 
   it('adds the jobs to the run quest, keeping earlier ones and skipping repeats', () => {
     const qc = seedQueryClient([
@@ -327,24 +328,30 @@ describe('addGenerationJobsToRunBubble', () => {
       makeQuest({ id: 'run_quest', generationJobs: [song] }),
     ]);
     addGenerationJobsToRunBubble(qc, sessionId, 'run_quest', [song, clip]);
-    const quests = readQuests(qc);
-    expect(quests.find(q => q.id === 'run_quest')?.generationJobs).toEqual([song, clip]);
-    expect(quests.find(q => q.id === 'other_quest')?.generationJobs).toBeUndefined();
+    expect(jobsOf(qc, 'run_quest')).toEqual([song, clip]);
+    expect(jobsOf(qc, 'other_quest')).toBeUndefined();
   });
 
-  it('falls back to the prompt-only optimistic bubble before its id is swapped', () => {
-    const qc = seedQueryClient([makeQuest({ id: 'answered', replies: ['done'] })]);
-    createOptimisticPromptBubble(qc, sessionId, 'make me a song');
-    addGenerationJobsToRunBubble(qc, sessionId, 'not_cached_yet', [song]);
-    const bubble = readQuests(qc).find(q => q.id.startsWith('optimistic-quest-'));
-    expect(bubble?.generationJobs).toEqual([song]);
-    expect(readQuests(qc).find(q => q.id === 'answered')?.generationJobs).toBeUndefined();
+  it("puts each of two overlapping runs' jobs on its own bubble", () => {
+    const qc = seedQueryClient([makeQuest({ id: 'run_a' }), makeQuest({ id: 'run_b' })]);
+    addGenerationJobsToRunBubble(qc, sessionId, 'run_b', [clip]);
+    addGenerationJobsToRunBubble(qc, sessionId, 'run_a', [song]);
+    expect(jobsOf(qc, 'run_a')).toEqual([song]);
+    expect(jobsOf(qc, 'run_b')).toEqual([clip]);
+  });
+
+  it('leaves an older empty bubble alone when the run quest is not cached', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'a cancelled ask');
+    addGenerationJobsToRunBubble(qc, sessionId, 'not_cached', [song]);
+    expect(readQuests(qc).every(q => q.generationJobs === undefined)).toBe(true);
   });
 
   it('keeps the jobs when the run completes and its reply is appended', () => {
     const qc = seedQueryClient([]);
     createOptimisticPromptBubble(qc, sessionId, 'make me a song');
-    addGenerationJobsToRunBubble(qc, sessionId, undefined, [song]);
+    swapOptimisticPromptBubbleId(qc, sessionId, 'run_quest');
+    addGenerationJobsToRunBubble(qc, sessionId, 'run_quest', [song]);
     appendReplyToLatestOptimisticBubble(qc, sessionId, 'your song is on the way', 'exec_1');
     expect(readQuests(qc)[0]).toMatchObject({ replies: ['your song is on the way'], generationJobs: [song] });
   });

@@ -212,27 +212,23 @@ export function appendReplyToLatestOptimisticBubble(
 
 /**
  * Add generation jobs an agent run just started to its quest, so the job cards render mid-run (the agent path has no
- * streamed quest to carry them, unlike chat). Targets `questId` when cached, else the latest prompt-only bubble, the
- * same one appendReplyToLatestOptimisticBubble later fills. updatedAt is left alone so the persisted quest still wins.
+ * streamed quest to carry them, unlike chat). Matches the run quest by id only: the worker sends `execution_started`
+ * (which swaps the optimistic bubble to this id) before any tool can start a job, and guessing at a prompt-only bubble
+ * could land the cards on another run's reply. No match is a no-op; the persisted quest carries the jobs on refetch.
+ * updatedAt is left alone so the persisted quest still wins.
  */
 export function addGenerationJobsToRunBubble(
   queryClient: QueryClient,
   sessionId: string,
-  questId: string | undefined,
+  questId: string,
   jobs: readonly GenerationJobRef[]
 ): void {
   if (!jobs.length) return;
   queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
     if (!current?.pages) return current;
-    const hasRunQuest = !!questId && current.pages.some(page => page.data.some(q => q.id === questId));
-    let patchedOne = false;
     const pages = current.pages.map(page => {
-      if (patchedOne) return page;
-      const idx = hasRunQuest
-        ? page.data.findIndex(q => q.id === questId)
-        : page.data.findIndex(q => q.replies && q.replies.length === 0 && !!q.prompt);
+      const idx = page.data.findIndex(q => q.id === questId);
       if (idx < 0) return page;
-      patchedOne = true;
       const existing = page.data[idx].generationJobs ?? [];
       const added = jobs.filter(job => !existing.some(e => e.id === job.id)).map(({ id, kind }) => ({ id, kind }));
       if (!added.length) return page;

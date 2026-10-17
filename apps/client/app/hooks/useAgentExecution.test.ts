@@ -638,31 +638,46 @@ describe('useAgentExecutionSubscriptions -- toolCallId identity wire', () => {
 });
 
 describe('useAgentExecutionSubscriptions -- generation jobs started mid-run', () => {
+  const questsKey = ['quests', 'session', 's1'];
+  const seeded = () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'make a song', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    return queryClient;
+  };
+  const cachedJobs = (queryClient: QueryClient) =>
+    (queryClient.getQueryData(questsKey) as { pages: Array<{ data: Array<{ generationJobs?: unknown }> }> }).pages[0]
+      .data[0].generationJobs;
+  const frame = (executionId: string) => ({
+    action: 'progress',
+    executionId,
+    questId: 'q1',
+    generationJobs: [{ id: 'job-1', kind: 'music' }],
+  });
+
   beforeEach(() => {
     Object.keys(handlers).forEach(k => delete handlers[k]);
     useAgentExecutionStore.getState().clearAll();
   });
 
   it("puts a progress frame's jobs on the run's quest so the cards render live", async () => {
-    const queryClient = new QueryClient();
-    const questsKey = ['quests', 'session', 's1'];
-    queryClient.setQueryData(questsKey, {
-      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'make a song', replies: [] }], hasMore: false }],
-      pageParams: [{ page: 1 }],
-    });
+    const queryClient = seeded();
     mountSubscriptions(queryClient);
     useAgentExecutionStore.getState().startExecution('e1', 's1');
 
-    await handlers['progress']({
-      action: 'progress',
-      executionId: 'e1',
-      questId: 'q1',
-      generationJobs: [{ id: 'job-1', kind: 'music' }],
-    });
+    await handlers['progress'](frame('e1'));
 
-    const cached = queryClient.getQueryData(questsKey) as {
-      pages: Array<{ data: Array<{ id: string; generationJobs?: unknown }> }>;
-    };
-    expect(cached.pages[0].data[0].generationJobs).toEqual([{ id: 'job-1', kind: 'music' }]);
+    expect(cachedJobs(queryClient)).toEqual([{ id: 'job-1', kind: 'music' }]);
+  });
+
+  it('ignores a frame for an execution this tab does not know', async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+
+    await handlers['progress'](frame('unknown'));
+
+    expect(cachedJobs(queryClient)).toBeUndefined();
   });
 });

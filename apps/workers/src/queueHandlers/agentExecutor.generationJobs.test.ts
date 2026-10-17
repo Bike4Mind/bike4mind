@@ -70,6 +70,38 @@ describe('publishRunGenerationJobs', () => {
     expect(sendWs).toHaveBeenCalledWith('progress', expect.objectContaining({ generationJobs: [music] }));
   });
 
+  it('warns instead of failing the tool call when the send throws', async () => {
+    const sendWs = vi.fn(async () => Promise.reject(new Error('gone')));
+    const logger = makeLogger();
+    await expect(
+      publishRunGenerationJobs({
+        jobs: [music],
+        questId: QUEST_ID,
+        executionId: EXECUTION_ID,
+        questRepository: makeQuests(),
+        sendWs,
+        logger,
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('send'),
+      expect.objectContaining({ questId: QUEST_ID })
+    );
+  });
+
+  it('sends nothing without a run quest to put the cards on', async () => {
+    const sendWs = vi.fn(async () => undefined);
+    await publishRunGenerationJobs({
+      jobs: [music],
+      questId: undefined,
+      executionId: EXECUTION_ID,
+      questRepository: makeQuests(),
+      sendWs,
+      logger: makeLogger(),
+    });
+    expect(sendWs).not.toHaveBeenCalled();
+  });
+
   it('sends nothing for a status update without jobs', async () => {
     const quests = makeQuests();
     const sendWs = vi.fn(async () => undefined);

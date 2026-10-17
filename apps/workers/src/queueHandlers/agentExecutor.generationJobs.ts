@@ -23,9 +23,10 @@ export async function attachGenerationJobsToRunQuest(
 
 /**
  * Attaches the run's new generation jobs to its Quest, then pushes them to the client on a `progress` frame so the
- * job cards render while the run is live. The agent path has no streamed quest (chat's carries `generationJobs`), and
- * the quest change-stream is not a reliable delivery path for the optimistic bubble. The frame goes out even when
- * the quest write failed: the job exists and its card can still poll it.
+ * job cards render while the run is live. The agent path has no streamed quest (chat's carries `generationJobs`) and
+ * the client does not refetch the run's quest, so without this the cards appeared only after a reload. Both steps
+ * are best-effort: the frame goes out even when the quest write failed (the job exists and its card can poll it),
+ * and a failed send never fails the tool call.
  */
 export async function publishRunGenerationJobs({
   jobs,
@@ -44,9 +45,14 @@ export async function publishRunGenerationJobs({
 }): Promise<void> {
   if (!jobs?.length) return;
   await attachGenerationJobsToRunQuest(jobs, questId, questRepository, logger);
-  await sendWs('progress', {
-    executionId,
-    ...(questId ? { questId } : {}),
-    generationJobs: jobs.map(({ id, kind }) => ({ id, kind })),
-  });
+  // Without a run quest the client has nothing to attach the cards to.
+  if (!questId) return;
+  try {
+    await sendWs('progress', { executionId, questId, generationJobs: jobs.map(({ id, kind }) => ({ id, kind })) });
+  } catch (error) {
+    logger.warn('[AgentGenerationJobs] failed to send generation jobs to the client', {
+      questId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

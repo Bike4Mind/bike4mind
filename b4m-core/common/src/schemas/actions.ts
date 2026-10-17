@@ -1344,6 +1344,7 @@ export const AgentProgressAction = z.object({
   creditsUsed: z.number().optional(),
   iteration: z.number().optional(),
   // Jobs a tool just started, so the client can render their cards on the run's quest mid-run.
+  // questId is only set together with generationJobs.
   questId: z.string().optional(),
   generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
 });
