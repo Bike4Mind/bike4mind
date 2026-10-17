@@ -24,7 +24,7 @@ export const DEAD_SETTING_NAMES = [
 ];
 
 const migration: MigrationFile = {
-  id: 20260921235985,
+  id: 20260921235981,
   name: 'drop-google-calendar-settings',
 
   up: async () => {

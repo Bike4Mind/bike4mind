@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 
-import { DEAD_SETTING_NAMES } from './20260921235985_drop-google-calendar-settings';
+import { DEAD_SETTING_NAMES } from './20260921235981_drop-google-calendar-settings';
 
 /**
  * The migration deletes `adminsettings` rows by name. That is only safe while those names are

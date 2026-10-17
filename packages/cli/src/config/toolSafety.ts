@@ -39,6 +39,34 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
   ask_user_question: 'auto_approve',
   weather_info: 'prompt_default',
 
+  // Auto-approve: the agent's own session bookkeeping and delegation. These ran unwrapped
+  // before every tool went through the permission wrapper; they stay prompt-free there.
+  // A delegated subagent runs its own tools through the wrapper under its mode ceiling.
+  // Not all are side-effect free (work_item_* write server state, cancel_background_agent
+  // stops a run), so plan mode lets them through: it only blocks prompt_always tools.
+  agent_delegate: 'auto_approve',
+  check_agent_status: 'auto_approve',
+  list_background_agents: 'auto_approve',
+  cancel_background_agent: 'auto_approve',
+  resume_agent: 'auto_approve',
+  create_dynamic_agent: 'auto_approve',
+  coordinate_task: 'auto_approve',
+  decompose_task: 'auto_approve',
+  shared_context_read: 'auto_approve',
+  shared_context_write: 'auto_approve',
+  write_todos: 'auto_approve',
+  read_prior_todos: 'auto_approve',
+  log_decision: 'auto_approve',
+  track_blocker: 'auto_approve',
+  resolve_blocker: 'auto_approve',
+  request_review_gate: 'auto_approve',
+  work_item_create: 'auto_approve',
+  work_item_update: 'auto_approve',
+  work_item_close: 'auto_approve',
+  work_item_ready: 'auto_approve',
+  work_item_graph: 'auto_approve',
+  tool_search: 'auto_approve',
+
   // Prompt-always: modify files or run code; always require permission, cannot be trusted
   edit_file: 'prompt_always',
   edit_local_file: 'prompt_always',

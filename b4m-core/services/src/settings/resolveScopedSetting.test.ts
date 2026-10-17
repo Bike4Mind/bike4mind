@@ -3,6 +3,7 @@ import {
   CreditHolderType,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   IScopedSetting,
+  isCustomMcpEnabled,
   MIN_PASSAGE_TOKEN_TARGET,
   ScopeRef,
   SettingScope,
@@ -590,5 +591,48 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
       source: SettingScopeLevel.Platform,
       ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Owner, scopeId: 'u2', reason: 'unparseable' }],
     });
+  });
+});
+
+describe('custom MCP connector settings (org-scoped object and flag)', () => {
+  const orgScope: SettingScope = { organizationId: 'o1', owner };
+
+  it('resolves the coded policy default with no rows', async () => {
+    const r = await resolveScopedSetting('customMcpPolicy', orgScope, makeDb({}));
+    expect(r.value).toMatchObject({ mode: 'presets_only', maxConnectionsPerUser: 20 });
+    expect(r.source).toBe(SettingScopeLevel.Platform);
+  });
+
+  it('an org policy override, stored as JSON, beats the platform row', async () => {
+    const db = makeDb({ customMcpPolicy: JSON.stringify({ mode: 'any' }) }, [
+      override(
+        SettingScopeLevel.Organization,
+        'o1',
+        JSON.stringify({ mode: 'allowlist', allowedHostPatterns: ['*.example.com'] }),
+        'customMcpPolicy'
+      ),
+    ]);
+    const r = await resolveScopedSetting('customMcpPolicy', orgScope, db);
+    expect(r.source).toBe(SettingScopeLevel.Organization);
+    expect(r.value).toMatchObject({ mode: 'allowlist', allowedHostPatterns: ['*.example.com'], allowWriteTools: true });
+  });
+
+  it('an org cannot turn the platform flag on, and an owner row is ignored', async () => {
+    const db = makeDb({ EnableCustomMcpConnectors: 'false' }, [
+      override(SettingScopeLevel.Organization, 'o1', 'true', 'EnableCustomMcpConnectors'),
+      override(SettingScopeLevel.Owner, 'u1', 'true', 'EnableCustomMcpConnectors'),
+    ]);
+    const r = await resolveScopedSetting('EnableCustomMcpConnectors', orgScope, db);
+    expect(r).toMatchObject({ value: false, source: SettingScopeLevel.Platform });
+  });
+
+  it('an org closes connectors with policy mode off, which wins over a platform on', async () => {
+    const db = makeDb({ EnableCustomMcpConnectors: 'true', customMcpPolicy: JSON.stringify({ mode: 'any' }) }, [
+      override(SettingScopeLevel.Organization, 'o1', JSON.stringify({ mode: 'off' }), 'customMcpPolicy'),
+    ]);
+    const flag = await resolveScopedSetting('EnableCustomMcpConnectors', orgScope, db);
+    const policy = await resolveScopedSetting('customMcpPolicy', orgScope, db);
+    expect(isCustomMcpEnabled(flag.value, policy.value)).toBe(false);
+    expect(isCustomMcpEnabled(flag.value, { mode: 'any' })).toBe(true);
   });
 });

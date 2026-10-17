@@ -17,6 +17,7 @@ export * from './quest';
 export * from './session';
 export * from './user';
 export * from './settings';
+export * from './customMcpHosts';
 export * from './zod';
 export * from './promptMeta';
 export * from './analytics';
