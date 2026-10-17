@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetState } from '@shared/fleet';
-import type { VaultFile } from '../auth/tokenVault';
 import type { ActivityBatch, ActivityEvent } from './activityContract';
 import { ActivityQueue } from './ActivityQueue';
 import { FleetClient, fleetOrigin, type FetchPort } from './FleetClient';
 import { parseFleetConfig, readFleetConfig, type FleetConfigFs, type FleetConfigResult } from './FleetConfig';
 import { FLUSH_DELAY_MS, FleetService } from './FleetService';
 import { FleetSettingsStore } from './FleetSettingsStore';
+import { memoryFile } from './memoryFile.testHelper';
 import { toOtlpLogs } from './otlp';
 
 const KEY = 'fltk_test_telemetry_key_AAAA1111';
@@ -17,18 +17,6 @@ const EMAIL = 'dev@example.test';
 
 const configJson = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ version: 1, endpoint: ORIGIN, key: KEY, email: EMAIL, installId: INSTALL_ID, ...over });
-
-function memoryFile(initial: string | null = null): VaultFile & { contents: string | null } {
-  return {
-    contents: initial,
-    async read() {
-      return this.contents;
-    },
-    async write(contents: string) {
-      this.contents = contents;
-    },
-  };
-}
 
 const response = (status: number) =>
   new Response('{"partialSuccess":{}}', { status, headers: { 'content-type': 'application/json' } });

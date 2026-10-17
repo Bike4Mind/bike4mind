@@ -3,6 +3,7 @@ import type { VaultFile } from '../auth/tokenVault';
 import type { ActivityEvent } from './activityContract';
 import { MAX_EVENT_AGE_MS } from './activityContract';
 import { ActivityQueue, MAX_QUEUED_EVENTS } from './ActivityQueue';
+import { memoryFile } from './memoryFile.testHelper';
 
 const event: ActivityEvent = {
   eventId: 'event-000001',
@@ -26,18 +27,6 @@ const eventAt = (n: number, occurredAt = event.occurredAt): ActivityEvent => ({
   occurredAt,
 });
 
-function memoryFile(initial: string | null = null): VaultFile & { contents: string | null } {
-  return {
-    contents: initial,
-    async read() {
-      return this.contents;
-    },
-    async write(value: string) {
-      this.contents = value;
-    },
-  };
-}
-
 describe('ActivityQueue persistence', () => {
   it('drops the oldest events first once past the cap, on disk as well as in memory', async () => {
     const file = memoryFile();
@@ -52,20 +41,21 @@ describe('ActivityQueue persistence', () => {
     expect(onDisk.at(-1)?.eventId).toBe(`event-${String(MAX_QUEUED_EVENTS + 3).padStart(6, '0')}`);
   });
 
-  it('loads a non-array or corrupt queue file as empty and warns once', async () => {
-    for (const contents of ['{"events":[]}', '"text"', '42', 'null', '{not json', '']) {
+  it.each(['{"events":[]}', '"text"', '42', 'null', '{not json', ''])(
+    'loads %j as an empty queue and warns at most once',
+    async contents => {
       const warn = vi.fn();
       const queue = new ActivityQueue(memoryFile(contents), Date.now, { warn });
-      expect(await queue.size(), contents).toBe(0);
-      expect(await queue.peek(), contents).toBeNull();
-      expect(warn.mock.calls.length, contents).toBeLessThanOrEqual(1);
+      expect(await queue.size()).toBe(0);
+      expect(await queue.peek()).toBeNull();
+      expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
     }
-  });
+  );
 
   it('warns when the file is corrupt but stays quiet for a missing one', async () => {
     const warn = vi.fn();
     await new ActivityQueue(memoryFile('{not json'), Date.now, { warn }).size();
-    expect(warn).toHaveBeenCalledWith('FLEET: activity queue unreadable, starting empty');
+    expect(warn.mock.calls).toEqual([['FLEET: activity queue unreadable, starting empty']]);
     warn.mockClear();
     await new ActivityQueue(memoryFile(null), Date.now, { warn }).size();
     expect(warn).not.toHaveBeenCalled();
@@ -97,14 +87,14 @@ describe('ActivityQueue persistence', () => {
     expect((JSON.parse(file.contents!) as ActivityEvent[]).map(e => e.eventId)).toEqual(['event-000002']);
   });
 
-  it('leaves the disk in the last caller state for concurrent push and clear', async () => {
-    const pushLast = memoryFile();
+  it('the last-issued of overlapping push and clear wins on disk', async () => {
+    const pushLast = memoryFile(null, true);
     const a = new ActivityQueue(pushLast);
     await Promise.all([a.clear(), a.push([eventAt(1)])]);
     expect(JSON.parse(pushLast.contents!)).toHaveLength(1);
     expect(await new ActivityQueue(pushLast).size()).toBe(1);
 
-    const clearLast = memoryFile();
+    const clearLast = memoryFile(null, true);
     const b = new ActivityQueue(clearLast);
     await Promise.all([b.push([eventAt(1)]), b.push([eventAt(2)]), b.clear()]);
     expect(clearLast.contents).toBe('[]');

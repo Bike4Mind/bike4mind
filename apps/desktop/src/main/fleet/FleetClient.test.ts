@@ -9,6 +9,7 @@ const respond = (status: number) => new Response(status === 204 ? null : '{}', {
 describe('FleetClient', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('posts the body to the logs path with the bearer key', async () => {
@@ -48,11 +49,17 @@ describe('FleetClient', () => {
     }
   });
 
-  it('retries with no status when fetch throws, and does not leak the error', async () => {
+  it('retries with no status when fetch throws, and logs nothing that carries the key', async () => {
+    const spies = (['log', 'info', 'warn', 'error'] as const).map(method =>
+      vi.spyOn(console, method).mockImplementation(() => undefined)
+    );
     const client = new FleetClient(async () => {
       throw new TypeError(`redirect mode is set to error ${KEY}`);
     });
-    expect(await client.sendLogs(ORIGIN, KEY, {})).toEqual({ kind: 'retry', status: null });
+    const result = await client.sendLogs(ORIGIN, KEY, {});
+    expect(result).toEqual({ kind: 'retry', status: null });
+    expect(JSON.stringify(result)).not.toContain(KEY);
+    for (const spy of spies) expect(JSON.stringify(spy.mock.calls)).not.toContain(KEY);
   });
 
   it('aborts a request still pending after 15 seconds and retries', async () => {
