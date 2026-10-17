@@ -7,7 +7,7 @@ export type ParsedClaudeModelId = {
   minor: number | null;
 };
 
-/** Bedrock's `[<scope>.]anthropic.` id prefix (any region or `global`). Shared with isClaudeModelId. */
+/** Bedrock's `[<scope>.]anthropic.` id prefix (any region or `global`), as regex source. Shared with isClaudeModelId. */
 export const BEDROCK_ANTHROPIC_PREFIX = '(?:(?:[a-z-]+\\.)?anthropic\\.)?';
 
 // `claude-<family>-<major>[-<minor>]` then an 8-digit date, a lettered suffix (`-v1:0`, `-latest`), `:`, `@`,

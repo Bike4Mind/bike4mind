@@ -25,6 +25,7 @@ const TOOL_SEARCH_VERSIONS: ReadonlySet<string> = new Set([
   'mythos-5-1',
 ]);
 
+// Keep in sync with NO_FORCED_TOOL_CHOICE_FAMILY in models.ts when a new 5.x ships.
 // Sonnet 5 is left out on purpose: it takes no mid-conversation system messages.
 const TOOL_CHANGES_VERSIONS: ReadonlySet<string> = new Set([
   'opus-4-8',
