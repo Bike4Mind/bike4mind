@@ -31,6 +31,7 @@ import {
   type ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { ForbiddenError } from '@server/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
@@ -132,7 +133,16 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
           await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
-        } catch {
+        } catch (authError) {
+          // verifyJwtToken refuses an authenticated session for reasons the caller can act on
+          // (MFA enrollment, account dispute or suspension) with a ForbiddenError; relaying it as
+          // 401 makes the CLI report an expired session and tell the user to sign in again, which
+          // cannot help.
+          // The message is server-authored guidance (sanitizeErrorMessage would blank it).
+          if (authError instanceof ForbiddenError) {
+            res.status(403).json({ error: authError.message });
+            return;
+          }
           res.status(401).json({ error: 'Authentication failed' });
           return;
         }

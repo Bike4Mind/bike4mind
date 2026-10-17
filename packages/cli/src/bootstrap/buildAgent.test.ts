@@ -4,7 +4,7 @@ import { createMockConfig, createMockLlmBackend } from '../test-utils/mocks.js';
 import type { AgentContext } from '../utils';
 
 function makeInput(overrides: Partial<BuildAgentInput> = {}): BuildAgentInput {
-  const agentContext: AgentContext = { currentAgent: null, observationQueue: [] };
+  const agentContext: AgentContext = { currentAgent: null };
   return {
     config: createMockConfig(),
     modelId: 'test-model',

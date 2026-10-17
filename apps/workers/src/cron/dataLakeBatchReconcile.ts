@@ -37,13 +37,13 @@ import {
   type ChunkRescueOutcome,
 } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
-import { runChunkRescueSweep } from '@server/s3/chunkRescueSweep';
-import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
+import { runChunkRescueSweep } from '@workers/s3/chunkRescueSweep';
+import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
 import {
   buildStrandedVectorizeScanFilter,
   CHUNK_CLAIM_STALE_MS,
   VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
-} from '@server/s3/chunkScan';
+} from '@workers/s3/chunkScan';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';

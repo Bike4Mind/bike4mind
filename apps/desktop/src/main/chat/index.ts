@@ -255,7 +255,10 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
-export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'sessionClosed'> = {}): RegisteredChat {
+export function registerChat(
+  auth: AuthService,
+  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
@@ -422,7 +425,14 @@ export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'se
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
-    emit: broadcast,
+    emit: event => {
+      broadcast(event);
+      try {
+        hooks.observeStream?.(event);
+      } catch {
+        logger.warn('FLEET: activity observer failed');
+      }
+    },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
     sessionClosed: hooks.sessionClosed,
   });

@@ -41,6 +41,7 @@ import {
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -603,7 +604,7 @@ describe('ChatCompletionProcess', () => {
       supportsImageVariation: false,
     };
 
-    it('reply metadata names the model that answered and keeps the requested model', async () => {
+    it('reply metadata names the model that answered and records the requested model', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
@@ -615,20 +616,42 @@ describe('ChatCompletionProcess', () => {
 
       // Assert on what the turn persisted, not only on the in-memory quest object.
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
-      expect(lastSave.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: ChatModels.GPT4,
+        model: { name: ChatModels.GPT4_1 },
+      });
     });
 
-    it('leaves answeredBy unset when no redirect happened', async () => {
+    it('records no redirect when none happened', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
 
       await service.process({ body, logger: mockLogger });
 
-      expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+      expect(mockQuest.promptMeta.redirectedFrom).toBeUndefined();
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
     });
 
-    it('clears answeredBy when the successor fails and nothing answers the turn', async () => {
+    it('keeps an existing redirect record rather than overwriting it', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'earlier-model';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: 'earlier-model',
+        model: { name: ChatModels.GPT4_1 },
+      });
+    });
+
+    it('keeps the redirect record when the successor fails and nothing answers the turn', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
@@ -648,8 +671,8 @@ describe('ChatCompletionProcess', () => {
 
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
-      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
-      expect(lastSave.promptMeta.model.answeredBy).toBeUndefined();
+      expect(lastSave.promptMeta.redirectedFrom).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4_1);
     });
   });
 
@@ -836,6 +859,116 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('a turn redirected off an unavailable model', () => {
+    const redirectNotices = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter(([, status]) => typeof status === 'string' && status.includes('is unavailable'));
+
+    it('tells the user once which model answered in place of the unavailable one', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      const notices = redirectNotices(sendStatusUpdate);
+      expect(notices).toHaveLength(1);
+      expect(notices[0][1]).toBe(`gpt-5-chat-latest is unavailable; answering with ${ChatModels.GPT4}`);
+    });
+
+    it('says nothing when the successor turns out to be unusable', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
+      const body = wireMinimalTurn();
+      mockedGetAvailableModels.mockResolvedValue([]);
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow('Invalid LLM backend specified');
+
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
+    });
+
+    it('says nothing when the turn was not redirected', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
+    });
+
+    // Queue and agent runs reach Process without ChatCompletionInvoke, so it records the redirect itself.
+    it('records a redirect first seen here and relabels the reply with the model that answers', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: 'gpt-5-chat-latest', backend: ModelBackend.OpenAI };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.redirectedFrom).toBe('gpt-5-chat-latest');
+      expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(1);
+    });
+
+    it('describes the model block from the successor when it records a redirect first seen here', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = {
+        name: 'gpt-5-chat-latest',
+        type: 'image',
+        backend: ModelBackend.Anthropic,
+        contextWindow: 111,
+        supportsTools: true,
+        parameters: { temperature: 0.2 },
+      };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 2000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+          supportsVision: true,
+        },
+      ] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.model).toMatchObject({
+        name: ChatModels.GPT4,
+        type: 'text',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 2000,
+        maxTokens: 100,
+        supportsVision: true,
+        parameters: { temperature: 0.2 },
+      });
+      expect(mockQuest.promptMeta.model.supportsTools).toBeUndefined();
+    });
+  });
+
   describe('a user stop', () => {
     it('landing before processing starts is honoured instead of saving running over it', async () => {
       mockSession.userId = 'user1';
@@ -843,7 +976,7 @@ describe('ChatCompletionProcess', () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
       mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await service.process({ body, logger: mockLogger });
 
@@ -892,6 +1025,51 @@ describe('ChatCompletionProcess', () => {
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
       expect(lastSave.replies.join('')).toContain('The request was interrupted');
+    });
+
+    it('a Responses stream the user stopped mid-answer ends stopped with the partial reply kept', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('Request aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['partial answer']);
+          throw abort;
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(lastSave.replies.join('')).toContain('partial answer');
+      expect(lastSave.replies.join('')).not.toContain('interrupted');
+    });
+
+    it('a Responses stream closed early ends done with the interrupted reply, warning not erroring', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new ResponsesStreamTruncatedError('gpt-5')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.toBeUndefined();
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Truncated]'));
+      const errorCalls = mockLogger.error.mock.calls.flat();
+      expect(errorCalls.some(a => a instanceof ResponsesStreamTruncatedError)).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(ResponsesStreamTruncatedError));
     });
   });
 
@@ -1716,6 +1894,54 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('skips a prefetched quest that invoke already saved as an error', async () => {
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });
+      const errorQuest = { ...mockQuest, type: 'error', status: 'done', reply: 'denied' };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: errorQuest });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalled();
+      expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    });
+
+    it('still processes a prefetched quest that is not an error', async () => {
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      });
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: mockQuest });
+
+      expect(complete).toHaveBeenCalled();
+    });
+
     // The root cause of the slow-first-token anomaly never firing was THIS call site dropping
     // the TTFVT pair. Every other test drives `performanceFromPromptMeta` directly, so only a
     // test through the real finalisation fails if the call site regresses to the two-field
@@ -1811,6 +2037,281 @@ describe('ChatCompletionProcess', () => {
       expect(statuses.length).toBeGreaterThan(0);
       expect(statuses.at(-1)).toBe('stopped');
       expect(mockQuest.status).toBe('stopped');
+    });
+
+    describe('caller abortSignal (wait=true deadline)', () => {
+      function arrangeTurn({ hangUntilAbort = false }: { hangUntilAbort?: boolean } = {}) {
+        let signalSeen: AbortSignal | undefined;
+        let markBackendCalled: () => void = () => {};
+        const backendCalled = new Promise<void>(resolve => {
+          markBackendCalled = resolve;
+        });
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts) => {
+          signalSeen = opts.abortSignal;
+          markBackendCalled();
+          await new Promise<void>((resolve, reject) => {
+            const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            if (opts.abortSignal?.aborted) return fail();
+            opts.abortSignal?.addEventListener('abort', fail, { once: true });
+            // hangUntilAbort leaves the turn open until the caller aborts, so a test can advance
+            // virtual time past the streaming heartbeat without the turn completing first.
+            if (!hangUntilAbort) setTimeout(resolve, 3000);
+          });
+        });
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        return { complete, body, backendCalled, getSignalSeen: () => signalSeen };
+      }
+
+      it('aborting the caller signal aborts the backend call', async () => {
+        const { body, backendCalled, getSignalSeen } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        expect(getSignalSeen()?.aborted).toBe(false);
+        external.abort();
+
+        await expect(run).resolves.not.toThrow();
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('writes no quest update after the caller aborts', async () => {
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('waits for an in-flight quest save before returning on the caller abort', async () => {
+        vi.useFakeTimers();
+        try {
+          const { body, backendCalled } = arrangeTurn({ hangUntilAbort: true });
+          // Hold the write the heartbeat starts, so the save mutex stays locked across the abort.
+          let holdWrites = false;
+          let writeStarted = false;
+          let releaseWrite: (value: unknown) => void = () => {};
+          mockDb.quests.update.mockImplementation(() => {
+            if (!holdWrites) return Promise.resolve(undefined);
+            writeStarted = true;
+            return new Promise(resolve => {
+              releaseWrite = resolve;
+            });
+          });
+          const external = new AbortController();
+          let resolved = false;
+          const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+          run.then(
+            () => {
+              resolved = true;
+            },
+            () => {
+              resolved = true;
+            }
+          );
+
+          await backendCalled;
+          holdWrites = true;
+          // One heartbeat: its save clears the not-yet-aborted fence and enters the save mutex.
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(writeStarted).toBe(true);
+
+          external.abort();
+          holdWrites = false; // only the write already in flight stays held
+          await vi.advanceTimersByTimeAsync(0);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          // The write is still pending, so the drain must keep process() from resolving yet.
+          expect(resolved).toBe(false);
+
+          releaseWrite(mockQuest);
+          await run;
+          expect(resolved).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('aborts the backend signal at once when the caller signal is already aborted', async () => {
+        const { body, getSignalSeen, complete } = arrangeTurn();
+        const external = new AbortController();
+        external.abort();
+
+        await expect(
+          service.process({ body, logger: mockLogger, abortSignal: external.signal })
+        ).resolves.not.toThrow();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('does not persist the success-path status when the backend resolves on abort', async () => {
+        const { body, complete } = arrangeTurn();
+        let markStreamed: () => void = () => {};
+        const streamed = new Promise<void>(resolve => {
+          markStreamed = resolve;
+        });
+        complete.mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          markStreamed();
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal?.aborted) return resolve();
+            opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await streamed;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('refunds a real reservation when the caller aborts the turn', async () => {
+        vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
+          (key: string) => key === 'enforceCredits'
+        );
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = {
+          update: vi.fn(),
+          findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 550 }),
+          incrementCredits,
+        };
+        mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        external.abort();
+        await run;
+
+        // Held before the turn, returned when the caller cut it off - no charge for an aborted turn.
+        expect(incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -50);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', 50);
+      });
+    });
+
+    describe('releaseReservedCredits', () => {
+      type ReservationFields = { reservedCredits: number; reservedCreditsOwnerId: string };
+
+      it('refunds once under concurrent calls', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        let release: (value: unknown) => void = () => {};
+        const incrementCredits = vi.fn().mockReturnValue(
+          new Promise(resolve => {
+            release = resolve;
+          })
+        );
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        const first = service.releaseReservedCredits('q1', mockLogger);
+        const second = service.releaseReservedCredits('q1', mockLogger);
+        release({ id: 'owner-id', currentCredits: 50 });
+        await Promise.all([first, second]);
+
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+      });
+
+      it('is a no-op with nothing reserved', async () => {
+        const incrementCredits = vi.fn();
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).not.toHaveBeenCalled();
+      });
+
+      it('keeps the refunded balance so a later settlement bills the actual instead of writing it off', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        // The balance the reservation held it at: 50 had already come out of a 60 balance.
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'owner-id', currentCredits: 60 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
+        // What the still-running process() computes at settlement. A zeroed holder would floor the
+        // debit at zero and give the turn away; the restored balance charges the real 30.
+        const { delta, writtenOffCredits } = computeSettlementDelta(
+          0,
+          30,
+          fields.reservedCreditHolder?.currentCredits ?? 0
+        );
+        expect(delta).toBe(-30);
+        expect(writtenOffCredits).toBe(0);
+      });
+
+      it('resolves and logs CRITICAL when the refund fails, without refunding twice', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        const incrementCredits = vi.fn().mockRejectedValue(new Error('db down'));
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await expect(service.releaseReservedCredits('q1', mockLogger)).resolves.toBeUndefined();
+        // The claim zeroed the counter even though the write failed, so a retry cannot double-refund.
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'), expect.anything());
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+      });
+
+      it('restores the holder snapshot when the refund fails', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        mockDb.users = { ...mockDb.users, incrementCredits: vi.fn().mockRejectedValue(new Error('db down')) };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(10);
+      });
     });
 
     describe('Research Mode cancellation', () => {
@@ -4075,9 +4576,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
-      // No redirect here: the turn switched models only by falling back, so answeredBy stays unset
-      // and `name` (now the final hop) is the sole record of who answered.
-      expect(updateCall[0].promptMeta.model.answeredBy).toBeUndefined();
+      // No redirect here: the turn switched models only by falling back, so redirectedFrom stays
+      // unset and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.redirectedFrom).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call
@@ -4488,7 +4989,7 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect(hopN).toBe(2);
-      expect(mockQuest.promptMeta.model).toMatchObject({ name: 'hop-model-2', answeredBy: 'hop-model-2' });
+      expect(mockQuest.promptMeta).toMatchObject({ redirectedFrom: ChatModels.GPT4, model: { name: 'hop-model-2' } });
     });
 
     // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop

@@ -300,7 +300,6 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
-      answeredBy: { type: String, required: false },
       type: { type: String, required: false },
       backend: { type: String, required: false },
       contextWindow: { type: Number, required: false },
@@ -462,6 +461,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     ],
     offeredTools: [{ type: String, required: false }],
     toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
+    redirectedFrom: { type: String, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },

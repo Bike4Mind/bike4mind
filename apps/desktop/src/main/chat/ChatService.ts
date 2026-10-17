@@ -1827,7 +1827,14 @@ export class ChatService {
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
     const deadline = turnStartedAt + limits.wallClockMs;
-    this.emit({ type: 'start', sessionId, messageId: replyId });
+    // Where the interrupted run had got to, so a consumer can report the resumed run's totals as
+    // only what they add; see ChatStreamEvent's `start`.
+    this.emit({
+      type: 'start',
+      sessionId,
+      messageId: replyId,
+      ...(resume?.usage ? { baseUsage: resume.usage } : {}),
+    });
 
     // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
     // renderer replaces the message's text with it rather than extending what it already shows.

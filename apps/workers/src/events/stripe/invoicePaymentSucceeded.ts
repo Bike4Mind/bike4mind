@@ -4,12 +4,12 @@ import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscri
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
-} from '@client/lib/userSubscriptions/serverUtils';
+} from '@workers/lib/userSubscriptions/serverUtils';
 import { StripeEvents } from '@server/utils/eventBus';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
 import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 

@@ -1,4 +1,8 @@
-import { integrationAuditLogRepository, INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
+import {
+  integrationAuditLogRepository,
+  INTEGRATION_AUDIT_ENTITY_TYPES,
+  INTEGRATION_AUDIT_INTEGRATION_NAMES,
+} from '@bike4mind/database';
 import type {
   IntegrationAuditEntityType,
   IntegrationAuditIntegrationName,
@@ -13,7 +17,7 @@ import { z } from 'zod';
 const QuerySchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  entityType: z.enum(['oauth', 'webhook', 'mcp_tool', 'token_refresh']).optional(),
+  entityType: z.enum(INTEGRATION_AUDIT_ENTITY_TYPES).optional(),
   // Shared const so this filter can never drift from the model's enum (e.g. omitting 'optihashi').
   integrationName: z.enum(INTEGRATION_AUDIT_INTEGRATION_NAMES).optional(),
   outcome: z.enum(['success', 'failure', 'rate_limited']).optional(),

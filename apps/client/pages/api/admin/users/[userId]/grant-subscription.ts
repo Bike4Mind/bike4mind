@@ -13,7 +13,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/co
 import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -84,60 +84,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         throw new BadRequestError('Price ID required for individual subscriptions');
       }
 
-      const planDetail = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
-      if (!planDetail) {
+      const grant = await grantIndividualAdminSubscription({
+        userId: user.id,
+        priceId,
+        durationMonths,
+        grantedBy: req.user.id,
+      });
+      if (grant.status === 'unknown_plan') {
         throw new BadRequestError('Invalid subscription plan');
       }
-
-      // Check for existing active subscription
-      const existingSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, userId);
-      if (existingSubscription && existingSubscription.status === 'active') {
+      if (grant.status === 'already_active') {
         throw new BadRequestError('User already has an active subscription for this plan');
       }
+      if (grant.status === 'already_granted') {
+        throw new BadRequestError('This subscription grant already exists for this user');
+      }
 
-      await withTransaction(async () => {
-        // Create subscription record in unified Subscription model
-        await subscriptionRepository.create({
-          ownerType: SubscriptionOwnerType.User,
-          ownerId: user.id,
-          // Sentinel id for admin grants - not a Stripe subscription, but the
-          // unique index on subscriptionId is non-sparse (DocumentDB constraint),
-          // so every row needs a real value (mirrors organizations/grant.ts).
-          subscriptionId: `admin_grant_${randomUUID()}`,
-          priceId: priceId,
-          status: 'active',
-          source: SubscriptionSource.AdminGrant,
-          grantedBy: req.user.id,
-          periodStartsAt,
-          periodEndsAt,
-          quantity: 1, // Always 1 for individual subscriptions (not team seats)
-          canceledAt: null,
-        });
-
-        // Add credits to user
-        const creditsToAdd = planDetail.credits * durationMonths;
-        await creditService.addCredits(
-          {
-            ownerId: user.id,
-            ownerType: CreditHolderType.User,
-            credits: creditsToAdd,
-            type: 'subscription',
-            metadata: {},
-          },
-          {
-            db: {
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-            },
-            creditHolderMethods: userRepository,
-          }
-        );
-
-        req.logger.info(`Admin ${req.user.id} granted individual subscription to user ${userId}`, {
-          priceId,
-          credits: creditsToAdd,
-          durationMonths,
-        });
+      req.logger.info(`Admin ${req.user.id} granted individual subscription to user ${userId}`, {
+        priceId,
+        credits: grant.credits,
+        durationMonths,
       });
 
       await logAuditEvent(
@@ -149,7 +115,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           metadata: {
             subscriptionType: 'individual',
             priceId,
-            credits: planDetail.credits * durationMonths,
+            credits: grant.credits,
             durationMonths,
           },
         },
@@ -174,7 +140,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       return res.status(200).json({
         success: true,
         message: `Individual subscription granted for ${durationMonths} month(s)`,
-        credits: planDetail.credits * durationMonths,
+        credits: grant.credits,
       });
     } else if (subscriptionType === 'team') {
       if (!organizationName && !organizationId) {

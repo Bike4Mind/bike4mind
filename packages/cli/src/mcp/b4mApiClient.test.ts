@@ -614,6 +614,61 @@ describe('B4mApiClient', () => {
     expect(sent().body).toEqual({ name: 'Apollo', description: 'Moon' });
   });
 
+  const v1Artifact = {
+    id: 'a1',
+    type: 'html',
+    title: 'Spec',
+    description: null,
+    version: 1,
+    version_tag: null,
+    status: 'draft',
+    tags: ['docs'],
+    session_id: 's1',
+    project_id: null,
+    visibility: 'private',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    content: '<h1>Spec</h1>',
+  };
+
+  it('creates an artifact via v1, sending snake_case ids and mapping the resource', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    const artifact = await client.createArtifact({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      notebookId: 's1',
+      projectId: 'p1',
+      tags: ['docs'],
+    });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/artifacts', method: 'POST' });
+    expect(sent().body).toStrictEqual({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      session_id: 's1',
+      project_id: 'p1',
+      tags: ['docs'],
+    });
+    expect(artifact).toEqual({
+      id: 'a1',
+      type: 'html',
+      title: 'Spec',
+      version: 1,
+      notebookId: 's1',
+      projectId: undefined,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('sends only the required artifact fields when the optional ones are omitted', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    await client.createArtifact({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B', tags: [] });
+    expect(sent().body).toStrictEqual({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' });
+  });
+
   it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({
       artifacts: [{ id: 'artifact_a_1', title: 'A' }],

@@ -487,14 +487,15 @@ describe('updateFabFile (narrowed write pins)', () => {
     findUpdateAccessById.mockResolvedValue(textFile());
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
 
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        // No getMetadata adapter: the content's own byte length, never a stale size.
-        fileSize: 8,
         fileUrl: 'https://s3.example.com/new-signed-url',
         fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
@@ -505,18 +506,20 @@ describe('updateFabFile (narrowed write pins)', () => {
     ]);
   });
 
-  it('writes the stored size alongside the rewrite patch when storage reports metadata', async () => {
+  it('keeps fileSize out of the trailing write when storage reports metadata', async () => {
     mockAdapters.storage.getMetadata = vi.fn().mockResolvedValue({ size: 8 });
     findUpdateAccessById.mockResolvedValue(textFile());
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
 
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        fileSize: 8,
         fileUrl: 'https://s3.example.com/new-signed-url',
         fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
@@ -559,7 +562,7 @@ describe('updateFabFile (narrowed write pins)', () => {
 
       await run();
 
-      expect(dbUpdate.mock.calls[0][0]).toMatchObject({ fileSize: 8 });
+      expect(dbUpdate.mock.calls[0][0]).not.toHaveProperty('fileSize');
       expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     });
 

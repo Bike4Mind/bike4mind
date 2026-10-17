@@ -57,6 +57,7 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { FleetState } from './fleet';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -81,6 +82,12 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
   usageGetHistory: 'usage:get-history',
+  fleetGetState: 'fleet:get-state',
+  fleetRefresh: 'fleet:refresh',
+  fleetSetConsent: 'fleet:set-consent',
+  fleetSendNow: 'fleet:send-now',
+  /** main -> renderer push of the integration's state; never carries the key. */
+  fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
@@ -432,6 +439,15 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+  };
+  fleet: {
+    getState(): Promise<FleetState>;
+    /** Read Fleet's installer file again. Its key stays in main; the state never carries it. */
+    refresh(): Promise<FleetState>;
+    /** Off empties the unsent queue, and nothing is recorded until it is on again. */
+    setConsent(consent: boolean): Promise<FleetState>;
+    sendNow(): Promise<FleetState>;
+    onStateChanged(listener: (state: FleetState) => void): () => void;
   };
   chat: {
     /**

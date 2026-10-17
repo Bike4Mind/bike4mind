@@ -49,7 +49,7 @@ vi.mock('sst', () => ({
 }));
 
 // Passthrough so the raw handler runs without connectDB / Config; this test owns the connection.
-vi.mock('@server/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
+vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
 
 vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: {

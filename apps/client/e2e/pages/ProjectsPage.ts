@@ -248,10 +248,7 @@ export class ProjectsPage extends BasePage {
   }
 
   async openInbox() {
-    await this.page.getByTestId('profile-menu-card').click();
-    // Inbox now lives in the "More" flyout of the profile menu.
-    await this.page.getByTestId('profile-menu-more').click();
-    await this.page.getByTestId('profile-more-inbox').click();
+    await this.page.getByTestId('sidenav-header-inbox-btn').click();
     // Wait for the drawer to open - Invites tab is always visible in the inbox header
     await expect(this.page.getByRole('tab').filter({ hasText: /Invites/i })).toBeVisible({
       timeout: TIMEOUTS.MODAL,

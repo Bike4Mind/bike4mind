@@ -500,6 +500,10 @@ token.
   `registerAuth()` must be called from inside `whenReady()`. Where
   `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
   memory-only and the UI says so - it never falls back to writing plaintext.
+- **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
+  the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
+  sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
+  starts signed out.
 - **Per-environment tokens.** Switching between Production, Local Dev and a self-hosted URL
   restores the session already cached for that endpoint instead of forcing another device
   flow, matching the CLI.

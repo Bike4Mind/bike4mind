@@ -30,7 +30,8 @@
     "title": "Catatan Perubahan"
   },
   "feedback": {
-    "send": "Kirim Umpan Balik"
+    "send": "Kirim Umpan Balik",
+    "rollupTitle": "Masukan Anda"
   },
   "terms_policies": "Syarat & Kebijakan",
   "login": "Masuk",
@@ -166,7 +167,8 @@
     "messages": "Pesan",
     "invites": "Undangan",
     "sendMessage": "Kirim sebuah pesan",
-    "noMessages": "Tidak ada pesan"
+    "noMessages": "Tidak ada pesan",
+    "title_unread": "Kotak masuk, ada item belum dibaca"
   },
   "addSomething": "Tambahkan {{ name }}",
   "deleteAllSomething": "Hapus Semua {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Diperbarui pada {{ date }}"
   },
   "billing": {
-    "title": "Tagihan"
+    "title": "Tagihan",
+    "balance": "Saldo",
+    "credits_heading": "Isi ulang kredit",
+    "credits_sub": "Paket sekali beli, ditambahkan ke saldo Anda. Tanpa langganan.",
+    "credits_sub_with_plan": "Paket sekali beli, di luar jatah bulanan Anda.",
+    "free_plan": "Gratis",
+    "free_plan_detail": "Bayar sesuai pemakaian dengan paket kredit",
+    "low_org": "Admin organisasi dapat menambahkan kredit ke akun ini.",
+    "low_with_plan": "Isi ulang agar tetap bisa bekerja sampai jatah Anda diperbarui.",
+    "low_without_plan": "Paket langganan menambah kredit setiap bulan; paket kredit langsung mengisi ulang.",
+    "payment_failed": "Pembayaran gagal",
+    "plan": "Paket",
+    "plan_fallback": "Langganan",
+    "plan_unavailable": "Tidak tersedia",
+    "plan_unavailable_detail": "Paket Anda tidak dapat dimuat.",
+    "plans_change": "Paket Anda",
+    "plans_change_sub": "Kelola, ubah, atau batalkan langganan Anda.",
+    "plans_heading": "Paket",
+    "plans_heading_sub": "Paket bulanan dengan jatah kredit.",
+    "plans_upgrade": "Tingkatkan",
+    "plans_upgrade_sub": "Dapatkan jatah kredit bulanan alih-alih mengisi ulang secara manual.",
+    "retry": "Coba lagi",
+    "see_plans": "Lihat paket",
+    "top_up": "Isi ulang"
   },
   "credits": {
     "title": "Kredit",
@@ -314,7 +339,8 @@
     "usage_pattern": "Berdasarkan pola penggunaan Anda dari {{days}} hari terakhir",
     "credits_used": "Kredit Digunakan",
     "credits_purchased": "Kredit Dibeli",
-    "net_credits": "Kredit Bersih"
+    "net_credits": "Kredit Bersih",
+    "unit": "kredit"
   },
   "time": {
     "last_7_days": "7 hari terakhir",
@@ -362,7 +388,15 @@
       "completed": "Selesai",
       "pending": "Dalam Proses",
       "failed": "Gagal"
-    }
+    },
+    "buy_pack": "Beli {{credits}} kredit seharga {{price}}",
+    "choose_pack": "Pilih paket kredit",
+    "history_usage_hint": "Daftar ini hanya berisi pembelian.",
+    "organization_credits_active": "Kredit organisasi aktif",
+    "rate_per_thousand": "{{rate}} per 1.000 kredit",
+    "see_usage": "Lihat pemakaian",
+    "shared_rate": "Semua paket bertarif sama: {{rate}} per 1.000 kredit.",
+    "switch_to_personal": "Beralih ke akun pribadi Anda untuk membeli kredit untuk penggunaan pribadi."
   },
   "settings": {
     "title": "Pengaturan",
@@ -543,7 +577,9 @@
     "personal": "Pribadi",
     "business": "Bisnis",
     "team": "Tim",
-    "enterprise": "Perusahaan"
+    "enterprise": "Perusahaan",
+    "audience_label": "Jenis paket",
+    "includes": "Termasuk"
   },
   "agents": {
     "title": "Agen",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Keterampilan",
     "command_palette_description": "Kelola template instruksi yang dapat digunakan kembali"
+  },
+  "apiKeys": {
+    "title": "Kunci API"
+  },
+  "connections": {
+    "menuTooltip": "Integrasi seperti Google Drive dan Slack, serta kunci API untuk kode Anda sendiri",
+    "sections": "Bagian koneksi",
+    "title": "Koneksi"
   }
 }

@@ -51,7 +51,7 @@ import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
-  wrapTools,
+  buildCliToolList,
   resolveApiEndpoint,
   requireApiUrl,
   ApiEndpointUnconfiguredError,
@@ -867,10 +867,9 @@ function CliApp() {
         });
       };
 
-      // Create agent context for observation tracking
+      // Per-agent state shared with the tool wrappers
       const agentContext: AgentContext = {
         currentAgent: null,
-        observationQueue: [],
         onFileChanged: filePath => postEditDiagnosticsRef.current.enqueue(filePath),
       };
 
@@ -967,10 +966,9 @@ function CliApp() {
         reviewGateStoreRef.current.reviewGates = [];
       }
 
-      // Deps for routing the raw CLI-built tools (skill, find_definition,
-      // get_file_structure) through the ONE permission wrapper, exactly like the
-      // B4M and MCP tools. `additionalDirectories` is the same live allow-list
-      // reference threaded into generateCliTools, so runtime grants apply here too.
+      // Deps for routing the CLI-built tools through the ONE permission wrapper,
+      // exactly like the B4M and MCP tools. `additionalDirectories` is the same live
+      // allow-list reference threaded into generateCliTools, so runtime grants apply here too.
       const cliWrapDeps = {
         permissionManager,
         showPermissionPrompt: promptFn,
@@ -984,27 +982,16 @@ function CliApp() {
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
       const skillTool = enableSkillTool
-        ? wrapTools(
-            [
-              createSkillTool({
-                customCommandStore: state.customCommandStore,
-                subagentOrchestrator: orchestrator,
-                sessionId: newSession.id,
-                // Gate skill lifecycle hook shell commands through permission.
-                permission: { permissionManager, promptFn },
-                // Confine skill @file refs to the workspace (plus granted dirs).
-                allowedDirectories: additionalDirectories,
-              }),
-            ],
-            cliWrapDeps
-          )[0]
+        ? createSkillTool({
+            customCommandStore: state.customCommandStore,
+            subagentOrchestrator: orchestrator,
+            sessionId: newSession.id,
+            // Gate skill lifecycle hook shell commands through permission.
+            permission: { permissionManager, promptFn },
+            // Confine skill @file refs to the workspace (plus granted dirs).
+            allowedDirectories: additionalDirectories,
+          })
         : null;
-
-      // Create find_definition tool for fast symbol lookup
-      const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-
-      // Create get_file_structure tool for AST-based code overview
-      const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for
@@ -1013,33 +1000,46 @@ function CliApp() {
         ? createWorkItemTools(new WorkItemsClient(apiClient))
         : [];
 
-      // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
-      // registry so their names can be reserved against plugin tool-name
-      // collisions (a duplicate tool name would 400 every completion).
-      const cliTools = [
-        agentDelegateTool,
-        ...backgroundTools,
-        resumeAgentTool,
-        writeTodosTool,
-        decisionLogTool,
-        ...blockerTools,
-        reviewGateTool,
-        findDefinitionTool,
-        getFileStructureTool,
-        ...workItemTools,
-      ];
-      if (skillTool) {
-        cliTools.push(skillTool);
-      }
-      if (dynamicAgentTool) {
-        cliTools.push(dynamicAgentTool);
-      }
+      // Holder so the tool_search closure can resolve to the agent's live
+      // context.tools array (assigned below after the agent is constructed).
+      // Pushing into context.tools makes newly-loaded schemas callable in
+      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
+      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+      const toolSearchTool =
+        deferredToolRegistry.size() > 0
+          ? createToolSearchTool(() => {
+              if (!agentToolsRef.current) {
+                throw new Error('tool_search invoked before agent context was wired');
+              }
+              return agentToolsRef.current;
+            })
+          : null;
 
-      // Create coordinate_task tool (gated by config flag)
-      if (config.preferences.enableCoordinatorMode === true) {
-        const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, newSession.id);
-        cliTools.push(coordinateTaskTool);
-      }
+      // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
+      // Assembled before the feature registry so their names can be reserved against
+      // plugin tool-name collisions (a duplicate tool name would 400 every completion).
+      const cliTools = buildCliToolList(
+        {
+          toolSearchTool,
+          agentDelegateTool,
+          backgroundTools,
+          resumeAgentTool,
+          writeTodosTool,
+          decisionLogTool,
+          blockerTools,
+          reviewGateTool,
+          findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+          getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+          workItemTools,
+          skillTool,
+          dynamicAgentTool,
+          coordinateTaskTool:
+            config.preferences.enableCoordinatorMode === true
+              ? createCoordinateTaskTool(orchestrator, agentStore, newSession.id)
+              : null,
+        },
+        cliWrapDeps
+      );
 
       // Build the feature registry: config-gated built-ins plus any enabled
       // external plugins (discovered once here; installs need a restart).
@@ -1053,7 +1053,8 @@ function CliApp() {
         descriptors: pluginDescriptors,
         config,
         logger,
-        // 'tool_search' is added later but its name is fixed; reserve it too.
+        // 'tool_search' is fixed-named; cliTools carries it when deferred schemas exist,
+        // but reserve the name unconditionally so a plugin can never claim it.
         reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
       });
 
@@ -1069,21 +1070,7 @@ function CliApp() {
       }
 
       const featureTools = featureRegistry.getAllTools();
-      // Holder so the tool_search closure can resolve to the agent's live
-      // context.tools array (assigned below after the agent is constructed).
-      // Pushing into context.tools makes newly-loaded schemas callable in
-      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
-      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-      const toolSearchTool =
-        deferredToolRegistry.size() > 0
-          ? createToolSearchTool(() => {
-              if (!agentToolsRef.current) {
-                throw new Error('tool_search invoked before agent context was wired');
-              }
-              return agentToolsRef.current;
-            })
-          : null;
-      const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools, ...featureTools];
+      const allTools = [...loadedB4mTools, ...cliTools, ...featureTools];
 
       startupLog.push(`📂 Working directory: ${process.cwd()}`);
       if (additionalDirectories.length > 0) {
@@ -1109,7 +1096,7 @@ function CliApp() {
         startupLog.push(`⚠️ Plugins skipped: ${skippedPlugins.map(s => s.name).join(', ')} (see debug log)`);
       }
       logger.debug(
-        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature + ${toolSearchTool ? 1 : 0} tool_search, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
+        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
       );
 
       if (contextResult.globalContext) {
@@ -1155,7 +1142,7 @@ function CliApp() {
 
       // Wire the agent's step events to the UI store and tavern transcript,
       // and mirror them onto delegated subagents via the orchestrator callbacks.
-      wireAgentEvents({ agent, agentContext, orchestrator });
+      wireAgentEvents({ agent, orchestrator });
 
       setState((prev: CliState) => ({
         ...prev,
