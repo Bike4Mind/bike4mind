@@ -86,9 +86,20 @@ describe('generateReleaseNotes', () => {
     const complete = vi.fn().mockResolvedValue(editorialReply([99]));
 
     await expect(generateReleaseNotes([pr(7, { customerNote: 'n' })], complete)).rejects.toThrow(
-      /editorial output invalid after one repair: sourcePrs references unknown change 99/
+      /editorial output invalid after one repair: an item has no sourcePrs from the list \(cited: 99\)/
     );
     expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops sourcePrs that are not changes in the release instead of failing it', async () => {
+    const warn = vi.fn();
+    const complete = vi.fn().mockResolvedValue(editorialReply([7, 4844]));
+
+    const result = await writeReleaseNotes([pr(7)], new Map([[7, 'Search is quicker.']]), complete, [], { warn });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(result.draft.items[0].sourcePrs).toEqual([7]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('4844'));
   });
 
   it('treats a non-JSON reply as invalid and repairs it', async () => {

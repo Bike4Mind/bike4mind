@@ -188,27 +188,39 @@ export async function writeReleaseNotes(
   prs: ReleaseNotesJobPr[],
   notes: Map<number, string>,
   complete: CompleteFn,
-  editorialFeedback: string[] = []
+  editorialFeedback: string[] = [],
+  logger?: Pick<Logger, 'warn'>
 ): Promise<GenerateResult> {
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
   if (notes.size === 0) return { draft: { headline: '', summary: '', items: [] }, usage };
 
   const titles = new Map(prs.map(pr => [pr.number, pr.title]));
   const input = [...notes].map(([number, note]) => ({ number, title: titles.get(number) ?? '', note }));
+  const dropped = new Set<number>();
   const draft = await completeValidated(
     complete,
     buildEditorialPrompt(input, editorialFeedback),
     raw => {
       const parsed = ReleaseNoteDraftSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
-      const unknown = parsed.data.items.flatMap(item => item.sourcePrs).filter(n => !notes.has(n));
-      return unknown.length
-        ? { ok: false, errors: [...new Set(unknown)].map(n => `sourcePrs references unknown change ${n}`) }
-        : { ok: true, value: parsed.data };
+      // A stray cited number (e.g. an issue read in a PR description) is a provenance glitch: drop it, and
+      // only fail (triggering the repair retry) when an item is left with no real source.
+      const items = parsed.data.items.map(item => ({ ...item, sourcePrs: item.sourcePrs.filter(n => notes.has(n)) }));
+      const orphaned = items.flatMap((item, i) => (item.sourcePrs.length ? [] : parsed.data.items[i].sourcePrs));
+      if (items.some(item => !item.sourcePrs.length)) {
+        const cited = orphaned.length ? [...new Set(orphaned)].join(', ') : 'none';
+        return {
+          ok: false,
+          errors: [`an item has no sourcePrs from the list (cited: ${cited}); unknown change numbers are rejected`],
+        };
+      }
+      parsed.data.items.forEach((item, i) => item.sourcePrs.filter(n => !notes.has(n)).forEach(n => dropped.add(n)));
+      return { ok: true, value: { ...parsed.data, items } };
     },
     usage,
     'editorial'
   );
+  if (dropped.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...dropped].join(', ')}`);
   return { draft, usage };
 }
 

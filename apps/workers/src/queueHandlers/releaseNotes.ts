@@ -139,7 +139,7 @@ async function generateAndStore(
   let feedback: string[] = [];
   let previousDraft: ReleaseNoteDraft | undefined;
   for (let attempt = 0; attempt < MAX_EDITORIAL_ATTEMPTS; attempt++) {
-    const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback);
+    const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback, logger);
     usage.inputTokens += generated.usage.inputTokens;
     usage.outputTokens += generated.usage.outputTokens;
 
