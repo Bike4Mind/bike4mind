@@ -41,19 +41,20 @@ const StorageBreakdown: FC = () => {
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    // Capture phase + stopPropagation so Escape closes only the panel, not an enclosing modal.
+    // Portaled children (a Tooltip or Menu) would count as outside clicks if ever added here.
+    // Capture phase + stopPropagation so Escape from inside closes only the panel, not an enclosing modal.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || !rootRef.current?.contains(event.target as Node)) return;
       event.stopPropagation();
       setOpen(false);
     };
-    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown, true);
     };
   }, [open]);
@@ -77,7 +78,7 @@ const StorageBreakdown: FC = () => {
           data-testid="storage-breakdown-panel"
           sx={{
             mt: 1,
-            maxHeight: 280,
+            maxHeight: { xs: 200, md: 280 },
             overflowY: 'auto',
             pr: 0.5,
           }}
