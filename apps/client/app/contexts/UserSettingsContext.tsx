@@ -376,16 +376,17 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     [currentUser, queryClient]
   );
 
-  // --- Language preference: read from server on load ---
+  // --- Language preference: apply the server value on load and when it changes ---
+  // Keyed on the server value only. Also depending on the local language re-ran this on every
+  // pick, before the write-back below had updated the store, and snapped the UI back to the
+  // old server value - which also suppressed the write, so the pick never reached the server.
+  const serverLanguage = currentUser?.preferences?.language;
   const languageSyncedRef = useRef(false);
   useEffect(() => {
-    const serverLang = currentUser?.preferences?.language;
-    if (!serverLang || languageSyncedRef.current) return;
-    if (serverLang !== currentLanguage) {
-      languageSyncedRef.current = true;
-      setLanguage(serverLang);
-    }
-  }, [currentUser?.preferences?.language, currentLanguage, setLanguage]);
+    if (!serverLanguage || serverLanguage === useLanguage.getState().language) return;
+    languageSyncedRef.current = true;
+    setLanguage(serverLanguage);
+  }, [serverLanguage, setLanguage]);
 
   // --- Language preference: write back to server on change ---
   const prevLanguageRef = useRef(currentLanguage);
@@ -403,21 +404,31 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     // ran, so an experimental toggle still in flight when the language changes is dropped from
     // the persisted set.
     const fullPreferences = { ...currentUser.preferences, language: currentLanguage };
+    // Write through to the store as updatePreferences does: identify is reseeded from it on
+    // reload, so a stale store language would bring the old value back.
+    const previousPreferences = currentUser.preferences;
+    useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
     void persistPreferences(currentUser.id, fullPreferences, {
       logLabel: 'language preference',
       fallbackMessage: 'Could not save your language preference. Please try again.',
       rollback: () => {
-        // Unlike the preferences write there is no optimistic store entry to undo - the
-        // language lives in its own store, and it is the visible UI language that has to go
-        // back. Skip if the user has since picked another language: theirs must win.
+        // Skip if the user has since picked another language: theirs must win.
         if (useLanguage.getState().language !== currentLanguage) return;
-        // Reuse the server-read path's suppression flag so the write-back effect treats this
-        // as a programmatic change and does not echo the rollback to the server.
+        const store = useUser.getState();
+        // Same reference guard as updatePreferences: a newer write or server echo must stand.
+        if (store.currentUser && store.currentUser.preferences === fullPreferences) {
+          store.setCurrentUser({ ...store.currentUser, preferences: previousPreferences });
+        } else {
+          void queryClient.invalidateQueries({ queryKey: ['identify'] });
+        }
+        // Restore the visible language explicitly: a user with no saved server language has
+        // nothing for the server-read effect to apply. The suppression flag keeps the
+        // write-back effect from echoing the rollback to the server.
         languageSyncedRef.current = true;
         setLanguage(prev);
       },
     });
-  }, [currentLanguage, currentUser, setLanguage]);
+  }, [currentLanguage, currentUser, setLanguage, queryClient]);
 
   // One-time cleanup: remove stale localStorage keys from previous localStorage-based persistence
   useEffect(() => {
