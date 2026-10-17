@@ -1,5 +1,67 @@
 # @bike4mind/cli
 
+## 3.0.0
+
+### Major Changes
+
+- [#4331](https://github.com/Bike4Mind/bike4mind/pull/4331) [`0cbe715`](https://github.com/Bike4Mind/bike4mind/commit/0cbe71548676fdbe7647fef37058133753b426e8) Thanks [@dea0030](https://github.com/dea0030)! - require an explicit authOrigin on ToolContext
+
+- [#4724](https://github.com/Bike4Mind/bike4mind/pull/4724) [`6711c5f`](https://github.com/Bike4Mind/bike4mind/commit/6711c5fe5f8d9c9f1d37e5ba7739fd9a3678a13a) Thanks [@onoya](https://github.com/onoya)! - serve generated media through short-lived signed URLs
+
+### Minor Changes
+
+- [#4187](https://github.com/Bike4Mind/bike4mind/pull/4187) [`8ad3249`](https://github.com/Bike4Mind/bike4mind/commit/8ad32497393db0a4a0d01b419ca398a276d46b11) Thanks [@vinchi777](https://github.com/vinchi777)! - emit a toolStarted frame when a tool call opens
+
+- [#4210](https://github.com/Bike4Mind/bike4mind/pull/4210) [`b9a1e41`](https://github.com/Bike4Mind/bike4mind/commit/b9a1e41588a85d9ff0f38447c84bfc403880cdbf) Thanks [@julsanchez](https://github.com/julsanchez)! - fail send_message on errored/stopped turns and stop the turn on cancel
+
+- [#4211](https://github.com/Bike4Mind/bike4mind/pull/4211) [`9f7195a`](https://github.com/Bike4Mind/bike4mind/commit/9f7195a28ff0128a595428a065bdf3a8c986c0bf) Thanks [@julsanchez](https://github.com/julsanchez)! - add a typed @bike4mind/sdk client generated from the OpenAPI spec
+
+- [#4670](https://github.com/Bike4Mind/bike4mind/pull/4670) [`70eb763`](https://github.com/Bike4Mind/bike4mind/commit/70eb7633ee731cce9f4a41667cccd0e37bd87419) Thanks [@vinchi777](https://github.com/vinchi777)! - add the Electron desktop client
+
+- [#4671](https://github.com/Bike4Mind/bike4mind/pull/4671) [`e522492`](https://github.com/Bike4Mind/bike4mind/commit/e5224921043739026e3a234e9dd29e6d5f8ee7b5) Thanks [@julsanchez](https://github.com/julsanchez)! - add the Skill Market (publish, safety scan, review, import, rate)
+
+- [#4694](https://github.com/Bike4Mind/bike4mind/pull/4694) [`eb0a121`](https://github.com/Bike4Mind/bike4mind/commit/eb0a121eb1e0b31f9f5359c984b20d8b6b9fdec9) Thanks [@onoya](https://github.com/onoya)! - stream assistant text to the TUI as it arrives
+
+- [#4725](https://github.com/Bike4Mind/bike4mind/pull/4725) [`89ed029`](https://github.com/Bike4Mind/bike4mind/commit/89ed029b1cccec68a5651b3843da2a769e1746ea) Thanks [@julsanchez](https://github.com/julsanchez)! - show Bike4Mind account skills in Customize and the picker
+
+- [#4768](https://github.com/Bike4Mind/bike4mind/pull/4768) [`0d96e9e`](https://github.com/Bike4Mind/bike4mind/commit/0d96e9e68a8082930b44ddf7153523f77532efb8) Thanks [@onoya](https://github.com/onoya)! - add publish_artifact tool to the B4M MCP server
+
+- [#4772](https://github.com/Bike4Mind/bike4mind/pull/4772) [`6ea5a12`](https://github.com/Bike4Mind/bike4mind/commit/6ea5a12fd1255269b4b78ece0b2db57e46b350be) Thanks [@onoya](https://github.com/onoya)! - repair the transcript before every model request
+
+- [#4786](https://github.com/Bike4Mind/bike4mind/pull/4786) [`0c814ff`](https://github.com/Bike4Mind/bike4mind/commit/0c814ffd06baa6d5f9199c8c9eaaee07a137f1c6) Thanks [@onoya](https://github.com/onoya)! - typed model-call errors and one retry decision
+
+- [#4863](https://github.com/Bike4Mind/bike4mind/pull/4863) [`0bab465`](https://github.com/Bike4Mind/bike4mind/commit/0bab4656ac106d0513dc34a53e789ae03bd76430) Thanks [@vinchi777](https://github.com/vinchi777)! - report reasoning tokens in the completions usage event
+
+- [#4899](https://github.com/Bike4Mind/bike4mind/pull/4899) [`f0bb340`](https://github.com/Bike4Mind/bike4mind/commit/f0bb3402751dc6f7dd9c514b0b8e32dad97ef4c5) Thanks [@onoya](https://github.com/onoya)! - route every CLI-built tool through the permission wrapper
+
+### Patch Changes
+
+- [#4372](https://github.com/Bike4Mind/bike4mind/pull/4372) [`57a3bdb`](https://github.com/Bike4Mind/bike4mind/commit/57a3bdb8e9ae0004ce01d384dfcd2fcd827c1e33) Thanks [@erikbethke](https://github.com/erikbethke)! - one picker row per model, keyboard-selectable cards, catalog-only Gemini ids
+
+- [#4414](https://github.com/Bike4Mind/bike4mind/pull/4414) [`d075a46`](https://github.com/Bike4Mind/bike4mind/commit/d075a46d5310069e45521a88928ec9ac710b325e) Thanks [@jarlacut](https://github.com/jarlacut)! - return real HTTP status for pre-stream completion failures
+
+- [#4466](https://github.com/Bike4Mind/bike4mind/pull/4466) [`48016b1`](https://github.com/Bike4Mind/bike4mind/commit/48016b142b5168e849acf2454b2421ff0747cd0d) Thanks [@erikbethke](https://github.com/erikbethke)! - add explicit uploadFile for local-file uploads
+
+- [#4599](https://github.com/Bike4Mind/bike4mind/pull/4599) [`37a8844`](https://github.com/Bike4Mind/bike4mind/commit/37a8844e98868251b1725987d427f8810c86faeb) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - rate-limit WS JWT completions at the cli cap
+
+- [#4698](https://github.com/Bike4Mind/bike4mind/pull/4698) [`80a4077`](https://github.com/Bike4Mind/bike4mind/commit/80a4077b2690c53e5ae8b2e881c55e049c11fc05) Thanks [@onoya](https://github.com/onoya)! - make the @ file crawl async, bounded and gitignore-correct
+
+- [#4705](https://github.com/Bike4Mind/bike4mind/pull/4705) [`abe12eb`](https://github.com/Bike4Mind/bike4mind/commit/abe12ebe0f3ef3f6ff3f1e9badedcac156cece48) Thanks [@onoya](https://github.com/onoya)! - start the CLI faster by skipping the update wait and heavy imports
+
+- [#4709](https://github.com/Bike4Mind/bike4mind/pull/4709) [`22e6f85`](https://github.com/Bike4Mind/bike4mind/commit/22e6f85410139977e665ba89a42766dfa136e30d) Thanks [@onoya](https://github.com/onoya)! - stop token counting, checkpoint git and @ file reads from freezing the TUI
+
+- [#4716](https://github.com/Bike4Mind/bike4mind/pull/4716) [`d8018c3`](https://github.com/Bike4Mind/bike4mind/commit/d8018c3be42b71e394dd4de07e5e0d7d126f78c5) Thanks [@jarlacut](https://github.com/jarlacut)! - hide and reject unusable Bedrock models
+
+- [#4733](https://github.com/Bike4Mind/bike4mind/pull/4733) [`8b8fb20`](https://github.com/Bike4Mind/bike4mind/commit/8b8fb20167f5905631212800ffb27517412cdccb) Thanks [@onoya](https://github.com/onoya)! - run ! shell commands without freezing the TUI
+
+- [#4805](https://github.com/Bike4Mind/bike4mind/pull/4805) [`bef1cdf`](https://github.com/Bike4Mind/bike4mind/commit/bef1cdfe235fa4dcb1e83b2c34f1854b9a601b69) Thanks [@erikbethke](https://github.com/erikbethke)! - declare BUSL-1.1 license on the CLI and SDK packages
+
+- [#4813](https://github.com/Bike4Mind/bike4mind/pull/4813) [`91f136e`](https://github.com/Bike4Mind/bike4mind/commit/91f136e63f596f7cc06162754a3c55c7d701457a) Thanks [@erikbethke](https://github.com/erikbethke)! - point model aliases at active models
+
+- [#4896](https://github.com/Bike4Mind/bike4mind/pull/4896) [`f26469d`](https://github.com/Bike4Mind/bike4mind/commit/f26469da76796c614c0a3d47cfc3b71a671fac49) Thanks [@onoya](https://github.com/onoya)! - run MCP, skill and other wrapped tools instead of rejecting them
+
+- [#4906](https://github.com/Bike4Mind/bike4mind/pull/4906) [`20607df`](https://github.com/Bike4Mind/bike4mind/commit/20607df0e21e734bdf9d0dcbea573297f5d1bbd2) Thanks [@onoya](https://github.com/onoya)! - stop signing users out on transient or racing token refreshes
+
 ## 2.1.0
 
 ### Minor Changes
