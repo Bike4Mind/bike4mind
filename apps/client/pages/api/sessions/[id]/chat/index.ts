@@ -5,7 +5,8 @@ import { NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
 import qs from 'qs';
 import { secureParameters } from '@bike4mind/utils';
-import { queryBool } from '@bike4mind/common';
+import { chatMessageResponseSchema, queryBool } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 
 const searchSchema = z.object({
   search: z.string().optional(),
@@ -19,6 +20,11 @@ const searchSchema = z.object({
   sort: z.enum(['asc', 'desc']).prefault('asc'),
 });
 
+const chatMessagePageResponseSchema = z.object({
+  data: z.array(chatMessageResponseSchema),
+  hasMore: z.boolean(),
+});
+
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -26,7 +32,7 @@ const handler = baseApi()
       const { search, ...options } = secureParameters(qs.parse(req.query), searchSchema);
 
       const result = await getMessagesFromSession(req.user!, sessionId!, search, options);
-      return res.json(result);
+      return respond(res, chatMessagePageResponseSchema, result);
     })
   )
   .post(
@@ -49,7 +55,7 @@ const handler = baseApi()
 
       const userId = req.user?.id;
       const result = await addMessageToSession(userId, sessionId, message, req.ability!);
-      return res.json(result.toJSON());
+      return respond(res, chatMessageResponseSchema, result.toJSON());
     })
   );
 
