@@ -63,6 +63,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
   dataLakeRepository: {
+    findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findByDatalakeTag: h.findByDatalakeTag,
     find: h.find,
     setStats: h.setStats,

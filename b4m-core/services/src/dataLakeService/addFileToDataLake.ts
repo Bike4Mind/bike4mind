@@ -17,10 +17,13 @@ import { createDataLakeFallbackTagger, UNCATEGORIZED_TAG_SUFFIX } from './fallba
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import type { StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 interface AddFileToDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
-    LakeMembershipAuditAdapters['db'] & {
+    LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'findByDatalakeTag' | 'find' | 'setStats' | 'activateIfDraft'>;
       fabFiles: Pick<
         IFabFileRepository,

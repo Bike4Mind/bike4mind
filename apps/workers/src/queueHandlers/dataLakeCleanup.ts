@@ -26,6 +26,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';
 import { CleanupPayload } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -50,6 +51,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
       deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
       db: {
+        // A survivor stripped of this lake's tags moves its billed bytes to its next owner.
+        ...storageOwnerTransferDb,
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         dataLakeProposals: dataLakeProposalRepository,

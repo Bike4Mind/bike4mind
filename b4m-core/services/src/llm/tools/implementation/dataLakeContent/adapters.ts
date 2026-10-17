@@ -61,10 +61,11 @@ export function saveContentAdapters(db: ToolDb) {
   const { dataLakes, dataLakeAccessGrants, fabfiles, users, lakeMembershipRemovals } = db;
   const { lakeConfigChangeEvents, lakeMembershipChangeEvents } = db;
   if (
-    !hasMethods(dataLakes, ['findBySlug', 'findBySlugAmongIds', 'setStats', 'activateIfDraft']) ||
+    !hasMethods(dataLakes, ['findBySlug', 'findBySlugAmongIds', 'setStats', 'activateIfDraft', 'findByDatalakeTags']) ||
     !hasMethods(dataLakeAccessGrants, ['listByLake']) ||
     !fabfiles ||
-    !users ||
+    !hasMethods(users, ['incrementCurrentStorage']) ||
+    !hasMethods(db.organizations, ['incrementCurrentStorage']) ||
     !lakeMembershipRemovals ||
     !lakeConfigChangeEvents ||
     !lakeMembershipChangeEvents

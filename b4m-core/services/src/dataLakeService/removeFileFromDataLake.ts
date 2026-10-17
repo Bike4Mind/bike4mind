@@ -9,6 +9,7 @@ import { removeFileFromLake, type MembershipActor, type MembershipOriginOptions 
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import type { StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
 const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
@@ -19,8 +20,10 @@ export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters,
   // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
   // at the call site is never checked against this shape and dropping it still compiles. The route
   // test is what actually catches that; this keeps the contract honest for a reader.
+  // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
-    LakeMembershipAuditAdapters['db'] & {
+    LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
       fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;

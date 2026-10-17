@@ -40,7 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   // import-time failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
-  dataLakeRepository: { name: 'dataLakes' },
+  dataLakeRepository: { name: 'dataLakes', findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -50,9 +50,17 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  fabFileRepository: { name: 'fabFiles' },
+  fabFileRepository: { name: 'fabFiles', setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
   fileTagRepository: { name: 'fileTags' },
-  userRepository: { name: 'users' },
+  userRepository: {
+    name: 'users',
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   // Backing stores for the admission contract's enforcement lever (#1680), which the service
   // resolves at the join branch.
   adminSettingsRepository: { name: 'adminSettings' },
@@ -116,7 +124,10 @@ describe('POST /api/files/tags/toggle', () => {
         }),
       })
     );
-    expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({ name: 'dataLakes' });
+    expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({
+      name: 'dataLakes',
+      findByDatalakeTags: expect.any(Function),
+    });
     expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
   });
 

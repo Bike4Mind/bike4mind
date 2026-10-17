@@ -17,6 +17,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -59,6 +60,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
 
     const result = await fabFilesService.toggleTags(req.user.id, req.body, {
       db: {
+        ...storageOwnerTransferDb,
         fabFiles: fabFileRepository,
         fileTags: fileTagRepository,
         dataLakes: dataLakeRepository,

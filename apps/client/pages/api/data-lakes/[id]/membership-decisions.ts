@@ -18,6 +18,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * POST /api/data-lakes/:id/membership-decisions
@@ -93,6 +94,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           : { fileName: parsed.data.fileName, decision: parsed.data.decision, keptFabFileId: null },
         {
           db: {
+            ...storageOwnerTransferDb,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,

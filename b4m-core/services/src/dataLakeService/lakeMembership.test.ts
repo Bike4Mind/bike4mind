@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, DATALAKE_TAG_STRENGTH, type IDataLakeDocument } from '@bike4mind/common';
 import { addFileToLake, removeFileFromLake } from './lakeMembership';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -22,7 +23,7 @@ const fallbackLake = lake({ id: DATA_LAKES[0].id, datalakeTag: DATA_LAKES[0].dat
 describe('addFileToLake', () => {
   // The pre-image the winning push saw: a stranger to the lake, so the write is a real join.
   const makeAdapters = (prior: unknown = { userId: 'owner', tags: [] }) => ({
-    db: { fabFiles: { pushTagReturningPriorState: vi.fn().mockResolvedValue(prior) } },
+    db: withStorageOwnerFakes({ fabFiles: { pushTagReturningPriorState: vi.fn().mockResolvedValue(prior) } }),
   });
 
   it('stamps the canonical meta-tag at the shared membership strength', async () => {
@@ -64,10 +65,10 @@ describe('addFileToLake', () => {
 
   describe('membership event', () => {
     const makeAuditedAdapters = (prior: unknown = { userId: 'owner', tags: [] }) => ({
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: { pushTagReturningPriorState: vi.fn().mockResolvedValue(prior) },
         lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
-      },
+      }),
     });
 
     it('records an `added` event, defaulting to `person` origin', async () => {
@@ -142,12 +143,12 @@ describe('removeFileFromLake', () => {
   };
 
   const makeAdapters = () => ({
-    db: {
+    db: withStorageOwnerFakes({
       fabFiles: {
         findById: vi.fn().mockResolvedValue(fileInLake),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
-    },
+    }),
   });
 
   it('clears the membership signals without recomputing stats', async () => {
@@ -171,14 +172,14 @@ describe('removeFileFromLake', () => {
 
   it('returns empty contentTags for a meta-tag-only member (nothing to restore)', async () => {
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi
             .fn()
             .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake', strength: 1 }] }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     const result = await removeFileFromLake(owner, lake(), 'f1', adapters);
@@ -190,7 +191,7 @@ describe('removeFileFromLake', () => {
     // Same fixture as "strips only the meta-tag" above: admitted via the meta-tag arm only, so the
     // prefix-matching tag is a bystander this lake never actually held as content.
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi.fn().mockResolvedValue({
             id: 'f1',
@@ -202,7 +203,7 @@ describe('removeFileFromLake', () => {
           }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     const result = await removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
@@ -232,14 +233,14 @@ describe('removeFileFromLake', () => {
     // Prefix-only (no meta-tag), owned by someone other than lake()'s creator ('owner'), so the
     // outcome is decided entirely by the ownership conjunct, not the meta-tag arm.
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi
             .fn()
             .mockResolvedValue({ id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters)).rejects.toThrow(
@@ -254,7 +255,7 @@ describe('removeFileFromLake', () => {
     // canManageLake trivially), and the file's owner shared it with them read/write. A share is
     // not ownership, so the outcome is identical to the admin case.
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi.fn().mockResolvedValue({
             id: 'f1',
@@ -264,7 +265,7 @@ describe('removeFileFromLake', () => {
           }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
@@ -276,7 +277,7 @@ describe('removeFileFromLake', () => {
     // stranger's file) - the read path's prefix arm never admitted this file since it is not
     // owned by the lake's creator, so removal must not strip its coincidentally-matching tag.
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi.fn().mockResolvedValue({
             id: 'f1',
@@ -288,7 +289,7 @@ describe('removeFileFromLake', () => {
           }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     await removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
@@ -301,14 +302,14 @@ describe('removeFileFromLake', () => {
     // treat an unrelated lake's meta-tag as this lake's own prefix-tagged content.
     const reservedPrefixLake = lake({ fileTagPrefix: 'datalake:evil:' });
     const adapters = {
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi
             .fn()
             .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:other', strength: 1 }] }),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
-      },
+      }),
     };
 
     await expect(removeFileFromLake(owner, reservedPrefixLake, 'f1', adapters)).rejects.toThrow(
@@ -319,13 +320,13 @@ describe('removeFileFromLake', () => {
 
   describe('membership event (#3052)', () => {
     const makeAuditedAdapters = () => ({
-      db: {
+      db: withStorageOwnerFakes({
         fabFiles: {
           findById: vi.fn().mockResolvedValue(fileInLake),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         },
         lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
-      },
+      }),
     });
 
     it('records a `removed` event, defaulting to `person` origin, after the pull lands', async () => {
@@ -363,10 +364,10 @@ describe('removeFileFromLake', () => {
 
     it('never records when the member refusal throws first', async () => {
       const adapters = {
-        db: {
+        db: withStorageOwnerFakes({
           fabFiles: { findById: vi.fn().mockResolvedValue(null), pullTagsByFabFileId: vi.fn() },
           lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
-        },
+        }),
       };
 
       await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found/i);

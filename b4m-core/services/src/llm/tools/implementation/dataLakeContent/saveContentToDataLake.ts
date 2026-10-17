@@ -205,6 +205,8 @@ export const saveContentToDataLakeTool: ToolDefinition = {
             dataLakes: adapters.dataLakes,
             dataLakeAccessGrants: adapters.dataLakeAccessGrants,
             fabFiles: adapters.fabFiles,
+            users: adapters.users,
+            organizations: adapters.organizations,
             lakeMembershipRemovals: adapters.lakeMembershipRemovals,
             adminSettings: adapters.adminSettings,
             scopedSettings: adapters.scopedSettings,
