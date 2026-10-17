@@ -13,6 +13,11 @@ import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import {
+  assertStorageOwnerTransferFits,
+  reassignStorageOwner,
+  type StorageOwnerTransferDb,
+} from '../fabFileService/reassignStorageOwner';
 
 /**
  * Who drove this membership write - see `LakeMembershipChangeOrigin`'s own doc comment for why
@@ -39,19 +44,23 @@ export type MembershipLake = Pick<
   'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
 >;
 
+// Membership decides who a file's bytes are billed to (reassignStorageOwner), so both doors take the
+// storage-owner repositories as required adapters: a caller cannot wire the tag write without them.
 interface RemoveMembershipAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
-    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-  };
+  db: LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
+      // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
 }
 
 interface AddMembershipAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'pushTagReturningPriorState'>;
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-  };
+  db: LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'pushTagReturningPriorState'>;
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
 }
 
 /** The file fields a membership signal is read from - always the persisted document. */
@@ -204,6 +213,7 @@ export const removeFileFromLake = async (
   // first pull clears the tags and the second matches nothing, and recording off the read would
   // append two `removed` events for one transition - a permanent claim that the file left twice.
   if (pulled > 0) {
+    await reassignStorageOwner(file.id, db);
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
   return { contentTags };
@@ -234,7 +244,15 @@ export const addFileToLake = async (
   }
   assertLakeWritable(lake);
 
+  // Gated before the push so a join refused for quota writes nothing, even outside a transaction.
+  const file = await db.fabFiles.findById(fabFileId);
+  if (file) {
+    const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
+    await assertStorageOwnerTransferFits(file, [...tagNames, lake.datalakeTag], db);
+  }
+
   const priorState = await db.fabFiles.pushTagReturningPriorState(fabFileId, lake.datalakeTag, DATALAKE_TAG_STRENGTH);
+  if (priorState) await reassignStorageOwner(fabFileId, db);
   // Idempotent by construction (the push is filtered on the name being absent), so a no-op re-add
   // of an existing member records nothing - matching `recordLakeConfigChange`'s own "no real
   // change, no row" rule.

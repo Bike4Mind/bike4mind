@@ -129,7 +129,9 @@ export interface ToolContext {
       // method semanticDataLakeSearch's residency gate depends on with no type error.
       | 'annResidentFabFileIds'
     >;
-    users?: Pick<IUserRepository, 'findById'>;
+    // incrementCurrentStorage: save_content_to_data_lake's lake join moves the file's billed bytes
+    // (reassignStorageOwner). Optional so a read-only host still type-checks; that tool refuses without it.
+    users?: Pick<IUserRepository, 'findById'> & Partial<Pick<IUserRepository, 'incrementCurrentStorage'>>;
     projects?: IProjectRepository;
     // 'find' is forwarded straight to createFabFile (persistGeneratedFileAsFabFile), for its
     // fallback tagger's prefix-overlap check.
@@ -154,7 +156,14 @@ export interface ToolContext {
       Partial<
         Pick<
           IDataLakeRepository,
-          'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+          | 'findAccessible'
+          | 'findBySlug'
+          | 'findBySlugAmongIds'
+          | 'create'
+          | 'setStats'
+          | 'activateIfDraft'
+          // The owner transfer a save's lake join triggers (reassignStorageOwner).
+          | 'findByDatalakeTags'
         >
       >;
     /**
@@ -183,7 +192,9 @@ export interface ToolContext {
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'> &
+      // Same reason as `users.incrementCurrentStorage` above.
+      Partial<Pick<IOrganizationRepository, 'incrementCurrentStorage'>>;
     /**
      * Access-grant lookup shared by two independent optional features:
      * - the retrieval resolver's grant arm, so a lake the caller reaches only by an

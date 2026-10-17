@@ -76,6 +76,7 @@ import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 const Payload = z.object({
   connectionId: z.string(),
@@ -1086,7 +1087,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           membershipActor,
           lake,
           doc.id,
-          { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+          { db: { ...storageOwnerTransferDb, ...membershipAuditDb }, logger },
           { origin: 'connector' }
         );
         unpicked++;
