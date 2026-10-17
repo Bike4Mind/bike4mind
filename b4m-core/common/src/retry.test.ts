@@ -192,13 +192,20 @@ describe('retry', () => {
     });
 
     it('should parse Retry-After as HTTP date', () => {
-      const futureDate = new Date(Date.now() + 3000);
-      const error = createAxiosError(429, undefined, {
-        'retry-after': futureDate.toUTCString(),
-      });
-      const result = getRetryAfterMs(error);
-      expect(result).toBeGreaterThan(2000);
-      expect(result).toBeLessThan(4000);
+      // toUTCString() drops sub-second precision, so pin the clock to a whole second.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+        const futureDate = new Date(Date.now() + 3000);
+        const error = createAxiosError(429, undefined, {
+          'retry-after': futureDate.toUTCString(),
+        });
+        const result = getRetryAfterMs(error);
+        expect(result).toBeGreaterThan(2000);
+        expect(result).toBeLessThan(4000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // #2118: withRetry overrides its exponential backoff with ANY non-null return, so a zero does
