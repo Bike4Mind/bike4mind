@@ -201,6 +201,9 @@ export enum ChatModels {
   DEEPSEEK_R1_BEDROCK = 'us.deepseek.r1-v1:0',
   DEEPSEEK_V3_1 = 'deepseek.v3-v1:0',
 
+  // Served by the generic Converse backend (llm-adapters bedrockBackend/converse.ts).
+  NOVA_PRO_BEDROCK = 'us.amazon.nova-pro-v1:0',
+
   TITAN_TEXT_G1_LITE = 'amazon.titan-text-lite-v1',
   TITAN_TEXT_G1_EXPRESS = 'amazon.titan-text-express-v1',
   // Bedrock hosted Anthropic models

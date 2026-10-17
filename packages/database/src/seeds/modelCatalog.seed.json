@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-15T07:24:50.287Z",
-  "notice": "Fallback defaults last maintained on 2026-10-15. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-16T05:12:18.113Z",
+  "notice": "Fallback defaults last maintained on 2026-10-16. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -3775,6 +3775,35 @@
         },
         "description": "Amazon Transcribe - Automatic speech recognition service that converts audio to text with support for multiple languages and formats.",
         "rank": 1
+      }
+    },
+    {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.amazon.nova-pro-v1:0",
+        "vendor": "amazon",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Amazon Nova Pro",
+        "contextWindow": 300000,
+        "maxOutputTokens": 10000,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Amazon's Nova Pro via AWS Bedrock - multimodal (text and images), tool use, and a 300K-token context window.",
+        "rank": 5,
+        "releaseDate": "2024-12-03"
       }
     },
     {

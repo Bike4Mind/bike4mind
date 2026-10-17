@@ -228,6 +228,8 @@ export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, Reasonin
   ollama: 'always',
   'bedrock-deepseek': 'always',
   'bedrock-moonshot': 'always',
+  // Converse reasoningContent is wrapped in the markers inline, like bedrock-deepseek.
+  'bedrock-converse': 'always',
   // Not text completion at all - image, embedding and credential-only families. They cannot
   // back a chat agent, so they are refused rather than described.
   bfl: 'always',
