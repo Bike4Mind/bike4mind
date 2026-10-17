@@ -1,5 +1,31 @@
 # @bike4mind/infra
 
+## 3.0.0
+
+### Major Changes
+
+- [#4462](https://github.com/Bike4Mind/bike4mind/pull/4462) [`3e46049`](https://github.com/Bike4Mind/bike4mind/commit/3e46049023bdb7a05e69eb6fa2fd18577dca76a5) Thanks [@onoya](https://github.com/onoya)! - save every generated asset through saveGeneratedAsset
+
+### Minor Changes
+
+- [#4164](https://github.com/Bike4Mind/bike4mind/pull/4164) [`d553e0d`](https://github.com/Bike4Mind/bike4mind/commit/d553e0d6e290d89abe8d5f375d463fbf9ff077d9) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 file list, update and delete endpoints
+
+- [#4192](https://github.com/Bike4Mind/bike4mind/pull/4192) [`e9b4d0a`](https://github.com/Bike4Mind/bike4mind/commit/e9b4d0a15a5f0048f72cc6f543b59e41f2ec0422) Thanks [@julsanchez](https://github.com/julsanchez)! - add public v1 artifacts, transcriptions and quest files endpoints
+
+- [#4495](https://github.com/Bike4Mind/bike4mind/pull/4495) [`b907917`](https://github.com/Bike4Mind/bike4mind/commit/b9079176ad40a5f54052e3e8b35a0251f31f7ba5) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - add NCMEC CyberTipline reporting path for CSAM detection
+
+### Patch Changes
+
+- [#4276](https://github.com/Bike4Mind/bike4mind/pull/4276) [`b142d79`](https://github.com/Bike4Mind/bike4mind/commit/b142d79a0d726cbaa25ff77fa3e1d7884b0033c5) Thanks [@poysama](https://github.com/poysama)! - sign browser URLs in file collections
+
+- [#4401](https://github.com/Bike4Mind/bike4mind/pull/4401) [`2a05d5e`](https://github.com/Bike4Mind/bike4mind/commit/2a05d5ed61983e43134c0fb218c2f015fbc02842) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - terminally fail callbacks that exhaust redispatch retries
+
+- [#4474](https://github.com/Bike4Mind/bike4mind/pull/4474) [`ed24bf7`](https://github.com/Bike4Mind/bike4mind/commit/ed24bf7cc5e68aafa89efe5913c4b84dea9316ce) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - stop masked edits losing the race with mask moderation
+
+- [#4557](https://github.com/Bike4Mind/bike4mind/pull/4557) [`86bba4a`](https://github.com/Bike4Mind/bike4mind/commit/86bba4a26562a43a06e28951b7b38d9e5867d4c0) Thanks [@julsanchez](https://github.com/julsanchez)! - charge a content rewrite only the size delta
+
+- [#4645](https://github.com/Bike4Mind/bike4mind/pull/4645) [`c317966`](https://github.com/Bike4Mind/bike4mind/commit/c317966ac743b47b873b47b0148201ff0523b53a) Thanks [@aflordelis](https://github.com/aflordelis)! - move the standalone Lambda handlers into apps/workers
+
 ## 2.1.0
 
 ### Minor Changes
