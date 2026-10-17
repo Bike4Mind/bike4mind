@@ -1058,7 +1058,18 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 export type ChatStreamEvent =
-  | { type: 'start'; sessionId: string; messageId: string }
+  | {
+      type: 'start';
+      sessionId: string;
+      messageId: string;
+      /**
+       * What the reply had already used before the run this event opens, when it resumes one.
+       * Absent on a fresh reply. A resumed run's later `usage` totals carry the earlier part
+       * inside them, so a consumer that already reported that part reads it from here rather
+       * than keeping a total of its own.
+       */
+      baseUsage?: ChatUsage;
+    }
   | { type: 'delta'; sessionId: string; messageId: string; text: string }
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
