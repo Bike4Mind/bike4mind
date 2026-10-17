@@ -51,6 +51,7 @@ describe('TOOL_NAMES', () => {
       'generate_sound_effect',
       'text_to_speech',
       'generate_image',
+      'create_artifact',
       'publish_artifact',
     ]);
   });
@@ -1108,6 +1109,7 @@ describe('registerTools', () => {
     ['rename_notebook', 'renameNotebook', { notebookId: NB_ID, name: 'x' }],
     ['clone_notebook', 'cloneNotebook', { notebookId: NB_ID }],
     ['delete_notebook', 'deleteNotebook', { notebookId: NB_ID, confirm: true }],
+    ['create_artifact', 'createArtifact', { type: 'html', title: 'Spec', content: '<p>x</p>' }],
   ] as const)('%s maps a 403 to an isError naming notebooks:write', async (tool, method, args) => {
     const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
       status: 403,
@@ -1122,6 +1124,31 @@ describe('registerTools', () => {
 
     expect(result.isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toContain('recommended scope: notebooks:write');
+  });
+
+  it('create_artifact forwards the input and returns the new artifact for publish_artifact', async () => {
+    const created = { id: 'a1', type: 'html', title: 'Spec', version: 1, createdAt: 'c' };
+    const createArtifact = vi.fn().mockResolvedValue(created);
+    const tools = collectTools(mockClient({ createArtifact }));
+    const args = { type: 'html', title: 'Spec', content: '<p>x</p>', notebookId: NB_ID };
+
+    const result = await tools.get('create_artifact')!(args);
+
+    expect(createArtifact).toHaveBeenCalledWith(args);
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual(created);
+  });
+
+  it('create_artifact input schema requires a known type, a title and non-empty content', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('create_artifact')!);
+    const valid = { type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' };
+
+    expect(schema.safeParse(valid).success).toBe(true);
+    expect(schema.safeParse({ ...valid, type: 'markdown' }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, title: '' }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, title: 'x'.repeat(256) }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, content: '' }).success).toBe(false);
+    expect(schema.safeParse({ ...valid, notebookId: 'n1' }).success).toBe(false);
   });
 
   it.each([

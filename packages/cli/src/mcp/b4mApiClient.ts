@@ -5,6 +5,7 @@ import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
+  type ArtifactResource,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
   type IBriefcasePrompt,
@@ -184,6 +185,26 @@ interface ArtifactListEnvelope {
 export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
+}
+
+export interface CreateArtifactArgs {
+  type: ArtifactResource['type'];
+  title: string;
+  content: string;
+  description?: string;
+  notebookId?: string;
+  projectId?: string;
+  tags?: string[];
+}
+
+export interface CreatedArtifact {
+  id: string;
+  type: ArtifactResource['type'];
+  title: string;
+  version: number;
+  notebookId?: string;
+  projectId?: string;
+  createdAt: string;
 }
 
 /** Where an artifact is already published, from GET /api/publish/artifacts?sourceArtifactId. */
@@ -462,6 +483,30 @@ export class B4mApiClient {
     return this.client.get<ArtifactWithContent>(`/api/artifacts/${encodeURIComponent(artifactId)}`, {
       params: { includeContent: 'true' },
     });
+  }
+
+  /** POST /api/v1/artifacts: creates a private artifact at version 1. */
+  async createArtifact(args: CreateArtifactArgs): Promise<CreatedArtifact> {
+    const artifact = await this.sdk.call('createArtifact', {
+      body: {
+        type: args.type,
+        title: args.title,
+        content: args.content,
+        ...(args.description !== undefined ? { description: args.description } : {}),
+        ...(args.notebookId ? { session_id: args.notebookId } : {}),
+        ...(args.projectId ? { project_id: args.projectId } : {}),
+        ...(args.tags?.length ? { tags: args.tags } : {}),
+      },
+    });
+    return {
+      id: artifact.id,
+      type: artifact.type,
+      title: artifact.title,
+      version: artifact.version,
+      notebookId: artifact.session_id ?? undefined,
+      projectId: artifact.project_id ?? undefined,
+      createdAt: artifact.created_at,
+    };
   }
 
   /**

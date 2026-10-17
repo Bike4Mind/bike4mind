@@ -25,6 +25,7 @@ import {
   apiErrorStatus,
   B4mApiClient,
   mapApiError,
+  type CreateArtifactArgs,
   type QuestResponse,
   type RawDataLake,
   type RawNotebook,
@@ -147,6 +148,13 @@ export const TOOL_META: ToolMeta[] = [
     description:
       "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
     scope: 'ai:generate',
+  },
+  {
+    name: 'create_artifact',
+    title: 'Create artifact',
+    description:
+      "Create a private artifact (diagram, chart, code, page) and return its id. There is no markdown type: put a written document in type 'html'. Pass the returned id to publish_artifact to share it.",
+    scope: 'notebooks:write',
   },
   {
     name: 'publish_artifact',
@@ -294,6 +302,18 @@ const publishArtifactShape = {
       "Who can open the link: 'public' (anyone) or 'private' (only you); omit to keep an existing page's visibility (a first publish is public)"
     ),
   title: z.string().min(1).max(200).optional().describe("Page title; defaults to the artifact's title"),
+};
+
+const createArtifactShape = {
+  type: ArtifactTypeSchema.describe(
+    "Artifact type: 'html' for a written document or web page, 'mermaid' for a diagram, 'recharts' for a chart, 'svg', 'react', 'python' or 'code' for source"
+  ),
+  title: z.string().min(1).max(255).describe('Artifact title'),
+  content: z.string().min(1).describe("The artifact's source: HTML, Mermaid, SVG, code and so on, matching type"),
+  description: z.string().max(1000).optional().describe('Short description'),
+  notebookId: notebookId('A notebook (session) you can edit, to file the artifact under').optional(),
+  projectId: z.string().min(1).optional().describe('A project you can read, to file the artifact under'),
+  tags: z.array(z.string().max(50)).max(20).optional().describe('Up to 20 tags'),
 };
 
 const textToSpeechShape = {
@@ -683,6 +703,10 @@ async function openPublishDraft(client: B4mApiClient, request: UploadUrlRequest)
   }
 }
 
+export async function createArtifact(client: B4mApiClient, args: CreateArtifactArgs) {
+  return client.createArtifact(args);
+}
+
 /**
  * Publish an artifact: upload its RAW content and let finalize render it
  * (source.artifactType), so the page matches an in-app publish byte for byte with
@@ -1044,6 +1068,16 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
           onProgress: progressReporter(extra, () => 'rendering image'),
         })
       )
+  );
+
+  server.registerTool(
+    'create_artifact',
+    {
+      title: meta('create_artifact').title,
+      description: meta('create_artifact').description,
+      inputSchema: createArtifactShape,
+    },
+    args => run('notebooks:write', () => createArtifact(client, args))
   );
 
   server.registerTool(
