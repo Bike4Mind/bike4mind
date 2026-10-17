@@ -35,6 +35,7 @@ export function buildSlackLakeIngestDeps(args: {
     adminSettings: adminSettingsRepository,
     fabFiles: FabFile,
     users: User,
+    organizations: organizationRepository,
     // Required by createFabFile's tag gate (assertCanWriteDataLakeTags +
     // assertCanWriteStaticRegistryTags), which every caller now passes through. Declared on the
     // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly

@@ -5,6 +5,7 @@ import type {
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -51,6 +52,7 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembership
       // silently keep every soft-deleted file's bytes counted against its owner's storage quota
       // forever, correctable only via the admin recalculate-storage endpoint.
       users: Pick<IUserRepository, 'incrementCurrentStorage'>;
+      organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
@@ -173,7 +175,7 @@ export const deleteDataLake = async (
   // Grouped by owner, not the lake's creator: a swept file may belong to any contributor (see
   // groupStorageDeltaByOwner). Off the same swept set as the membership log above, so a re-run
   // after a crash only debits files THIS attempt actually took out of the counted set.
-  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(swept, -1), logger);
+  await bestEffortAdjustOwnerStorage(db, groupStorageDeltaByOwner(swept, -1), logger);
   // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
   // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
   // soft-deleted members too and stays stable across re-runs.

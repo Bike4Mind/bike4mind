@@ -19,7 +19,7 @@ beforeEach(async () => {
 });
 
 const charged = new Date('2026-01-01T00:00:00Z');
-const makeFile = () =>
+const makeFile = (fields: Record<string, unknown> = {}) =>
   FabFile.create({
     userId: 'u-rewrite',
     fileName: 'a.txt',
@@ -28,6 +28,7 @@ const makeFile = () =>
     filePath: 'files/a.txt',
     fileSize: 100,
     storageChargedAt: charged,
+    ...fields,
   });
 
 // The storage delta in fabFileService/rewriteStorage.ts is computed from what this returns, so a
@@ -55,5 +56,25 @@ describe('FabFileRepository.commitContentRewrite', () => {
 
     expect(await fabFileRepository.commitContentRewrite(file.id, { fileSize: 250 }, { filePath: 'other' })).toBeNull();
     expect((await FabFile.findById(file.id).lean())?.fileSize).toBe(100);
+  });
+
+  // The rewrite delta is billed to storageOwnerOf(pre), so dropping the org would bill the uploader.
+  it('carries the owning organizationId on the pre-image', async () => {
+    const file = await makeFile({ organizationId: 'o1' });
+
+    const pre = await fabFileRepository.commitContentRewrite(file.id, { fileSize: 250 });
+
+    expect(pre?.organizationId).toBe('o1');
+  });
+});
+
+describe('FabFileRepository.findChargeState', () => {
+  it('carries the owning organizationId', async () => {
+    const file = await makeFile({ organizationId: 'o1' });
+
+    expect(await fabFileRepository.findChargeState(file.id)).toMatchObject({
+      userId: 'u-rewrite',
+      organizationId: 'o1',
+    });
   });
 });

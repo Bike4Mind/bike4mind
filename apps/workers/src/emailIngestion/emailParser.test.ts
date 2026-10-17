@@ -10,6 +10,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   connectDB: vi.fn().mockResolvedValue(undefined),
   userRepository: {},
   ingestedEmailRepository: {},

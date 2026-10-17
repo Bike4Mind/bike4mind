@@ -4,6 +4,7 @@ import {
   IProjectRepository,
   ISessionRepository,
   ISessionAgentConfigRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
@@ -27,6 +28,9 @@ interface DeleteSessionAdapters {
     // that omits it gets no storage debit, leaving the owner's quota over-counted until the admin
     // recalculate-storage endpoint runs - so every in-repo route must wire it.
     users?: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    // Required: it arrived with owner billing, so no caller predates it, and an org-owned file left
+    // undebited would hold the whole org's quota.
+    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     // Optional: this is a published, patch-released signature (re-exported from
     // @bike4mind/services), so an existing caller built against the pre-cleanup shape must keep
     // compiling and running without it - the cleanup below is then just skipped for that caller.
@@ -109,9 +113,9 @@ export const deleteSession = async (
   // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
   // so the grouping collapses to one write today.
   await bestEffortAdjustOwnerStorage(
-    db.users,
+    db,
     groupStorageDeltaByOwner(
-      ownedFiles.map(f => ({ id: f.id, userId: f.userId, fileSize: chargedBytes(f) })),
+      ownedFiles.map(f => ({ userId: f.userId, organizationId: f.organizationId, fileSize: chargedBytes(f) })),
       -1
     ),
     logger

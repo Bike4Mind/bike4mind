@@ -35,6 +35,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   Session,
   User,
   NotebookCurationJob,

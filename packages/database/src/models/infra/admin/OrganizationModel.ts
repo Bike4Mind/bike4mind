@@ -8,7 +8,7 @@ import {
   OrgMemberPopulation,
   orgAclRowConfersMembership,
 } from '@bike4mind/common';
-import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
+import mongoose, { type ClientSession, HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -150,9 +150,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
-    // MB; no schema default so an unset limit keeps tracking DEFAULT_STORAGE_LIMIT_MB.
+    // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
     storageLimit: { type: Number, min: 0 },
-    // Bytes owned by the org; written only through incrementCurrentStorage.
+    // Bytes owned by the org; written only through incrementCurrentStorage and the reconciliation's
+    // setCurrentStorageIfUnchanged.
     currentStorageSize: { type: Number, min: 0 },
     /**
      * Organization-wide system prompt applied to all team-member conversations. Lets
@@ -233,14 +234,50 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return this.organizationModel.findOne({ stripeCustomerId });
   }
 
-  async incrementCurrentStorage(organizationId: string, bytes: number): Promise<void> {
-    await this.organizationModel.findByIdAndUpdate(organizationId, [
-      {
-        $set: {
-          currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, bytes] }] },
+  /**
+   * `session` lets a caller that charges inside a transaction (the S3 charge's compare-and-set claim,
+   * the delete routes) move the org counter atomically with the row write. Not on the interface:
+   * services stay transaction-agnostic.
+   */
+  async incrementCurrentStorage(organizationId: string, bytes: number, session?: ClientSession): Promise<void> {
+    await this.organizationModel.findByIdAndUpdate(
+      organizationId,
+      [
+        {
+          $set: {
+            currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, bytes] }] },
+          },
         },
-      },
-    ]);
+      ],
+      session ? { session } : {}
+    );
+  }
+
+  async setCurrentStorageIfUnchanged(organizationId: string, expected: number, next: number): Promise<boolean> {
+    // `null` also matches a missing field, which every reader treats as 0.
+    const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
+    const res = await this.organizationModel.updateOne(
+      { _id: organizationId, currentStorageSize: counterFilter },
+      { $set: { currentStorageSize: next } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  async findCurrentStorageSize(organizationId: string): Promise<number | null> {
+    if (!mongoose.isValidObjectId(organizationId)) return null;
+    const row = await this.organizationModel
+      .findById(organizationId, { currentStorageSize: 1 })
+      .lean<{ currentStorageSize?: number | null }>();
+    return row ? (row.currentStorageSize ?? 0) : null;
+  }
+
+  async listOrganizationIdsAfter(afterId: string | null, limit: number): Promise<string[]> {
+    const rows = await this.organizationModel
+      .find(afterId ? { _id: { $gt: afterId } } : {}, { _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
   }
 
   /**

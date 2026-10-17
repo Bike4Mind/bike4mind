@@ -7,6 +7,7 @@ import {
   orgGoogleDriveConnectionRepository,
   sessionRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
@@ -132,6 +133,7 @@ async function purgeSlice(
       fabFiles: fabFileRepository,
       fabFileChunks: fabFileChunkRepository,
       users: userRepository,
+      organizations: organizationRepository,
       dataLakeFindings: dataLakeFindingRepository,
       sessions: sessionRepository,
     },
