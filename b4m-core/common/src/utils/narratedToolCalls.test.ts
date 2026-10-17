@@ -61,11 +61,39 @@ describe('stripNarratedToolCalls', () => {
     expect(stripNarratedToolCalls('Let me check.\n<tool_').text).toBe('Let me check.\n');
   });
 
-  it('strips an unterminated block at finalize only when it parses as a call to an offered tool', () => {
-    const cut = 'Checking.\n<tool_call>\n{"name": "web_search", "arguments": {}}';
-    expect(stripNarratedToolCalls(cut, OFFERED).text).toBe('Checking.\n');
-    const broken = 'Checking.\n<tool_call>\n{"name": "web_se';
-    expect(stripNarratedToolCalls(broken, OFFERED).text).toBe(broken);
+  it('never strips an unterminated block at finalize, since the real answer may follow it', () => {
+    const unclosed = [
+      'Checking.\n<tool_call>\n{"name": "web_search", "arguments": {}}',
+      '<function_calls>\n<invoke name="web_search">\nHere is the real answer: the tide is high.',
+      '[TOOL_CALLS]web_search[ARGS]{"query": "tides"}\nHere is the real answer.',
+      '[TOOL_CALLS][{"name": "web_search", "arguments": {}}]\nHere is the real answer.',
+    ];
+    for (const reply of unclosed)
+      expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [] });
+  });
+
+  it('does not hide a partial opener at finalize', () => {
+    expect(stripNarratedToolCalls('Answer.\n<f', OFFERED).text).toBe('Answer.\n<f');
+  });
+
+  it('leaves a block indented four spaces alone, since markdown renders it as code', () => {
+    const reply = 'Example:\n\n    <tool_call>{"name":"web_search","arguments":{}}</tool_call>';
+    expect(stripNarratedToolCalls(reply, OFFERED).text).toBe(reply);
+    expect(stripNarratedToolCalls(reply).text).toBe(reply);
+    expect(stripNarratedToolCalls('A\n   <tool_call>{"name":"web_search"}</tool_call>\nB', OFFERED).text).toBe('A\nB');
+  });
+
+  // A quadratic scan here stalls the server's event loop on a hostile or degenerate reply.
+  it.each([
+    ['unclosed openers', '<tool_call>\n'.repeat(17_000)],
+    ['openers before one close', '<tool_call>{\n'.repeat(16_000) + '</tool_call>'],
+    ['invoke openers', '<function_calls>\n<invoke name="web_search">\n'.repeat(4_600)],
+    ['Mistral markers', '[TOOL_CALLS]web_search[ARGS]\n'.repeat(7_000)],
+  ])('stays linear on about 200KB of %s', (_case, reply) => {
+    const started = performance.now();
+    stripNarratedToolCalls(reply, OFFERED);
+    stripNarratedToolCalls(reply);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 
   const untouched: Array<[string, string]> = [

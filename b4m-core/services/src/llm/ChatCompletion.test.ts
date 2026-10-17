@@ -6519,15 +6519,18 @@ describe('ChatCompletionProcess', () => {
       tools: any[],
       disabledTools?: string[],
       extraBody: Record<string, unknown> = {},
-      reply = 'Hi!'
+      reply = 'Hi!',
+      stoppedByUser = false
     ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, opts: any, cb: any) => {
           await cb([reply]);
+          // A user Stop aborts the turn's controller; the backend then resolves rather than throws.
+          if (stoppedByUser) Object.defineProperty(opts.abortSignal, 'aborted', { value: true });
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -6671,6 +6674,14 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.reply).not.toContain('<tool_call>');
       expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
       expect(mockQuest.reply).toContain(NARRATED_TOOL_CALL_NOTICE);
+    });
+
+    it('strips and flags a tool call written as text on a stopped turn, without a notice', async () => {
+      await runWithTools([webSearchTool], undefined, {}, narratedCall, true);
+      expect(mockQuest.status).toBe('stopped');
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
+      expect(mockQuest.replies.join('')).not.toContain(NARRATED_TOOL_CALL_NOTICE);
     });
 
     it('leaves a tool call written as text alone when it names no offered tool', async () => {

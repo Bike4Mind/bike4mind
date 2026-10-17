@@ -5207,38 +5207,45 @@ export class ChatCompletionProcess {
           });
         }
 
+        // The flag is what lets the client hide the same blocks on render (extractReplies), so the
+        // notice is shown only alongside it, and never on a turn the user stopped.
+        let narratedNoticeShown = false;
         if (narratedToolNames.length > 0) {
           logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', {
             questId,
             model: currentModel.id,
             toolNames: narratedToolNames,
           });
-          if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames: narratedToolNames };
-          // Same notice-slot shape as the incomplete-answer notice below.
-          quest.replies = [...(quest.replies ?? []), `\n\n${NARRATED_TOOL_CALL_NOTICE}`];
-          quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+          if (quest.promptMeta) {
+            quest.promptMeta.narratedToolCall = { toolNames: narratedToolNames };
+            if (quest.status !== 'stopped') {
+              // Same notice-slot shape as the incomplete-answer notice below.
+              quest.replies = [...(quest.replies ?? []), `\n\n${NARRATED_TOOL_CALL_NOTICE}`];
+              quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+              narratedNoticeShown = true;
+            }
+          }
         }
 
-        // Skipped after a narrated call: stripping it lowers the visible count, and the notice
-        // above already tells the user why there is no answer.
-        const incompleteAnswerNotice =
-          narratedToolNames.length > 0
-            ? null
-            : buildIncompleteAnswerNotice({
-                stopped: quest.status === 'stopped',
-                toolCallCount: toolCallsSeen,
-                visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
-                stopReason: actualTokenUsage.stopReason,
-                producedNonTextDeliverable: producedNonTextDeliverable(),
-                // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
-                // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
-                // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
-                // reason after a mixed round ending in a flagged tool also skips the notice.
-                endedOnAnswerTool:
-                  actualTokenUsage.stopReason === 'tool_use' &&
-                  echoToolsUsed.length > 0 &&
-                  isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
-              });
+        // Skipped after a narrated-call notice: stripping the call lowers the visible count, and the
+        // notice already tells the user why there is no answer.
+        const incompleteAnswerNotice = narratedNoticeShown
+          ? null
+          : buildIncompleteAnswerNotice({
+              stopped: quest.status === 'stopped',
+              toolCallCount: toolCallsSeen,
+              visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
+              stopReason: actualTokenUsage.stopReason,
+              producedNonTextDeliverable: producedNonTextDeliverable(),
+              // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
+              // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
+              // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
+              // reason after a mixed round ending in a flagged tool also skips the notice.
+              endedOnAnswerTool:
+                actualTokenUsage.stopReason === 'tool_use' &&
+                echoToolsUsed.length > 0 &&
+                isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
+            });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,

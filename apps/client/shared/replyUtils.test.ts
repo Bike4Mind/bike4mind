@@ -11,15 +11,38 @@ import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTim
  * silent failure the whole path exists to replace, arrived at from the UI side.
  */
 describe('extractReplies', () => {
-  it('hides a tool call the model wrote as text, while streaming and after', () => {
-    const narrated =
-      'Let me check.\n\n<tool_call>\n{"name": "web_search", "arguments": {"query": "tides"}}\n</tool_call>';
-    expect(extractReplies({ replies: [narrated] })).toEqual(['Let me check.\n\n']);
-    expect(extractReplies({ replies: [narrated.slice(0, -20)] })).toEqual(['Let me check.\n\n']);
+  const narrated =
+    'Let me check.\n\n<tool_call>\n{"name": "web_search", "arguments": {"query": "tides"}}\n</tool_call>';
+
+  it('hides a tool call the model wrote as text while the reply streams', () => {
+    expect(extractReplies({ status: 'running', replies: [narrated] })).toEqual(['Let me check.\n\n']);
+    expect(extractReplies({ status: 'running', replies: [narrated.slice(0, -20)] })).toEqual(['Let me check.\n\n']);
+    expect(extractReplies({ status: 'running', replies: ['Answer.\n<tool_'] })).toEqual(['Answer.\n']);
+  });
+
+  it('hides a call finalize flagged on a finished reply', () => {
+    const quest = {
+      status: 'done',
+      replies: [narrated],
+      promptMeta: { narratedToolCall: { toolNames: ['web_search'] } },
+    };
+    expect(extractReplies(quest)).toEqual(['Let me check.\n\n']);
+  });
+
+  // Finalize keeps a block that names no offered tool, and a finished reply must render what was
+  // stored, so the two sides agree: kept on the server, shown on the client.
+  it('shows a tool-call block on a finished reply that finalize did not flag', () => {
+    expect(extractReplies({ status: 'done', replies: [narrated] })).toEqual([narrated]);
+    expect(extractReplies({ replies: [narrated] })).toEqual([narrated]);
+  });
+
+  it('keeps a trailing partial opener on a finished reply', () => {
+    expect(extractReplies({ status: 'done', replies: ['Answer.\n<f'] })).toEqual(['Answer.\n<f']);
   });
 
   it('renders a fenced tool-call example unchanged', () => {
     const example = 'The format is:\n\n```\n<tool_call>\n{"name": "web_search"}\n</tool_call>\n```';
+    expect(extractReplies({ status: 'running', replies: [example] })).toEqual([example]);
     expect(extractReplies({ replies: [example] })).toEqual([example]);
   });
 
