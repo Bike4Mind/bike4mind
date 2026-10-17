@@ -673,6 +673,21 @@ export class ChatService {
   }
 
   /**
+   * The base a workspace session is cut from: the picked branch, else the repository's default.
+   * Only a repository with nothing to base on is refused.
+   */
+  private async resolveWorkspaceBase(
+    directory: string,
+    branch: string,
+    workspace: boolean
+  ): Promise<{ branch: string } | { error: string }> {
+    if (!workspace || branch) return { branch };
+    const base = await defaultBaseBranch(directory);
+    if (base) return { branch: base };
+    return { error: 'This repository has no commits yet, so there is no branch to start a workspace from.' };
+  }
+
+  /**
    * Start a Code session, with or without a project directory.
    *
    * A request naming no directory creates an UNBOUND session: a real conversation in Code mode
@@ -695,11 +710,10 @@ export class ChatService {
     const directory = resolve(request.directory);
     const unusable = await unusableProjectReason(directory);
     if (unusable) return { ok: false, error: unusable };
-    let branch = (request.branch ?? '').trim();
-
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
-    if (request.workspace && !branch) branch = await defaultBaseBranch(directory);
-    if (request.workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+    const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -760,9 +774,14 @@ export class ChatService {
     const movedProject = directory !== current?.directory;
     // A branch name means nothing in a repository it does not belong to, so moving the project
     // without naming a branch drops the old one rather than carrying it across.
-    let branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
     const workspace = request.workspace ?? current?.workspace ?? false;
-    if (workspace && !branch) branch = await defaultBaseBranch(directory);
+    const base = await this.resolveWorkspaceBase(
+      directory,
+      (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim(),
+      workspace
+    );
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     // The session's own branch is carried forward only while the base it was cut from is still
     // the one chosen: re-resolving must land in the worktree this session already has, while
@@ -779,7 +798,6 @@ export class ChatService {
       ? (current?.workspaceBranch ?? (alreadyRelocated ? current?.branch : undefined))
       : undefined;
 
-    if (workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
     // No worktree is created here: a session that already has its worktree keeps it, and one
     // that does not gets it on its first turn - see `ensureWorkspace`.
     // A worktree the session stops claiming is left registered and unharmed where it is.

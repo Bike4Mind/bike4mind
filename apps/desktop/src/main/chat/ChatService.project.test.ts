@@ -150,8 +150,8 @@ describe('ChatService.updateProject', () => {
       return main;
     }
 
-    it('defaults the base to main instead of refusing, and creates nothing', async () => {
-      const { main } = await repository('default-main');
+    it('createCodeSession defaults the base to main instead of refusing, and creates nothing', async () => {
+      const { main } = await repository('default-main-create');
       const before = await listWorktrees(main);
 
       const created = await service.createCodeSession({ directory: main, workspace: true });
@@ -160,8 +160,13 @@ describe('ChatService.updateProject', () => {
       if (!created.ok) return;
       expect(created.session.project).toMatchObject({ branch: 'main', workspace: true, workingDirectory: main });
       expect(await listWorktrees(main)).toEqual(before);
+    });
 
+    it('updateProject defaults the base to main instead of refusing, and creates nothing', async () => {
+      const { main } = await repository('default-main-update');
+      const before = await listWorktrees(main);
       const id = await codeSession(main, '');
+
       expect(await service.updateProject({ sessionId: id, workspace: true })).toMatchObject({ ok: true });
       expect((await service.getSession(id))?.project?.branch).toBe('main');
       expect(await listWorktrees(main)).toEqual(before);

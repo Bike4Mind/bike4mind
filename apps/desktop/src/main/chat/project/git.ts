@@ -303,12 +303,13 @@ async function containerCheckouts(directory: string): Promise<string[] | null> {
 }
 
 /**
- * What a new branch forks from: origin/main when it resolves, matching the default in the
+ * What a new branch forks from: the remote's default branch, else origin/main, matching the default in the
  * user's `worktree` command, and otherwise whatever HEAD is - a repo with no origin still has
  * to produce a usable branch rather than an error the user cannot act on.
  */
 export async function resolveBaseRef(directory: string): Promise<string> {
-  for (const candidate of ['origin/main', 'origin/master']) {
+  const remote = await remoteDefaultBranch(directory);
+  for (const candidate of [...(remote ? [`origin/${remote}`] : []), 'origin/main', 'origin/master']) {
     try {
       await git(directory, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`]);
       return candidate;
@@ -319,28 +320,34 @@ export async function resolveBaseRef(directory: string): Promise<string> {
   return 'HEAD';
 }
 
-/**
- * The branch a worktree session is based on when the user picked none: the remote's default
- * branch when it is known, else `main`, `master`, or the checked-out branch, taking the first
- * that exists locally. Empty only when none of those resolve, e.g. a repository with no commits.
- */
-export async function defaultBaseBranch(directory: string): Promise<string> {
-  const candidates: string[] = [];
+/** The branch the remote's HEAD points at (`origin/HEAD`), or null when none is recorded. */
+async function remoteDefaultBranch(directory: string): Promise<string | null> {
   try {
     const head = await git(directory, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
     const name = head.trim().replace(/^refs\/remotes\/origin\//, '');
-    if (name && name !== 'HEAD') candidates.push(name);
+    return name && name !== 'HEAD' ? name : null;
   } catch {
     // No remote HEAD recorded, which is ordinary for a local-only or bare-cloned repository.
+    return null;
   }
-  candidates.push('main', 'master');
-  const checkedOut = await currentBranch(directory);
-  if (checkedOut) candidates.push(checkedOut);
+}
 
-  for (const candidate of candidates) {
+/**
+ * The branch a worktree session is based on when the user picked none: the first LOCAL branch
+ * among the remote default, `main`, `master` and the checked-out branch. Empty only when none
+ * exist, e.g. a repository with no commits.
+ *
+ * Differs from resolveBaseRef on purpose: that one names a ref to fork from (a remote-tracking
+ * ref, else HEAD), this one names the base the session records and the UI shows, which must be
+ * a branch the user could pick. Both consult the same remote default first, so they agree.
+ */
+export async function defaultBaseBranch(directory: string): Promise<string> {
+  const remote = await remoteDefaultBranch(directory);
+  for (const candidate of [...(remote ? [remote] : []), 'main', 'master']) {
     if (await branchExists(directory, candidate)) return candidate;
   }
-  return '';
+  const checkedOut = await currentBranch(directory);
+  return checkedOut && (await branchExists(directory, checkedOut)) ? checkedOut : '';
 }
 
 /** Best-effort freshening so a new branch forks from an up-to-date base, as the shell helper does. */
