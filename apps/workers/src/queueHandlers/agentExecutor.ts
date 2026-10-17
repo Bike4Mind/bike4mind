@@ -121,6 +121,7 @@ import {
 } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
+import { evaluateConfidenceGate } from './agentExecutorUtils/confidenceGate';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
@@ -2967,7 +2968,17 @@ async function processExecution(
       // approval pauses for that more specific signal first, and only
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
-      const gate = readLastIterationConfidence();
+      // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
+      // Per-profile override wins over the global default; a profile threshold of 0
+      // disables the gate entirely (confidence is never < 0) for unattended loops.
+      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+      const gate = evaluateConfidenceGate({
+        gate: readLastIterationConfidence(),
+        isComplete: iterationResult.isComplete,
+        reachedMaxIterations: iterationResult.reachedMaxIterations,
+        threshold: confidenceGateThreshold,
+        iterationSteps: iterationResult.allSteps,
+      });
       if (gate !== null) {
         // Telemetry (#56 M1.1): record every iteration the gate evaluates -
         // including ones that complete in the same turn (isComplete=true) or
@@ -2976,15 +2987,7 @@ async function processExecution(
         // a real pause. Baseline observability before touching signal quality.
         await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
       }
-      // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
-      if (
-        gate !== null &&
-        !iterationResult.isComplete &&
-        !iterationResult.reachedMaxIterations &&
-        gate.confidence < confidenceGateThreshold
-      ) {
+      if (gate?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
