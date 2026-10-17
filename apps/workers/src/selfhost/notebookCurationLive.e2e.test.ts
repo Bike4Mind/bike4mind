@@ -69,7 +69,11 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     process.env.NOTEBOOK_MONGO_URI = mongo.getUri();
     await mongoose.connect(mongo.getUri(), { autoIndex: false });
     await settleAutoIndexBuilds(mongoose);
-    await Promise.all([NotebookCurationJob.init(), FabFile.init(), CreditTransaction.init()]);
+    await Promise.all([
+      NotebookCurationJob.createIndexes(),
+      FabFile.createIndexes(),
+      CreditTransaction.createIndexes(),
+    ]);
     try {
       await s3.send(new CreateBucketCommand({ Bucket: 'notebook-proof' }));
     } catch (error) {

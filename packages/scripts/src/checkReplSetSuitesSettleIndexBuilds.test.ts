@@ -9,15 +9,27 @@ import path from 'node:path';
  * pool and a transaction opened meanwhile waits until mongod reaps it at 60s (see the doc comment on
  * `settleAutoIndexBuilds` in createMongoServer.ts). The failure needs a contended runner, so nothing
  * but a source pin catches a suite that drops or never had the settle.
+ *
+ * Checks presence, not placement: a settle that runs before the suite's model imports can still
+ * settle nothing, which review has to catch. Comments are stripped first, so a commented-out settle
+ * does not count.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SCAN_ROOTS = ['apps', 'packages', 'b4m-core', 'selfhost'];
+const SELF = fileURLToPath(import.meta.url);
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', '.sst', '.turbo', 'coverage']);
 
-// Awaited call sites only: type positions (`typeof createMongoReplSet`) and prose mentions do not
-// start a server, and the helper's own definition is not awaited.
-const REPLSET_CALL = /await\s+createMongoReplSet\s*\(/;
-const SETTLE_CALL = /await\s+settleAutoIndexBuilds\s*\(/;
+// Any call, awaited or not. Type positions (`typeof createMongoReplSet`) have no parentheses after
+// the name and import lines are removed before matching.
+const REPLSET_CALL = /\bcreateMongoReplSet\s*\(/;
+const SETTLE_CALL = /\bsettleAutoIndexBuilds\s*\(/;
+
+function stripCommentsAndImports(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    .replace(/^\s*import\s[\s\S]*?from\s+['"][^'"]+['"];?/gm, '');
+}
 
 // Billing-area suites are owned separately; remove an entry once its owner has settled it.
 const ALLOWLIST = new Set([
@@ -29,7 +41,7 @@ function* walkTests(dir: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkTests(path.join(dir, entry.name));
-    } else if (/\.test\.(ts|tsx|mts)$/.test(entry.name)) {
+    } else if (/\.(test|spec)\.(ts|tsx|mts)$/.test(entry.name)) {
       yield path.join(dir, entry.name);
     }
   }
@@ -39,7 +51,8 @@ function replSetSuites(): Array<{ rel: string; source: string }> {
   const suites: Array<{ rel: string; source: string }> = [];
   for (const root of SCAN_ROOTS) {
     for (const file of walkTests(path.join(REPO_ROOT, root))) {
-      const source = readFileSync(file, 'utf8');
+      if (file === SELF) continue;
+      const source = stripCommentsAndImports(readFileSync(file, 'utf8'));
       if (REPLSET_CALL.test(source)) {
         suites.push({ rel: path.relative(REPO_ROOT, file).split(path.sep).join('/'), source });
       }

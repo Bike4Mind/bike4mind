@@ -34,8 +34,8 @@ let post: Handler;
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri(), { autoIndex: false });
-  await settleAutoIndexBuilds(mongoose);
   await import('../claim');
+  await settleAutoIndexBuilds(mongoose);
   post = mockRefs.postHandler!;
 });
 

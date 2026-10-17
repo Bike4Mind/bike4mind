@@ -33,11 +33,11 @@ let softRepo: TxnRepo;
 beforeAll(async () => {
   server = await createMongoReplSet();
   await mongoose.connect(server.getUri(), { autoIndex: false });
-  await settleAutoIndexBuilds(mongoose);
   HardModel = mongoose.model<TxnDoc>('TxnHard', hardSchema);
   SoftModel = mongoose.model<TxnDoc>('TxnSoft', softSchema);
   hardRepo = new TxnRepo(HardModel);
   softRepo = new TxnRepo(SoftModel);
+  await settleAutoIndexBuilds(mongoose);
 }, 60000);
 
 afterAll(async () => {

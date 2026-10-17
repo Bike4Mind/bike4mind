@@ -67,7 +67,7 @@ beforeAll(async () => {
   mongo = await createMongoReplSet();
   await mongoose.connect(mongo.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  await Promise.all([NotebookCurationJob.init(), FabFile.init(), CreditTransaction.init()]);
+  await Promise.all([NotebookCurationJob.createIndexes(), FabFile.createIndexes(), CreditTransaction.createIndexes()]);
 });
 afterAll(async () => {
   await mongoose.disconnect();

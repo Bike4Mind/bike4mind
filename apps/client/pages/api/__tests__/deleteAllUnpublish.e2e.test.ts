@@ -70,10 +70,10 @@ let serveHandler: Handler;
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri(), { autoIndex: false });
-  await settleAutoIndexBuilds(mongoose);
   sessionsHandler = (await import('../sessions/index')).default as unknown as Handler;
   filesHandler = (await import('../files/index')).default as unknown as Handler;
   serveHandler = (await import('../publish/serve/[...path]')).default as unknown as Handler;
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {

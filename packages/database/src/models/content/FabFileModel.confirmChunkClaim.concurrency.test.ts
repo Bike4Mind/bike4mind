@@ -146,7 +146,8 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
     // The deadlines above cover the HANDSHAKE only. So a bare 120s timeout with no deadline message
     // means the handshake was fine and the time went somewhere unguarded - most likely the first
     // write's cold start (vitest.config.ts explains why: Mongoose builds every model's indexes on
-    // connect and autoIndex cannot be disabled) or confirmChunkClaim's WriteConflict re-attempts.
+    // connect; this suite connects with autoIndex: false and settles the rest) or confirmChunkClaim's
+    // WriteConflict re-attempts.
     // Look there, not at the handshake.
     //
     // Raised 90s -> 120s (#1098) alongside the inner handshake deadline (20s -> 90s): the real CI

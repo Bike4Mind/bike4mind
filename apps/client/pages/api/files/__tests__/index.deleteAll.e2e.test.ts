@@ -41,8 +41,8 @@ let replSet: MongoMemoryReplSet;
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri(), { autoIndex: false });
-  await settleAutoIndexBuilds(mongoose);
   await import('../index');
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
