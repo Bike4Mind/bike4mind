@@ -108,6 +108,27 @@ describe('OperationsModelService.getOperationsTextModel', () => {
 
     expect(result.modelId).toBe('gpt-4o-mini');
   });
+
+  it('fails with a named error when no text model is available', async () => {
+    mockAdminSettings.findOne.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, ollama: null });
+    mockGetAvailableModels.mockResolvedValue([]);
+
+    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
+      'No text models available for operations'
+    );
+  });
+
+  it('fails with a named error when the picked model has no usable backend', async () => {
+    mockAdminSettings.findOne.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, openai: 'sk-test' });
+    mockGetAvailableModels.mockResolvedValue([GPT_MINI]);
+    mockGetLlmByModel.mockReturnValue(null);
+
+    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
+      'Failed to initialize operations text model gpt-4o-mini'
+    );
+  });
 });
 
 // A deployment with no OpenAI key (e.g. a PR preview) cannot run the configured

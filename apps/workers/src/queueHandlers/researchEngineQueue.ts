@@ -70,11 +70,11 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
   try {
     try {
       const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
-      llm.currentModel = modelId;
 
       if (!llm) {
         throw new Error('No LLM found');
       }
+      llm.currentModel = modelId;
 
       const user = await User.findById(userId);
 
