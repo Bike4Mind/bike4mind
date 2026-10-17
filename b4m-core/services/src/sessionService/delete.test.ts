@@ -6,6 +6,7 @@ import {
   createMockFabFileRepository,
   createMockSessionAgentConfigRepository,
   createMockUserRepository,
+  createMockOrganizationRepository,
 } from '../__tests__/utils/testUtils';
 import {
   IFabFileRepository,
@@ -167,6 +168,27 @@ describe('sessionService - delete', () => {
 
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -150);
+  });
+
+  it('debits an org-owned file to the organization and the rest to the user', async () => {
+    const mockOrgRepo = createMockOrganizationRepository();
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const charged = new Date('2026-10-10T00:00:00Z');
+    const ownedFiles = [
+      { id: 'file-personal', userId: ownerId, fileSize: 100, storageChargedAt: charged, users: [] },
+      { id: 'file-org', userId: ownerId, organizationId: 'org1', fileSize: 40, storageChargedAt: charged, users: [] },
+    ];
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue(ownedFiles);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, { db: { ...adapters.db, organizations: mockOrgRepo } } as any); // any: partial adapter bag
+
+    expect(mockOrgRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(mockOrgRepo.incrementCurrentStorage).toHaveBeenCalledWith('org1', -40);
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -100);
   });
 
   it('does not debit storage for owned files that were never charged', async () => {

@@ -1264,7 +1264,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async sumFileSizeByOrganizationId(organizationId: string): Promise<number> {
-    return this.sumChargedFileSize({ organizationId });
+    // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+    return this.sumChargedFileSize({ organizationId: { $eq: organizationId, $type: 'string' } });
   }
 
   private async sumChargedFileSize(owner: Record<string, unknown>): Promise<number> {
