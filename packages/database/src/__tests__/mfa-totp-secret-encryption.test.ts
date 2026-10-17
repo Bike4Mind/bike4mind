@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { configureSecretsAtRest, encryptSecret, generateEncryptionKey, isEncrypted } from '@bike4mind/utils/security';
 import { User, userRepository } from '../models/auth/UserModel';
@@ -143,6 +143,30 @@ describe('mfa.totpSecret encryption at rest', () => {
     it('refuses once a concurrent setup has replaced the secret', async () => {
       await userRepository.update({ id: userId, mfa: mfaWith(OTHER_SECRET) });
       expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).toBeNull();
+      const mfa = (await userRepository.findByIdWithMfaSecrets(userId))!.mfa!;
+      expect(mfa.totpEnabled).toBe(false);
+      expect(mfa.totpSecret).toBe(OTHER_SECRET);
+    });
+
+    it('refuses when a re-setup lands between the decrypt-compare and the conditional write', async () => {
+      const realFindOne = User.findOne.bind(User);
+      // The pre-read sees the verified secret; a concurrent setup then replaces it before the write.
+      const findOneSpy = vi.spyOn(User, 'findOne').mockImplementationOnce(((filter: Record<string, unknown>) => ({
+        select: (fields: string) => ({
+          lean: async () => {
+            const current = await realFindOne(filter).select(fields).lean();
+            await userRepository.update({ id: userId, mfa: mfaWith(OTHER_SECRET) });
+            return current;
+          },
+        }),
+      })) as unknown as typeof User.findOne);
+
+      try {
+        expect(await userRepository.atomicEnableMfa(userId, TOTP_SECRET)).toBeNull();
+      } finally {
+        findOneSpy.mockRestore();
+      }
+
       const mfa = (await userRepository.findByIdWithMfaSecrets(userId))!.mfa!;
       expect(mfa.totpEnabled).toBe(false);
       expect(mfa.totpSecret).toBe(OTHER_SECRET);
