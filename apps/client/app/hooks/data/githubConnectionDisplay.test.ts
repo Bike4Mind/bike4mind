@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
 import { describeGitHubConnection, describeGitHubSyncProgress } from './githubConnectionDisplay';
 
@@ -9,10 +9,30 @@ const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}
   repositoryFullName: 'acme/docs',
   syncStale: false,
   disconnecting: false,
+  lastSyncedAt: undefined as string | Date | null | undefined,
   ...over,
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('describeGitHubConnection', () => {
+  it('appends the last-synced time to the idle connected tooltip', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: '2026-01-01T11:42:00Z' }));
+    expect(title).toBe('Kept in sync with the GitHub repository acme/docs - last synced 18 minutes ago');
+  });
+
+  it('says never synced for a null lastSyncedAt rather than printing an invalid date', () => {
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: null }));
+    expect(title).toBe('Kept in sync with the GitHub repository acme/docs - not synced yet');
+    expect(title).not.toContain('Invalid');
+  });
+
+  it('keeps the time out of tooltips that are not the idle connected state', () => {
+    const { title } = describeGitHubConnection(conn({ status: 'syncing', lastSyncedAt: '2026-01-01T11:42:00Z' }));
+    expect(title).not.toContain('last synced');
+  });
+
   it('reads a clean connected sync as healthy', () => {
     expect(describeGitHubConnection(conn())).toEqual({
       label: 'Connected',
