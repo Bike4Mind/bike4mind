@@ -12,7 +12,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toPlayableAudio } from '@client/app/utils/generatedAudio';
-import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
+import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 
 export interface AudioGenerationResult {
   /** Playable URL: a blob: URL for inline audio, or a signed storage URL for audio too large to inline. */
@@ -26,10 +26,18 @@ export interface AudioGenerationResult {
 
 type AudioKind = 'Audio' | 'Sound effect';
 
-const SAVE_SKIPPED_MESSAGES: Record<AudioSaveSkippedReason, (kind: AudioKind) => string> = {
-  storage_limit: kind => `${kind} generated, but your storage is full so it was not saved to Files.`,
-  file_too_large: kind => `${kind} generated, but it was too large to save to Files.`,
-  error: kind => `${kind} generated, but saving to Files failed.`,
+// One row per reason so the two wordings cannot drift: `message` while the player still holds the clip, `cause`
+// as a clause once the tab unmounted and nothing keeps it.
+const SAVE_SKIPPED: Record<AudioSaveSkippedReason, { message: (kind: AudioKind) => string; cause: string }> = {
+  storage_limit: {
+    message: kind => `${kind} generated, but your storage is full so it was not saved to Files.`,
+    cause: 'your storage is full',
+  },
+  file_too_large: {
+    message: kind => `${kind} generated, but it was too large to save to Files.`,
+    cause: 'it was too large to save',
+  },
+  error: { message: kind => `${kind} generated, but saving to Files failed.`, cause: 'saving it failed' },
 };
 
 interface ParsedError {
@@ -68,16 +76,17 @@ function parseError(error: unknown): ParsedError {
 }
 
 /**
- * Drives the in-app audio generator (#1055): calls the existing TTS /
- * sound-effects endpoints with the current useAudioGenSettings, exposes a
- * playable result, refreshes the File Browser when audio was persisted, and
- * surfaces the insufficient-credit / no-key / over-quota / too-large states.
+ * Drives Studio's Speech and Sound effects tabs: calls the TTS or sound-effects
+ * endpoint (per `mode`) with the current useAudioGenSettings, exposes a
+ * playable result, refreshes Files when audio was persisted, and surfaces the
+ * insufficient-credit / no-key / over-quota / too-large states.
  */
-export function useGenerateAudio() {
+export function useGenerateAudio(mode: AudioGenMode) {
   const queryClient = useQueryClient();
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<AudioGenerationResult | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const releaseObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -86,11 +95,13 @@ export function useGenerateAudio() {
     }
   }, []);
 
-  useEffect(() => releaseObjectUrl, [releaseObjectUrl]);
-
-  const clearResult = useCallback(() => {
-    releaseObjectUrl();
-    setResult(null);
+  // Switching Studio tabs unmounts this hook, and a request already in flight still settles.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      releaseObjectUrl();
+    };
   }, [releaseObjectUrl]);
 
   const refreshFiles = useCallback(() => {
@@ -98,12 +109,16 @@ export function useGenerateAudio() {
   }, [queryClient]);
 
   const notifySaveOutcome = useCallback(
-    (data: GeneratedAudioResponse, kind: AudioKind) => {
+    (data: GeneratedAudioResponse, kind: AudioKind, playerGone: boolean) => {
       if (data.saved === true) {
         refreshFiles();
         toast.success(`${kind} generated and saved to your Files.`);
+      } else if (playerGone) {
+        // Unsaved and its blob already revoked: there is no copy left anywhere, so "generated" alone would mislead.
+        const cause = data.saved === false && data.saveSkippedReason ? SAVE_SKIPPED[data.saveSkippedReason].cause : '';
+        toast.warning(`${kind} finished after you left, but it was not saved to your Files${cause && ` (${cause})`}.`);
       } else if (data.saved === false && data.saveSkippedReason) {
-        toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
+        toast.info(SAVE_SKIPPED[data.saveSkippedReason].message(kind));
       } else {
         toast.success(`${kind} generated.`);
       }
@@ -119,7 +134,7 @@ export function useGenerateAudio() {
         return;
       }
 
-      const { mode, ttsProvider, voice, format, languageCode, durationSeconds, promptInfluence } =
+      const { ttsProvider, voice, format, languageCode, durationSeconds, promptInfluence } =
         useAudioGenSettings.getState();
 
       setIsGenerating(true);
@@ -158,13 +173,21 @@ export function useGenerateAudio() {
 
         const data = response.data;
         const playable = toPlayableAudio(data);
-        if (playable.isObjectUrl) objectUrlRef.current = playable.url;
-        setResult({
-          ...playable,
-          saved: data.saved === true,
-          fabFileId: data.fabFileId,
-          contentType: data.contentType,
-        });
+        const playerGone = !mountedRef.current;
+        if (!playerGone) {
+          if (playable.isObjectUrl) objectUrlRef.current = playable.url;
+          setResult({
+            ...playable,
+            saved: data.saved === true,
+            fabFileId: data.fabFileId,
+            contentType: data.contentType,
+          });
+        } else if (playable.isObjectUrl) {
+          // Nothing here can play it any more, and no cleanup will run for this one, so revoke it
+          // here rather than leak the blob. The outcome below is still reported: the clip was
+          // billed and may have been saved, and the user has to hear about that.
+          URL.revokeObjectURL(playable.url);
+        }
 
         // The server substituted a provider, so the voice will not be the one
         // selected. Say so before the outcome toast rather than letting an
@@ -176,7 +199,7 @@ export function useGenerateAudio() {
           );
         }
 
-        notifySaveOutcome(data, mode === 'tts' ? 'Audio' : 'Sound effect');
+        notifySaveOutcome(data, mode === 'tts' ? 'Audio' : 'Sound effect', playerGone);
       } catch (error) {
         const parsed = parseError(error);
 
@@ -202,8 +225,8 @@ export function useGenerateAudio() {
         setIsGenerating(false);
       }
     },
-    [notifySaveOutcome, releaseObjectUrl]
+    [mode, notifySaveOutcome, releaseObjectUrl]
   );
 
-  return { generate, isGenerating, result, clearResult };
+  return { generate, isGenerating, result };
 }
