@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   lakeOrderScopes,
+  lakeScopeArms,
   orderFilesFairlyAcrossLakes,
   UNATTRIBUTED_LAKE_KEY,
   type LakeOrderScope,
@@ -62,6 +63,28 @@ describe('lakeOrderScopes', () => {
       lakeMemberships: [{ datalakeTag: null, fileTagPrefix: null }],
     });
     expect(scopes).toEqual([]);
+  });
+});
+
+describe('lakeScopeArms', () => {
+  it('partitions every arm of a mixed scope across its lake scopes, each arm exactly once', () => {
+    const sources = {
+      dataLakeTags: ['datalake:reg', 'datalake:dyn'],
+      dataLakeTagPrefixes: ['reg:', 'orphan:'],
+      lakeMemberships: [
+        { datalakeTag: 'datalake:dyn', fileTagPrefix: 'dyn:' },
+        { datalakeTag: null, fileTagPrefix: 'solo:' },
+      ],
+      lakes: [{ datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' }],
+    };
+    const scopes = lakeOrderScopes(sources);
+    const slices = scopes.map(scope => lakeScopeArms(scope, sources));
+
+    expect(slices.flatMap(s => s.dataLakeTags).sort()).toEqual([...sources.dataLakeTags].sort());
+    expect(slices.flatMap(s => s.dataLakeTagPrefixes).sort()).toEqual([...sources.dataLakeTagPrefixes].sort());
+    expect(slices.flatMap(s => s.lakeMemberships)).toEqual(sources.lakeMemberships);
+    const reg = slices[scopes.findIndex(s => s.key === 'datalake:reg')];
+    expect(reg).toEqual({ dataLakeTags: ['datalake:reg'], dataLakeTagPrefixes: ['reg:'], lakeMemberships: [] });
   });
 });
 

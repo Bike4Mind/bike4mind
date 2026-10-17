@@ -105,6 +105,36 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
   return [...byKey.values()];
 }
 
+/** The slice of the caller's scope arms that reaches ONE lake's files. */
+export interface LakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]> {
+  dataLakeTags: string[];
+  dataLakeTagPrefixes: string[];
+  lakeMemberships: M[];
+}
+
+/**
+ * Split the caller's scope arms back out per lake bucket, so each lake can be listed on its own.
+ * Mirrors the keying in `lakeOrderScopes`: an arm lands in the scope whose `key` it would have
+ * produced, so the per-scope slices partition the full arm set. Arms are filtered, never
+ * rebuilt, so a creator-anchored membership stays exactly as resolved.
+ */
+export function lakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]>(
+  scope: LakeOrderScope,
+  sources: Pick<LakeOrderScopeSources, 'dataLakeTags' | 'dataLakeTagPrefixes'> & { lakeMemberships: M[] }
+): LakeScopeArms<M> {
+  return {
+    dataLakeTags: sources.dataLakeTags.filter(tag => tag === scope.key),
+    dataLakeTagPrefixes: sources.dataLakeTagPrefixes.filter(
+      prefix => prefix === scope.registryPrefix || scope.key === `prefix:${prefix}`
+    ),
+    lakeMemberships: sources.lakeMemberships.filter(m => {
+      const datalakeTag = m.datalakeTag || undefined;
+      const fileTagPrefix = m.fileTagPrefix || undefined;
+      return (datalakeTag ?? (fileTagPrefix ? `prefix:${fileTagPrefix}` : undefined)) === scope.key;
+    }),
+  };
+}
+
 /** Bucket key for files attributable to no lake - the caller's own and shared files, which
  *  `collectScopedFiles` admits via `includeShared` and which must not be starved either. */
 export const UNATTRIBUTED_LAKE_KEY = '';

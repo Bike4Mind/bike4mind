@@ -1345,6 +1345,50 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(10);
     });
 
+    it('lists each lake of a multi-lake session on its own, so a lake larger than the listing cannot starve the others', async () => {
+      // Lake a alone exceeds the 1000-row listing and every name sorts ahead of lake b's 5 files, so
+      // one union page by name never reaches lake b; the answer is in lake b.
+      const bigScope = [
+        ...Array.from({ length: 1200 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 5 }, (_, i) => fileInLake('b', i)),
+      ];
+      const answer = 'b003';
+      const ctx = makeCtx({
+        files: bigScope,
+        rows: ids =>
+          ids.map(id => ({
+            id: `ch-${id}`,
+            fabFileId: id,
+            text: `text ${id}`,
+            vector: id === answer ? [1, 0] : [0, 1],
+          })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      // Emulates the DB: only files in a scoped lake, by name, cut at the page size.
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }, _s, opts: { dataLakeTags: string[] }) => {
+        const inScope = bigScope.filter(f => f.tags.some(t => opts.dataLakeTags.includes(t.name)));
+        return Promise.resolve({
+          data: inScope.slice(0, page.limit),
+          hasMore: inScope.length > page.limit,
+          total: inScope.length,
+        });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a', 'datalake:b']
+      );
+      stubLakeAccess(feature, [lake('a'), lake('b')]);
+      const messages = await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const content = messages.map(m => m.content).join('\n');
+      expect(content).toContain(`### b-003.pdf (ID: ${answer})`);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(5);
+    });
+
     it('orders a multi-lake scope under the candidate cap fairly, so a chunk-heavy lake cannot spend the scan budget alone', async () => {
       // 50 files fit under the cap, but lake a's 40 x 500 chunks dwarf the 4000-chunk budget and all
       // sort ahead of lake b; scanned in plain name order, lake b would never be read.

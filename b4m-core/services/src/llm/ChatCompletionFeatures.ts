@@ -99,7 +99,7 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
-import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from '../dataLakeService/lakeFairOrder';
+import { lakeOrderScopes, lakeScopeArms, orderFilesFairlyAcrossLakes } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
@@ -3017,20 +3017,21 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         relevanceSelectionAvailable || spansSeveralLakes
           ? FORCED_RETRIEVAL_MAX_LISTED_FILES
           : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
-      const listFiles = (restrictToDataLake: boolean) =>
+      const unionArms = { dataLakeTags, dataLakeTagPrefixes, lakeMemberships };
+      const listFiles = (restrictToDataLake: boolean, limit = listingLimit, arms: typeof unionArms = unionArms) =>
         db.fabfiles.search(
           user.id,
           '',
           { tags: nonLakeRetrievalTags, shared: false },
-          { page: 1, limit: listingLimit },
+          { page: 1, limit },
           { by: 'fileName', direction: 'asc' },
           {
             textSearch: true,
             includeShared: true,
             userGroups: user.groups || [],
-            dataLakeTags,
-            dataLakeTagPrefixes, // static-registry (open) prefixes
-            lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+            dataLakeTags: arms.dataLakeTags,
+            dataLakeTagPrefixes: arms.dataLakeTagPrefixes, // static-registry (open) prefixes
+            lakeMemberships: arms.lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
             restrictToDataLake,
             excludeContent: true, // metadata only; chunk text + vectors fetched below
             // supersededInLakes is select:false by default; forced retrieval feeds the same
@@ -3042,15 +3043,44 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             ...this.retrievalFilter,
           }
         );
+      // One name-sorted page over the union of every lake is filled by whichever lake sorts first, so
+      // a lake holding a whole page alone would leave the others out of the listing before the fair
+      // cut ever runs. Each lake is therefore also listed on its own, a share of the page each.
+      const listLakesSeparately = spansSeveralLakes && orderScopes.length > 1;
+      const listLakesOnly = async () => {
+        const [union, ...perLake] = await Promise.all([
+          listFiles(true),
+          ...(listLakesSeparately
+            ? orderScopes.map(scope =>
+                listFiles(
+                  true,
+                  Math.max(1, Math.floor(listingLimit / orderScopes.length)),
+                  lakeScopeArms(scope, unionArms)
+                )
+              )
+            : []),
+        ]);
+        if (perLake.length === 0) return union;
+        // Each lake's own rows first so none is cut, then the union fills what is left of the page.
+        return mergeLakeFirstListing(
+          {
+            data: [...new Map(perLake.flatMap(r => r.data).map(f => [f.id, f])).values()],
+            hasMore: perLake.some(r => r.hasMore === true),
+          },
+          union,
+          listingLimit
+        );
+      };
       // An explicit "+ My files" turns the listing into a union where a large personal library,
       // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
       // lake-only listing goes first so lake files keep their slots; library files fill the rest.
-      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
+      const prioritizeLakeFiles = (this.includeLibraryFiles === true && hasLakeArms) || listLakesSeparately;
       // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
       // session excludes the library; see the gating note above.
       const [lakeListing, scopeListing] = await Promise.all([
-        prioritizeLakeFiles ? listFiles(true) : null,
-        listFiles(excludeLibrary),
+        prioritizeLakeFiles ? listLakesOnly() : null,
+        // A library-excluding scope is the lake-only listing already; listing it again adds nothing.
+        prioritizeLakeFiles && excludeLibrary ? { data: [], hasMore: false } : listFiles(excludeLibrary),
       ]);
       const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
       const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
