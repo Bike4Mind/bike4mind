@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 

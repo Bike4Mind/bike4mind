@@ -1,4 +1,4 @@
-import { Permission } from '@bike4mind/common';
+import { Permission, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -6,6 +6,8 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -110,7 +112,7 @@ const handler = baseApi()
         }
 
         // Get the operations model (optimized for fast operations like gpt-4o-mini)
-        const { llm, modelId } = await OperationsModelService.getOperationsModel();
+        const { llm, modelId, modelInfo } = await OperationsModelService.getOperationsModel();
 
         // Get file extension to preserve it (including compound extensions like .tar.gz, .test.ts)
         const getFileExtension = (filename: string): string => {
@@ -178,11 +180,19 @@ Return only the filename (without extension) in kebab-case:`;
 
         console.log(`[Auto-Rename API] Invoking model: ${modelId}`);
 
+        // Metered per call: a timed-out call keeps running and settles its own usage when it ends.
+        const meteredLlm = meterCompletionBackend(
+          llm,
+          createRequestCompletionMeter(req, 'automatic file renaming', { systemModel: true }),
+          modelInfo
+        );
+
         // Add timeout handling for LLM request
         let suggestedName = '';
-        const llmPromise = llm.complete(
+        const messages: IMessage[] = [{ role: 'user', content: prompt }];
+        const llmPromise = meteredLlm.complete(
           modelId,
-          [{ role: 'user', content: prompt }],
+          messages,
           {
             temperature: 0.3,
             maxTokens: 100,
@@ -288,6 +298,8 @@ Return only the filename (without extension) in kebab-case:`;
           model: modelId,
         });
       } catch (error) {
+        // The credit reservation keeps its own 422.
+        if (error instanceof UnprocessableEntityError) throw error;
         console.error('Auto-rename error:', error);
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to auto-rename file');
       }

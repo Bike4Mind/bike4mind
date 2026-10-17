@@ -18,6 +18,8 @@ import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
+import { getQuestErrorCode } from '@bike4mind/common';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { canAccessSession } from '@server/utils/sessionAccess';
@@ -96,34 +98,42 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
 
     const recentMessages = await questRepository.getMostRecentChatHistory(config.sessionId, 10);
 
-    await agentProactiveMessagingService.generateAndSendProactiveMessage({
-      config,
-      agent,
-      session,
-      user,
-      logger,
-      recentMessages: recentMessages.reverse(), // Reverse to get chronological order
-      db: {
-        quests: questRepository,
-        sessions: sessionRepository,
-        sessionAgentConfigs: sessionAgentConfigRepository,
-        apiKeys: apiKeyRepository,
-        adminSettings: adminSettingsRepository,
-        // Audit trail for images blocked by the image_generation/edit_image tools'
-        // moderation gate. The gate itself is unconditional (constructed
-        // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
-        // Record tool-internal operational llm.complete spend (blog draft, deep research,
-        // file edit, notebook gen) that runs inside a proactive message.
-        usageEvents: usageEventRepository,
-        organizations: organizationRepository,
-        scopedSettings: scopedSettingsRepository,
-      },
-      apiKeyTable,
-      storage: getFilesStorage(),
-      imageGenerateStorage: getGeneratedImageStorage(),
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
-    });
+    try {
+      await agentProactiveMessagingService.generateAndSendProactiveMessage({
+        config,
+        agent,
+        session,
+        user,
+        logger,
+        recentMessages: recentMessages.reverse(), // Reverse to get chronological order
+        db: {
+          quests: questRepository,
+          sessions: sessionRepository,
+          sessionAgentConfigs: sessionAgentConfigRepository,
+          apiKeys: apiKeyRepository,
+          adminSettings: adminSettingsRepository,
+          // Audit trail for images blocked by the image_generation/edit_image tools'
+          // moderation gate. The gate itself is unconditional (constructed
+          // inline in the tool) - this only wires the incident record, not the block.
+          imageModerationIncidents: imageModerationIncidentRepository,
+          // Record tool-internal operational llm.complete spend (blog draft, deep research,
+          // file edit, notebook gen) that runs inside a proactive message.
+          usageEvents: usageEventRepository,
+          organizations: organizationRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        apiKeyTable,
+        storage: getFilesStorage(),
+        imageGenerateStorage: getGeneratedImageStorage(),
+        imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+        meter: createCompletionMeter(user, logger, 'proactive agent messages', { sessionId: config.sessionId }),
+      });
+    } catch (err) {
+      // Refused before any provider call; retrying cannot help until the owner adds credits.
+      if (getQuestErrorCode(err) !== 'insufficient_credits') throw err;
+      logger.info(`Skipping proactive message for agent ${config.agentId}: owner has insufficient credits`);
+      return;
+    }
 
     await clientMessageSender.sendToClient(config.userId, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',

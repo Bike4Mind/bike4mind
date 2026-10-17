@@ -5,6 +5,7 @@ import {
   isImageServeable,
   FAB_FILE_CONTENT_REWRITE_PATCH,
   isStorageLimitError,
+  type IMessage,
 } from '@bike4mind/common';
 import {
   FabFile,
@@ -33,8 +34,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  createModelAdmission,
+  latchUsage,
+  reserveCompletionCredits,
+  settleCompletion,
+  type CompletionUsage,
+} from '@server/billing/meterPlatformCompletion';
 
 const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
+/** Generous UTF-8 bound for one output token, for the pre-call storage check. */
+const MAX_OUTPUT_BYTES_PER_TOKEN = 4;
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -215,6 +227,8 @@ const handler = baseApi()
           );
         }
 
+        await (await createModelAdmission(user, models)).assert(modelInfo.id);
+
         // Initialize LLM backend
         const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
         if (!llm) {
@@ -256,31 +270,62 @@ Return only the edited content without any markdown code blocks or explanations.
 
         console.log(`[Edit API] Invoking model: ${modelToUse} (${modelInfo.backend})`);
 
+        const messages: IMessage[] = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ];
+        const maxTokens = 4000;
+        // Refuse an edit whose worst-case result cannot fit before paying for it: the rewrite is at
+        // most the full output (plus the Office container it is written back into).
+        if (applyImmediately) {
+          const worstCaseSize = (originalBuffer?.length ?? 0) + maxTokens * MAX_OUTPUT_BYTES_PER_TOKEN;
+          await fabFilesService.assertRewriteFits(file, worstCaseSize, rewriteStorageDb, user);
+        }
+        const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+        const reservation = await reserveCompletionCredits(req, ceilingUsd, 'AI file editing');
+
         let editedContent = '';
-        await llm.complete(
-          modelInfo.id,
-          [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          {
-            temperature: 0.3,
-            maxTokens: 4000,
-            stream: false,
-          },
-          async (chunks: (string | null | undefined)[]) => {
-            // When stream=false, we get the complete response in one callback
-            // chunks is an array where chunks[0] contains the full response
-            const text = chunks[0];
-            if (text) {
-              editedContent = text;
+        const usage: CompletionUsage = {};
+        try {
+          await llm.complete(
+            modelInfo.id,
+            messages,
+            {
+              temperature: 0.3,
+              maxTokens,
+              stream: false,
+            },
+            async (chunks: (string | null | undefined)[], info) => {
+              // When stream=false, we get the complete response in one callback
+              // chunks is an array where chunks[0] contains the full response
+              const text = chunks[0];
+              if (text) {
+                editedContent = text;
+              }
+              latchUsage(usage, info);
             }
-          }
-        );
+          );
+        } catch (error) {
+          await reservation.refund();
+          throw error;
+        }
 
         // Clean up the response (remove any markdown code blocks if present)
         editedContent = editedContent.trim();
         editedContent = editedContent.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
+
+        // The provider billed the input even when the answer is empty, so settle before failing.
+        // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
+        const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+        if (!reported)
+          req.logger.warn(`[Edit API] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
+        await settleCompletion(reservation, req, {
+          model: modelInfo.id,
+          provider: modelInfo.backend,
+          usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+        });
 
         if (!editedContent) {
           console.error('[Edit API] AI model returned empty response', {
@@ -412,8 +457,8 @@ Return only the edited content without any markdown code blocks or explanations.
         return res.json(result);
       } catch (error) {
         console.error('Edit file error:', error);
-        // The storage gate and a missing owner already carry their own status code; rethrow them
-        // instead of flattening every error to a 400.
+        // The storage gate, a missing owner, model admission (403) and the credit reservation (422)
+        // already carry their own status code; rethrow them instead of flattening every error to a 400.
         if (isStorageLimitError(error) || error instanceof HTTPError) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to generate edit');
       }

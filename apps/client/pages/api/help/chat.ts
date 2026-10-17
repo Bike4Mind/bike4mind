@@ -1,16 +1,48 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { apiKeyService } from '@bike4mind/services';
+import {
+  adminSettingsRepository,
+  apiKeyRepository,
+  creditTransactionRepository,
+  organizationRepository,
+  usageEventRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { apiKeyService, recordOperationalUsage } from '@bike4mind/services';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { ChatModels } from '@bike4mind/common';
+import {
+  ChatModels,
+  CreditHolderType,
+  ForbiddenError,
+  UnprocessableEntityError,
+  getEmbeddingModelCost,
+  getTextModelCost,
+  type IMessage,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import { stripFabricatedLinks } from '@server/utils/sanitizeHelpLinks';
 import { searchHelpContext, type RelevantArticle } from '@server/help/retrieval';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  createModelAdmission,
+  latchUsage,
+  reserveCompletionCredits,
+  settleCompletion,
+  type CompletionUsage,
+} from '@server/billing/meterPlatformCompletion';
 
 /** Max tokens for the LLM response */
 const MAX_RESPONSE_TOKENS = 1000;
+
+/**
+ * Input-token allowance for the retrieved documentation, which is only known after the hold is
+ * placed (retrieval embeds the question, so it must not run before the credit check). Sized to
+ * MAX_CONTEXT_TOKENS in server/help/retrieval.ts; keep the two in sync.
+ */
+const HELP_CONTEXT_TOKEN_ALLOWANCE = 4000;
 
 /**
  * Help Chat Schema - validates incoming chat requests
@@ -101,31 +133,10 @@ const handler = baseApi()
       };
       const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
-      // Retrieve relevant documentation (vector search -> keyword fallback) and wrap it in the
-      // help-assistant system prompt.
-      const helpResult = await searchHelpContext({
-        question,
-        currentHelpSlug,
-        isAdmin: !!req.user?.isAdmin,
-        apiKeys: apiKeyTable,
-        logger: req.logger,
-      });
-      const systemPrompt = buildSystemPrompt(helpResult.context);
-      const relevantArticles: RelevantArticle[] = helpResult.relevantArticles;
-
-      const messages = [
-        { role: 'system' as const, content: systemPrompt },
-        ...conversationHistory.map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        })),
-        { role: 'user' as const, content: question },
-      ];
-
-      // Get LLM - use a fast, cost-effective model for help chat
+      // Pick the model first so the credit hold lands before retrieval's query embedding.
       const models = await getAvailableModels(apiKeyTable);
 
-      // Prefer fast, cheap models for help chat (not charged to users)
+      // Prefer fast, cheap models for help chat, then any model the catalog admits for this user.
       const preferredModels = [
         ChatModels.GPT4_1_MINI,
         ChatModels.CLAUDE_4_5_HAIKU,
@@ -133,19 +144,23 @@ const handler = baseApi()
         ChatModels.GEMINI_2_5_FLASH,
         ChatModels.GPT4o_MINI,
       ];
-      let modelInfo = null;
-      for (const modelId of preferredModels) {
-        modelInfo = models.find(m => m.id === modelId);
-        if (modelInfo) break;
-      }
-
-      // Fall back to any available model
-      if (!modelInfo && models.length > 0) {
-        modelInfo = models[0];
-      }
-
-      if (!modelInfo) {
+      const candidates = [
+        ...preferredModels.flatMap(id => models.filter(m => m.id === id)),
+        ...models.filter(m => m.type === 'text'),
+      ];
+      if (candidates.length === 0) {
         throw new BadRequestError('No AI model available. Please check your API keys.');
+      }
+      const admission = await createModelAdmission(req.user, models);
+      let modelInfo: ModelInfo | undefined;
+      for (const candidate of candidates) {
+        if (await admission.admits(candidate.id)) {
+          modelInfo = candidate;
+          break;
+        }
+      }
+      if (!modelInfo) {
+        throw new ForbiddenError(`Model "${candidates[0].id}" is not accessible and no fallback available`);
       }
 
       const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
@@ -153,29 +168,103 @@ const handler = baseApi()
         throw new BadRequestError(`Model "${modelInfo.id}" is not available.`);
       }
 
-      req.logger.info(`[HelpChat] Using model: ${modelInfo.id} (retrieval: ${helpResult.method})`);
-
-      // Generate completion (non-streaming for simplicity)
-      const options = {
-        max_tokens: MAX_RESPONSE_TOKENS,
-        temperature: 0.7,
-        stream: false,
-      };
+      const history: IMessage[] = conversationHistory.map(msg => ({ role: msg.role, content: msg.content }));
+      const ceilingUsd =
+        completionCeilingUsd(
+          modelInfo,
+          [{ role: 'system', content: buildSystemPrompt('') }, ...history, { role: 'user', content: question }],
+          MAX_RESPONSE_TOKENS
+        ) + getTextModelCost(modelInfo, HELP_CONTEXT_TOKEN_ALLOWANCE, 0);
+      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'help chat');
 
       let responseText = '';
-
-      await llm.complete(
-        // any: modelInfo.id is a dynamic string that can't be narrowed to the union of model ID literals
-        modelInfo.id as any,
-        messages,
-        options,
-        async (streamedTexts: (string | null | undefined)[]) => {
-          const text = streamedTexts[0] || streamedTexts[1] || '';
-          if (text) {
-            responseText = text;
-          }
+      let relevantArticles: RelevantArticle[];
+      const usage: CompletionUsage = {};
+      try {
+        // Retrieve relevant documentation (vector search -> keyword fallback) and wrap it in the
+        // help-assistant system prompt.
+        const helpResult = await searchHelpContext({
+          question,
+          currentHelpSlug,
+          isAdmin: !!req.user?.isAdmin,
+          apiKeys: apiKeyTable,
+          logger: req.logger,
+        });
+        relevantArticles = helpResult.relevantArticles;
+        if (helpResult.embedding) {
+          const { model, provider, inputTokens } = helpResult.embedding;
+          // Same owner as the hold (reserveRequestCredits applies the API-key billing-owner rule).
+          const organization =
+            reservation.ownerType === CreditHolderType.Organization
+              ? await organizationRepository.findById(reservation.ownerId)
+              : null;
+          await recordOperationalUsage(
+            {
+              requestId: userId,
+              user: req.user,
+              organization,
+              feature: 'embedding',
+              provider,
+              model,
+              inputTokens,
+              costUsd: getEmbeddingModelCost(model, inputTokens),
+              forceCreditBilling: true,
+            },
+            {
+              db: {
+                usageEvents: usageEventRepository,
+                adminSettings: adminSettingsRepository,
+                creditTransactions: creditTransactionRepository,
+                users: userRepository,
+                organizations: organizationRepository,
+              },
+              logger: req.logger,
+            }
+          );
         }
-      );
+
+        const messages: IMessage[] = [
+          { role: 'system', content: buildSystemPrompt(helpResult.context) },
+          ...history,
+          { role: 'user', content: question },
+        ];
+
+        req.logger.info(`[HelpChat] Using model: ${modelInfo.id} (retrieval: ${helpResult.method})`);
+
+        // Generate completion (non-streaming for simplicity)
+        const options = {
+          maxTokens: MAX_RESPONSE_TOKENS,
+          temperature: 0.7,
+          stream: false,
+        };
+
+        await llm.complete(
+          // any: modelInfo.id is a dynamic string that can't be narrowed to the union of model ID literals
+          modelInfo.id as any,
+          messages,
+          options,
+          async (streamedTexts: (string | null | undefined)[], info) => {
+            const text = streamedTexts[0] || streamedTexts[1] || '';
+            if (text) {
+              responseText = text;
+            }
+            latchUsage(usage, info);
+          }
+        );
+      } catch (error) {
+        await reservation.refund();
+        throw error;
+      }
+
+      // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
+      const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+      await settleCompletion(reservation, req, {
+        model: modelInfo.id,
+        provider: modelInfo.backend,
+        usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      });
 
       const latency = Date.now() - startTime;
       req.logger.info(`[HelpChat] Completed in ${latency}ms`);
@@ -187,6 +276,8 @@ const handler = baseApi()
         relevantArticles,
       });
     } catch (error) {
+      // Model admission and the credit reservation keep their own 403 / 422.
+      if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) throw error;
       req.logger.error('[HelpChat] Error:', error);
       res.status(error instanceof BadRequestError ? 400 : 500).json({
         error: error instanceof Error ? error.message : 'An error occurred',

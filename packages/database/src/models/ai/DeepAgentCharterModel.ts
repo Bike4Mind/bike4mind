@@ -175,6 +175,11 @@ class DeepAgentCharterRepository extends BaseRepository<IDeepAgentCharter> {
     return result?.toObject() ?? null;
   }
 
+  /** Hard-removes one charter; for rolling back an enrollment whose first wake never ran. */
+  async deleteByAgentId(agentId: string): Promise<void> {
+    await this.model.deleteOne({ 'identity.agentId': agentId });
+  }
+
   /** An owner's agents, most recently updated first (console roster). */
   async listByOwnerUserId(ownerUserId: string, limit = 50): Promise<IDeepAgentCharter[]> {
     const docs = await this.model.find({ 'identity.ownerUserId': ownerUserId }).sort({ updatedAt: -1 }).limit(limit);

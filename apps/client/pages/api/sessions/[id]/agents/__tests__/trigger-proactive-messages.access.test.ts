@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
 import { NotFoundError } from '@bike4mind/utils';
+import { insufficientCreditsError } from '@bike4mind/common';
 
 type RouteHandler = (req: Request, res: Response) => unknown;
 
@@ -24,6 +25,7 @@ const mockRefs = vi.hoisted(() => ({
   findById: vi.fn(),
   findBySessionId: vi.fn(),
   sendToQueue: vi.fn(),
+  assertOwnerCanAfford: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -43,6 +45,9 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args) }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  assertOwnerCanAfford: (...args: unknown[]) => mockRefs.assertOwnerCanAfford(...args),
+}));
 
 // Import after mocks so the chain captures the handler; exercises the real assertSessionAccess.
 import '../trigger-proactive-messages';
@@ -62,6 +67,7 @@ describe('POST /api/sessions/[id]/agents/trigger-proactive-messages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRefs.sendToQueue.mockResolvedValue(undefined);
+    mockRefs.assertOwnerCanAfford.mockResolvedValue(undefined);
   });
 
   it("queues the owner's own enabled config", async () => {
@@ -129,5 +135,18 @@ describe('POST /api/sessions/[id]/agents/trigger-proactive-messages', () => {
     const { req, res } = invoke('stranger');
 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(NotFoundError);
+  });
+
+  it('refuses a caller who cannot pay with 422 before queueing anything', async () => {
+    mockRefs.findById.mockResolvedValue({ id: 'aaaaaaaaaaaaaaaaaaaaaaaa', userId: 'owner', users: [] });
+    mockRefs.findBySessionId.mockResolvedValue([
+      { id: 'cfg-1', agentId: 'agent-1', userId: 'owner', proactiveMessaging: { enabled: true } },
+    ]);
+    mockRefs.assertOwnerCanAfford.mockRejectedValue(insufficientCreditsError('Insufficient credits'));
+    const { req, res } = invoke('owner');
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 422 });
+    expect(mockRefs.assertOwnerCanAfford).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner' }));
+    expect(mockRefs.sendToQueue).not.toHaveBeenCalled();
   });
 });

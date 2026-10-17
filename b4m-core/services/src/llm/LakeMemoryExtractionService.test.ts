@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, insufficientCreditsError } from '@bike4mind/common';
 
 // Mock the adapters so evaluate()'s getAvailableModels + getLlmByModel resolve to a fake backend whose
 // `complete` streams whatever canned response the test sets. Mirrors intentClassifier.test.ts.
@@ -83,5 +83,22 @@ describe('LakeMemoryExtractionService.evaluate', () => {
   it('skips the LLM call entirely for empty document text', async () => {
     expect(await run('   ')).toBeNull();
     expect(completeCalls).toBe(0);
+  });
+
+  it('rethrows an insufficient-credits refusal from the meter without calling the provider', async () => {
+    const meter = vi.fn().mockRejectedValue(insufficientCreditsError('no credits'));
+    await expect(service.evaluate({ apiKeyTable, docTitle: 'T', docText: 'text', meter })).rejects.toMatchObject({
+      statusCode: 422,
+    });
+    expect(completeCalls).toBe(0);
+  });
+
+  it('settles a funded call through the meter', async () => {
+    nextResponse = JSON.stringify({ facts: [{ fact: 'A fact.', importance: 5 }] });
+    const settle = vi.fn().mockResolvedValue(1);
+    const meter = vi.fn().mockResolvedValue({ settle, refund: vi.fn() });
+    await expect(service.evaluate({ apiKeyTable, docTitle: 'T', docText: 'text', meter })).resolves.toHaveLength(1);
+    expect(meter).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledOnce();
   });
 });

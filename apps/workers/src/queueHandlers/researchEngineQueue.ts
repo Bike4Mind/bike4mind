@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { researchTaskService } from '@bike4mind/services';
+import { meterCompletionBackend, researchTaskService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
   dataLakeAccessGrantRepository,
@@ -27,6 +27,24 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
+
+/**
+ * The operations text model with every completion reserved and settled against the task owner's
+ * billing owner (org seat when present). Scraping (Firecrawl) has no per-call price and is not billed,
+ * so an out-of-credits owner is refused up front, before the service scrapes anything.
+ */
+async function meteredOperationsLlm(user: IUserDocument, logger: Logger) {
+  await assertOwnerCanAfford(user);
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel();
+  llm.currentModel = modelId;
+  return meterCompletionBackend(
+    llm,
+    createCompletionMeter(user, logger, 'research tasks', { systemModel: true }),
+    modelInfo
+  );
+}
 
 const researchEngineQueuePayload = z.object({
   action: z.enum(['process', 'processDiscoveredLinks', 'downloadRelevantLinks']),
@@ -69,18 +87,12 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
 
   try {
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
-      llm.currentModel = modelId;
-
-      if (!llm) {
-        throw new Error('No LLM found');
-      }
-
       const user = await User.findById(userId);
 
       if (!user) {
         throw new Error('User not found');
       }
+      const llm = await meteredOperationsLlm(user as IUserDocument, logger);
 
       await researchTaskService.process(
         user as any,
@@ -192,31 +204,41 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
   logger.log(`Started processDiscoveredLinks queue handler for researchTaskId: ${researchTaskId}`);
   logger.log('====================================');
 
-  const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
+  const user = await User.findById(userId);
+  if (!user) throw new Error('User not found');
 
-  if (!llm) {
-    throw new Error('No LLM found');
-  }
-  llm.currentModel = modelId;
-
-  await researchTaskService.processDiscoveredLinks(
-    {
+  try {
+    const llm = await meteredOperationsLlm(user as IUserDocument, logger);
+    await researchTaskService.processDiscoveredLinks(
+      {
+        id: researchTaskId,
+      },
+      {
+        db: {
+          fabFiles: fabFileRepository,
+          researchDatas: researchDataRepository,
+          researchTasks: researchTaskRepository,
+          withTransaction,
+        },
+        logger,
+        jobs: {
+          researchTasks: researchTaskJobs,
+        },
+        llm,
+      }
+    );
+  } catch (err) {
+    // Out of credits is not transient: fail the task instead of letting SQS redeliver it.
+    if (getQuestErrorCode(err) !== 'insufficient_credits') throw err;
+    await researchTaskRepository.update({
       id: researchTaskId,
-    },
-    {
-      db: {
-        fabFiles: fabFileRepository,
-        researchDatas: researchDataRepository,
-        researchTasks: researchTaskRepository,
-        withTransaction,
-      },
-      logger,
-      jobs: {
-        researchTasks: researchTaskJobs,
-      },
-      llm,
-    }
-  );
+      status: ResearchTaskStatus.FAILED,
+      statusFailedMessage: (err as Error).message,
+      statusFailedAt: new Date(),
+    });
+    logger.warn(`Research task ${researchTaskId} failed: the owner is out of credits`);
+    return;
+  }
 
   logger.log('====================================');
   logger.log('Completed processDiscoveredLinks queue handler');

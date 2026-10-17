@@ -557,6 +557,20 @@ type Consensus =
     };
 
 /**
+ * Models whose source quotes this run reach a trusted consensus, which is exactly
+ * the set planPriceWrites can write a first price row for. planCatalogWrites reads
+ * it so promotion never counts a quote this planner refuses ("applied neither")
+ * as a price: a provider price every mirror dissents from writes no row.
+ */
+export function consensusPricedModelIds(contributions: readonly SourceContribution[]): Set<string> {
+  const priced = new Set<string>();
+  for (const [modelId, observations] of collectObservations(contributions)) {
+    if (reachConsensus(observations).kind === 'trusted') priced.add(modelId);
+  }
+  return priced;
+}
+
+/**
  * A PROVIDER'S OWN PUBLISHED PRICE IS PRIMARY. WHERE MIRRORS EXIST, one of them
  * has to agree with it - but not all of them, and the ones that disagree are
  * recorded and overruled rather than allowed to veto. A provider no aggregator

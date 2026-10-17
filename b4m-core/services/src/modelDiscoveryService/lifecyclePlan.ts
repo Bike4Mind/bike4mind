@@ -76,6 +76,19 @@ export interface LifecycleSignalsInput {
   contributions: readonly SourceContribution[];
   /** Sources whose parser row count shifted: every docs-derived signal of theirs is dropped. */
   droppedDocsSources?: ReadonlySet<string>;
+  /**
+   * Models the catalog held when the run started. An aggregator sunset of one of
+   * these needs corroboration; a model the run itself introduces does not. Absent
+   * means every model counts as held, the fail-closed reading.
+   */
+  catalogModelIds?: ReadonlySet<string>;
+}
+
+/** An aggregator's typed sunset of a held model that nothing corroborated this run. */
+export interface AggregatorSunsetSignal {
+  modelId: string;
+  source: string;
+  lifecycle: NonNullable<ModelRecord['lifecycle']>;
 }
 
 export interface LifecycleSignals {
@@ -96,6 +109,13 @@ export interface LifecycleSignals {
    * future date until the page catches up.
    */
   providerUndated: Map<string, string>;
+  /**
+   * Aggregator sunsets withheld from the overlay: one aggregator alone may not
+   * deprecate a model the catalog already holds, because the field overlay lets
+   * it win whenever the provider lists the model without a lifecycle. Only a
+   * provider sunset or both aggregators agreeing writes it; the rest are queue items.
+   */
+  aggregatorSunsets: Map<string, AggregatorSunsetSignal>;
 }
 
 /**
@@ -105,19 +125,41 @@ export interface LifecycleSignals {
  * source that forgets to declare a typed feed loses a transition rather than
  * hiding a model on a parse artifact.
  */
-export function planLifecycleSignals({ contributions, droppedDocsSources }: LifecycleSignalsInput): LifecycleSignals {
+export function planLifecycleSignals({
+  contributions,
+  droppedDocsSources,
+  catalogModelIds,
+}: LifecycleSignalsInput): LifecycleSignals {
   const ordered = providersFirst(contributions);
 
   const typedSunsets = new Set<string>();
+  const providerSunsets = new Set<string>();
+  const aggregatorSunsetSources = new Map<string, Set<string>>();
   for (const contribution of ordered) {
     for (const record of contribution.records) {
       const status = record.patch?.lifecycle?.status;
-      if (evidenceOf(record) === 'typed' && status && LIFECYCLE_SUNSET_STATUSES.has(status))
-        typedSunsets.add(record.modelId);
+      if (!status || !LIFECYCLE_SUNSET_STATUSES.has(status)) continue;
+      const typed = evidenceOf(record) === 'typed';
+      if (typed) typedSunsets.add(record.modelId);
+      if (contribution.kind === 'provider') {
+        // A provider's own deprecations page corroborates too, on the same terms
+        // a docs row is itself corroborated: terminal status, parser not shifted.
+        const docsCounts = TERMINAL_STATUSES.has(status) && !droppedDocsSources?.has(contribution.name);
+        if (typed || docsCounts) providerSunsets.add(record.modelId);
+      } else if (typed) {
+        const sources = aggregatorSunsetSources.get(record.modelId) ?? new Set<string>();
+        sources.add(contribution.name);
+        aggregatorSunsetSources.set(record.modelId, sources);
+      }
     }
   }
+  const aggregatorSunsetCorroborated = (modelId: string): boolean =>
+    (catalogModelIds !== undefined && !catalogModelIds.has(modelId)) ||
+    providerSunsets.has(modelId) ||
+    (aggregatorSunsetSources.get(modelId)?.size ?? 0) >= 2;
 
   const docs = new Map<string, DocsLifecycleSignal>();
+  const aggregatorSunsets = new Map<string, AggregatorSunsetSignal>();
   const providerUndated = new Map<string, string>();
   const sanitized = ordered.map(contribution => ({
     ...contribution,
@@ -136,6 +178,22 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
         !providerUndated.has(record.modelId)
       ) {
         providerUndated.set(record.modelId, contribution.name);
+      }
+      if (
+        typed &&
+        contribution.kind === 'aggregator' &&
+        lifecycle.status !== undefined &&
+        LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
+        !aggregatorSunsetCorroborated(record.modelId)
+      ) {
+        if (!aggregatorSunsets.has(record.modelId)) {
+          aggregatorSunsets.set(record.modelId, {
+            modelId: record.modelId,
+            source: contribution.name,
+            lifecycle: { ...lifecycle, status: lifecycle.status },
+          });
+        }
+        return withoutLifecycle(record);
       }
       if (typed) return record;
       // Dates with no status are an announcement, and a parsed page announcing
@@ -161,7 +219,7 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
     }),
   }));
 
-  return { contributions: sanitized, docs, providerUndated };
+  return { contributions: sanitized, docs, providerUndated, aggregatorSunsets };
 }
 
 export interface ParserRowShift {
@@ -249,6 +307,8 @@ export interface LifecyclePlanInput {
   resolvedInForce?: ReadonlyMap<string, ResolvedCatalogRecord>;
   /** Docs signals from planLifecycleSignals, keyed by model. */
   docs: ReadonlyMap<string, DocsLifecycleSignal>;
+  /** Uncorroborated aggregator sunsets from planLifecycleSignals, keyed by model. */
+  aggregatorSunsets?: ReadonlyMap<string, AggregatorSunsetSignal>;
   /** planAbsence's missed ids: the only models the absence protocol can graduate. */
   missed: readonly string[];
   /**
@@ -352,6 +412,7 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
   }
 
   for (const signal of docsSuggestions(input, sunsetting)) suggestions.push(signal);
+  for (const signal of aggregatorSuggestions(input, sunsetting)) suggestions.push(signal);
 
   const rows = input.catalogPlan.rows.map(row => {
     const replacedBy = applied.get(row.modelId);
@@ -670,6 +731,29 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
         `${signal.source} documents this model as ${signal.lifecycle.status}` +
         `${signal.lifecycle.retirementDate ? ` (retirement ${signal.lifecycle.retirementDate})` : ''}; ` +
         'no typed feed corroborates it, so a parsed page alone may not hide the model',
+    });
+  }
+  return suggestions;
+}
+
+/** Lone-aggregator sunsets planLifecycleSignals withheld; same queue rules as docsSuggestions. */
+function aggregatorSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
+  const suggestions: LifecycleSuggestion[] = [];
+  for (const signal of input.aggregatorSunsets?.values() ?? []) {
+    if (sunsetting.has(signal.modelId)) continue;
+    const existing = input.resolvedInForce.get(signal.modelId);
+    if (!existing || agreesWith(existing, signal.lifecycle)) continue;
+
+    suggestions.push({
+      modelId: signal.modelId,
+      status: signal.lifecycle.status,
+      deprecationDate: signal.lifecycle.deprecationDate,
+      retirementDate: signal.lifecycle.retirementDate,
+      replacedBy: signal.lifecycle.replacedBy,
+      source: signal.source,
+      detail:
+        `${signal.source} reports this model as ${signal.lifecycle.status}; ` +
+        'no provider and no second aggregator corroborates it, so one aggregator alone may not hide the model',
     });
   }
   return suggestions;

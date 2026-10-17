@@ -187,6 +187,8 @@ import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes'
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-answeredby-to-redirectedfrom';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import DropGoogleCalendarSettings from './20260921235981_drop-google-calendar-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureMcpConnectionIndexes from './20260921235985_ensure-mcp-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import SetUserAuthAuditLogRetention from './20260921235950_set-user-auth-audit-log-retention';
@@ -335,6 +337,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureConnectionIndexes,
   MoveQuestAnsweredByToRedirectedFrom,
   EnsureMcpConnectionIndexes,
+  DropGoogleCalendarSettings,
   SetUserAuthAuditLogRetention,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

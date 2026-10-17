@@ -676,6 +676,94 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('model admission', () => {
+    const gatedSuccessor = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT-4.1',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    const gateSuccessor = () => {
+      mockDb.adminSettings.findOne = vi.fn().mockResolvedValue({
+        settingValue: [{ id: ChatModels.GPT4_1, enabled: true, allowedEntitlements: ['pro'] }],
+      });
+    };
+
+    it('refuses a remapped successor the caller is not entitled to before any provider call', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4_1 } as any); // any: minimal backend shape, as elsewhere in this file
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, gatedSuccessor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      gateSuccessor();
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
+    });
+
+    it('refuses an unadmitted primary model with no remap before any provider call', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape, as elsewhere in this file
+      mockDb.adminSettings.findOne = vi.fn().mockResolvedValue({
+        settingValue: [{ id: ChatModels.GPT4, enabled: true, allowedEntitlements: ['pro'] }],
+      });
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      expect(resolveDeprecatedModelId).toHaveReturnedWith(ChatModels.GPT4);
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
+    });
+
+    it('runs a remapped successor for an admin', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, gatedSuccessor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      gateSuccessor();
+      (service as any).user = { ...mockUser, isAdmin: true };
+
+      await service.process({ body, logger: mockLogger });
+
+      const promptMeta = mockDb.quests.update.mock.calls.at(-1)?.[0].promptMeta;
+      expect(promptMeta.model.name).toBe(ChatModels.GPT4_1);
+      expect(promptMeta.redirectedFrom).toBe(ChatModels.GPT4);
+    });
+
+    it('only offers the fallback picker models the caller is admitted to', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException')),
+        getModelInfo: vi.fn(),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      gateSuccessor();
+
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      const options = mockedGetLlmWithFallback.mock.calls[0]?.[5];
+      expect(options?.isAdmitted).toEqual(expect.any(Function));
+      await expect(options!.isAdmitted!(ChatModels.GPT4_1)).resolves.toBe(false);
+      await expect(options!.isAdmitted!(ChatModels.GPT4)).resolves.toBe(true);
+    });
+  });
+
   describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
       mockSession.userId = 'user1';

@@ -1,5 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { CreditHoldRecord } from './CreditHolderTypes';
+import type { CompletionSource } from '../analytics';
 
 /**
  * Lifecycle of a submitted Anthropic Message Batch, tracked locally so the
@@ -13,6 +15,8 @@ export type TransformBatchStatus = 'in_progress' | 'completed';
 export interface ITransformBatchCustomIdMapping {
   customId: string;
   clientRef: string;
+  /** The request's model, so the poll can price its usage. Absent on rows from before metering. */
+  model?: string;
 }
 
 /**
@@ -60,8 +64,31 @@ export interface ITransformBatch extends IMongoDocument {
    * 16MB doc cap; revisit (e.g. offload to S3) if batch sizes grow.
    */
   results?: ITransformBatchResultItem[];
+  /** Credits reserved at submit, settled once on the first poll that sees the batch end. */
+  creditHold?: CreditHoldRecord | null;
+  /**
+   * Stamped in the write that clears the hold after settlement. A completed row that still has a hold
+   * and no creditSettledAt was claimed but never settled (settlement is not idempotent; never redo one).
+   */
+  creditSettledAt?: Date;
+  /** The API key that submitted the batch, for the settlement ledger row. */
+  apiKeyId?: string;
+  /** Ledger `source` resolved from the submit request; absent for web (JWT) submits. */
+  usageSource?: CompletionSource;
 }
 
 export interface ITransformBatchRepository extends IBaseRepository<ITransformBatch> {
   findByAnthropicBatchId: (anthropicBatchId: ITransformBatch['anthropicBatchId']) => Promise<ITransformBatch | null>;
+  /**
+   * Atomically mark an in-progress batch completed, leaving its credit hold on the row. Returns the
+   * row as it was before the update to exactly one caller (the one that settles the hold); null to the rest.
+   */
+  claimCompletion: (
+    id: string,
+    update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount'>
+  ) => Promise<ITransformBatch | null>;
+  /** Clear the settled hold and stamp creditSettledAt in one write; a no-op once stamped. */
+  markCreditSettled: (id: string) => Promise<void>;
+  /** Cache the per-request results; kept out of the claim so an oversized payload cannot block it. */
+  saveResults: (id: string, results: NonNullable<ITransformBatch['results']>) => Promise<void>;
 }

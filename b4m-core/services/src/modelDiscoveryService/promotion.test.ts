@@ -114,11 +114,32 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(AWAITING_APPROVAL_REASON);
   });
 
+  it('still requires a price for an unpriced text model under the all policy', () => {
+    const decision = evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text' }) });
+
+    expect(decision.promote).toBe(false);
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(AWAITING_PRICE_REASON);
+  });
+
+  it('promotes a priced or free text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: true, record: testRecord({ type: 'text' }) }).promote).toBe(true);
+    expect(
+      evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text', freeToRun: true }) }).promote
+    ).toBe(true);
+  });
+
+  it('waives the price for a non-text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'image' }) }).promote).toBe(
+      true
+    );
+  });
+
   it('still refuses a missing dispatch profile under the all policy', () => {
     const decision = evaluate({
       policy: 'all',
       hasTrustedPrice: false,
-      record: testRecord({ dispatchProfile: undefined }),
+      record: testRecord({ type: 'image', dispatchProfile: undefined }),
     });
 
     expect(decision.blockedBy).toEqual(['no-dispatch-profile']);

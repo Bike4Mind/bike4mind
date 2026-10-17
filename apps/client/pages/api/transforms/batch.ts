@@ -1,7 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
-import { AnthropicBatchService, type BatchTransformRequest } from '@bike4mind/llm-adapters';
+import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
+import { BadRequestError, type IMessage, type ModelInfo } from '@bike4mind/common';
+import {
+  completionCeilingUsd,
+  createModelAdmission,
+  isCreditsEnforced,
+  reserveCompletionCredits,
+} from '@server/billing/meterPlatformCompletion';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { z } from 'zod';
 
@@ -64,6 +73,23 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 
+  const modelIds = [...new Set(body.requests.map(r => r.model))];
+  // Priced at the standard rate: the pricing layer does not model the Batches 50% discount, so the
+  // hold (and the settlement) over-charges rather than under.
+  const catalog = await getAvailableModels({ anthropic: apiKey });
+  const admission = await createModelAdmission(req.user, catalog);
+  for (const modelId of modelIds) await admission.assert(modelId);
+  const modelInfos = new Map<string, ModelInfo>(catalog.filter(m => modelIds.includes(m.id)).map(m => [m.id, m]));
+  const unpriced = modelIds.filter(id => !modelInfos.has(id));
+  if (unpriced.length > 0 && (await isCreditsEnforced())) {
+    throw new BadRequestError(`Unknown model(s): ${unpriced.join(', ')}`);
+  }
+  const ceilingUsd = body.requests.reduce((sum, r) => {
+    const modelInfo = modelInfos.get(r.model);
+    const messages = [{ role: 'system', content: r.system ?? '' }, ...r.messages] as IMessage[];
+    const cacheWrites = r.messages.some(msg => Array.isArray(msg.content) && msg.content.some(b => b.cache_control));
+    return modelInfo ? sum + completionCeilingUsd(modelInfo, messages, r.max_tokens, cacheWrites) : sum;
+  }, 0);
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 
   const requests: BatchTransformRequest[] = body.requests.map(r => ({
@@ -74,17 +100,45 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     messages: r.messages as MessageParam[],
   }));
 
-  const { anthropicBatchId, customIdMap } = await service.submitBatch(requests);
+  const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms');
 
-  await transformBatchRepository.create({
-    ownerUserId: req.user.id,
-    anthropicBatchId,
-    status: 'in_progress',
-    requestCount: requests.length,
-    succeededCount: 0,
-    erroredCount: 0,
-    customIdMap,
-  });
+  let submitted: Awaited<ReturnType<typeof service.submitBatch>>;
+  try {
+    submitted = await service.submitBatch(requests);
+  } catch (error) {
+    await reservation.refund();
+    throw error;
+  }
+  const { anthropicBatchId } = submitted;
+  // submitBatch maps requests in order, so customIdMap[i] is requests[i].
+  const customIdMap = submitted.customIdMap.map((m, i) => ({ ...m, model: requests[i].model }));
+
+  try {
+    await transformBatchRepository.create({
+      ownerUserId: req.user.id,
+      anthropicBatchId,
+      status: 'in_progress',
+      requestCount: requests.length,
+      succeededCount: 0,
+      erroredCount: 0,
+      customIdMap,
+      // Settled only by a poll that sees the batch end; nothing sweeps holds, so a batch that is
+      // never polled to completion keeps its hold.
+      creditHold: reservation.hold,
+      apiKeyId: req.apiKeyInfo?.keyId,
+      usageSource: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
+    });
+  } catch (error) {
+    req.logger.error(`[transforms/batch] Failed to persist batch ${anthropicBatchId} after submit`, error);
+    // Unrecorded, the batch would run on the platform key with nothing to settle it.
+    await new Anthropic({ apiKey }).messages.batches
+      .cancel(anthropicBatchId)
+      .catch(cancelError =>
+        req.logger.error(`[transforms/batch] Failed to cancel unrecorded batch ${anthropicBatchId}`, cancelError)
+      );
+    await reservation.refund();
+    throw error;
+  }
 
   req.logger.info(`[transforms/batch] Submitted batch ${anthropicBatchId} (${requests.length} requests)`);
 

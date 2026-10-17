@@ -1,9 +1,14 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType } from '@bike4mind/common';
+import { ApiKeyType, estimateTtsCreditCost, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+
+const TTS_MODEL = 'tts-1-hd';
 
 // Test real-time voice by creating a temporary session
 const handler = baseApi().post(async (req, res) => {
@@ -47,6 +52,24 @@ const handler = baseApi().post(async (req, res) => {
 
   console.log('[DEBUG] Test Realtime Voice - Selected voice:', selectedVoice);
 
+  // Same credit gate as pages/api/ai/tts.ts: refuse before the provider call, charge after it. Unlike
+  // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
+  const userId = req.user?.id;
+  if (userId) {
+    try {
+      await assertPreflightCredits({
+        userId,
+        estimatedCredits: estimateTtsCreditCost('openai', TTS_MODEL, text.length),
+        featureLabel: 'voice preview',
+      });
+    } catch (error) {
+      if (error instanceof InsufficientCreditsPreflightError) {
+        return res.status(422).json({ error: error.message, errorCode: 'insufficient_credits' satisfies ApiErrorCode });
+      }
+      throw error;
+    }
+  }
+
   try {
     // For now, fallback to TTS API since real-time API requires WebRTC
     // In future, we could implement a WebSocket connection to get real-time voice
@@ -58,7 +81,7 @@ const handler = baseApi().post(async (req, res) => {
     const openai = new OpenAI({ apiKey: openaiApiKey });
 
     const response = await openai.audio.speech.create({
-      model: 'tts-1-hd', // Use HD model for better quality matching real-time
+      model: TTS_MODEL, // Use HD model for better quality matching real-time
       voice: selectedVoice as any,
       input: text,
       response_format: 'mp3',
@@ -68,10 +91,20 @@ const handler = baseApi().post(async (req, res) => {
     // Convert response to buffer
     const buffer = Buffer.from(await response.arrayBuffer());
 
+    if (userId && (await isCreditsEnforced())) {
+      await deductTtsCredits({
+        userId,
+        vendor: 'openai',
+        model: TTS_MODEL,
+        characters: text.length,
+        logger: req.logger,
+      });
+    }
+
     // Set appropriate headers for audio response
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', buffer.length);
-    res.setHeader('X-Voice-Model', 'tts-1-hd'); // Indicate this is TTS, not real real-time
+    res.setHeader('X-Voice-Model', TTS_MODEL); // Indicate this is TTS, not real real-time
     res.setHeader('X-Voice-Selected', selectedVoice);
 
     return res.send(buffer);

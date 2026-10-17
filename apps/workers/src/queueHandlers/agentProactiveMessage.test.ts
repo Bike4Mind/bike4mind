@@ -7,6 +7,7 @@
  * real here (not mocked) - only its inputs (the session doc) are controlled per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { insufficientCreditsError } from '@bike4mind/common';
 
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   getEffectiveLLMApiKeys: vi.fn(),
   generateAndSendProactiveMessage: vi.fn(),
   sendToClient: vi.fn(),
+  createCompletionMeter: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -53,6 +55,8 @@ vi.mock('@bike4mind/utils', () => ({
     sendToClient = h.sendToClient;
   },
 }));
+
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: h.createCompletionMeter }));
 
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
@@ -129,5 +133,26 @@ describe('agentProactiveMessage consumer', () => {
     expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(h.generateAndSendProactiveMessage).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('no longer has access to agent'));
+  });
+
+  it('bills the message to config.userId through a completion meter', async () => {
+    const meter = vi.fn();
+    h.createCompletionMeter.mockReturnValue(meter);
+    await dispatch(makeEvent(payload), {} as never, logger);
+
+    expect(h.createCompletionMeter).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'editor' }),
+      logger,
+      'proactive agent messages',
+      expect.objectContaining({ sessionId: expect.any(String) })
+    );
+    expect(h.generateAndSendProactiveMessage).toHaveBeenCalledWith(expect.objectContaining({ meter }));
+  });
+
+  it('skips without retrying or notifying when the owner has insufficient credits', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(insufficientCreditsError('Insufficient credits'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
   });
 });

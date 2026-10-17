@@ -10,6 +10,8 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 // these tests parse frames against). Only the seams below are mocked.
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();

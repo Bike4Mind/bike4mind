@@ -28,6 +28,7 @@ import { withWebSocketContext, sendToConnection } from '@server/websocket/utils'
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { TooManyRequestsError } from '@server/utils/errors';
+import { getUserEntitlements } from '@server/entitlements';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -151,6 +152,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // Execute completion - same function as SSE handler
     // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
+      getEntitlements: getUserEntitlements,
       userId,
       model,
       messages: messages as IMessage[],

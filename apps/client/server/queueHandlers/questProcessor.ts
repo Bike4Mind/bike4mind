@@ -68,6 +68,7 @@ import {
   getVideoJobDeps,
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a
@@ -318,6 +319,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    createCompletionMeter: ({ organizationId, featureLabel }) =>
+      createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
   logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 

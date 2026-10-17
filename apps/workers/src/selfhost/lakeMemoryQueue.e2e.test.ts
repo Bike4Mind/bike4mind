@@ -6,6 +6,7 @@ import {
   DataLakeModel,
   FabFile,
   FabFileChunk,
+  User,
   dataLakeRepository,
   adminSettingsRepository,
   memoryLedgerRepository,
@@ -52,7 +53,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 let lakeId: string;
 let ids: string[];
-const owner = 'local-owner';
+// Extraction is billed to the lake owner, so the owner must be a real user.
+const owner = new mongoose.Types.ObjectId().toHexString();
 const tag = 'datalake:local-fixture';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 const message = (body: unknown, count = 1) => ({
@@ -103,6 +105,7 @@ beforeEach(async () => {
   for (const collection of Object.values(mongoose.connection.collections)) await collection.deleteMany({});
   vi.spyOn(adminSettingsRepository, 'getSettingsValue').mockResolvedValue(true);
   send.mockResolvedValue('continuation');
+  await User.collection.insertOne({ _id: new mongoose.Types.ObjectId(owner), email: 'owner@example.com' });
   remove.mockResolvedValue(undefined);
   const lake = await DataLakeModel.create({
     name: 'Local fixture',

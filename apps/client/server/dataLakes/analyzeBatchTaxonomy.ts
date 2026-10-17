@@ -4,18 +4,26 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
+import type { Logger } from '@bike4mind/observability';
 import {
   ApiKeyType,
+  ChatModels,
+  getQuestErrorCode,
+  type IUserDocument,
   MAX_TAXONOMY_TAGS,
   sanitizeCategories,
   sanitizeFileAssignments,
   type IDataLakeBatchDocument,
+  type InferTaxonomyResponse,
   type TaxonomyStatus,
 } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
 import { runTaxonomyInference, sampleFabFilesForTaxonomy } from '@server/dataLakes/runTaxonomyInference';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { Resource } from 'sst';
 
 export interface AnalyzeBatchTaxonomyResult {
@@ -67,7 +75,7 @@ export async function analyzeBatchTaxonomy(
   batchId: string,
   dataLakeId: string,
   userId: string,
-  logger: { error: (msg: string) => void; warn: (msg: string) => void },
+  logger: Logger,
   options: ({ from: TaxonomyStatus[] } | { claimHeldByCaller: true }) & { context?: string }
 ): Promise<AnalyzeBatchTaxonomyResult> {
   if ('from' in options && !(await claimBatchForAnalysis(batchId, options.from))) return { claimed: false };
@@ -106,11 +114,27 @@ export async function analyzeBatchTaxonomy(
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) return fail('Data lake not found');
 
+  // The inference call is billed to the user who uploaded (or re-analyzes) the batch.
+  const user = (await userRepository.findById(userId)) as IUserDocument | null;
+  if (!user) return fail('User not found');
+  const models = await getAvailableModels({ openai: openaiApiKey });
+  const modelInfo = models.find(m => m.id === ChatModels.GPT4o_MINI);
+  if (!modelInfo) return fail('Taxonomy model is not available');
+  const meter = createCompletionMeter(user, logger, 'data lake taxonomy', { systemModel: true });
+
   const folderTree = sampleFabFilesForTaxonomy(files);
-  const response = await runTaxonomyInference(openaiApiKey, folderTree, {
-    existingPrefix: lake.fileTagPrefix,
-    context: options.context,
-  });
+  let response: InferTaxonomyResponse;
+  try {
+    response = await runTaxonomyInference(openaiApiKey, folderTree, {
+      existingPrefix: lake.fileTagPrefix,
+      context: options.context,
+      reserve: (messages, maxTokens) => meter(modelInfo, messages, maxTokens, models),
+    });
+  } catch (err) {
+    // Not retryable: a redelivery would be refused the same way.
+    if (getQuestErrorCode(err) === 'insufficient_credits') return fail('Not enough credits to analyze this batch');
+    throw err;
+  }
 
   const tags = sanitizeCategories(response.categories, lake.fileTagPrefix);
   const fileAssignments = sanitizeFileAssignments(response.fileAssignments);

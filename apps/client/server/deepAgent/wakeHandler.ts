@@ -17,6 +17,15 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from './missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from './resolveBackend';
+import {
+  isInsufficientCredits,
+  MISSION_MODEL_REFUSED_BLOCKER,
+  MISSION_NEEDS_CREDITS_BLOCKER,
+  MissionModelRefusedError,
+  missionWakeMeter,
+  pauseMission,
+} from './wakeMetering';
+import type { CompletionMeter } from '@bike4mind/services';
 
 /**
  * Deep-agent wake trigger. One SQS message -> one wake cycle for one agent.
@@ -52,6 +61,7 @@ export interface BuildWakeDepsOptions {
    * precedence over `enableTools`.
    */
   buildTools?: ToolMaterializer;
+  meter?: CompletionMeter;
 }
 
 /** Assemble the production wake deps: Mongo store + LLM-backed steps. */
@@ -60,7 +70,7 @@ export async function buildDefaultWakeDeps(
   logger: Logger,
   options?: BuildWakeDepsOptions
 ): Promise<WakeDeps> {
-  const resolved = await resolveDeepAgentBackend(modelId ?? DEFAULT_WAKE_MODEL_ID, logger);
+  const resolved = await resolveDeepAgentBackend(modelId ?? DEFAULT_WAKE_MODEL_ID, logger, undefined, options?.meter);
   if (!resolved) {
     throw new Error(`deep agent wake: could not resolve model ${modelId ?? DEFAULT_WAKE_MODEL_ID}`);
   }
@@ -97,8 +107,26 @@ export async function processWake(
   logger: Logger,
   overrides?: ProcessWakeOverrides
 ): Promise<void> {
-  const deps = overrides?.deps ?? (await buildDefaultWakeDeps(payload.modelId, logger));
-  const outcome = await runWakeCycle(payload.agentId, deps);
+  const store = new MongoDeepAgentStore();
+  const deps =
+    overrides?.deps ??
+    (await buildDefaultWakeDeps(payload.modelId, logger, {
+      meter: await missionWakeMeter(store, payload.agentId, logger),
+    }));
+  let outcome: Awaited<ReturnType<typeof runWakeCycle>>;
+  try {
+    outcome = await runWakeCycle(payload.agentId, deps);
+  } catch (err) {
+    // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
+    const blocker = isInsufficientCredits(err)
+      ? MISSION_NEEDS_CREDITS_BLOCKER
+      : err instanceof MissionModelRefusedError
+        ? MISSION_MODEL_REFUSED_BLOCKER
+        : null;
+    if (!blocker) throw err;
+    await pauseMission(deps.store, payload.agentId, blocker, logger);
+    return;
+  }
   // Mission log: fire-and-forget - never fails the wake.
   void bridgeWakeToSession(outcome, logger);
   logger.info('deep agent wake complete', {

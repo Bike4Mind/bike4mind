@@ -1,4 +1,4 @@
-import { CreditHolderType, IUserDocument } from '@bike4mind/common';
+import { CreditHolderType, IUserDocument, type CreditHoldRecord } from '@bike4mind/common';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
@@ -13,6 +13,8 @@ export type CreditReservation = {
   ownerType: CreditHolderType;
   /** Credits held against the owner; 0 when nothing was reserved (credits off, or a free request). */
   reservedCredits: number;
+  /** The serializable hold, for settling in a later request (see settleHeldCredits); null when nothing was reserved. */
+  hold: CreditHoldRecord | null;
   /**
    * Return the whole reservation - the provider call failed and incurred no cost. Never throws: the route
    * is already answering with the provider failure, so a failed refund is logged (with the owner, for a
@@ -34,6 +36,13 @@ type BillingRequest = {
   logger: Logger;
 };
 
+const holdAdapters = {
+  users: userRepository,
+  organizations: organizationRepository,
+  creditTransactions: creditTransactionRepository,
+  deductCredits: creditService.deductCreditsWithOrgSupport,
+};
+
 type ReserveRequestCreditsParams = {
   req: BillingRequest;
   requiredCredits: number;
@@ -41,7 +50,27 @@ type ReserveRequestCreditsParams = {
   enforceCredits: boolean | undefined;
   /** Noun phrase for the insufficient-credits copy, e.g. "music generation". */
   featureLabel: string;
+  /** Overrides rule 3's org seat with the org the caller is acting in (a chat turn's active org); null = the user. */
+  organizationId?: string | null;
 };
+
+/**
+ * The organization a request bills, or undefined when it bills the user. Precedence: org-billed API key
+ * -> its org; user-billed API key -> the user; JWT caller -> `organizationId` when given (null = the
+ * user), else the user's own org seat.
+ */
+export function resolveRequestBillingOrgId(
+  req: Pick<BillingRequest, 'user' | 'apiKeyInfo'>,
+  organizationId?: string | null
+): string | undefined {
+  if (req.apiKeyInfo) {
+    return req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
+      ? req.apiKeyInfo.organizationId
+      : undefined;
+  }
+  if (organizationId !== undefined) return organizationId ?? undefined;
+  return req.user?.organizationId?.toString() ?? undefined;
+}
 
 /**
  * Reserve a request's cost BEFORE any provider cost is incurred, for the stateless paid API routes
@@ -64,27 +93,18 @@ export async function reserveRequestCredits({
   requiredCredits,
   enforceCredits,
   featureLabel,
+  organizationId,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
-  const billingOrganizationId = req.apiKeyInfo
-    ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
-      ? req.apiKeyInfo.organizationId
-      : undefined
-    : (req.user.organizationId?.toString() ?? undefined);
+  const billingOrganizationId = resolveRequestBillingOrgId(req, organizationId);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 
   if (!enforceCredits || requiredCredits <= 0) {
-    return { ownerId, ownerType, reservedCredits: 0, refund: async () => {}, settle: async () => 0 };
+    return { ownerId, ownerType, reservedCredits: 0, hold: null, refund: async () => {}, settle: async () => 0 };
   }
 
-  const holdAdapters = {
-    users: userRepository,
-    organizations: organizationRepository,
-    creditTransactions: creditTransactionRepository,
-    deductCredits: creditService.deductCreditsWithOrgSupport,
-  };
   const hold = await creditService.holdCredits(
     {
       userId,
@@ -103,6 +123,7 @@ export async function reserveRequestCredits({
     ownerId: hold.ownerId,
     ownerType: hold.ownerType,
     reservedCredits: hold.reservedCredits,
+    hold,
     refund: async () => {
       try {
         await creditService.releaseCreditHold(hold, holdAdapters);
@@ -118,4 +139,17 @@ export async function reserveRequestCredits({
     settle: (chargedCredits, entry) =>
       creditService.settleCreditHold(hold, chargedCredits, entry, { featureLabel, logger: req.logger }, holdAdapters),
   };
+}
+
+/**
+ * Settle a hold persisted by an earlier request (e.g. an async batch settled on poll). Same clamp
+ * and ledger semantics as CreditReservation.settle; a charge of 0 refunds the whole hold.
+ */
+export function settleHeldCredits(
+  hold: CreditHoldRecord,
+  chargedCredits: number,
+  entry: CreditLedgerEntry,
+  context: { featureLabel: string; logger: Logger }
+): Promise<number> {
+  return creditService.settleCreditHold(hold, chargedCredits, entry, context, holdAdapters);
 }

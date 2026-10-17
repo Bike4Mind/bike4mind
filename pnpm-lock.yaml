@@ -286,9 +286,6 @@ importers:
       '@elevenlabs/client':
         specifier: ^1.14.1
         version: 1.14.1(@types/dom-mediacapture-record@1.0.22)
-      '@googleapis/calendar':
-        specifier: ^16.0.0
-        version: 16.0.0
       '@googleapis/drive':
         specifier: ^22.0.0
         version: 22.0.0
@@ -3496,10 +3493,6 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
-
-  '@googleapis/calendar@16.0.0':
-    resolution: {integrity: sha512-Z/8Jdf4hMvmMlBMhP0whZNPSixEpYv4mC5RJfrlvrnqpf/rV68MJ+8M9MmyqUt7/SQp2zRfVmEqkk+csB2Cgmg==}
-    engines: {node: '>=12.0.0'}
 
   '@googleapis/drive@22.0.0':
     resolution: {integrity: sha512-u21JQPR5mGKt8OqjsDndb+l5b44IXCKTum+P1Q1rlWmi2pUNZqcNeq7csx06xlwj+UeZv5/ZhhhAjziVZu86Dg==}
@@ -15030,12 +15023,6 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
-
-  '@googleapis/calendar@16.0.0':
-    dependencies:
-      googleapis-common: 8.0.2
-    transitivePeerDependencies:
-      - supports-color
 
   '@googleapis/drive@22.0.0':
     dependencies:

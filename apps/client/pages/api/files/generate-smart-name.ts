@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import { UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 const generateSmartNameSchema = z.object({
   prompt: z.string(),
@@ -17,17 +20,19 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req,
     const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;
 
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId, modelInfo } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'smart file naming', { systemModel: true }),
+        modelInfo
+      );
 
       let result = '';
-      await llm.complete(
-        modelId,
-        [{ role: 'user', content: prompt }],
-        { maxTokens: 50, temperature: 0.7 },
-        async (chunks: (string | null | undefined)[]) => {
-          result += chunks.filter(Boolean).join('');
-        }
-      );
+      const messages: IMessage[] = [{ role: 'user', content: prompt }];
+      await llm.complete(modelId, messages, { maxTokens: 50, temperature: 0.7 }, async chunks => {
+        result += chunks.filter(Boolean).join('');
+      });
 
       const generatedName = result.trim();
       req.logger.info('Generated name from AI:', { generatedName, prompt: prompt.slice(0, 100) });
@@ -48,10 +53,13 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req,
       req.logger.info('Returning clean name:', { cleanName });
       return res.status(200).json({ name: cleanName });
     } catch (modelError) {
+      if (modelError instanceof UnprocessableEntityError) throw modelError;
       req.logger.info('Operations model unavailable, using fallback name:', modelError);
       return res.status(200).json({ name: fallbackName });
     }
   } catch (error) {
+    // Insufficient credits must surface (422) instead of degrading to the fallback name.
+    if (error instanceof UnprocessableEntityError) throw error;
     req.logger.error('Error generating smart filename:', error);
     const fallbackName = req.body.fileType === 'image' ? 'pasted-image' : 'pasted-text';
     return res.status(200).json({ name: fallbackName });

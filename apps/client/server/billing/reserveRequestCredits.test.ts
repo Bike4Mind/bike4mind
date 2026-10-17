@@ -177,4 +177,28 @@ describe('reserveRequestCredits', () => {
     expect(orgIncrement).toHaveBeenCalledWith('o1', -2);
     expect(userIncrement).not.toHaveBeenCalled();
   });
+
+  it('bills the org a browser caller is acting in, overriding their home seat, and the user for null', async () => {
+    orgFindById.mockResolvedValue({ id: 'o2', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
+    orgIncrement.mockResolvedValue({ currentCredits: 48 });
+
+    const inOrg = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 2,
+      enforceCredits: true,
+      featureLabel: 'QuestMaster planning',
+      organizationId: 'o2',
+    });
+    expect(inOrg).toMatchObject({ ownerId: 'o2', ownerType: CreditHolderType.Organization });
+    expect(orgIncrement).toHaveBeenCalledWith('o2', -2);
+
+    const personal = await reserveRequestCredits({
+      req: { ...userReq(), user: { id: 'u1', organizationId: 'home-org' } } as never,
+      requiredCredits: 2,
+      enforceCredits: true,
+      featureLabel: 'QuestMaster planning',
+      organizationId: null,
+    });
+    expect(personal).toMatchObject({ ownerId: 'u1', ownerType: CreditHolderType.User });
+  });
 });

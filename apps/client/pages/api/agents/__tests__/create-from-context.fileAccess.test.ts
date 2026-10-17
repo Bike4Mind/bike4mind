@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ fabFileIds: ['message-file'] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
   fabFileRepository: { findAccessibleInIds: h.findAccessibleInIds, findAllByIds: h.findAllByIds },
-  agentRepository: {},
+  agentRepository: { countByUserId: vi.fn().mockResolvedValue(0) },
   apiKeyRepository: {},
   adminSettingsRepository: {},
   projectRepository: {},
@@ -38,8 +38,9 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: h.createAttachmentLakeAccess,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));
-vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
+vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, meterCompletionBackend: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 await import('../create-from-context');
 

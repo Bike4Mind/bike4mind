@@ -50,6 +50,7 @@ import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -174,6 +175,13 @@ const handler = nextRouteForContract(chatContract, {
     gpcSignalDetected: req.headers['sec-gpc'] === '1',
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger: req.logger,
+    createCompletionMeter: ({
+      organizationId,
+      featureLabel,
+    }: {
+      organizationId: string | null;
+      featureLabel: string;
+    }) => createCompletionMeter(req.user!, req.logger, featureLabel, { sessionId, organizationId }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT

@@ -66,6 +66,7 @@ import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@server/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -635,6 +636,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          getEntitlements: getUserEntitlements,
           userId: actorUserId,
           model: hydrated.model,
           messages,

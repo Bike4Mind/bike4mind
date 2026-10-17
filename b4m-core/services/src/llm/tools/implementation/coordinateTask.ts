@@ -10,6 +10,7 @@ import type { ICompletionBackend, ICompletionOptionTools, ApiKeyTable } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from '../../modelAdmission';
 import type {
   ServerSubagentTracker,
   SubagentHandoffSignal,
@@ -176,6 +177,9 @@ export interface CoordinateTaskToolDeps {
    * their execution rows (`makeDagDispatcher` in apps/workers).
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /** The user's model admission; forwarded to the orchestrator, see `ServerOrchestratorDeps.modelAdmission`. */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -244,6 +248,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
         toolPermissions: deps.toolPermissions,
+        modelAdmission: deps.modelAdmission,
       });
 
       try {

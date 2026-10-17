@@ -42,6 +42,14 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   }),
 }));
 vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+  completionCeilingUsd: () => 0,
+  reserveCompletionCredits: async () => ({ reservedCredits: 0, refund: async () => {} }),
+  latchUsage: () => {},
+  completionUsd: () => 0,
+  settleCompletion: async () => {},
+}));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   applyEditedText: h.applyEditedText,
@@ -69,7 +77,7 @@ const call = () =>
       query: { id: 'ff1' },
       user,
       body: { instruction: 'edit it', applyImmediately: true, model: 'm' },
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as Request,
     { json: vi.fn() } as unknown as Response
   );

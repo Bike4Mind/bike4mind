@@ -1,7 +1,8 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
+import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { getImageModelCapabilities, isImageModel, type ModelInfo, type SupersededModelInfo } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
@@ -28,7 +29,7 @@ function withImageCapabilities(model: ModelInfo): ModelInfo {
   return { ...model, image: getImageModelCapabilities(model.id) };
 }
 
-async function buildCallerModelList(userId: string | null): Promise<CallerModelList> {
+async function buildCallerModelList(userId: string | null, enforceCredits: boolean): Promise<CallerModelList> {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
@@ -38,19 +39,27 @@ async function buildCallerModelList(userId: string | null): Promise<CallerModelL
   const apiKeys = buildApiKeyTable(coreKeys);
 
   const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
-  const models = listedModels.map(withImageCapabilities);
+  // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
+  // an unpriced text model settles at $0, so the picker must not offer it either.
+  const offered = enforceCredits
+    ? listedModels.filter(model => !isUnpricedTextModel(model))
+    : listedModels;
+  const models = offered.map(withImageCapabilities);
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.
   // Reads the fan-out getAvailableModels just did, so it costs no extra work.
-  return { models, supersededModels: getSupersededModels(listedModels) };
+  return { models, supersededModels: getSupersededModels(offered) };
 }
 
 export async function getCallerModelList(
   userId: string | null,
   logger: { log: (message: string) => void }
 ): Promise<CallerModelList> {
-  const cacheKey = CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID);
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const enforceCredits = Boolean(getSettingsValue('enforceCredits', settings));
+  // The flag is in the key so toggling enforceCredits takes effect immediately, not after the TTL.
+  const cacheKey = `${CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID)}:credits-${enforceCredits ? 'on' : 'off'}`;
 
   const cached = await cacheRepository.findOne({ key: cacheKey });
   if (cached) {
@@ -59,7 +68,7 @@ export async function getCallerModelList(
   }
 
   logger.log(`Cache miss for key: ${cacheKey}`);
-  const payload = await buildCallerModelList(userId);
+  const payload = await buildCallerModelList(userId, enforceCredits);
 
   // Don't cache an empty result. If every backend timed out (network blip, all
   // providers slow at once), caching `{ models: [] }` for 60s would hide healthy

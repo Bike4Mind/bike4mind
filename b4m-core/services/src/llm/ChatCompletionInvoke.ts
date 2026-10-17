@@ -16,7 +16,6 @@ import {
   ForbiddenError,
   InternalServerError,
   NotFoundError,
-  isModelAccessible,
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
@@ -26,6 +25,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import { createModelAdmission, loadModelConfigurations } from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
@@ -325,7 +325,7 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
+    const [quest, defaultEmbeddingModel, modelConfigurations, enforceCredits] = await Promise.all([
       // Quest creation/update
       questId
         ? this.db.quests.findById(questId).then(async q => {
@@ -404,6 +404,7 @@ export class ChatCompletionInvoke {
       // Admin settings fetches
       this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
       this.modelConfigurationsCache || this.getModelConfigurations(),
+      this.db.adminSettings.getSettingsValue('enforceCredits'),
 
       // Session update (fire-and-forget but ensure completion)
       sessionUpdatePromise,
@@ -420,29 +421,21 @@ export class ChatCompletionInvoke {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
       const originalModel = model.id;
-
-      // Check if primary model is accessible
       const modelToUse = originalModel;
 
-      if (modelConfigurations.length > 0) {
-        const primaryModelConfig = modelConfigurations.find(config => config.id === originalModel);
-        if (primaryModelConfig) {
-          // Entitlement-aware admission: a tag-less subscriber can reach an
-          // entitlement-gated model via their resolved keys. Fail-safe to [].
-          // Only resolve when keys can change the outcome - skip the DB lookup
-          // for admins (always allowed) and for models with no allowedEntitlements
-          // (tag-only), keeping the entitlement branch inert.
-          const isAdmin = this.user.isAdmin || false;
-          const needsEntitlements = !isAdmin && (primaryModelConfig.allowedEntitlements?.length ?? 0) > 0;
-          const entitlementKeys = needsEntitlements ? await this.resolveEntitlementKeys() : [];
-          const hasUserAccess = isModelAccessible(primaryModelConfig, this.user.tags || [], isAdmin, entitlementKeys);
-
-          if (!primaryModelConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Primary model ${originalModel} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${originalModel}" is not accessible and no fallback available`);
-          }
-        }
-      }
+      // Same admission rule as every other model-selection path (see ./modelAdmission).
+      await createModelAdmission({
+        user: this.user,
+        configs: modelConfigurations,
+        getEntitlements: () => this.resolveEntitlementKeys(),
+        models: modelInfo,
+        enforceCredits: enforceCredits === true,
+      })
+        .assert(originalModel)
+        .catch(err => {
+          this.logger.error(`Primary model ${originalModel} is not admitted: ${(err as Error).message}`);
+          throw err;
+        });
 
       let currentEmbeddingModel = embeddingModel;
       if (!currentEmbeddingModel) {
@@ -545,19 +538,5 @@ export class ChatCompletionInvoke {
     return quest;
   }
 
-  private getModelConfigurations = async (): Promise<LLMModelConfig[]> => {
-    try {
-      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
-      const configs = setting?.settingValue;
-
-      if (Array.isArray(configs)) {
-        return configs as LLMModelConfig[];
-      }
-
-      return [];
-    } catch (error) {
-      console.error('Failed to fetch model configurations:', error);
-      return [];
-    }
-  };
+  private getModelConfigurations = (): Promise<LLMModelConfig[]> => loadModelConfigurations(this.db.adminSettings);
 }

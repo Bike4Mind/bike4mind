@@ -1,8 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
-import { transformBatchRepository } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/utils';
-import { AnthropicBatchService } from '@bike4mind/llm-adapters';
+import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
+import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
+import { getTextModelCost } from '@bike4mind/common';
+import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
+import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).
@@ -28,13 +30,14 @@ const handler = baseApi().get(async (req, res) => {
   // Short-circuit: once completed, results are cached on the row - return them
   // without re-streaming the (potentially large) JSONL from Anthropic on every
   // poll. The consumer typically polls completed once, but this also makes the
-  // poll idempotent + cheap if it retries.
-  if (batch.status === 'completed') {
+  // poll idempotent + cheap if it retries. An empty array is a stored zero-result batch; only an
+  // absent field means the results were never written.
+  if (batch.status === 'completed' && Array.isArray(batch.results)) {
     return res.json({
       batch_id: anthropicBatchId,
       status: 'completed',
       counts: { succeeded: batch.succeededCount, errored: batch.erroredCount },
-      results: batch.results ?? [],
+      results: batch.results,
     });
   }
 
@@ -68,13 +71,99 @@ const handler = baseApi().get(async (req, res) => {
     error: r.error,
   }));
 
-  await transformBatchRepository.update({
-    id: batch.id,
-    status: 'completed',
+  // Best-effort: results over Mongo's 16MB document cap must not fail the poll; a completed row
+  // without stored results re-streams them from Anthropic on the next poll.
+  const saveResults = () =>
+    transformBatchRepository.saveResults(batch.id, results).catch(error => {
+      req.logger.error(`[transforms/batch] Failed to persist results for batch ${anthropicBatchId}`, error);
+    });
+
+  // Completed but no results stored: the write failed or the claiming poll has not reached it.
+  // Settlement belongs to the claim winner alone, so never settle here.
+  if (batch.status === 'completed') {
+    await saveResults();
+    return res.json({ batch_id: anthropicBatchId, status: 'completed', counts: status.counts, results });
+  }
+
+  // Fetched before the claim: once the claim lands, a throw here could never be retried.
+  const catalog = batch.creditHold ? await getAvailableModels({ anthropic: apiKey }) : [];
+  // Only the poll that wins the in_progress -> completed transition sees the hold, so a retried or
+  // concurrent poll never settles twice. The hold stays on the row until markCreditSettled, so a
+  // crash before then leaves a record of the unsettled hold.
+  const claimed = await transformBatchRepository.claimCompletion(batch.id, {
     succeededCount: status.counts.succeeded,
     erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
-    results,
   });
+  if (claimed?.creditHold) {
+    // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
+    const modelByCustomId = new Map(claimed.customIdMap.map(m => [m.customId, m.model]));
+    let usd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    const models = new Set<string>();
+    for (const r of status.results ?? []) {
+      const modelInfo = catalog.find(m => m.id === modelByCustomId.get(r.customId));
+      if (r.status === 'done' && r.tokenUsage && !modelInfo) {
+        req.logger.error(
+          `[transforms/batch] Unbilled item in batch ${anthropicBatchId}: model ${modelByCustomId.get(r.customId)} missing from catalog`
+        );
+      }
+      if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
+      const u = r.tokenUsage;
+      usd += getTextModelCost(
+        modelInfo,
+        u.inputTokens,
+        u.outputTokens,
+        u.cacheReadInputTokens ?? 0,
+        u.cacheCreationInputTokens ?? 0
+      );
+      inputTokens += u.inputTokens;
+      outputTokens += u.outputTokens;
+      cacheReadTokens += u.cacheReadInputTokens ?? 0;
+      cacheWriteTokens += u.cacheCreationInputTokens ?? 0;
+      models.add(modelInfo.id);
+    }
+    const model = [...models].join(',') || 'unknown';
+    const creditsCharged = await settleHeldCredits(
+      claimed.creditHold,
+      usdToCreditsStochastic(usd),
+      {
+        type: 'completion_api_usage',
+        sessionId: anthropicBatchId,
+        model,
+        apiKeyId: claimed.apiKeyId,
+        source: claimed.usageSource,
+        inputTokens,
+        outputTokens,
+      },
+      { featureLabel: 'batch transforms', logger: req.logger }
+    );
+    await transformBatchRepository.markCreditSettled(batch.id);
+    await usageEventRepository
+      .record({
+        requestId: anthropicBatchId,
+        userId: claimed.ownerUserId,
+        ownerId: claimed.creditHold.ownerId,
+        ownerType: claimed.creditHold.ownerType,
+        feature: 'completion_api',
+        provider: 'anthropic',
+        model,
+        inputTokens,
+        outputTokens,
+        cachedInputTokens: cacheReadTokens,
+        cacheWriteTokens,
+        settledBasis: 'local',
+        costUsd: usd,
+        creditsCharged,
+        status: 'ok',
+        source: claimed.usageSource,
+        apiKeyId: claimed.apiKeyId,
+      })
+      .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
+  }
+  if (claimed) await saveResults();
 
   return res.json({
     batch_id: anthropicBatchId,

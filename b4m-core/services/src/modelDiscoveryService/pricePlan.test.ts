@@ -1,6 +1,12 @@
 import type { IModelPrice, IModelPriceTier } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { classifyPriceRow, describePriceRows, planPriceWrites, type PricePlanInput } from './pricePlan';
+import {
+  classifyPriceRow,
+  consensusPricedModelIds,
+  describePriceRows,
+  planPriceWrites,
+  type PricePlanInput,
+} from './pricePlan';
 import type { DiscoveredModel, DiscoveredPrice, SourceContribution } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -1259,5 +1265,31 @@ describe('planPriceWrites adapter literal rows', () => {
 
   it('writes nothing when no ladders are supplied, which is every caller that predates it', () => {
     expect(plan().rows).toEqual([]);
+  });
+});
+
+describe('consensusPricedModelIds', () => {
+  const PRICE: DiscoveredPrice = { inputPerMTok: 2, outputPerMTok: 8 };
+  const FAR: DiscoveredPrice = { inputPerMTok: 20, outputPerMTok: 80 };
+
+  it('names exactly the models planPriceWrites would write a first row for', () => {
+    const cases: Array<[string, SourceContribution[]]> = [
+      ['provider-alone', [provider(PRICE, 'provider-alone')]],
+      ['provider-corroborated', [provider(PRICE, 'provider-corroborated'), litellm(PRICE, 'provider-corroborated')]],
+      ['provider-dissented', [provider(PRICE, 'provider-dissented'), litellm(FAR, 'provider-dissented')]],
+      ['aggregators-agree', [modelsDev(PRICE, 'aggregators-agree'), litellm(PRICE, 'aggregators-agree')]],
+      ['aggregator-lone', [litellm(PRICE, 'aggregator-lone')]],
+    ];
+    const contributions = cases.flatMap(([, entries]) => entries);
+    const written = plan({ contributions, knownModelIds: new Set(cases.map(([modelId]) => modelId)) }).rows.map(
+      row => row.modelId
+    );
+
+    expect([...consensusPricedModelIds(contributions)].sort()).toEqual([
+      'aggregators-agree',
+      'provider-alone',
+      'provider-corroborated',
+    ]);
+    expect(written.sort()).toEqual(['aggregators-agree', 'provider-alone', 'provider-corroborated']);
   });
 });

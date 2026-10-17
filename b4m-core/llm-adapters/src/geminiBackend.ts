@@ -11,6 +11,7 @@ import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type I
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
+import { ignoresRequestedOutputCap } from './thinkingParams';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
@@ -1606,8 +1607,9 @@ export class GeminiBackend implements ICompletionBackend {
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
     // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
     // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
-    // so a caller's small cap would starve the visible reply.
-    if (model.can_think) return {};
+    // so a caller's small cap would starve the visible reply. The credit meter keys its hold on
+    // the same predicate, so this and the hold must change together.
+    if (ignoresRequestedOutputCap(model)) return {};
     return {
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       maxOutputTokens: options.maxTokens ?? 8192,
