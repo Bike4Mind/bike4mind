@@ -28,6 +28,7 @@ import {
   type FabFileChargeState,
   LAKE_INGEST_SOURCE_TYPES,
   type StorageUsageGroup,
+  type OrganizationStorageUploaderGroup,
   UNCATEGORIZED_TAG_SUFFIX,
   chargedBytes,
   type CitableFabFileFields,
@@ -1322,6 +1323,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       },
     ]);
     if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
+  }
+
+  /**
+   * sumFileSizeByOrganizationId's rows, grouped by uploader. Bounded by the partial
+   * `{ organizationId, deletedAt }` index; the group count is at most the org's uploader count.
+   */
+  async summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    { limit, maxTimeMS }: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<OrganizationStorageUploaderGroup>([
+      { $match: { organizationId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      { $group: { _id: '$userId', bytes: { $sum: { $ifNull: ['$fileSize', 0] } }, fileCount: { $sum: 1 } } },
+      { $sort: { bytes: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 0, userId: { $toString: '$_id' }, bytes: 1, fileCount: 1 } },
+    ]);
+    if (maxTimeMS) aggregate.option({ maxTimeMS });
     return aggregate.exec();
   }
 

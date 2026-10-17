@@ -3,6 +3,7 @@ import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 import type { StorageUsageGroup } from '../../storageBreakdown';
+import type { OrganizationStorageUploaderGroup } from '../../organizationStorage';
 
 // Define a type for the MIME types
 export type MimeType =
@@ -1163,6 +1164,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `maxTimeMS` bounds the aggregate for users with very large file counts.
    */
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
+
+  /**
+   * The rows `sumFileSizeByOrganizationId` sums, grouped by uploader (`userId`), largest first and
+   * capped at `limit` groups. `maxTimeMS` bounds the aggregate for orgs with very large file counts.
+   */
+  summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    options: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]>;
 
   /**
    * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
