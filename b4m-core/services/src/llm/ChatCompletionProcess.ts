@@ -22,6 +22,8 @@ import {
   getViewSummaryForLLM,
   isNavigableFeaturePath,
   applyReplyChoices,
+  applyNarratedToolCallStrip,
+  NARRATED_TOOL_CALL_NOTICE,
   REPLY_CHOICES_GUIDANCE,
   stripChoicesFromReplies,
   ReasoningEffort,
@@ -5180,6 +5182,8 @@ export class ChatCompletionProcess {
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
         clearStaleFallbackInfoIfNoAnswer();
+        // Before applyReplyChoices, so a choices block followed by a narrated call is still trailing.
+        const narratedToolNames = applyNarratedToolCallStrip(quest, allTools?.map(t => t.toolSchema.name) ?? []);
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
         // The system-prompt budget can evict the guidance after it was requested (lowest priority in
@@ -5203,21 +5207,38 @@ export class ChatCompletionProcess {
           });
         }
 
-        const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
-          toolCallCount: toolCallsSeen,
-          visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
-          stopReason: actualTokenUsage.stopReason,
-          producedNonTextDeliverable: producedNonTextDeliverable(),
-          // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
-          // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
-          // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
-          // reason after a mixed round ending in a flagged tool also skips the notice.
-          endedOnAnswerTool:
-            actualTokenUsage.stopReason === 'tool_use' &&
-            echoToolsUsed.length > 0 &&
-            isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
-        });
+        if (narratedToolNames.length > 0) {
+          logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', {
+            questId,
+            model: currentModel.id,
+            toolNames: narratedToolNames,
+          });
+          if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames: narratedToolNames };
+          // Same notice-slot shape as the incomplete-answer notice below.
+          quest.replies = [...(quest.replies ?? []), `\n\n${NARRATED_TOOL_CALL_NOTICE}`];
+          quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+        }
+
+        // Skipped after a narrated call: stripping it lowers the visible count, and the notice
+        // above already tells the user why there is no answer.
+        const incompleteAnswerNotice =
+          narratedToolNames.length > 0
+            ? null
+            : buildIncompleteAnswerNotice({
+                stopped: quest.status === 'stopped',
+                toolCallCount: toolCallsSeen,
+                visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
+                stopReason: actualTokenUsage.stopReason,
+                producedNonTextDeliverable: producedNonTextDeliverable(),
+                // An adapter only ends a turn on 'tool_use' via shouldEndTurnAfterTools; a normal tool
+                // round recurses. Known gap, accepted as narrow: OpenAI-family backends also report a
+                // per-round 'tool_use', and stopReason is sticky, so a follow-up that reports no stop
+                // reason after a mixed round ending in a flagged tool also skips the notice.
+                endedOnAnswerTool:
+                  actualTokenUsage.stopReason === 'tool_use' &&
+                  echoToolsUsed.length > 0 &&
+                  isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
+              });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,

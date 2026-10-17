@@ -3,6 +3,7 @@ import {
   THINK_OPEN_TAG,
   joinReplySlots,
   stripChoicesFromReplies,
+  stripNarratedToolCallsFromReplies,
   visibleReplyText,
 } from '@bike4mind/common';
 
@@ -18,7 +19,9 @@ export function extractReplies(messageData: ReplyBearingMessage) {
         : [];
   // The server strips the choices block on finalize; this hides it while it streams. Same rule as
   // the server: every slot's block is hidden, options come only from the answer slot.
-  const sourceReplies = stripChoicesFromReplies(rawReplies).replies;
+  // Finalize strips a tool call written as text only when it names an offered tool; this hides any
+  // well-formed or still-streaming one - see narratedToolCalls in @bike4mind/common.
+  const sourceReplies = stripNarratedToolCallsFromReplies(stripChoicesFromReplies(rawReplies).replies).replies;
 
   // Process and deduplicate short repeated segments that can occur during streaming
   const processedParts: string[] = [];

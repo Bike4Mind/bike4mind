@@ -11,6 +11,18 @@ import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTim
  * silent failure the whole path exists to replace, arrived at from the UI side.
  */
 describe('extractReplies', () => {
+  it('hides a tool call the model wrote as text, while streaming and after', () => {
+    const narrated =
+      'Let me check.\n\n<tool_call>\n{"name": "web_search", "arguments": {"query": "tides"}}\n</tool_call>';
+    expect(extractReplies({ replies: [narrated] })).toEqual(['Let me check.\n\n']);
+    expect(extractReplies({ replies: [narrated.slice(0, -20)] })).toEqual(['Let me check.\n\n']);
+  });
+
+  it('renders a fenced tool-call example unchanged', () => {
+    const example = 'The format is:\n\n```\n<tool_call>\n{"name": "web_search"}\n</tool_call>\n```';
+    expect(extractReplies({ replies: [example] })).toEqual([example]);
+  });
+
   it('hides a trailing choices block while it is still streaming', () => {
     const streaming = 'Pick one:\n1. A\n2. B\n\n```choices\n{"options":[{"label":"A","descr';
     expect(extractReplies({ replies: [streaming] })).toEqual(['Pick one:\n1. A\n2. B']);

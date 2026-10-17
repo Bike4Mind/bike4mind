@@ -53,6 +53,7 @@ import {
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   REPLY_CHOICES_GUIDANCE,
+  NARRATED_TOOL_CALL_NOTICE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -6659,6 +6660,23 @@ describe('ChatCompletionProcess', () => {
         expect.stringContaining('[ReplyChoices]'),
         expect.objectContaining({ reason: 'too_few', offered: false })
       );
+    });
+
+    const webSearchTool = { toolSchema: { name: 'web_search', description: 'search', parameters: {} } };
+    const narratedCall = 'Let me check.\n\n<tool_call>\n{"name": "web_search", "arguments": {}}\n</tool_call>';
+
+    it('strips a tool call written as text naming an offered tool, flags it and shows a notice', async () => {
+      await runWithTools([webSearchTool], undefined, {}, narratedCall);
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.reply).not.toContain('<tool_call>');
+      expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
+      expect(mockQuest.reply).toContain(NARRATED_TOOL_CALL_NOTICE);
+    });
+
+    it('leaves a tool call written as text alone when it names no offered tool', async () => {
+      await runWithTools([], undefined, {}, narratedCall);
+      expect(mockQuest.promptMeta.narratedToolCall).toBeUndefined();
+      expect(mockQuest.replies.join('')).toContain('<tool_call>');
     });
 
     // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see

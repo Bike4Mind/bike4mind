@@ -120,6 +120,7 @@ export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/streamVisibility';
 export * from './utils/replyChoices';
+export * from './utils/narratedToolCalls';
 export * from './utils/ttfvt';
 export * from './utils/shareableAccess';
 export * from './utils/inviteVisibility';
