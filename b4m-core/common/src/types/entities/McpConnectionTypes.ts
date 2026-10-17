@@ -568,9 +568,19 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** Disconnect: drop the tokens, their markers and any lease. Revocation at the server is the caller's. */
   clearOAuthTokens(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
-  setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
+  setInitialOAuthTokens(
+    id: string,
+    owner: McpConnectionOwner,
+    tokens: McpOAuthTokenUpdate
+  ): Promise<IMcpConnectionDocument | null>;
   markUsed(id: string): Promise<void>;
-  acquireRefreshLease(id: string, holder: string, ttlMs?: number): Promise<McpRefreshLeaseResult>;
+  /** Owner-scoped: a won lease returns the connection with its ciphertext. */
+  acquireRefreshLease(
+    id: string,
+    owner: McpConnectionOwner,
+    holder: string,
+    ttlMs?: number
+  ): Promise<McpRefreshLeaseResult>;
   releaseRefreshLease(id: string, holder: string): Promise<boolean>;
   deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean>;
 }

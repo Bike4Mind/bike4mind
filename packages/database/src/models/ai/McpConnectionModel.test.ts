@@ -92,6 +92,8 @@ const tool = (name: string, overrides: Partial<IMcpConnectionTool> = {}): IMcpCo
 });
 
 const OWNER = { ownerType: 'user' as const, ownerKey: 'user-1' };
+const OTHER_USER_OWNER = { ownerType: 'user' as const, ownerKey: 'user-2' };
+const ORG_OWNER = { ownerType: 'org' as const, ownerKey: 'org-1' };
 
 function secretValues(doc: unknown): unknown[] {
   return MCP_CONNECTION_SECRET_PATHS.map(path =>
@@ -230,11 +232,11 @@ describe('McpConnectionModel', () => {
       const before = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(fresh.id, OWNER))!);
       expect(before.auth.oauth).toMatchObject({ hasAccessToken: false, hasRefreshToken: false });
 
-      await mcpConnectionRepository.setInitialOAuthTokens(fresh.id, { accessTokenEnc: 'enc:a' });
+      await mcpConnectionRepository.setInitialOAuthTokens(fresh.id, OWNER, { accessTokenEnc: 'enc:a' });
       const accessOnly = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(fresh.id, OWNER))!);
       expect(accessOnly.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: false });
 
-      await mcpConnectionRepository.acquireRefreshLease(fresh.id, 'h');
+      await mcpConnectionRepository.acquireRefreshLease(fresh.id, OWNER, 'h');
       await mcpConnectionRepository.completeRefresh(fresh.id, 'h', {
         accessTokenEnc: 'enc:b',
         refreshTokenEnc: 'enc:r',
@@ -251,7 +253,7 @@ describe('McpConnectionModel', () => {
 
     it('clearOAuthTokens drops the tokens, markers and lease for the owner only', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'h');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'h');
       expect(
         await mcpConnectionRepository.clearOAuthTokens(created.id, { ownerType: 'user', ownerKey: 'user-2' })
       ).toBeNull();
@@ -325,8 +327,12 @@ describe('McpConnectionModel', () => {
 
     it('never writes tokens or a lease onto an org definition', async () => {
       const def = await mcpConnectionRepository.create(orgDefinition());
-      expect(await mcpConnectionRepository.setInitialOAuthTokens(def.id, { accessTokenEnc: 'enc:x' })).toBeNull();
-      expect(await mcpConnectionRepository.acquireRefreshLease(def.id, 'h')).toEqual({ outcome: 'not_found' });
+      expect(
+        await mcpConnectionRepository.setInitialOAuthTokens(def.id, ORG_OWNER, { accessTokenEnc: 'enc:x' })
+      ).toBeNull();
+      expect(await mcpConnectionRepository.acquireRefreshLease(def.id, ORG_OWNER, 'h')).toEqual({
+        outcome: 'not_found',
+      });
       const raw = await McpConnection.collection.findOne({ _id: new mongoose.Types.ObjectId(def.id) });
       expect(raw?.auth?.oauth?.accessTokenEnc).toBeUndefined();
       expect(raw?.refreshLease).toBeUndefined();
@@ -405,6 +411,19 @@ describe('McpConnectionModel', () => {
       expect(updated?.displayName).toBe('Edited');
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access');
+    });
+
+    it('maps a duplicate owner+slug to McpConnectionSlugConflictError in update and updateGuarded', async () => {
+      await mcpConnectionRepository.create(apiKeyConnection());
+      const created = await mcpConnectionRepository.create(baseConnection());
+
+      await expect(mcpConnectionRepository.update({ id: created.id, slug: 'airtable' })).rejects.toThrow(
+        McpConnectionSlugConflictError
+      );
+      await expect(mcpConnectionRepository.updateGuarded({ id: created.id, slug: 'airtable' })).rejects.toThrow(
+        McpConnectionSlugConflictError
+      );
+      expect((await mcpConnectionRepository.findById(created.id))?.slug).toBe('linear');
     });
   });
 
@@ -603,7 +622,7 @@ describe('McpConnectionModel', () => {
 
     it('setInitialOAuthTokens stores tokens without returning them and refuses a non-OAuth connection', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      const stored = await mcpConnectionRepository.setInitialOAuthTokens(created.id, {
+      const stored = await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, {
         accessTokenEnc: 'enc:access-2',
         expiresAt: new Date(Date.now() + 3600_000),
       });
@@ -614,7 +633,33 @@ describe('McpConnectionModel', () => {
       expect(toMcpConnectionPublic(stored!).auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: false });
 
       const key = await mcpConnectionRepository.create(apiKeyConnection());
-      expect(await mcpConnectionRepository.setInitialOAuthTokens(key.id, { accessTokenEnc: 'enc:x' })).toBeNull();
+      expect(
+        await mcpConnectionRepository.setInitialOAuthTokens(key.id, OWNER, { accessTokenEnc: 'enc:x' })
+      ).toBeNull();
+    });
+
+    it('create reports an access-only OAuth connection as hasAccessToken without hasRefreshToken', async () => {
+      const created = await mcpConnectionRepository.create(
+        baseConnection({
+          auth: {
+            kind: 'oauth',
+            oauth: { ...baseConnection().auth.oauth!, accessTokenEnc: 'enc:a', refreshTokenEnc: undefined },
+          },
+        })
+      );
+      const view = toMcpConnectionPublic((await mcpConnectionRepository.findById(created.id))!);
+      expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: false });
+    });
+
+    it('setInitialOAuthTokens refuses another user and leaves the stored tokens unchanged', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      expect(
+        await mcpConnectionRepository.setInitialOAuthTokens(created.id, OTHER_USER_OWNER, {
+          accessTokenEnc: 'enc:hijack',
+        })
+      ).toBeNull();
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
+      expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access', refreshTokenEnc: 'enc:refresh' });
     });
   });
 
@@ -776,7 +821,9 @@ describe('McpConnectionModel', () => {
     it('exactly one of N concurrent acquirers wins', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const results = await Promise.all(
-        Array.from({ length: 10 }, (_, i) => mcpConnectionRepository.acquireRefreshLease(created.id, `holder-${i}`))
+        Array.from({ length: 10 }, (_, i) =>
+          mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, `holder-${i}`)
+        )
       );
       const winners = results.flatMap(r => (r.outcome === 'acquired' ? [r.connection] : []));
       expect(winners).toHaveLength(1);
@@ -793,25 +840,29 @@ describe('McpConnectionModel', () => {
         { $set: { refreshLease: { holder: 'crashed', until: new Date(Date.now() - 1000) } } }
       );
 
-      const taken = await mcpConnectionRepository.acquireRefreshLease(created.id, 'next');
+      const taken = await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'next');
       expect(taken.outcome === 'acquired' && taken.connection.refreshLease?.holder).toBe('next');
     });
 
     it('tells a deleted connection apart from a held lease', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
-      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, 'b')).toMatchObject({
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'a');
+      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'b')).toMatchObject({
         outcome: 'held',
         holder: 'a',
       });
       await mcpConnectionRepository.deleteForOwner(created.id, OWNER);
-      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, 'b')).toEqual({ outcome: 'not_found' });
-      expect(await mcpConnectionRepository.acquireRefreshLease('not-an-id', 'b')).toEqual({ outcome: 'not_found' });
+      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'b')).toEqual({
+        outcome: 'not_found',
+      });
+      expect(await mcpConnectionRepository.acquireRefreshLease('not-an-id', OWNER, 'b')).toEqual({
+        outcome: 'not_found',
+      });
     });
 
     it('completeRefresh stores the tokens and frees the lease for the holder only', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'a');
 
       const done = await mcpConnectionRepository.completeRefresh(created.id, 'a', {
         accessTokenEnc: 'enc:access-2',
@@ -826,9 +877,11 @@ describe('McpConnectionModel', () => {
 
     it('a stale holder cannot write after a successor took the expired lease', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'slow');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'slow');
       await McpConnection.updateOne({ _id: created.id }, { $set: { 'refreshLease.until': new Date(Date.now() - 1) } });
-      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, 'successor')).outcome).toBe('acquired');
+      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'successor')).outcome).toBe(
+        'acquired'
+      );
       await mcpConnectionRepository.completeRefresh(created.id, 'successor', {
         accessTokenEnc: 'enc:access-new',
         refreshTokenEnc: 'enc:refresh-new',
@@ -853,9 +906,9 @@ describe('McpConnectionModel', () => {
         { _id: created.id },
         { $set: { 'auth.oauth.expiresAt': new Date(Date.now() - 1000), 'auth.oauth.grantedScope': 'read' } }
       );
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'old-grant');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'old-grant');
 
-      await mcpConnectionRepository.setInitialOAuthTokens(created.id, { accessTokenEnc: 'enc:access-new' });
+      await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, { accessTokenEnc: 'enc:access-new' });
 
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access-new');
@@ -874,7 +927,7 @@ describe('McpConnectionModel', () => {
         { _id: created.id },
         { $set: { 'auth.oauth.expiresAt': new Date(Date.now() - 1000) } }
       );
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'a');
 
       await mcpConnectionRepository.completeRefresh(created.id, 'a', { accessTokenEnc: 'enc:access-2' });
 
@@ -885,12 +938,55 @@ describe('McpConnectionModel', () => {
 
     it('only the holder can release, and release frees the lease', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'a');
 
-      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, 'b')).outcome).toBe('held');
+      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'b')).outcome).toBe('held');
       expect(await mcpConnectionRepository.releaseRefreshLease(created.id, 'b')).toBe(false);
       expect(await mcpConnectionRepository.releaseRefreshLease(created.id, 'a')).toBe(true);
-      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, 'b')).outcome).toBe('acquired');
+      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'b')).outcome).toBe('acquired');
+    });
+
+    it('refuses a lease to another user or an org owner and leaves the connection unleased', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+
+      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, OTHER_USER_OWNER, 'intruder')).toEqual({
+        outcome: 'not_found',
+      });
+      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, ORG_OWNER, 'intruder')).toEqual({
+        outcome: 'not_found',
+      });
+
+      expect((await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER))?.refreshLease).toBeUndefined();
+      expect((await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'real')).outcome).toBe('acquired');
+    });
+  });
+
+  describe('malformed ids', () => {
+    const BAD_ID = 'not-an-id';
+    it.each([
+      ['setStatus', () => mcpConnectionRepository.setStatus(BAD_ID, 'connected'), null],
+      ['markUsed', () => mcpConnectionRepository.markUsed(BAD_ID), undefined],
+      ['releaseRefreshLease', () => mcpConnectionRepository.releaseRefreshLease(BAD_ID, 'h'), false],
+      [
+        'completeRefresh',
+        () => mcpConnectionRepository.completeRefresh(BAD_ID, 'h', { accessTokenEnc: 'enc:a' }),
+        null,
+      ],
+      [
+        'setInitialOAuthTokens',
+        () => mcpConnectionRepository.setInitialOAuthTokens(BAD_ID, OWNER, { accessTokenEnc: 'enc:a' }),
+        null,
+      ],
+      ['clearOAuthTokens', () => mcpConnectionRepository.clearOAuthTokens(BAD_ID, OWNER), null],
+      [
+        'updateDiscovery',
+        () =>
+          mcpConnectionRepository.updateDiscovery(BAD_ID, { tools: [], fingerprint: 'f', expectedFingerprint: null }),
+        null,
+      ],
+      ['deleteForOwner', () => mcpConnectionRepository.deleteForOwner(BAD_ID, OWNER), false],
+    ])('%s returns its empty value for a malformed id without throwing', async (_name, call, expected) => {
+      expect(await call()).toBe(expected);
     });
   });
 });

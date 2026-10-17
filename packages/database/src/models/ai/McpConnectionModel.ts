@@ -297,7 +297,12 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   ): Promise<ConnectionDoc | null>;
   async update(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
     assertNoProtectedFields(data, options);
-    return super.update(data, withValidators(options));
+    try {
+      return await super.update(data, withValidators(options));
+    } catch (error) {
+      if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug ?? '');
+      throw error;
+    }
   }
 
   updateGuarded(
@@ -310,7 +315,12 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   ): Promise<ConnectionDoc | null>;
   async updateGuarded(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
     assertNoProtectedFields(data, options);
-    return super.updateGuarded(data, withValidators(options));
+    try {
+      return await super.updateGuarded(data, withValidators(options));
+    } catch (error) {
+      if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug ?? '');
+      throw error;
+    }
   }
 
   async updateMany(
@@ -333,8 +343,8 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
             ...data.auth,
             oauth: {
               ...oauth,
-              hasAccessToken: Boolean(oauth.accessTokenEnc),
-              hasRefreshToken: Boolean(oauth.refreshTokenEnc),
+              hasAccessToken: oauth.accessTokenEnc !== undefined,
+              hasRefreshToken: oauth.refreshTokenEnc !== undefined,
             },
           },
         }
@@ -558,13 +568,17 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  async setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null> {
-    if (!mongoose.isObjectIdOrHexString(id)) return null;
+  async setInitialOAuthTokens(
+    id: string,
+    owner: McpConnectionOwner,
+    tokens: McpOAuthTokenUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
     // Dropping the lease makes an in-flight refresh of the previous grant fail its holder check
     // instead of overwriting these tokens.
     const { $set, $unset } = oauthTokenWrite(tokens, OAUTH_TOKEN_FIELDS);
     const result = await this.model.findOneAndUpdate(
-      { _id: id, ownerType: 'user', 'auth.kind': 'oauth' },
+      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': 'oauth' },
       { $set, $unset: { ...$unset, refreshLease: 1 } },
       { new: true }
     );
@@ -604,21 +618,24 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
    */
   async acquireRefreshLease(
     id: string,
+    owner: McpConnectionOwner,
     holder: string,
     ttlMs: number = MCP_REFRESH_LEASE_TTL_MS
   ): Promise<McpRefreshLeaseResult> {
-    if (!mongoose.isObjectIdOrHexString(id)) return { outcome: 'not_found' };
+    // Owner-scoped like findByIdWithCredentials: a won lease returns the connection's ciphertext.
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return { outcome: 'not_found' };
+    const ownerFilter = { _id: id, ownerType: 'user', ownerKey: owner.ownerKey };
     const now = new Date();
     const result = await this.model
       .findOneAndUpdate(
-        { _id: id, ownerType: 'user', $or: [{ refreshLease: null }, { 'refreshLease.until': { $lt: now } }] },
+        { ...ownerFilter, $or: [{ refreshLease: null }, { 'refreshLease.until': { $lt: now } }] },
         { $set: { refreshLease: { holder, until: new Date(now.getTime() + ttlMs) } } },
         { new: true }
       )
       .select(WITH_CREDENTIALS);
     if (result) return { outcome: 'acquired', connection: result.toJSON() };
 
-    const current = await this.model.findOne({ _id: id, ownerType: 'user' }, { refreshLease: 1 });
+    const current = await this.model.findOne(ownerFilter, { refreshLease: 1 });
     if (!current) return { outcome: 'not_found' };
     return { outcome: 'held', holder: current.refreshLease?.holder, until: current.refreshLease?.until };
   }
