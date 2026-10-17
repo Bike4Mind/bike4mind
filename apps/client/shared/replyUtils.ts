@@ -11,7 +11,8 @@ type ReplyBearingMessage = {
   reply?: string | null;
   replies?: string[] | undefined;
   status?: string;
-  promptMeta?: { narratedToolCall?: { toolNames?: string[] } } | null;
+  // The index signature keeps this from being a weak type that other promptMeta shapes fail to match.
+  promptMeta?: { narratedToolCall?: { toolNames?: string[] }; [key: string]: unknown } | null;
 };
 
 export function extractReplies(messageData: ReplyBearingMessage) {
