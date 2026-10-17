@@ -9,6 +9,7 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { dataLakeRepository, FabFile, FabFileChunk, fabFileRepository } from '@bike4mind/database';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -40,7 +41,8 @@ describe.skipIf(!endpoint || !bucket)('cleanup handler with replica-set Mongo an
       throw new Error('Disposable loopback S3 required');
     vi.stubEnv('AWS_ENDPOINT_URL_S3', endpoint);
     mongo = await createMongoReplSet();
-    await mongoose.connect(mongo.getUri());
+    await mongoose.connect(mongo.getUri(), { autoIndex: false });
+    await settleAutoIndexBuilds(mongoose);
     storage = new S3Storage(bucket!);
     client = createS3Client({ endpoint, forcePathStyle: true });
   });
