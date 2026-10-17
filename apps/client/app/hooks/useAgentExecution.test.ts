@@ -62,8 +62,7 @@ import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './use
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
-const mountSubscriptions = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const mountSubscriptions = (queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) => {
   const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
   return renderHook(() => useAgentExecutionSubscriptions(), { wrapper });
@@ -635,5 +634,35 @@ describe('useAgentExecutionSubscriptions -- toolCallId identity wire', () => {
         rememberForSession: false,
       })
     );
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- generation jobs started mid-run', () => {
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("puts a progress frame's jobs on the run's quest so the cards render live", async () => {
+    const queryClient = new QueryClient();
+    const questsKey = ['quests', 'session', 's1'];
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'make a song', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['progress']({
+      action: 'progress',
+      executionId: 'e1',
+      questId: 'q1',
+      generationJobs: [{ id: 'job-1', kind: 'music' }],
+    });
+
+    const cached = queryClient.getQueryData(questsKey) as {
+      pages: Array<{ data: Array<{ id: string; generationJobs?: unknown }> }>;
+    };
+    expect(cached.pages[0].data[0].generationJobs).toEqual([{ id: 'job-1', kind: 'music' }]);
   });
 });

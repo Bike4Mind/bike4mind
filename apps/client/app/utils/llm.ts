@@ -1,4 +1,10 @@
-import type { IChatHistoryItemDocument, ISessionDocument, ModelInfo, SupersededModelInfo } from '@bike4mind/common';
+import type {
+  GenerationJobRef,
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  ModelInfo,
+  SupersededModelInfo,
+} from '@bike4mind/common';
 import type { AxiosError } from 'axios';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
@@ -198,6 +204,40 @@ export function appendReplyToLatestOptimisticBubble(
       };
       const data = [...page.data];
       data[idx] = patched;
+      return { ...page, data };
+    });
+    return { ...current, pages };
+  });
+}
+
+/**
+ * Add generation jobs an agent run just started to its quest, so the job cards render mid-run (the agent path has no
+ * streamed quest to carry them, unlike chat). Targets `questId` when cached, else the latest prompt-only bubble, the
+ * same one appendReplyToLatestOptimisticBubble later fills. updatedAt is left alone so the persisted quest still wins.
+ */
+export function addGenerationJobsToRunBubble(
+  queryClient: QueryClient,
+  sessionId: string,
+  questId: string | undefined,
+  jobs: readonly GenerationJobRef[]
+): void {
+  if (!jobs.length) return;
+  queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
+    if (!current?.pages) return current;
+    const hasRunQuest = !!questId && current.pages.some(page => page.data.some(q => q.id === questId));
+    let patchedOne = false;
+    const pages = current.pages.map(page => {
+      if (patchedOne) return page;
+      const idx = hasRunQuest
+        ? page.data.findIndex(q => q.id === questId)
+        : page.data.findIndex(q => q.replies && q.replies.length === 0 && !!q.prompt);
+      if (idx < 0) return page;
+      patchedOne = true;
+      const existing = page.data[idx].generationJobs ?? [];
+      const added = jobs.filter(job => !existing.some(e => e.id === job.id)).map(({ id, kind }) => ({ id, kind }));
+      if (!added.length) return page;
+      const data = [...page.data];
+      data[idx] = { ...page.data[idx], generationJobs: [...existing, ...added] };
       return { ...page, data };
     });
     return { ...current, pages };

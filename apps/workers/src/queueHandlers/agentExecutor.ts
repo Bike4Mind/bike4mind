@@ -175,7 +175,7 @@ import {
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
-import { attachGenerationJobsToRunQuest } from './agentExecutor.generationJobs';
+import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1774,7 +1774,14 @@ async function processExecution(
           }
         }
         // In-process subagents share these callbacks, so their clips and songs land here too.
-        await attachGenerationJobsToRunQuest(changes?.generationJobs, runQuestId, questRepository, logger);
+        await publishRunGenerationJobs({
+          jobs: changes?.generationJobs,
+          questId: runQuestId,
+          executionId,
+          questRepository,
+          sendWs,
+          logger,
+        });
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }

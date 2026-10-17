@@ -20,3 +20,33 @@ export async function attachGenerationJobsToRunQuest(
     })
   );
 }
+
+/**
+ * Attaches the run's new generation jobs to its Quest, then pushes them to the client on a `progress` frame so the
+ * job cards render while the run is live. The agent path has no streamed quest (chat's carries `generationJobs`), and
+ * the quest change-stream is not a reliable delivery path for the optimistic bubble. The frame goes out even when
+ * the quest write failed: the job exists and its card can still poll it.
+ */
+export async function publishRunGenerationJobs({
+  jobs,
+  questId,
+  executionId,
+  questRepository,
+  sendWs,
+  logger,
+}: {
+  jobs: readonly GenerationJobRef[] | undefined;
+  questId: string | undefined;
+  executionId: string;
+  questRepository: { addGenerationJobs(questId: string, jobs: GenerationJobRef[]): Promise<void> };
+  sendWs: (action: string, payload: Record<string, unknown>) => Promise<void>;
+  logger: Logger;
+}): Promise<void> {
+  if (!jobs?.length) return;
+  await attachGenerationJobsToRunQuest(jobs, questId, questRepository, logger);
+  await sendWs('progress', {
+    executionId,
+    ...(questId ? { questId } : {}),
+    generationJobs: jobs.map(({ id, kind }) => ({ id, kind })),
+  });
+}
