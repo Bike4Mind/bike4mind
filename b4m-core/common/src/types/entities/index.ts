@@ -56,6 +56,7 @@ export * from './EmbeddingCacheTypes';
 export * from './CurationTypes';
 export * from './McpServerTypes';
 export * from './McpConnectionTypes';
+export * from './McpConnectionRules';
 export * from './SecretRotationTypes';
 export * from './ResearchAgentTypes';
 export * from './ResearchTaskTypes';
