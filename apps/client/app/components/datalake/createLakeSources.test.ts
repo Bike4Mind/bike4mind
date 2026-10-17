@@ -4,6 +4,7 @@ import {
   CREATE_LAKE_SOURCES,
   GITHUB_CREATE_ORG_MANAGER_ONLY_REASON,
   GITHUB_CREATE_ORG_ONLY_REASON,
+  GITHUB_CREATE_SWITCH_ACCOUNT_REASON,
   createLakeOrigin,
   createSourceRequiresUpload,
   getCreateLakeSource,
@@ -66,6 +67,15 @@ describe('resolveCreateLakeSourceAvailability', () => {
       status: 'disabled',
       reason: GITHUB_CREATE_ORG_ONLY_REASON,
     });
+  });
+
+  it('adds the switch-account hint only when a personal-scope user belongs to an organization', () => {
+    expect(availability('github', { ...personal, hasOrganizations: true })).toEqual({
+      status: 'disabled',
+      reason: GITHUB_CREATE_SWITCH_ACCOUNT_REASON,
+    });
+    expect(GITHUB_CREATE_SWITCH_ACCOUNT_REASON).toMatch(/Switch to your team account/);
+    expect(GITHUB_CREATE_ORG_ONLY_REASON).not.toMatch(/switch/i);
   });
 
   it('disables GitHub for an org member who cannot manage the org', () => {
