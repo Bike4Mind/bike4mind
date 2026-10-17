@@ -97,7 +97,7 @@ describe('loadModelConfigurations', () => {
 
 describe('loadModelConfigurations failure logging', () => {
   it('warns with the error and still returns no configs on a rejected read', async () => {
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const failure = new Error('db down');
     await expect(
       loadModelConfigurations({ findOne: () => Promise.reject(failure) } as unknown as Parameters<

@@ -7,8 +7,6 @@ import {
 import { BadRequestError, ForbiddenError, isModelAccessible } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
-const logger = new Logger({ metadata: { component: 'modelAdmission' } });
-
 export type ModelAdmissionInput = {
   user: { isAdmin?: boolean | null; tags?: string[] | null };
   /** The llmModelConfigurations admin setting. */
@@ -35,7 +33,10 @@ export async function loadModelConfigurations(
     return Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
   } catch (error) {
     // Fails open by product decision; the warning separates "no gates configured" from "config read failed".
-    logger.warn('llmModelConfigurations read failed; admitting models as if no gates are configured', error);
+    Logger.warn(
+      'modelAdmission: llmModelConfigurations read failed; admitting models as if no gates are configured',
+      error
+    );
     return [];
   }
 }
