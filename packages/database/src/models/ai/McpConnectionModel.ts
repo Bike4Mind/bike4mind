@@ -13,6 +13,8 @@ import {
   McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
+  McpApiKeyUpdate,
+  McpConnectionCapError,
   MCP_CONNECTION_LIMITS,
   MCP_CONNECTION_PROTECTED_FIELDS,
   mcpConnectionOwnerProblem,
@@ -44,13 +46,49 @@ export class McpConnectionOwnerError extends Error {
   }
 }
 
+/**
+ * JSON Schema keys collide with Mongo field-name rules: `$defs`, `$ref` and `$schema` start with `$`
+ * and property names may contain `.`. Mongoose's update casting silently dropped a top-level `$defs`
+ * (leaving a dangling `$ref`), so every writer of `tools` escapes the keys (`escapeToolSchemas`) and
+ * the path getter restores them on read. `~` is the escape character and is itself escaped, so any
+ * key round-trips. Not a setter: update casting strips the keys before a setter would run.
+ */
+function escapeSchemaKey(key: string): string {
+  return key.replace(/~/g, '~t').replace(/\./g, '~p').replace(/^\$/, '~d');
+}
+
+function unescapeSchemaKey(key: string): string {
+  return key.replace(/~(d|p|t)/g, (_match, code: string) => (code === 'd' ? '$' : code === 'p' ? '.' : '~'));
+}
+
+function mapSchemaKeys(value: unknown, mapKey: (key: string) => string): unknown {
+  if (Array.isArray(value)) return value.map(item => mapSchemaKeys(item, mapKey));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [mapKey(key), mapSchemaKeys(item, mapKey)])
+    );
+  }
+  return value;
+}
+
+function escapeToolSchemas(tools: IMcpConnectionTool[] | undefined): IMcpConnectionTool[] | undefined {
+  return tools?.map(tool => ({
+    ...tool,
+    inputSchema: mapSchemaKeys(tool.inputSchema ?? {}, escapeSchemaKey) as Record<string, unknown>,
+  }));
+}
+
 const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
   {
     name: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.toolNameLength },
     title: { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength },
     description: { type: String, default: '', maxlength: MCP_CONNECTION_LIMITS.toolDescriptionLength },
     descriptionRawHash: { type: String, required: true },
-    inputSchema: { type: Schema.Types.Mixed, default: {} },
+    inputSchema: {
+      type: Schema.Types.Mixed,
+      default: {},
+      get: (value: unknown) => mapSchemaKeys(value, unescapeSchemaKey),
+    },
     annotations: { type: Schema.Types.Mixed },
     enabled: { type: Boolean, required: true },
     approval: { type: String, enum: MCP_TOOL_APPROVAL_MODES, default: 'default' },
@@ -182,6 +220,18 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     toolsFingerprint: { type: String },
     toolsFetchedAt: { type: Date },
     toolsDropped: { type: Number },
+    toolsRevision: { type: Number, default: 0 },
+    authChallenge: {
+      type: new Schema(
+        {
+          resourceMetadataUrl: { type: String, maxlength: MCP_CONNECTION_LIMITS.authChallengeUrlLength },
+          scope: { type: String, maxlength: MCP_CONNECTION_LIMITS.requiredScopeLength },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     enabled: { type: Boolean, required: true, default: true },
     lastUsedAt: { type: Date },
     refreshLease: {
@@ -194,8 +244,9 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    // `getters` restores the escaped tool input-schema keys on every read.
+    toJSON: { virtuals: true, getters: true },
+    toObject: { virtuals: true, getters: true },
   }
 );
 
@@ -336,9 +387,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const problem = mcpConnectionOwnerProblem(data);
     if (problem) throw new McpConnectionOwnerError(problem);
     const oauth = data.auth?.oauth;
+    const escaped = { ...data, tools: escapeToolSchemas(data.tools) ?? [] };
     const withMarkers = oauth
       ? {
-          ...data,
+          ...escaped,
           auth: {
             ...data.auth,
             oauth: {
@@ -348,13 +400,29 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
             },
           },
         }
-      : data;
+      : escaped;
     try {
       return stripSecrets(await super.create(withMarkers));
     } catch (error) {
       if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug);
       throw error;
     }
+  }
+
+  async createWithinUserCap(
+    data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>,
+    cap: number
+  ): Promise<IMcpConnectionDocument> {
+    if (data.ownerType !== 'user') throw new McpConnectionOwnerError('The per-user cap applies to user connections');
+    if ((await this.countForUser(data.userId)) >= cap) throw new McpConnectionCapError(cap);
+    const created = await this.create(data);
+    // Re-count once the insert is visible. The last survivor to insert counted every other survivor,
+    // so survivors never exceed the cap; racers at the boundary may all roll back (a retry fixes it).
+    if ((await this.countForUser(data.userId)) > cap) {
+      await this.model.deleteOne({ _id: created.id });
+      throw new McpConnectionCapError(cap);
+    }
+    return created;
   }
 
   async findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null> {
@@ -471,7 +539,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
       { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey },
-      { $set: set },
+      { $set: set, $inc: { toolsRevision: 1 } },
       { new: true, arrayFilters }
     );
     return result?.toJSON() ?? null;
@@ -480,7 +548,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   async updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const set: Record<string, unknown> = {
-      tools: update.tools,
+      tools: escapeToolSchemas(update.tools),
       toolsFingerprint: update.fingerprint,
       toolsFetchedAt: new Date(),
       toolsDropped: update.dropped ?? 0,
@@ -494,10 +562,68 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
           .map(([key, value]) => [key, (value as string).slice(0, MCP_CONNECTION_LIMITS.serverInfoFieldLength)])
       );
     }
-    // `toolsFingerprint: null` also matches a document that never had one.
+    // `null` also matches a document that never had the field, for both guards.
+    const revisionFilter = update.expectedRevision === 0 ? { $in: [0, null] } : update.expectedRevision;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, toolsFingerprint: update.expectedFingerprint },
-      { $set: set },
+      { _id: id, toolsFingerprint: update.expectedFingerprint, toolsRevision: revisionFilter },
+      { $set: set, $inc: { toolsRevision: 1 } },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setApiKey(
+    id: string,
+    owner: McpConnectionOwner,
+    apiKey: McpApiKeyUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
+      {
+        $set: {
+          'auth.apiKey.headerName': apiKey.headerName,
+          'auth.apiKey.scheme': apiKey.scheme,
+          'auth.apiKey.valueEnc': apiKey.valueEnc,
+          'auth.apiKey.last4': apiKey.last4,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPendingAuth(
+    id: string,
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const now = new Date();
+    const scope = challenge.scope?.slice(0, MCP_CONNECTION_LIMITS.requiredScopeLength);
+    // An over-long metadata URL is dropped rather than cut: a truncated URL would point somewhere else.
+    const resourceMetadataUrl =
+      challenge.resourceMetadataUrl &&
+      challenge.resourceMetadataUrl.length <= MCP_CONNECTION_LIMITS.authChallengeUrlLength
+        ? challenge.resourceMetadataUrl
+        : undefined;
+    const result = await this.model.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          status: 'pending_auth',
+          authChallenge: {
+            ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
+            ...(scope ? { scope } : {}),
+            at: now,
+          },
+          lastError: {
+            code: 'auth_required',
+            message: challenge.message.slice(0, MCP_CONNECTION_LIMITS.lastErrorMessageLength),
+            at: now,
+            ...(scope ? { requiredScope: scope } : {}),
+          },
+        },
+      },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
