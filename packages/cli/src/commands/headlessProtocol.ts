@@ -11,8 +11,8 @@
  */
 
 import { classifyCommandRisk, type CommandRiskLevel } from '../config/commandRisk.js';
-import { type ToolCategory } from '../config/toolSafety.js';
-import { SHELL_LIKE_TOOL_COMMAND_FIELDS } from '../config/shellCommandFields.js';
+import type { ToolDescriptor } from '../tools/gateway/toolDescriptor.js';
+import { commandTextOf, toolCategory } from '../tools/gateway/toolPolicy.js';
 
 /**
  * Protocol schema version (semver). Bump the MAJOR when removing/renaming a
@@ -123,17 +123,16 @@ export interface ToolRiskAssessment {
 
 /**
  * Classify the risk of a single tool invocation for the permission protocol.
- * Shell-like tools are classified from their actual command text (reusing the
- * shared command-risk tokenizer); every other tool falls back to a level derived
- * from its permission category (auto_approve -> low, prompt_always -> high, else
- * medium). Never throws: a classifier failure fails closed at `high`.
+ * Shell-like tools (a descriptor commandArg) are classified from their actual
+ * command text, reusing the shared command-risk tokenizer, exactly as the
+ * gateway's command-risk stage does; every other tool falls back to a level
+ * derived from its permission category (auto_approve -> low, prompt_always ->
+ * high, else medium). Never throws: a classifier failure fails closed at `high`.
  */
-export function classifyToolRisk(toolName: string, args: unknown, category: ToolCategory): ToolRiskAssessment {
-  const field = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
-  const command =
-    field && args !== null && typeof args === 'object' ? (args as Record<string, unknown>)[field] : undefined;
+export function classifyToolRisk(descriptor: ToolDescriptor | undefined, args: unknown): ToolRiskAssessment {
+  const command = commandTextOf(descriptor, args);
 
-  if (typeof command === 'string') {
+  if (command !== undefined) {
     try {
       return classifyCommandRisk(command);
     } catch {
@@ -141,6 +140,7 @@ export function classifyToolRisk(toolName: string, args: unknown, category: Tool
     }
   }
 
+  const category = toolCategory(descriptor);
   const level: CommandRiskLevel =
     category === 'auto_approve' ? 'low' : category === 'prompt_always' ? 'high' : 'medium';
   return { level, reasons: [] };

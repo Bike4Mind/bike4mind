@@ -12,6 +12,7 @@ vi.mock('./shellRunner', () => ({ runShellCommand: vi.fn() }));
 import { runShellCommand } from './shellRunner';
 import { requestShellCommandPermission, type ShellPermissionPromptFn } from './commandPermission';
 import { PermissionManager } from './PermissionManager';
+import { ToolCatalog } from '../tools/gateway/toolCatalog';
 import { executeHooks } from '../agents/hookExecutor';
 import { createSkillTool } from '../tools/skillTool';
 import type { CustomCommandStore } from '../storage/CustomCommandStore';
@@ -30,7 +31,7 @@ beforeEach(() => {
 
 describe('requestShellCommandPermission', () => {
   it('denies when the prompt is denied', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const res = await requestShellCommandPermission('agent_hook:PreToolUse', 'rm -rf /', '/proj', {
       permissionManager: pm,
       promptFn: promptReturning('deny'),
@@ -39,7 +40,7 @@ describe('requestShellCommandPermission', () => {
   });
 
   it('allows once without permanently trusting the hook', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const res = await requestShellCommandPermission('agent_hook:PreToolUse', 'ls', '/proj', {
       permissionManager: pm,
       promptFn: promptReturning('allow-once'),
@@ -49,7 +50,7 @@ describe('requestShellCommandPermission', () => {
   });
 
   it('allow-session session-trusts the hook so the next call skips the prompt', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const prompt = promptReturning('allow-session');
     await requestShellCommandPermission('agent_hook:Stop', 'ls', '/proj', { permissionManager: pm, promptFn: prompt });
     expect(pm.isSessionTrusted('agent_hook:Stop')).toBe(true);
@@ -69,7 +70,7 @@ describe('requestShellCommandPermission', () => {
     // listing the namespaced hook name in trustedTools. getToolCategory classifies
     // hook namespaces as prompt_always, so needsPermission stays true and the gate
     // still prompts rather than silently running the repo's shell.
-    const pm = new PermissionManager(['agent_hook:PreToolUse', 'skill_hook:pre-invoke']);
+    const pm = new PermissionManager(new ToolCatalog(), ['agent_hook:PreToolUse', 'skill_hook:pre-invoke']);
     expect(pm.needsPermission('agent_hook:PreToolUse')).toBe(true);
     expect(pm.canBeTrusted('agent_hook:PreToolUse')).toBe(false);
 
@@ -94,14 +95,14 @@ describe('agent lifecycle hooks (executeHooks)', () => {
   };
 
   it('does not run the shell command when permission is denied', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const result = await executeHooks(hooks, context, { permissionManager: pm, promptFn: promptReturning('deny') });
     expect(result.decision).toBe('deny');
     expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('runs the shell command when permission is allowed', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     await executeHooks(hooks, context, { permissionManager: pm, promptFn: promptReturning('allow-once') });
     expect(mockRun).toHaveBeenCalledTimes(1);
   });
@@ -125,7 +126,7 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
   }
 
   it('does not run the pre-invoke hook shell command when denied', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const tool = createSkillTool({
       customCommandStore: storeWithHookedSkill(),
       permission: { permissionManager: pm, promptFn: promptReturning('deny') },
@@ -135,7 +136,7 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
   });
 
   it('runs the pre-invoke hook shell command when allowed', async () => {
-    const pm = new PermissionManager();
+    const pm = new PermissionManager(new ToolCatalog());
     const tool = createSkillTool({
       customCommandStore: storeWithHookedSkill(),
       permission: { permissionManager: pm, promptFn: promptReturning('allow-once') },

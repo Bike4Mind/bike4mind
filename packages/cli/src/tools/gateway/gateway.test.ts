@@ -9,8 +9,8 @@ import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 // sanitizer). Override just executeTool to invoke the tool's own fn, so these
 // tests exercise ONLY the permission wrapper's cleanup guard and risk-driven
 // force-prompt - not tool routing.
-vi.mock('../llm/ToolRouter', async importOriginal => {
-  const actual = await importOriginal<typeof import('../llm/ToolRouter')>();
+vi.mock('../../llm/ToolRouter', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../llm/ToolRouter')>();
   return {
     ...actual,
     executeTool: vi.fn(async (_name: string, args: unknown, _api: unknown, fn: (a: unknown) => Promise<string>) =>
@@ -19,11 +19,12 @@ vi.mock('../llm/ToolRouter', async importOriginal => {
   };
 });
 
-import { wrapToolWithPermission } from './toolsAdapter.js';
-import { PermissionManager } from './PermissionManager.js';
+import { wrapToolWithPermission } from './gateway.js';
+import { PermissionManager } from '../../utils/PermissionManager.js';
+import { ToolCatalog } from './toolCatalog.js';
 import { PermissionDeniedError } from '@bike4mind/common';
-import { useCliStore } from '../store/index.js';
-import { executeTool } from '../llm/ToolRouter';
+import { useCliStore } from '../../store/index.js';
+import { executeTool } from '../../llm/ToolRouter';
 import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
 
 function tool(name: string, fn?: (args: any) => Promise<string>): ICompletionOptionTools {
@@ -80,7 +81,7 @@ describe('wrapToolWithPermission: _sandboxCleanup guard (criterion 3)', () => {
     await fs.writeFile(victim, 'do not delete me');
 
     const prompt = vi.fn();
-    const wrapped = wrap(tool('math_evaluate'), prompt, new PermissionManager([], undefined, []));
+    const wrapped = wrap(tool('math_evaluate'), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
     const result = await wrapped.toolFn({ expression: '1+1', _sandboxCleanup: [dir] });
 
@@ -95,7 +96,7 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
   it('forces the permission prompt for `rm -rf ~` even under auto-accept', async () => {
     useCliStore.getState().setInteractionMode('auto-accept');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
-    const wrapped = wrap(tool('write_shell_stdin'), prompt, new PermissionManager([], undefined, []));
+    const wrapped = wrap(tool('write_shell_stdin'), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
     await wrapped.toolFn({ chars: 'rm -rf ~' });
 
@@ -107,7 +108,7 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
   });
 
   it('forces the permission prompt for `rm -rf ~` even when the tool is session-trusted', async () => {
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('write_shell_stdin');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     const wrapped = wrap(tool('write_shell_stdin'), prompt, pm);
@@ -120,7 +121,7 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
   it('leaves a benign stdin on its normal (auto-accepted) path - tightening only', async () => {
     useCliStore.getState().setInteractionMode('auto-accept');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
-    const wrapped = wrap(tool('write_shell_stdin'), prompt, new PermissionManager([], undefined, []));
+    const wrapped = wrap(tool('write_shell_stdin'), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
     await wrapped.toolFn({ chars: 'ls -la' });
 
@@ -159,7 +160,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     useCliStore.getState().setInteractionMode('auto-accept');
     const { dir, file } = await fuzzyFile();
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
-    const wrapped = wrapEdit(prompt, new PermissionManager([], undefined, []), [dir]);
+    const wrapped = wrapEdit(prompt, new PermissionManager(new ToolCatalog(), [], []), [dir]);
 
     await wrapped.toolFn({ path: file, old_string: 'hello world   ', new_string: 'hi world' });
 
@@ -174,7 +175,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
 
   it('forces one prompt when the tool is session-trusted and the edit resolves fuzzily', async () => {
     const { dir, file } = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     const wrapped = wrapEdit(prompt, pm, [dir]);
@@ -189,14 +190,14 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     useCliStore.getState().setInteractionMode('auto-accept');
     const a = await fuzzyFile();
     const autoPrompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
-    const autoWrapped = wrapEdit(autoPrompt, new PermissionManager([], undefined, []), [a.dir]);
+    const autoWrapped = wrapEdit(autoPrompt, new PermissionManager(new ToolCatalog(), [], []), [a.dir]);
     await autoWrapped.toolFn({ path: a.file, old_string: 'hello world', new_string: 'hi world' });
     expect(autoPrompt).not.toHaveBeenCalled();
     expect(await fs.readFile(a.file, 'utf-8')).toBe('hi world\n');
 
     useCliStore.getState().setInteractionMode('normal');
     const b = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const trustPrompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     const trustWrapped = wrapEdit(trustPrompt, pm, [b.dir]);
@@ -209,7 +210,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // The TOCTOU: the gate sees an exact match, the file changes to a fuzzy region
     // before the write. On main this completed with prompts: 0 (silent fuzzy write).
     const { dir, file } = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     const wrapped = wrapEdit(prompt, pm, [dir]);
@@ -233,7 +234,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // only a gate-computed gateSnapshot, bound to a real resolveEdit() match, may
     // ever reach the write.
     const { dir, file } = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     const wrapped = wrapEdit(prompt, pm, [dir]);
@@ -263,7 +264,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
   it('ignores an externally supplied confirmedFuzzyHash when the gate itself finds no match', async () => {
     const { dir, file } = await fuzzyFile();
     await fs.writeFile(file, 'goodbye\n'); // gate resolve throws: no match
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
     const wrapped = wrapEdit(prompt, pm, [dir]);
@@ -288,7 +289,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
 
   it('ignores an externally supplied confirmedFuzzyHash when the gate saw an exact match', async () => {
     const { dir, file } = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
     const wrapped = wrapEdit(prompt, pm, [dir]);
@@ -316,7 +317,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // path is rejected before any content read - no raw-path read, no force prompt.
     // On main willEditResolveFuzzily read the raw path and force-prompted here.
     const { file } = await fuzzyFile();
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file');
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
     // No allowedDirectories passed to the wrapper => the runtime grant flow is off,
@@ -348,7 +349,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // Untrusted + no allowedDirectories: the file is outside cwd, so it is denied,
     // but a prompt is still shown first (this is where the preview is built).
     const wrapped = wrapToolWithPermission(realEditTool([]), {
-      permissionManager: new PermissionManager([], undefined, []),
+      permissionManager: new PermissionManager(new ToolCatalog(), [], []),
       showPermissionPrompt: prompt,
       agentContext,
       configStore: {},
@@ -370,7 +371,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
   it('re-confirms a granted edit that resolves fuzzily instead of applying it silently', async () => {
     // onoya: a directory grant must not double as a confirmation bypass. Grant the
     // out-of-bounds dir, then the retry resolves fuzzily and must re-prompt.
-    const pm = new PermissionManager([], undefined, []);
+    const pm = new PermissionManager(new ToolCatalog(), [], []);
     pm.trustToolForSession('edit_local_file'); // main gate auto-approves; isolates grant + fuzzy prompts
     const { dir, file } = await fuzzyFile();
     const dirs: string[] = []; // shared live allow-list; the grant pushes onto it
@@ -399,9 +400,10 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     // still re-confirmed. A fresh module picks up B4M_ALLOWED_TOOLS (parsed once).
     vi.resetModules();
     vi.stubEnv('B4M_ALLOWED_TOOLS', JSON.stringify(['edit_local_file']));
-    const { wrapToolWithPermission: freshWrap } = await import('./toolsAdapter.js');
+    const { wrapToolWithPermission: freshWrap } = await import('./gateway.js');
     const { getCliOnlyTools: freshGetCli } = await import('@bike4mind/services/llm/tools/cliTools');
-    const { PermissionManager: FreshPM } = await import('./PermissionManager.js');
+    const { PermissionManager: FreshPM } = await import('../../utils/PermissionManager.js');
+    const { ToolCatalog: FreshCatalog } = await import('./toolCatalog.js');
 
     const { dir, file } = await fuzzyFile();
     const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
@@ -411,7 +413,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     const t = freshDef.implementation({ logger, allowedDirectories: [dir] });
     const agentContext = { currentAgent: null };
     const wrapped = freshWrap(t, {
-      permissionManager: new FreshPM([], undefined, []),
+      permissionManager: new FreshPM(new FreshCatalog(), [], []),
       showPermissionPrompt: prompt,
       agentContext,
       configStore: {},
@@ -442,7 +444,7 @@ describe('wrapToolWithPermission: create_file / delete_file preview guard', () =
     await fs.writeFile(file, 'do not read me\n');
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
     // No allowedDirectories => the temp file is outside cwd, so authorization rejects it.
-    const wrapped = wrap(realTool(createDef, []), prompt, new PermissionManager([], undefined, []));
+    const wrapped = wrap(realTool(createDef, []), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
     await expect(wrapped.toolFn({ path: file, content: 'new content' })).rejects.toThrow();
 
@@ -458,7 +460,7 @@ describe('wrapToolWithPermission: create_file / delete_file preview guard', () =
     const file = path.join(dir, 'existing.txt');
     await fs.writeFile(file, 'do not delete me\n');
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
-    const wrapped = wrap(realTool(deleteDef, []), prompt, new PermissionManager([], undefined, []));
+    const wrapped = wrap(realTool(deleteDef, []), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
     await expect(wrapped.toolFn({ path: file })).rejects.toThrow();
 
@@ -472,7 +474,7 @@ describe('wrapToolWithPermission: create_file / delete_file preview guard', () =
 // An earlier test calls vi.resetModules(), so the wrapper's lazy store import can resolve to a
 // fresh instance; set the mode on the instance the wrapper actually reads.
 async function setLiveMode(mode: 'plan' | 'normal' | 'auto-accept'): Promise<void> {
-  const { useCliStore: liveStore } = await import('../store/index.js');
+  const { useCliStore: liveStore } = await import('../../store/index.js');
   liveStore.getState().setInteractionMode(mode);
 }
 
@@ -481,7 +483,7 @@ describe('checkpoint before a file write', () => {
   function checkpointing(t: ICompletionOptionTools, prompt: any) {
     const createCheckpoint = vi.fn().mockResolvedValue(undefined);
     const wrapped = wrapToolWithPermission(t, {
-      permissionManager: new PermissionManager([], undefined, []),
+      permissionManager: new PermissionManager(new ToolCatalog(), [], []),
       showPermissionPrompt: prompt,
       agentContext: { currentAgent: null },
       configStore: {},
@@ -585,7 +587,7 @@ describe('session bookkeeping and delegation tools', () => {
 
   it('blocks a writing tool in the same plan-mode setup (control)', async () => {
     await setLiveMode('plan');
-    const wrapped = wrap(tool('bash_execute'), vi.fn(), new PermissionManager([], undefined, []));
+    const wrapped = wrap(tool('bash_execute'), vi.fn(), new PermissionManager(new ToolCatalog(), [], []));
 
     expect(await wrapped.toolFn({ command: 'ls' })).toMatch(/blocked while plan mode is active/);
   });
@@ -595,7 +597,7 @@ describe('session bookkeeping and delegation tools', () => {
     async name => {
       await setLiveMode('plan');
       const prompt = vi.fn();
-      const wrapped = wrap(tool(name), prompt, new PermissionManager([], undefined, []));
+      const wrapped = wrap(tool(name), prompt, new PermissionManager(new ToolCatalog(), [], []));
 
       expect(await wrapped.toolFn({})).toBe('ok');
       expect(prompt).not.toHaveBeenCalled();
@@ -604,7 +606,11 @@ describe('session bookkeeping and delegation tools', () => {
 
   it('prompts for one the project has denied', async () => {
     const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
-    const wrapped = wrap(tool('agent_delegate'), prompt, new PermissionManager([], undefined, ['agent_delegate']));
+    const wrapped = wrap(
+      tool('agent_delegate'),
+      prompt,
+      new PermissionManager(new ToolCatalog(), [], ['agent_delegate'])
+    );
 
     await expect(wrapped.toolFn({})).rejects.toThrow();
     expect(prompt).toHaveBeenCalledTimes(1);

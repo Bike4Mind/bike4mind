@@ -31,7 +31,7 @@ import { requireApiUrl, buildCliToolList, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
-import { isReadOnlyTool } from '../config/toolSafety.js';
+import { ToolCatalog } from '../tools/gateway/index.js';
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
@@ -281,7 +281,7 @@ export class AcpServer {
         result = await stack.agent.run(userText, {
           signal: abortController.signal,
           previousMessages: session.history,
-          isReadOnlyTool,
+          isReadOnlyTool: toolName => stack.permissionManager.catalog.isReadOnly(toolName),
           maxHistoryIterations: 4,
         });
       } catch (error) {
@@ -549,7 +549,11 @@ export class AcpServer {
     const startupLog: string[] = [];
     const { llm, wsManager, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
 
-    const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled ?? []);
+    const permissionManager = new PermissionManager(
+      new ToolCatalog(),
+      config.trustedTools ?? [],
+      config.tools.disabled ?? []
+    );
 
     const checkpointStore = new CheckpointStore(this.configStore.getProjectConfigDir() ?? process.cwd());
     const stackSessionId = randomUUID();
