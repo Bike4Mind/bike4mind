@@ -1139,6 +1139,19 @@ describe('registerTools', () => {
     expect(result.structuredContent).toEqual(created);
   });
 
+  it.each([
+    [{ error: 'Session not found' }, 'Session not found'],
+    [{}, 'does not have this API route'],
+  ])('create_artifact maps a v1 404 (%o) to an isError', async (body, expected) => {
+    const createArtifact = vi.fn().mockRejectedValue(new B4mApiError(404, body, new Headers()));
+    const tools = collectTools(mockClient({ createArtifact }));
+
+    const result = await tools.get('create_artifact')!({ type: 'html', title: 'Spec', content: '<p>x</p>' });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain(expected);
+  });
+
   it('create_artifact input schema requires a known type, a title and non-empty content', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('create_artifact')!);
     const valid = { type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' };

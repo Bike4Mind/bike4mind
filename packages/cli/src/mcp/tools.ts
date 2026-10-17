@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
   ArtifactTypeSchema,
+  CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
   GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
@@ -304,16 +305,21 @@ const publishArtifactShape = {
   title: z.string().min(1).max(200).optional().describe("Page title; defaults to the artifact's title"),
 };
 
+// Derived from the v1 route's strict body schema so the limits cannot drift from the server's.
 const createArtifactShape = {
-  type: ArtifactTypeSchema.describe(
+  type: CreateArtifactRequestSchema.shape.type.describe(
     "Artifact type: 'html' for a written document or web page, 'mermaid' for a diagram, 'recharts' for a chart, 'svg', 'react', 'python' or 'code' for source"
   ),
-  title: z.string().min(1).max(255).describe('Artifact title'),
-  content: z.string().min(1).describe("The artifact's source: HTML, Mermaid, SVG, code and so on, matching type"),
-  description: z.string().max(1000).optional().describe('Short description'),
+  title: CreateArtifactRequestSchema.shape.title.describe('Artifact title'),
+  content: CreateArtifactRequestSchema.shape.content.describe(
+    "The artifact's source: HTML, Mermaid, SVG, code and so on, matching type"
+  ),
+  description: CreateArtifactRequestSchema.shape.description.describe('Short description'),
   notebookId: notebookId('A notebook (session) you can edit, to file the artifact under').optional(),
-  projectId: z.string().min(1).optional().describe('A project you can read, to file the artifact under'),
-  tags: z.array(z.string().max(50)).max(20).optional().describe('Up to 20 tags'),
+  projectId: CreateArtifactRequestSchema.shape.project_id.describe(
+    'A project you can read, to file the artifact under'
+  ),
+  tags: CreateArtifactRequestSchema.shape.tags.describe('Up to 20 tags'),
 };
 
 const textToSpeechShape = {
