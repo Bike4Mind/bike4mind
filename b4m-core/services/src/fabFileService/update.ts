@@ -148,7 +148,8 @@ export const updateFabFile = async (
         Logger.globalInstance.warn('Failed to retrieve file metadata from S3:', error);
       }
     }
-    contentChanges.fileSize = fileSize;
+    // Persisted only by commitContentRewrite (with the counter move); kept out of the trailing write.
+    fabFile.fileSize = fileSize;
     if (!fabFile.filePath) contentChanges.filePath = filePath;
     const committed = await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
     if (!committed) {
