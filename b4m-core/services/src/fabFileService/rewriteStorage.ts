@@ -13,8 +13,9 @@ import { checkStorageLimit } from '@bike4mind/utils';
  * row's charged bytes - this commit, or the upload's S3 event claim (apps/client/server/s3/storageCharge.ts)
  * - sets `fileSize` and the stamp in one atomic update and moves the owner's counter by
  * `newSize - chargedBytes(preImage)`, so the moves add up to the truth in any order, including
- * overlapping rewrites of one file. A guard test pins the known call sites, but only finds new ones
- * under its search roots (b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
+ * overlapping rewrites of one file. A guard test pins the known call sites and finds new ones only under its
+ * search roots (apps/client/pages/api, apps/client/server, apps/workers/src and the fabFileService and
+ * researchTaskService directories; b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
  */
 
 export type RewriteStorageDb = {

@@ -34,7 +34,8 @@ const REWRITE_SITES = [
 ];
 
 /** Content-upload call shapes, used to spot a rewrite site nobody added to the list above. */
-const UPLOAD_PATTERN = /(getFilesStorage\(\)\.upload\(|storage\.upload\(|\.uploadFile\(|PutObjectCommand)/;
+const UPLOAD_CALL = /\.\s*upload(File)?\s*\(/;
+const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObject`);
 
 /** First-write and backup paths: they upload bytes but invalidate nothing. */
 const NOT_A_REWRITE = new Set([
@@ -56,7 +57,8 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
   'apps/client/server/files/createPresignedUpload.ts',
-  // Uploads to the path of the FabFile it has just created through createFabFile (a first write).
+  // Its upload writes the FabFile it has just created through createFabFile (a first write). It is ALSO
+  // listed in ADAPTER_WIRING_SITES on purpose: line ~248 reaches a real rewrite through updateFabFile.
   'apps/workers/src/events/sessionSummarization.ts',
   // Not FabFile content: exports, attachments, generated media, caches, QA fixtures and public artifacts.
   'apps/workers/src/queueHandlers/slackExport.ts',
@@ -67,6 +69,9 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
   'apps/client/server/services/whatsNewDistribution.ts',
+  'apps/client/server/generationJobs/wiring.ts',
+  'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',
+  'apps/workers/src/queueHandlers/questExport.ts',
 ]);
 
 /**
@@ -82,7 +87,7 @@ const ADAPTER_WIRING_SITES = [
 
 /** A call that hands a `users` adapter to the rewrite accounting, so the caller must be in a list above. */
 const REWRITE_SERVICE_CALL =
-  /(updateFabFile\(|assertRewriteFits\(|commitContentRewrite\(|researchTaskService\.(process|processDiscoveredLinks|downloadRelevantLinks)\()/;
+  /(updateFabFile\(|editFabFile\(|assertRewriteFits\(|commitContentRewrite\(|researchTaskService\.(process|processDiscoveredLinks|downloadRelevantLinks)\()/;
 
 /** Rewrite sites that charge through the accounting helper but do not use the extracted-count patch. */
 const CHARGED_ELSEWHERE = ['b4m-core/services/src/researchTaskService/utils.ts'];
@@ -92,14 +97,18 @@ const read = (rel: string) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')
 // Comments stripped (keeping `://` in strings) so a commented-out call cannot satisfy a check.
 const stripComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, '$1');
 
+// Same skip set as fabFileModerationGate.test.ts (a copy: the walker is ten lines, and a shared
+// helper would need a non-test module in this directory just for two guards).
+const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
+
 const walkTs = (dir: string, visit: (rel: string) => void) => {
   const abs = path.join(REPO_ROOT, dir);
   if (!fs.existsSync(abs)) return;
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue;
+    if (EXCLUDED_DIR_NAMES.has(entry.name)) continue;
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) walkTs(rel, visit);
-    else if (entry.name.endsWith('.ts') && !entry.name.includes('.test.')) visit(rel.split(path.sep).join('/'));
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) visit(rel.split(path.sep).join('/'));
   }
 };
 
@@ -151,26 +160,38 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     for (const branch of branches.slice(0, -1)) {
       const check = branch.indexOf('assertRewriteFits(');
       expect(check).toBeGreaterThanOrEqual(0);
-      expect(branch.indexOf('.upload(')).toBeGreaterThan(check);
-      expect(branch.lastIndexOf('.upload(')).toBeGreaterThan(check);
+      expect(branch.search(UPLOAD_CALL)).toBeGreaterThan(check);
     }
     // Nothing is written after the last commit: bytes the row never charged would be unaccounted.
-    expect(branches[branches.length - 1]).not.toContain('.upload(');
+    expect(branches[branches.length - 1]).not.toMatch(UPLOAD_CALL);
     expect(source).not.toMatch(/FabFile\.(updateOne|findOneAndUpdate)\(/);
   });
 
   // The accounting helper moves the owner's counter through `users.incrementCurrentStorage`. A
-  // hand-built or cast adapter without it compiles and charges nothing.
+  // hand-built or cast adapter without it compiles but does not update the owner's storage usage.
   it.each([...ADAPTER_WIRING_SITES, ...REWRITE_SITES.filter(rel => rel.startsWith('apps/'))])(
     '%s wires the real user repository into the rewrite accounting',
     rel => {
       const source = stripComments(read(rel));
-      expect(source).not.toMatch(/as\s+unknown\s+as\s+IUserRepository/);
-      const adapters = [...source.matchAll(/\busers\s*:\s*([^,}\n]+)/g)].map(m => m[1].trim());
-      expect(adapters.length).toBeGreaterThan(0);
-      expect(adapters.filter(rhs => rhs !== 'userRepository')).toEqual([]);
+      const adapters = [
+        ...[...source.matchAll(/\busers\s*:\s*([^,}\n]+)/g)].map(m => m[1].trim()),
+        ...[...source.matchAll(/[{,]\s*users\s*(?=[,}])/g)].map(() => 'users (shorthand)'),
+      ];
+      const bad = adapters.filter(rhs => !/(^|\.)userRepository$/.test(rhs));
+      const castUsers = /\bas\s+(unknown\s+as\s+)?IUserRepository\b/.test(source);
+      const fromRealModule = /import\s*\{[^}]*\buserRepository\b[^}]*\}\s*from\s*'@bike4mind\/database'/.test(source);
+
+      expect(adapters.length, `${rel}: no users adapter found`).toBeGreaterThan(0);
+      expect(bad, `${rel}: users adapter must be userRepository, found: ${bad.join(' | ')}`).toEqual([]);
+      expect(castUsers, `${rel}: users adapter is cast to IUserRepository`).toBe(false);
+      expect(fromRealModule, `${rel}: userRepository must come from @bike4mind/database`).toBe(true);
     }
   );
+
+  it('lists only paths that exist', () => {
+    const listed = [...NOT_A_REWRITE, ...ADAPTER_WIRING_SITES, ...REWRITE_SITES, ...CHARGED_ELSEWHERE];
+    expect(listed.filter(rel => !fs.existsSync(path.join(REPO_ROOT, rel)))).toEqual([]);
+  });
 
   it('has no unlisted app file that hands a users adapter to the rewrite accounting', () => {
     const known = new Set([...REWRITE_SITES, ...ADAPTER_WIRING_SITES, ...CHARGED_ELSEWHERE]);
