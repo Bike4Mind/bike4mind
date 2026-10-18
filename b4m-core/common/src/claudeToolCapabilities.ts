@@ -1,3 +1,4 @@
+import { claudeFamilyVersion } from './claudeModelId';
 import { ModelBackend } from './models';
 
 /**
@@ -24,6 +25,7 @@ const TOOL_SEARCH_VERSIONS: ReadonlySet<string> = new Set([
   'mythos-5-1',
 ]);
 
+// Keep in sync with NO_FORCED_TOOL_CHOICE_FAMILY in models.ts when a new 5.x ships.
 // Sonnet 5 is left out on purpose: it takes no mid-conversation system messages.
 const TOOL_CHANGES_VERSIONS: ReadonlySet<string> = new Set([
   'opus-4-8',
@@ -36,20 +38,6 @@ const TOOL_CHANGES_VERSIONS: ReadonlySet<string> = new Set([
   'mythos-5',
   'mythos-5-1',
 ]);
-
-// `[<scope>.]anthropic.` (any Bedrock scope, as isClaudeModelId), then `claude-<family>-<major>[-<minor>]`,
-// then an 8-digit date, a lettered suffix (`-v1:0`, `-latest`), `[1m]` or the end. Anything else after the
-// version (`claude-opus-5-50`, a patch `-5-5-1`) is unreviewed and reads null rather than as a shorter version.
-const CLAUDE_FAMILY_VERSION =
-  /^(?:(?:[a-z-]+\.)?anthropic\.)?claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d))?(?=$|[:@[]|-(?:\d{8}(?!\d)|[a-z]))/;
-
-/** `opus-4-5` for `claude-opus-4-5-20251101` or `global.anthropic.claude-opus-4-5-...`; null otherwise. */
-function claudeFamilyVersion(modelId: string): string | null {
-  const match = CLAUDE_FAMILY_VERSION.exec(modelId);
-  if (!match) return null;
-  const [, family, major, minor] = match;
-  return minor ? `${family}-${major}-${minor}` : `${family}-${major}`;
-}
 
 export type ClaudeToolCapabilityModel = {
   id: string;
