@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   changeStorageSize: vi.fn(),
+  withTransaction: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -40,7 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   imageModerationIncidentRepository: {},
   User: { findById: h.userFindById },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@bike4mind/common', async importOriginal => ({
@@ -86,6 +87,7 @@ const metadata = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.withTransaction.mockImplementation((fn: (session: unknown) => Promise<unknown>) => fn(undefined));
   h.updateOne.mockResolvedValue({ modifiedCount: 1, matchedCount: 1 });
   h.findOneAndUpdate.mockResolvedValue({ id: 'ff1' });
   h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
@@ -389,35 +391,72 @@ describe('objectCreated - storage charge', () => {
     expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 
-  it('charges a legacy no-status row in full on a retry after the first attempt failed', async () => {
-    // A stored row: pre-cutoff, never stamped, no status. Writes inside the failed attempt's
-    // transaction never land, so only writes made outside it persist into the retry.
-    const row: Record<string, unknown> = { fileSize: 4, createdAt: new Date('2026-01-01T00:00:00.000Z') };
-    h.findOne.mockImplementation(async () => {
-      const doc = metadata({ ...row });
-      doc.save.mockImplementation(async () => {
-        row.status = (doc as Record<string, unknown>).status;
+  describe('a retry after a failed attempt on a legacy no-status row', () => {
+    // A stored row: pre-cutoff, never stamped, no status. Writes made inside the transaction are
+    // buffered and land only when its callback resolves, as a rolled-back transaction's would.
+    let row: Record<string, unknown>;
+    let pending: Array<() => void>;
+    const session = { id: 'session' };
+    let docs: Array<ReturnType<typeof metadata>>;
+
+    beforeEach(() => {
+      row = { fileSize: 4, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+      pending = [];
+      docs = [];
+      h.withTransaction.mockImplementation(async (fn: (s: unknown) => Promise<unknown>) => {
+        pending = [];
+        const result = await fn(session);
+        pending.forEach(write => write());
+        return result;
       });
-      return doc;
+      h.findOne.mockImplementation(async () => {
+        const doc = metadata({ ...row });
+        doc.save.mockImplementation(async () => {
+          const { status } = doc as Record<string, unknown>;
+          pending.push(() => Object.assign(row, { status }));
+        });
+        docs.push(doc);
+        return doc;
+      });
+      h.updateOne.mockImplementation(
+        async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+          if ('status' in filter) Object.assign(row, update.$set);
+          return { modifiedCount: 1, matchedCount: 1 };
+        }
+      );
+      h.findOneAndUpdate.mockImplementation(
+        async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+          if (!isStorageClaim(filter)) return { id: 'ff1' };
+          const pre = { ...row };
+          pending.push(() => Object.assign(row, update.$set));
+          return pre;
+        }
+      );
     });
-    h.updateOne.mockImplementation(
-      async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
-        if ('status' in filter) Object.assign(row, update.$set);
-        return { modifiedCount: 1, matchedCount: 1 };
-      }
-    );
-    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
-      isStorageClaim(filter) ? { ...row } : { id: 'ff1' }
-    );
-    h.moderateUploadedFile.mockRejectedValueOnce(new Error('transient'));
 
-    await expect(run('uploads/report.pdf', '2026-01-01T00:00:00.000Z')).rejects.toThrow('transient');
-    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    const retryCharges = async () => {
+      await expect(run('uploads/report.pdf', '2026-01-01T00:00:00.000Z')).rejects.toThrow('transient');
+      expect(row.status).toBeUndefined();
+      h.changeStorageSize.mockClear();
 
-    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+      await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
 
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
-    expect(row.status).toBe('complete');
+      expect(h.changeStorageSize).toHaveBeenCalledTimes(1);
+      expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+      expect(row.status).toBe('complete');
+      expect(docs.at(-1)?.save).toHaveBeenCalledWith({ session });
+    };
+
+    it('charges the full new size when the first attempt failed before the save', async () => {
+      h.moderateUploadedFile.mockRejectedValueOnce(new Error('transient'));
+      await retryCharges();
+    });
+
+    it('charges the full new size when the first attempt failed after the save', async () => {
+      const failingUser = { id: 'u1', currentStorageSize: 1, save: vi.fn().mockRejectedValue(new Error('transient')) };
+      h.userFindById.mockReturnValueOnce({ session: () => failingUser });
+      await retryCharges();
+    });
   });
 
   it("still marks a legacy no-status row 'complete' when the owner lookup fails", async () => {

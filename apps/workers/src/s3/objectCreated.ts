@@ -54,8 +54,8 @@ export const func = withContext(async (event, context, logger) => {
     const statusBeforeUpload = metadata.status;
     // Except where the flip alone changes how the charge rule reads the row (a pre-cutoff unstamped
     // row): there it rides the transaction's save, because a retry after a failed transaction would
-    // read a persisted flip as the pre-upload status and undercharge. Such a row stays un-complete
-    // only if every attempt fails.
+    // read a persisted flip as the pre-upload status and undercharge. Such a row keeps its old status
+    // while the transaction is in flight, and keeps it for good only if every attempt fails.
     const chargeFields = { storageChargedAt: metadata.storageChargedAt, createdAt: metadata.createdAt };
     const deferStatusFlip =
       metadata.status !== 'complete' &&
