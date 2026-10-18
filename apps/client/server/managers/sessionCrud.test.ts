@@ -379,6 +379,56 @@ describe('sessionCrud', () => {
       expect(logger.warn).toHaveBeenCalled();
     });
 
+    it('pins the message attachments on an existing session, minus images and message-only files', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      updateSessionService.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a', 'doc'] });
+
+      await getOrCreateSession({
+        sessionId: 'existing',
+        // The workbench, without the flag: never pinned from a browser's whole list.
+        fabFileIds: ['wb'],
+        messageFileIds: ['a', 'doc', 'img-1', 'note'],
+        messageOnlyFileIds: ['NOTE'],
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(updateSessionService).toHaveBeenCalledTimes(1);
+      expect(updateSessionService.mock.calls[0][1]).toEqual({
+        id: 'existing',
+        knowledgeIds: ['doc'],
+        knowledgeIdsMode: 'add',
+        propagateToProjects: false,
+      });
+    });
+
+    it('seeds a new session with its first message attachments, minus images and message-only files', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({
+        fabFileIds: ['wb', 'img-wb'],
+        messageFileIds: ['WB', 'doc', 'img-1', 'note'],
+        messageOnlyFileIds: ['note'],
+        user,
+        logger,
+      });
+
+      expect(createSessionService.mock.calls[0][1].knowledgeIds).toEqual(['wb', 'img-wb', 'doc']);
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('still creates the session when the message attachment lookup fails', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+      fabFileFindMetadataByIds.mockRejectedValueOnce(new Error('db'));
+
+      const result = await getOrCreateSession({ messageFileIds: ['doc'], user, logger });
+
+      expect(result.wasCreated).toBe(true);
+      expect(createSessionService.mock.calls[0][1].knowledgeIds).toEqual([]);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
     it('does not persist fabFileIds without the flag (a stale tab must not re-add a removed file)', async () => {
       SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: [] });
 

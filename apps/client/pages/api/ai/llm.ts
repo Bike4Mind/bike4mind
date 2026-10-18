@@ -76,8 +76,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Everything that can reject the request runs before getOrCreateSession, so a rejected request
     // leaves no session behind. invoke() parses the body again, but only after that write.
     const body = LLMApiRequestBodySchema.parse(req.body);
-    // agentIds is destructured out so a session-creation field never rides into the completion body.
-    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = body;
+    // agentIds and messageOnlyFileIds are destructured out so session-write input never rides into the
+    // completion body.
+    const { sessionId: reqSessionId, sessionName, agentIds, messageOnlyFileIds, ...invokeParams } = body;
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
@@ -89,6 +90,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       sessionName,
       projectId: body.projectId,
       fabFileIds: body.fabFileIds,
+      messageFileIds: body.messageFileIds,
+      messageOnlyFileIds,
       agentIds,
       origin: resolveSessionOrigin(req),
       user: req.user,

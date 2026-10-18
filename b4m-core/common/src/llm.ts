@@ -402,6 +402,11 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ t
    * is absent; ignored when an existing session is resolved.
    */
   agentIds: z.array(z.string()).optional(),
+  /**
+   * The subset of `messageFileIds` the user scoped to this message only. Every other notebook-scope
+   * message attachment is pinned to the session so it stays in context on later turns.
+   */
+  messageOnlyFileIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

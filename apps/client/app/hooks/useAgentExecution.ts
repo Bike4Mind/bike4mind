@@ -74,6 +74,8 @@ interface AgentExecuteStart {
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];
+  /** The subset of `messageFileIds` scoped to this message only; the rest are pinned to the session. */
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   // LLM runtime knobs.
   temperature?: number;
