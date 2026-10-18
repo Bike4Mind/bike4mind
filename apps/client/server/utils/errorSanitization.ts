@@ -1,3 +1,5 @@
+import { HTTPError } from '@bike4mind/common';
+
 /** Sanitize error messages to avoid leaking internal details to clients */
 export function sanitizeErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -11,4 +13,16 @@ export function sanitizeErrorMessage(error: unknown): string {
     }
   }
   return 'Internal server error';
+}
+
+/**
+ * The error fields of a `cli_completion_error` frame. A 4xx is the caller's to fix, so it keeps its own
+ * message and `errorCode` (as the SSE route's JSON envelope does); anything else is sanitized.
+ */
+export function cliCompletionErrorFields(error: unknown): { error: string; errorCode?: string } {
+  if (!(error instanceof HTTPError) || error.statusCode < 400 || error.statusCode >= 500) {
+    return { error: sanitizeErrorMessage(error) };
+  }
+  const errorCode = error.additionalInfo?.errorCode;
+  return { error: error.message, ...(typeof errorCode === 'string' ? { errorCode } : {}) };
 }
