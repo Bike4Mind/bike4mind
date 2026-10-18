@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -48,6 +49,7 @@ describe('cleanup handler recovery with real replica-set Mongo', () => {
   beforeAll(async () => {
     mongo = await createMongoReplSet();
     await mongoose.connect(mongo.getUri(), { autoIndex: false });
+    await settleAutoIndexBuilds(mongoose);
   });
   afterEach(() => {
     vi.restoreAllMocks();
