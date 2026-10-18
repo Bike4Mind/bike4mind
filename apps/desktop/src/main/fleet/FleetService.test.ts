@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetState } from '@shared/fleet';
-import type { VaultFile } from '../auth/tokenVault';
 import type { ActivityBatch, ActivityEvent } from './activityContract';
 import { ActivityQueue } from './ActivityQueue';
 import { FleetClient, fleetOrigin, type FetchPort } from './FleetClient';
 import { parseFleetConfig, readFleetConfig, type FleetConfigFs, type FleetConfigResult } from './FleetConfig';
 import { FLUSH_DELAY_MS, FleetService } from './FleetService';
 import { FleetSettingsStore } from './FleetSettingsStore';
+import { memoryFile } from './memoryFile.testHelper';
 import { toOtlpLogs } from './otlp';
 
 const KEY = 'fltk_test_telemetry_key_AAAA1111';
@@ -17,18 +17,6 @@ const EMAIL = 'dev@example.test';
 
 const configJson = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ version: 1, endpoint: ORIGIN, key: KEY, email: EMAIL, installId: INSTALL_ID, ...over });
-
-function memoryFile(initial: string | null = null): VaultFile & { contents: string | null } {
-  return {
-    contents: initial,
-    async read() {
-      return this.contents;
-    },
-    async write(contents: string) {
-      this.contents = contents;
-    },
-  };
-}
 
 const response = (status: number) =>
   new Response('{"partialSuccess":{}}', { status, headers: { 'content-type': 'application/json' } });
@@ -433,6 +421,26 @@ describe('FleetService sending', () => {
     expect(h.sent[0].headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(eventIds(h.sent[0].body)).toHaveLength(2);
     expect(h.service.getState()).toMatchObject({ pending: 0, lastResult: { sent: 2 }, lastError: null });
+  });
+
+  it('sends each event once when sendNow overlaps a timer flush', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const h = await harness(async () => {
+      await gate;
+      return response(200);
+    });
+    await h.service.setConsent(true);
+    await h.service.record([event(), event()]);
+    h.timers.at(-1)!.callback();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const now = h.service.sendNow();
+    release();
+    await now;
+    expect(h.sent).toHaveLength(1);
+    expect(h.service.getState()).toMatchObject({ pending: 0, lastResult: { sent: 2 } });
   });
 
   it('retries a failed send with the same event ids, so Fleet can dedupe it', async () => {
