@@ -256,6 +256,16 @@ describe('a message attachment is pinned to the session it was sent in', () => {
     expect(await knowledgeIds(session.id)).toEqual([]);
   });
 
+  it('pins only ids the message carries, whatever messageOnlyFileIds names', async () => {
+    const owner = await createUser('owner');
+    const session = await createSession({ userId: owner.id, name: 'nb' });
+    const sent = await createFile(owner.id, 'application/pdf');
+    const notSent = await createFile(owner.id, 'application/pdf');
+
+    await send(owner, session.id, [sent], [notSent]);
+    expect(await knowledgeIds(session.id)).toEqual([sent]);
+  });
+
   it('pins a message attachment once, however often it is sent', async () => {
     const owner = await createUser('owner');
     const kept = await createFile(owner.id, 'application/pdf');

@@ -29,9 +29,7 @@ describe('useSendMessage - message attachments pinned to the session', () => {
   });
 
   it('mirrors the pin on both paths once the send lands', () => {
-    expect(source).toMatch(/mirrorPinnedMessageFiles\(dispatchSessionId\);/);
-    expect(source).toMatch(
-      /dispatchedRef\.current = true;[\s\S]{0,200}mirrorPinnedMessageFiles\(data\?\.session\?\.id\)/
-    );
+    expect(source).toMatch(/mirrorPins\(dispatchSessionId\);/);
+    expect(source).toMatch(/dispatchedRef\.current = true;[\s\S]{0,200}mirrorPins\(data\?\.session\?\.id\)/);
   });
 });

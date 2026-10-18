@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
-import { createOptimisticPromptBubble, createOptimisticSessionId, isOptimisticId } from '@client/app/utils/llm';
+import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
 import { withSubmitMutex } from './withSubmitMutex';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -27,8 +27,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
-import { filesPinnedBySend, messageOnlyFileIds } from './messageFilePins';
+import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
+import { messageOnlyFileIds, mirrorPinnedMessageFiles } from './messageFilePins';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
@@ -570,20 +570,8 @@ export function useSendMessage({
     }
     const messageFileIdsForRouting = sendableMessageFileIds;
     const sentMessageOnlyFileIds = messageOnlyFileIds(pendingMessageFiles);
-    // Mirrors the server's pin of this send's attachments (see filesPinnedBySend). Read from the
-    // store at call time, after the send landed, so a concurrent workbench write is kept.
-    const mirrorPinnedMessageFiles = (sessionId: string | null | undefined) => {
-      if (!sessionId || isOptimisticId(sessionId)) return;
-      const store = useWorkBenchStore.getState();
-      const pinned = filesPinnedBySend(pendingMessageFiles, sendableMessageFileIds, store.getWorkBenchFiles(sessionId));
-      if (pinned.length === 0) return;
-      store.setWorkBenchFiles(sessionId, prev => [...prev, ...pinned.filter(f => !prev.some(p => p.id === f.id))]);
-      setCurrentSessionRaw(prev =>
-        prev && prev.id === sessionId
-          ? { ...prev, knowledgeIds: [...new Set([...(prev.knowledgeIds ?? []), ...pinned.map(f => f.id)])] }
-          : prev
-      );
-    };
+    const mirrorPins = (sessionId: string | null | undefined) =>
+      mirrorPinnedMessageFiles(sessionId, pendingMessageFiles, sendableMessageFileIds, setCurrentSessionRaw);
     // Routing verdict ONLY - `tools`/`researchMode` are deliberately omitted.
     // Passing them trips the classifier's tool short-circuit, which is a
     // session-level setting: with any of recharts / image generation / deep
@@ -1128,7 +1116,7 @@ export function useSendMessage({
           // message, and it is kept off the stored execution and Quest.
           ...systemContextField,
         });
-        mirrorPinnedMessageFiles(dispatchSessionId);
+        mirrorPins(dispatchSessionId);
         setChatInputValue('');
         clearDraft(dispatchSessionId);
         // A first send from a new notebook drafted under the new-notebook key
@@ -1239,7 +1227,7 @@ export function useSendMessage({
     // cleanup) is cleanup failing, not a refusal, so the outer catch must not report it as one.
     dispatchedRef.current = true;
     // A new session was seeded with them at create, and session.created carries the list.
-    if (!isNewSession) mirrorPinnedMessageFiles(data?.session?.id);
+    if (!isNewSession) mirrorPins(data?.session?.id);
 
     setWorkBenchAgents([]);
     setSubmitting(false);

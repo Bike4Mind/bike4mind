@@ -41,6 +41,7 @@ vi.mock('@client/app/contexts/SessionsContext', async () => {
 });
 
 import { useNotebookContextFiles } from './useNotebookContextFiles';
+import { mirrorPinnedMessageFiles } from '@client/app/components/Session/SessionBottom/messageFilePins';
 import { useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 
 const SID = 'session-1';
@@ -281,5 +282,23 @@ describe('useNotebookContextFiles', () => {
     // A session switch landed mid-write: leave the new session's doc alone.
     expect(updater({ id: 'other' })).toEqual({ id: 'other' });
     expect(updater(null)).toBeNull();
+  });
+
+  it('keeps a message attachment the server pinned when a later write sends the full list', async () => {
+    useWorkBenchStore.getState().setWorkBenchFiles(SID, [file('a'), file('b')]);
+    const csv = { id: 'csv', fileName: 'data.csv', mimeType: 'text/csv' } as IFabFileDocument;
+    mirrorPinnedMessageFiles(
+      SID,
+      [{ fabFile: csv, uploadProgress: 100, status: 'complete', scope: 'notebook' }],
+      ['csv'],
+      mockSetCurrentSessionRaw
+    );
+
+    const { result } = renderHook(() => useNotebookContextFiles());
+    await act(async () => {
+      await result.current.removeFromNotebookContext(SID, 'a');
+    });
+
+    expect(mockMutateAsync).toHaveBeenCalledWith({ id: SID, knowledgeIds: ['b', 'csv'], propagateToProjects: false });
   });
 });
