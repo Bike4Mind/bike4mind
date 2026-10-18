@@ -102,6 +102,8 @@ describe('stripNarratedToolCalls', () => {
     const started = performance.now();
     stripNarratedToolCalls(reply, OFFERED);
     stripNarratedToolCalls(reply);
+    stripNarratedToolCalls(reply, { ...OFFERED, truncated: true });
+    stripNarratedToolCalls(reply, { offeredToolNames: ['get_weather'], truncated: true });
     // Generous for a loaded runner; the quadratic scan this guards against took about 3s here.
     expect(performance.now() - started).toBeLessThan(1000);
   });
@@ -151,7 +153,7 @@ describe('stripNarratedToolCallsFromReplies', () => {
     expect(stripNarratedToolCallsFromReplies([`A\n${call}`, 'An answer.'], OFFERED).endsOnCall).toBe(false);
   });
 
-  // The client joins slots with '', so a fence opened in one slot still holds in the next.
+  // The client joins slots into one text, so a fence opened in one slot still holds in the next.
   it('leaves a call alone inside a code fence that spans reply slots', () => {
     const call = '<tool_call>{"name":"web_search","arguments":{}}</tool_call>';
     const replies = ['Example:\n```\n', `${call}\n`, '```\nDone.'];
@@ -162,6 +164,28 @@ describe('stripNarratedToolCallsFromReplies', () => {
     const cut = '<tool_call>\n{"name": "web_search", "arguments": {"query": "ti';
     const result = stripNarratedToolCallsFromReplies(['Let me check.\n', cut], { ...OFFERED, truncated: true });
     expect(result).toEqual({ replies: ['Let me check.\n', ''], toolNames: ['web_search'], endsOnCall: true });
+  });
+
+  it('treats a trailing whitespace-only slot as not where the reply was cut off', () => {
+    const replies = ['Hi\n<tool_call>{"name":"web_search","arguments":{"q', '\n'];
+    expect(stripNarratedToolCallsFromReplies(replies, { ...OFFERED, truncated: true }).replies).toEqual(['Hi\n', '\n']);
+  });
+
+  it('strips a closed call in an earlier slot and a cut-off call in the last slot of a truncated reply', () => {
+    const closed = 'A\n<tool_call>{"name":"get_weather","arguments":{}}</tool_call>\n';
+    const cut = 'B\n<tool_call>{"name":"web_search","arguments":{"q';
+    expect(stripNarratedToolCallsFromReplies([closed, cut], { ...OFFERED, truncated: true })).toEqual({
+      replies: ['A\n', 'B\n'],
+      toolNames: ['get_weather', 'web_search'],
+      endsOnCall: true,
+    });
+  });
+
+  // joinReplySlots starts every slot on a new line, so a slot after one that ended mid-line can
+  // still open a block on its first line.
+  it('strips a call opening a slot that follows a slot ending mid-line', () => {
+    const call = '<tool_call>{"name":"web_search","arguments":{}}</tool_call>';
+    expect(stripNarratedToolCallsFromReplies(['Text ', `${call}\n`], OFFERED).replies).toEqual(['Text ', '']);
   });
 });
 
@@ -190,6 +214,23 @@ describe('stripNarratedToolCalls on a truncated reply', () => {
   it('keeps a cut-off block whose tool name is not complete yet', () => {
     const reply = 'Let me check.\n<tool_call>\n{"name": "web_sea';
     expect(stripNarratedToolCalls(reply, TRUNCATED).text).toBe(reply);
+  });
+
+  // A body that already closed is a call missing its close tag, and the text after it is the answer.
+  it.each([
+    ['tool_call JSON', 'Hi\n<tool_call>{"name":"web_search","arguments":{}}\n\nThe tide is high at noon and'],
+    ['TOOL_CALLS args form', 'Hi\n[TOOL_CALLS]web_search[ARGS]{"query": "tides"}\n\nThe tide is high at noon and'],
+    [
+      'function_calls invoke',
+      'Hi\n<function_calls>\n<invoke name="web_search">\n</invoke>\n\nThe tide is high at noon and',
+    ],
+  ])('keeps an unclosed %s block whose body closed before the answer', (_form, reply) => {
+    expect(stripNarratedToolCalls(reply, TRUNCATED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
+  });
+
+  it('removes an unclosed block whose closed body is all that is left', () => {
+    const reply = 'Hi\n<tool_call>{"name":"web_search","arguments":{"q":"a}"}}\n';
+    expect(stripNarratedToolCalls(reply, TRUNCATED).text).toBe('Hi\n');
   });
 
   it('keeps an unclosed block on a reply that was not truncated', () => {

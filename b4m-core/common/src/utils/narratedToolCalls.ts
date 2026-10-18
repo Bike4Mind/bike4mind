@@ -67,6 +67,8 @@ const MISTRAL_ARGS_NAME = /^\s*([\w.-]+)\[ARGS\]/;
 // First complete `"name": "..."` in a cut-off JSON body; later ones may sit inside the arguments.
 const CUT_OFF_JSON_NAME = /"name"\s*:\s*"([^"\\]+)"/;
 const FENCE_MARKER = /`{3}|~{3}/;
+// A blank line, then text that is not a tag: the answer after an invoke/function body.
+const PROSE_AFTER_BLANK_LINE = /\n[ \t]*\r?\n[ \t]*[^<\s]/;
 const BLANK_LINE_REST = /[ \t]*(?:\r?\n|$)/y;
 // Same fence rules as findLastChoicesFence in ./replyChoices.ts.
 const FENCE_OPEN_LINE = /^[ \t]*(`{3,}|~{3,})(.*)$/;
@@ -121,7 +123,10 @@ function calledToolNames(body: string, isMistral: boolean): string[] | null {
   return invoked.length > 0 ? invoked : null;
 }
 
-/** The tool name a cut-off block body already names in full, or null when it names none yet. */
+/**
+ * The tool name a cut-off block body already names in full, or null when it names none yet. The
+ * cut-off counterpart of calledToolNames: keep the two in sync when a block format is added.
+ */
 function cutOffToolNames(body: string, isMistral: boolean): string[] | null {
   const first = body.trimStart()[0];
   const named =
@@ -134,6 +139,33 @@ function cutOffToolNames(body: string, isMistral: boolean): string[] | null {
   if (first === '{' || first === '[' || isMistral) return null;
   const invoked = [...body.matchAll(INVOKE_NAME)].map(match => match[1]);
   return invoked.length > 0 ? invoked : null;
+}
+
+/**
+ * Whether a cut-off body is still open at its end, so no answer can follow it. A JSON body that
+ * already closed, or an invoke/function body followed by a blank line and prose, is a call missing
+ * its close tag with the answer after it.
+ */
+function stillOpen(body: string, isMistral: boolean): boolean {
+  const args = isMistral ? body.match(MISTRAL_ARGS_NAME) : null;
+  const json = args ? body.slice(args[0].length) : body;
+  const start = json.search(/\S/);
+  if (start === -1) return true;
+  if (json[start] !== '{' && json[start] !== '[') return !isMistral && !PROSE_AFTER_BLANK_LINE.test(body);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < json.length; i++) {
+    const char = json[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') inString = true;
+    else if (char === '{' || char === '[') depth += 1;
+    else if ((char === '}' || char === ']') && --depth === 0) return !json.slice(i + 1).trim();
+  }
+  return true;
 }
 
 /** Whether the body at `bodyStart` is empty so far or starts the way a call body does. */
@@ -166,6 +198,8 @@ function stripRun(
   let out = '';
   let copiedTo = 0;
   let lineStart = 0;
+  // Only the first unclosed opener can be the cut-off block: every later one sits inside it.
+  let cutOffPending = cutOff && !!offered;
   // Next known offset of each close tag, or -1 once it is absent from the rest of the run. Offsets
   // only move forward, so each tag costs one pass over the run in total.
   const nextClose = new Map<string, number>();
@@ -228,10 +262,18 @@ function stripRun(
       hide = !!names && (offered === null || names.some(name => offered.has(name)));
     }
     if (!hide && streaming && (!complete || isMistral)) hide = startsLikeCall(run, bodyStart, isMistral);
-    if (!hide && cutOff && offered && (!complete || isMistral) && startsLikeCall(run, bodyStart, isMistral)) {
-      names = cutOffToolNames(run.slice(bodyStart, bodyStart + MAX_CALL_BODY_CHARS), isMistral);
-      hide = !!names && names.some(name => offered.has(name));
-      if (!hide) names = null;
+    if (!hide && cutOffPending && offered && (!complete || isMistral)) {
+      cutOffPending = false;
+      const body = run.slice(bodyStart);
+      if (
+        body.length <= MAX_CALL_BODY_CHARS &&
+        startsLikeCall(run, bodyStart, isMistral) &&
+        stillOpen(body, isMistral)
+      ) {
+        names = cutOffToolNames(body, isMistral);
+        hide = !!names && names.some(name => offered.has(name));
+        if (!hide) names = null;
+      }
     }
     if (!hide) {
       lineStart = nextLine;
@@ -304,7 +346,8 @@ export function stripNarratedToolCalls(text: string, options: NarratedToolCallOp
 /**
  * {@link stripNarratedToolCalls} over every reply slot, with the named tools collected once each.
  * Slots are read as one text, the way extractReplies in apps/client/shared/replyUtils.ts joins them
- * with '', so a code fence opened in one slot still holds in the next.
+ * (joinReplySlots in ./streamVisibility.ts): a code fence opened in one slot still holds in the
+ * next. Every slot starts on a new line there, so each slot's first line can open a block.
  */
 export function stripNarratedToolCallsFromReplies(
   replies: readonly string[],
@@ -314,7 +357,7 @@ export function stripNarratedToolCallsFromReplies(
   const offered = options.offeredToolNames ? new Set(options.offeredToolNames) : null;
   const state: RunState = { fence: null, strippedAt: null };
   let lastFilled = replies.length - 1;
-  while (lastFilled > 0 && !replies[lastFilled]) lastFilled -= 1;
+  while (lastFilled > 0 && !replies[lastFilled].trim()) lastFilled -= 1;
   let endsOnCall = false;
   const stripped = replies.map((slot, index) => {
     const result = stripSlot(slot, offered, toolNames, state, !!options.truncated && index === lastFilled);

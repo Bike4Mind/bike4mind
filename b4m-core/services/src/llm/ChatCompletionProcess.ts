@@ -5234,17 +5234,19 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = successStatus();
+        const finalStatus = successStatus();
+        quest.status = finalStatus;
         clearStaleFallbackInfoIfNoAnswer();
         const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
         // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
         const narratedStrip = applyNarratedToolCallStrip(quest, turnOfferedToolNames, {
-          truncated: quest.status === 'stopped',
+          truncated: finalStatus === 'stopped',
         });
         flagNarratedToolCalls(narratedStrip.toolNames);
         // The snapshot counted blocks the strip just removed. Taking their size off it keeps a short
         // answer after the last real tool call from reading as no answer; a block stripped after
-        // the call is covered by endsOnCall instead.
+        // the call is covered by endsOnCall instead. The clamp only bites when blocks stripped after
+        // the call outweigh the visible text before it, which overstates the answer, never hides one.
         visibleCharsAtLastToolCall = Math.max(
           0,
           visibleCharsAtLastToolCall - (visibleCharsBeforeStrip - countVisibleChars(quest.replies))
