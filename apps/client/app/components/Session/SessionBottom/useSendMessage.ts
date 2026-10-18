@@ -28,6 +28,12 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
+import {
+  holdMirroredPinsUntilAgentStart,
+  messageOnlyFileIds,
+  mirrorPinnedMessageFiles,
+  rollbackMirroredPins,
+} from '@client/app/utils/messageFilePins';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
@@ -146,6 +152,7 @@ export function useSendMessage({
     workBenchAgents,
     setWorkBenchAgents,
     setCurrentSessionId,
+    setCurrentSessionRaw,
   } = useSessions();
 
   const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
@@ -567,6 +574,9 @@ export function useSendMessage({
       toast.warning("An image couldn't be added — it may violate our content policy.");
     }
     const messageFileIdsForRouting = sendableMessageFileIds;
+    const sentMessageOnlyFileIds = messageOnlyFileIds(pendingMessageFiles);
+    const mirrorPins = (sessionId: string | null | undefined) =>
+      mirrorPinnedMessageFiles(sessionId, pendingMessageFiles, sendableMessageFileIds, setCurrentSessionRaw);
     // Routing verdict ONLY - `tools`/`researchMode` are deliberately omitted.
     // Passing them trips the classifier's tool short-circuit, which is a
     // session-level setting: with any of recharts / image generation / deep
@@ -814,6 +824,7 @@ export function useSendMessage({
           agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
+          messageOnlyFileIds: sentMessageOnlyFileIds,
           optimisticSessionId: optimisticTmpId ?? undefined,
           enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
@@ -863,6 +874,7 @@ export function useSendMessage({
           agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
+          messageOnlyFileIds: sentMessageOnlyFileIds,
           enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
@@ -1034,6 +1046,8 @@ export function useSendMessage({
           effectiveTools,
           dispatchAgent?.allowedTools
         );
+        // Mirrored before the dispatch, settled on the socket's start outcome (useAgentExecution).
+        holdMirroredPinsUntilAgentStart(dispatchSessionId, mirrorPins(dispatchSessionId));
         agentExecution.start({
           sessionId: dispatchSessionId,
           // Server requires `questId`; without an authored quest we tag the
@@ -1057,6 +1071,7 @@ export function useSendMessage({
           // + per-message attachments here.
           sessionFabFileIds: dispatchSessionFabFileIds.length > 0 ? dispatchSessionFabFileIds : undefined,
           messageFileIds: dispatchMessageFileIds.length > 0 ? dispatchMessageFileIds : undefined,
+          messageOnlyFileIds: sentMessageOnlyFileIds.length > 0 ? sentMessageOnlyFileIds : undefined,
           // LLM runtime knobs. `thinking` is forwarded only when the user
           // actually enabled it - the LLM store ships a baseline
           // `{enabled: false, ...}` that would otherwise round-trip needlessly.
@@ -1184,6 +1199,10 @@ export function useSendMessage({
       }));
     }
 
+    // Mirrored before the send so a workbench write racing it carries the pin. A new session is
+    // seeded server-side at create, and session.created carries the list.
+    const pinnedSessionId = isNewSession ? null : sessionToSend?.id;
+    const mirroredPins = mirrorPins(pinnedSessionId);
     let data;
     try {
       data = await handler(sessionToSend);
@@ -1207,6 +1226,7 @@ export function useSendMessage({
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
       // A held Stop is dropped first so the placeholder reads as unreplaced again.
+      if (pinnedSessionId) rollbackMirroredPins(pinnedSessionId, mirroredPins, setCurrentSessionRaw);
       deferredStop.cancel();
       setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);

@@ -18,6 +18,7 @@ import {
   organizationRepository,
   sessionRepository,
   sessionToolApprovalRepository,
+  userRepository,
   Quest,
   type AgentExecutionStatus,
 } from '@bike4mind/database';
@@ -32,6 +33,8 @@ import {
 } from '@server/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
+import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -111,6 +114,13 @@ export type StartAgentExecutionInput = {
   apiKeyInfo: ApiKeyCredential | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
+  /**
+   * Pin this run's notebook-scope `messageFileIds` to the session (except `messageOnlyFileIds`), so
+   * they stay in context on later turns, as the chat path does. Set by the in-app door; the public
+   * REST route leaves its `file_ids` per-run.
+   */
+  pinMessageFiles?: boolean;
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   temperature?: number;
   maxTokens?: number;
@@ -323,6 +333,23 @@ export async function startAgentExecution(
 
   const executionId = execution.id;
 
+  // After the run is accepted, so a refused start pins nothing; this run carries the files itself.
+  // Runs alongside the prompt Quest persist below and is awaited before dispatch, so it adds no
+  // latency of its own. pinFilesToSessionKnowledge never throws.
+  const messagePins = input.pinMessageFiles
+    ? pinnableMessageFileIds(input.messageFileIds, input.messageOnlyFileIds)
+    : [];
+  const pinning =
+    messagePins.length > 0
+      ? userRepository
+          .findById(userId)
+          .catch(error => {
+            logger.warn('[Start] Could not load the user for the session knowledge pin', { userId, error });
+            return null;
+          })
+          .then(user => (user ? pinFilesToSessionKnowledge(session, messagePins, { user, logger }) : undefined))
+      : Promise.resolve();
+
   // Persist the user's prompt as a Quest immediately so the bubble survives a mid-run
   // reload, and so a REST caller has a chat-history record of what it asked. The
   // completion handler (`persistRunAsQuest`) later patches `replies` onto this same
@@ -369,6 +396,7 @@ export async function startAgentExecution(
     });
   }
 
+  await pinning;
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is
