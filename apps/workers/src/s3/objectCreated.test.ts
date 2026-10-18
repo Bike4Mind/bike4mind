@@ -389,6 +389,49 @@ describe('objectCreated - storage charge', () => {
     expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 
+  it('charges a legacy no-status row in full on a retry after the first attempt failed', async () => {
+    // A stored row: pre-cutoff, never stamped, no status. Writes inside the failed attempt's
+    // transaction never land, so only writes made outside it persist into the retry.
+    const row: Record<string, unknown> = { fileSize: 4, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+    h.findOne.mockImplementation(async () => {
+      const doc = metadata({ ...row });
+      doc.save.mockImplementation(async () => {
+        row.status = (doc as Record<string, unknown>).status;
+      });
+      return doc;
+    });
+    h.updateOne.mockImplementation(
+      async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+        if ('status' in filter) Object.assign(row, update.$set);
+        return { modifiedCount: 1, matchedCount: 1 };
+      }
+    );
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? { ...row } : { id: 'ff1' }
+    );
+    h.moderateUploadedFile.mockRejectedValueOnce(new Error('transient'));
+
+    await expect(run('uploads/report.pdf', '2026-01-01T00:00:00.000Z')).rejects.toThrow('transient');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+    expect(row.status).toBe('complete');
+  });
+
+  it("still marks a legacy no-status row 'complete' when the owner lookup fails", async () => {
+    h.findOne.mockResolvedValue(metadata({ createdAt: new Date('2026-01-01T00:00:00.000Z') }));
+    h.userFindById.mockReturnValue({ session: () => null });
+
+    await run();
+
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  });
+
   it('charges a redelivered event once', async () => {
     h.findOne.mockResolvedValue(metadata());
     let stamp: Date | undefined;
