@@ -150,6 +150,58 @@ describe('stripNarratedToolCallsFromReplies', () => {
     expect(result.endsOnCall).toBe(true);
     expect(stripNarratedToolCallsFromReplies([`A\n${call}`, 'An answer.'], OFFERED).endsOnCall).toBe(false);
   });
+
+  // The client joins slots with '', so a fence opened in one slot still holds in the next.
+  it('leaves a call alone inside a code fence that spans reply slots', () => {
+    const call = '<tool_call>{"name":"web_search","arguments":{}}</tool_call>';
+    const replies = ['Example:\n```\n', `${call}\n`, '```\nDone.'];
+    expect(stripNarratedToolCallsFromReplies(replies, OFFERED)).toEqual({ replies, toolNames: [], endsOnCall: false });
+  });
+
+  it('removes a cut-off call naming an offered tool from the last slot of a truncated reply', () => {
+    const cut = '<tool_call>\n{"name": "web_search", "arguments": {"query": "ti';
+    const result = stripNarratedToolCallsFromReplies(['Let me check.\n', cut], { ...OFFERED, truncated: true });
+    expect(result).toEqual({ replies: ['Let me check.\n', ''], toolNames: ['web_search'], endsOnCall: true });
+  });
+});
+
+describe('stripNarratedToolCalls on a truncated reply', () => {
+  const TRUNCATED = { ...OFFERED, truncated: true };
+
+  it.each([
+    ['tool_call JSON', '<tool_call>\n{"name": "web_search", "arguments": {"query": "ti'],
+    ['tool_call function tag', '<tool_call>\n<function=web_search>\n<parameter=query>ti'],
+    ['function_calls invoke', '<function_calls>\n<invoke name="web_search">\n<parameter name="query">ti'],
+    ['TOOL_CALLS array', '[TOOL_CALLS][{"name": "web_search", "arguments": {"query": "ti'],
+    ['TOOL_CALLS args form', '[TOOL_CALLS]web_search[ARGS]{"query": "ti'],
+  ])('removes a cut-off %s block naming an offered tool', (_form, cut) => {
+    expect(stripNarratedToolCalls(`Let me check.\n${cut}`, TRUNCATED)).toEqual({
+      text: 'Let me check.\n',
+      toolNames: ['web_search'],
+      endsOnCall: true,
+    });
+  });
+
+  it('keeps a cut-off block that names no offered tool', () => {
+    const reply = 'Let me check.\n<tool_call>\n{"name": "send_email", "arguments": {"to": "a';
+    expect(stripNarratedToolCalls(reply, TRUNCATED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
+  });
+
+  it('keeps a cut-off block whose tool name is not complete yet', () => {
+    const reply = 'Let me check.\n<tool_call>\n{"name": "web_sea';
+    expect(stripNarratedToolCalls(reply, TRUNCATED).text).toBe(reply);
+  });
+
+  it('keeps an unclosed block on a reply that was not truncated', () => {
+    const reply = 'Let me check.\n<tool_call>\n{"name": "web_search", "arguments": {"query": "ti';
+    expect(stripNarratedToolCalls(reply, OFFERED).text).toBe(reply);
+  });
+
+  // Visible text after a think span means the block was not where the reply was cut off.
+  it('keeps an unclosed block that visible text follows', () => {
+    const reply = 'A\n<tool_call>\n{"name": "web_search"<think>hm</think>The answer.';
+    expect(stripNarratedToolCalls(reply, TRUNCATED).text).toBe(reply);
+  });
 });
 
 describe('applyNarratedToolCallStrip', () => {
@@ -157,6 +209,16 @@ describe('applyNarratedToolCallStrip', () => {
     const narrated = 'Checking.\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>';
     const quest = { reply: narrated, replies: [narrated] };
     expect(applyNarratedToolCallStrip(quest, ['web_search'])).toEqual({ toolNames: ['web_search'], endsOnCall: true });
+    expect(quest).toEqual({ reply: 'Checking.\n', replies: ['Checking.\n'] });
+  });
+
+  it('removes a cut-off call from a truncated quest', () => {
+    const cut = 'Checking.\n<tool_call>{"name":"web_search","arguments":{"q';
+    const quest = { reply: cut, replies: [cut] };
+    expect(applyNarratedToolCallStrip(quest, ['web_search'], { truncated: true })).toEqual({
+      toolNames: ['web_search'],
+      endsOnCall: true,
+    });
     expect(quest).toEqual({ reply: 'Checking.\n', replies: ['Checking.\n'] });
   });
 

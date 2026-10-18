@@ -5236,8 +5236,19 @@ export class ChatCompletionProcess {
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
         clearStaleFallbackInfoIfNoAnswer();
-        const narratedStrip = applyNarratedToolCallStrip(quest, turnOfferedToolNames);
+        const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
+        // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
+        const narratedStrip = applyNarratedToolCallStrip(quest, turnOfferedToolNames, {
+          truncated: quest.status === 'stopped',
+        });
         flagNarratedToolCalls(narratedStrip.toolNames);
+        // The snapshot counted blocks the strip just removed. Taking their size off it keeps a short
+        // answer after the last real tool call from reading as no answer; a block stripped after
+        // the call is covered by endsOnCall instead.
+        visibleCharsAtLastToolCall = Math.max(
+          0,
+          visibleCharsAtLastToolCall - (visibleCharsBeforeStrip - countVisibleChars(quest.replies))
+        );
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
         // The system-prompt budget can evict the guidance after it was requested (lowest priority in
@@ -6428,13 +6439,14 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
         quest.status = 'stopped';
         // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
-        flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames).toolNames);
+        flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
         finalQuest = await saveQuest(quest);
         return;
       }
       const narratedStripped = stripNarratedToolCallsFromReplies(streamedRepliesBeforeError ?? [], {
         offeredToolNames: turnOfferedToolNames,
+        truncated: true,
       });
       flagNarratedToolCalls(narratedStripped.toolNames);
       const setErrorReply = (message: string) => {
