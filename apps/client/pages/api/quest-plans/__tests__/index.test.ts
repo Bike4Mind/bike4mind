@@ -49,7 +49,7 @@ describe('GET /api/quest-plans', () => {
   });
 
   it('strips undeclared plan fields and keeps pagination and stats', async () => {
-    const stats = { total: 12, byState: { active: 12 } };
+    const stats = { active: 2, paused: 1, completed: 3, archived: 0, totalTimeSpent: 540 };
     h.findByUserIdWithCount.mockResolvedValue({
       plans: [{ id: 'p1', goal: 'One', ...STRAY }],
       total: 12,

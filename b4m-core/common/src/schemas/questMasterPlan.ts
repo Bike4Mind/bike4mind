@@ -28,7 +28,10 @@ const QUEST_MASTER_PLAN_RESPONSE_FIELDS = {
 export const questMasterPlanResponseSchema = z.object(passthroughShape(QUEST_MASTER_PLAN_RESPONSE_FIELDS));
 export const questMasterPlansResponseSchema = z.array(questMasterPlanResponseSchema);
 
-/** `{ success, plan }`, the envelope of the plan write routes (quest-master-plans/[id]/*, quest-plans/[id]/*). */
+/**
+ * `{ success, plan }`, the envelope of the plan write routes: quest-master-plans/[id]/* (except the
+ * GET) and quest-plans/[id]/{clone,continue,progress}. The quest-plans/[id] GET and PATCH return the bare plan.
+ */
 export const questMasterPlanMutationResponseSchema = z.object({
   success: z.literal(true),
   plan: questMasterPlanResponseSchema,

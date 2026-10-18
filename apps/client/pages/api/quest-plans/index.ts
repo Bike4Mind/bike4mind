@@ -3,7 +3,6 @@ import {
   SUBQUEST_STATUS_VALUES,
   questMasterPlanResponseSchema,
   questMasterPlansResponseSchema,
-  passthroughField,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -81,7 +80,13 @@ const CreateQuestPlanSchema = z.object({
 const questPlansListResponseSchema = z.object({
   data: questMasterPlansResponseSchema,
   pagination: z.object({ limit: z.number(), offset: z.number(), total: z.number(), hasMore: z.boolean() }),
-  stats: passthroughField,
+  stats: z.object({
+    active: z.number(),
+    paused: z.number(),
+    completed: z.number(),
+    archived: z.number(),
+    totalTimeSpent: z.number(),
+  }),
 });
 
 const listRateLimit = rateLimit({ limit: 100, windowMs: 60000 });
