@@ -19,6 +19,8 @@ import {
   type ISkillListing,
   type ISkillListingVersion,
   type ISkillScanFinding,
+  type ISkillSnapshot,
+  type SkillRiskTier,
 } from '@bike4mind/common';
 import { computeTier, reviewStatusFor, runDeterministicScan, scanPublicText } from './scanRules';
 import type { ClassifierLlm, ClassifierResult } from './classifySkill';
@@ -133,6 +135,74 @@ export async function rescanVersion(
   return scanAndDecide(listing, plainVersion(claimed), claimedAt, deps);
 }
 
+export type SnapshotScan =
+  | { status: 'error'; findings: ISkillScanFinding[]; error: string; model?: string }
+  | {
+      status: 'scored';
+      tier: SkillRiskTier | 'failed';
+      findings: ISkillScanFinding[];
+      /** Null when a deterministic critical finding failed the snapshot before the classifier ran. */
+      classifier: Extract<ClassifierResult, { ok: true }> | null;
+    };
+
+/**
+ * The Skill Market safety scan over one snapshot: deterministic rules, then the LLM classifier, then
+ * the rules over the classifier's own summary. Shared by listing versions and global-skill saves
+ * (globalSkillUpdate.ts) so both gates stay identical. `extraFindings` carries caller-specific
+ * findings (the listing duplicate check) that count toward the tier like any rule finding.
+ */
+export async function scanSkillSnapshot(
+  snapshot: ISkillSnapshot,
+  settings: MarketSettings,
+  getClassifier: ScanDeps['getClassifier'],
+  extraFindings: ISkillScanFinding[] = []
+): Promise<SnapshotScan> {
+  const findings = [
+    ...runDeterministicScan(snapshot, { highRiskTools: settings.highRiskTools, urlAllowlist: settings.urlAllowlist }),
+    ...extraFindings,
+  ];
+
+  // Deterministic critical findings fail the version outright; the classifier can't overturn them.
+  if (findings.some(f => f.severity === 'critical'))
+    return { status: 'scored', tier: 'failed', findings, classifier: null };
+
+  let classifier: ClassifierResult;
+  try {
+    classifier = await classifySkill(snapshot, await getClassifier());
+  } catch (error) {
+    classifier = { ok: false, error: error instanceof Error ? error.message.slice(0, 300) : 'Classifier unavailable' };
+  }
+  if (!classifier.ok) return { status: 'error', findings, error: classifier.error, model: classifier.model };
+
+  // The honest summary is model output an adversarial body can steer, and every field of it is
+  // shown to viewers, so the whole summary is scanned - not just the prose fields. Each field is
+  // scanned on its own: joining them lets a `<` in one field pair with a `>` in the next.
+  const summaryFields = [
+    classifier.honestSummary.whatItDoes,
+    classifier.honestSummary.dataItTouches,
+    ...classifier.honestSummary.riskNotes,
+    classifier.honestSummary.mismatchNote ?? '',
+    ...classifier.honestSummary.toolsUsed,
+  ];
+  // One finding per rule: a URL quoted in two summary fields is one problem, not two.
+  const summaryFindings = [
+    ...new Map(
+      summaryFields.flatMap(field => scanPublicText(field, settings.urlAllowlist)).map(f => [f.rule, f])
+    ).values(),
+  ].map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }));
+  const allFindings = [...findings, ...classifier.findings, ...summaryFindings];
+  const tier = computeTier(
+    allFindings,
+    {
+      verdict: classifier.verdict,
+      confidence: classifier.confidence,
+      descriptionMatches: classifier.honestSummary.descriptionMatches,
+    },
+    settings.minConfidence
+  );
+  return { status: 'scored', tier, findings: allFindings, classifier };
+}
+
 async function scanAndDecide(
   listing: ISkillListing,
   version: ISkillListingVersion,
@@ -143,33 +213,16 @@ async function scanAndDecide(
   const listingId = String(listing.id);
   const versionId = String(version.id);
 
-  const findings = runDeterministicScan(version.snapshot, {
-    highRiskTools: settings.highRiskTools,
-    urlAllowlist: settings.urlAllowlist,
-  });
   const duplicate = await duplicateFinding(listing, version.contentHash);
-  if (duplicate) findings.push(duplicate);
+  const scan = await scanSkillSnapshot(version.snapshot, settings, deps.getClassifier, duplicate ? [duplicate] : []);
 
-  // Deterministic critical findings fail the version outright; the classifier can't overturn them.
-  let classifier: ClassifierResult | null = null;
-  if (!findings.some(f => f.severity === 'critical')) {
-    try {
-      classifier = await classifySkill(version.snapshot, await deps.getClassifier());
-    } catch (error) {
-      classifier = {
-        ok: false,
-        error: error instanceof Error ? error.message.slice(0, 300) : 'Classifier unavailable',
-      };
-    }
-  }
-
-  if (classifier && !classifier.ok) {
+  if (scan.status === 'error') {
     // Fail closed: an unscanned version is never publishable. The author can rescan.
     await writeSkillVersionScanVerdict(versionId, claimedAt, {
       scanStatus: 'error',
-      scanFindings: findings,
-      scanError: classifier.error,
-      scanModel: classifier.model,
+      scanFindings: scan.findings,
+      scanError: scan.error,
+      scanModel: scan.model,
       reviewStatus: 'not_required',
     });
     await notifyUser(
@@ -180,37 +233,7 @@ async function scanAndDecide(
     return reload(versionId);
   }
 
-  // The honest summary is model output an adversarial body can steer, and every field of it is
-  // shown to viewers, so the whole summary is scanned - not just the prose fields. Each field is
-  // scanned on its own: joining them lets a `<` in one field pair with a `>` in the next.
-  const summaryFields = classifier?.ok
-    ? [
-        classifier.honestSummary.whatItDoes,
-        classifier.honestSummary.dataItTouches,
-        ...classifier.honestSummary.riskNotes,
-        classifier.honestSummary.mismatchNote ?? '',
-        ...classifier.honestSummary.toolsUsed,
-      ]
-    : [];
-  // One finding per rule: a URL quoted in two summary fields is one problem, not two.
-  const summaryFindings = [
-    ...new Map(
-      summaryFields.flatMap(field => scanPublicText(field, settings.urlAllowlist)).map(f => [f.rule, f])
-    ).values(),
-  ].map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }));
-  const allFindings = classifier?.ok ? [...findings, ...classifier.findings, ...summaryFindings] : findings;
-  const tier = classifier?.ok
-    ? computeTier(
-        allFindings,
-        {
-          verdict: classifier.verdict,
-          confidence: classifier.confidence,
-          descriptionMatches: classifier.honestSummary.descriptionMatches,
-        },
-        settings.minConfidence
-      )
-    : 'failed';
-
+  const { tier, findings: allFindings, classifier } = scan;
   if (tier === 'failed') {
     const landed = await writeSkillVersionScanVerdict(versionId, claimedAt, {
       scanStatus: 'failed',

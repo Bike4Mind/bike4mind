@@ -17,12 +17,14 @@ import {
   SkillActor,
   canAccessSkill,
   canEditSkill,
-  canChangeSkillContent,
+  skillUpdateNeedsMarketScan,
   canDeleteSkill,
   canManageSkillSharing,
   redactShareRosterForViewer,
 } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
+import { scanGlobalSkillUpdate } from '@server/skillMarket/globalSkillUpdate';
+import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
@@ -60,10 +62,10 @@ const handler = baseApi()
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
     }
 
-    if (!canChangeSkillContent(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin })) {
-      throw new ForbiddenError(
-        'This skill is shared with everyone, so its content can only change through the Skill Market. Publish your changes there instead.'
-      );
+    if (skillUpdateNeedsMarketScan(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin })) {
+      await scanGlobalSkillUpdate({ ...skill, ...patch }, req, res, {
+        getClassifier: () => getOperationsClassifierLlm(req.logger, req.user!.id),
+      });
     }
 
     try {

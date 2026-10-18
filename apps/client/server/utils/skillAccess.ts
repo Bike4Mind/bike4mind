@@ -129,12 +129,16 @@ const normalizedContent = (skill: ISkill): ISkill => ({
 });
 
 /**
- * Content-change access for a global skill. Instance-wide content goes through the Skill Market's
- * scan and review, so only a super-admin may change what a global skill runs; the name (not part of
- * `skillContentHash`) stays editable under `canEditSkill`. Keep in sync with share.ts, which gates
- * turning the global flags on.
+ * True when an update changes the content of a global skill and the actor is not a super-admin.
+ * Instance-wide content goes through the Skill Market's scan, so such a save runs it first
+ * (`scanGlobalSkillUpdate`); the name is not part of `skillContentHash` and needs no scan. Keep in
+ * sync with share.ts, which gates turning the global flags on.
  */
-export const canChangeSkillContent = (skill: ShareableSkill, patch: Partial<ISkill>, actor: SkillActor): boolean => {
-  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return true;
-  return skillContentHash(normalizedContent({ ...skill, ...patch })) === skillContentHash(normalizedContent(skill));
+export const skillUpdateNeedsMarketScan = (
+  skill: ShareableSkill,
+  patch: Partial<ISkill>,
+  actor: SkillActor
+): boolean => {
+  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return false;
+  return skillContentHash(normalizedContent({ ...skill, ...patch })) !== skillContentHash(normalizedContent(skill));
 };

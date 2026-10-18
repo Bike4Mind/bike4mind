@@ -51,8 +51,8 @@ const EditSkillPage: FC = () => {
 
         {!isAdmin && (skill.isGlobalRead || skill.isGlobalWrite) && (
           <Alert color="neutral" variant="soft" data-testid="skill-edit-global-alert">
-            This skill is shared with everyone, so changes to its content go through the Skill Market. You can still
-            rename it here.
+            This skill is shared with everyone, so content changes are reviewed by the Skill Market safety scan when you
+            save.
           </Alert>
         )}
 

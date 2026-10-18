@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
 import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
+import type { RequestHandler } from 'express';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
@@ -291,3 +292,20 @@ export const submitRateLimits = () => [
     bucket: 'skill-market-submit-daily',
   }),
 ];
+
+/**
+ * Applies `submitRateLimits` from inside a handler, for a route that scans only on some requests (a
+ * global-skill save that changes content). Shares the publish buckets, so saves and submissions
+ * draw on one allowance. Throws the limiter's TooManyRequestsError when a cap is hit.
+ */
+export async function enforceSubmitRateLimits(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1]
+): Promise<void> {
+  for (const limiter of submitRateLimits()) {
+    const error = await new Promise<unknown>((resolve, reject) => {
+      Promise.resolve(limiter(req, res, resolve)).catch(reject);
+    });
+    if (error) throw error;
+  }
+}

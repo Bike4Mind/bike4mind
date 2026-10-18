@@ -37,10 +37,10 @@ describe('EditSkillPage global-skill hint', () => {
     h.skill = { id: 's1', name: 'summarize', description: 'd', body: 'b' };
   });
 
-  it('tells a non-admin that global skill content changes go through the Skill Market', () => {
+  it('tells a non-admin that global skill content changes are scanned on save', () => {
     h.skill = { ...h.skill, isGlobalRead: true };
     renderPage();
-    expect(screen.getByTestId('skill-edit-global-alert')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-edit-global-alert')).toHaveTextContent('Skill Market safety scan');
   });
 
   it('shows the hint for a skill that is only globally writable', () => {
