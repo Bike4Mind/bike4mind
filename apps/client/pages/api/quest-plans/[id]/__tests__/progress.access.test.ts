@@ -71,6 +71,26 @@ describe('PATCH /api/quest-plans/[id]/progress write-time re-check', () => {
     );
   });
 
+  it('strips fields the plan schema does not declare', async () => {
+    h.updateQuestProgress.mockResolvedValue({
+      id: PLAN_ID,
+      _id: 'raw-object-id',
+      __v: 4,
+      notInSchema: 'x',
+      metrics: { completionRate: 50 },
+    });
+
+    const res = await call();
+
+    const body = res._getJSONData();
+    expect(body.success).toBe(true);
+    expect(body.plan.id).toBe(PLAN_ID);
+    expect(body.metrics).toEqual({ completionRate: 50 });
+    for (const key of ['_id', '__v', 'notInSchema']) {
+      expect(body.plan).not.toHaveProperty(key);
+    }
+  });
+
   it('answers 404 when the gated write matches nothing', async () => {
     h.updateQuestProgress.mockResolvedValue(null);
 

@@ -1,4 +1,6 @@
+import { chatMessageResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import {
@@ -39,7 +41,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
   // intact).
   const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
   if (!recovery) {
-    return res.json(quest);
+    return respond(res, chatMessageResponseSchema, quest);
   }
 
   // Conditional, so a real answer that landed after the read above is returned rather than
@@ -58,7 +60,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
     req.logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'check-timeout' });
     await dispatchQuestCallback(quest.id, req.logger);
   }
-  return res.json(updatedQuest);
+  return respond(res, chatMessageResponseSchema, updatedQuest);
 });
 
 export default handler;

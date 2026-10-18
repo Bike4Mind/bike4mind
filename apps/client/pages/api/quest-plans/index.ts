@@ -1,9 +1,15 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
+import {
+  SUBQUEST_STATUS_VALUES,
+  questMasterPlanResponseSchema,
+  questMasterPlansResponseSchema,
+  passthroughField,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
@@ -72,6 +78,12 @@ const CreateQuestPlanSchema = z.object({
   priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
 });
 
+const questPlansListResponseSchema = z.object({
+  data: questMasterPlansResponseSchema,
+  pagination: z.object({ limit: z.number(), offset: z.number(), total: z.number(), hasMore: z.boolean() }),
+  stats: passthroughField,
+});
+
 const listRateLimit = rateLimit({ limit: 100, windowMs: 60000 });
 const createRateLimit = rateLimit({ limit: 10, windowMs: 60000 });
 
@@ -108,7 +120,7 @@ const handler = baseApi()
       // Get user's quest plans with count and stats in efficient parallel queries
       const { plans, total, stats } = await questMasterPlanRepository.findByUserIdWithCount(userId, options);
 
-      res.json({
+      respond(res, questPlansListResponseSchema, {
         data: plans,
         pagination: {
           limit,
@@ -158,7 +170,7 @@ const handler = baseApi()
         },
       });
 
-      res.status(201).json(plan);
+      respond(res, questMasterPlanResponseSchema, plan, 201);
     } catch (error) {
       console.error('Error creating quest plan:', error);
       res.status(500).json({ error: 'Failed to create quest plan' });
