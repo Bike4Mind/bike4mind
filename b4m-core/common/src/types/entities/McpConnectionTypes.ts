@@ -565,7 +565,10 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * the caller must not retry the write, because the successor's rotated token is the live one.
    */
   completeRefresh(id: string, holder: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
-  /** Disconnect: drop the tokens, their markers and any lease. Revocation at the server is the caller's. */
+  /**
+   * Disconnect: drop the tokens, their markers, any lease and `lastError`, and set `pending_auth`.
+   * Revocation at the server is the caller's.
+   */
   clearOAuthTokens(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
   setInitialOAuthTokens(

@@ -590,8 +590,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const result = await this.model.findOneAndUpdate(
       { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey, 'auth.kind': 'oauth' },
       {
-        $set: { 'auth.oauth.hasAccessToken': false, 'auth.oauth.hasRefreshToken': false },
+        // Status moves in the same write so listForUser never offers a connection with no token.
+        $set: { status: 'pending_auth', 'auth.oauth.hasAccessToken': false, 'auth.oauth.hasRefreshToken': false },
         $unset: {
+          lastError: 1,
           'auth.oauth.accessTokenEnc': 1,
           'auth.oauth.refreshTokenEnc': 1,
           'auth.oauth.expiresAt': 1,

@@ -270,6 +270,20 @@ describe('McpConnectionModel', () => {
       expect(withCreds?.auth.oauth?.manualClientIdEnc).toBe('enc:client-id');
     });
 
+    it('clearOAuthTokens leaves the connection pending_auth so listForUser stops offering it', async () => {
+      const connected = await mcpConnectionRepository.create(baseConnection());
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.id)).toEqual([connected.id]);
+      const cleared = await mcpConnectionRepository.clearOAuthTokens(connected.id, OWNER);
+      expect(cleared?.status).toBe('pending_auth');
+      expect(await mcpConnectionRepository.listForUser('user-1')).toEqual([]);
+
+      const failing = await mcpConnectionRepository.create(baseConnection({ slug: 'failing' }));
+      await mcpConnectionRepository.setStatus(failing.id, 'error', { code: 'timeout', message: 'slow' });
+      const reset = await mcpConnectionRepository.clearOAuthTokens(failing.id, OWNER);
+      expect(reset).toMatchObject({ status: 'pending_auth' });
+      expect(reset?.lastError).toBeUndefined();
+    });
+
     it('still requires the URL and API key ciphertext on write', async () => {
       await expect(mcpConnectionRepository.create(baseConnection({ urlEnc: undefined }))).rejects.toThrow(/urlEnc/);
       await expect(
