@@ -224,8 +224,36 @@ describe('stripNarratedToolCalls on a truncated reply', () => {
       'function_calls invoke',
       'Hi\n<function_calls>\n<invoke name="web_search">\n</invoke>\n\nThe tide is high at noon and',
     ],
-  ])('keeps an unclosed %s block whose body closed before the answer', (_form, reply) => {
+    [
+      'invoke with its close tag on the line before',
+      'Hi\n<function_calls>\n<invoke name="web_search">\n<parameter name="query">x</parameter>\n</invoke>\nAnswer here.',
+    ],
+    [
+      'function tag with its close tag on the line before',
+      'Hi\n<tool_call>\n<function=web_search>\n<parameter=query>x</parameter>\n</function>\nAnswer here.',
+    ],
+    [
+      'invoke with the answer on its close line',
+      'Hi\n<function_calls>\n<invoke name="web_search">\n<parameter name="query">x</parameter>\n</invoke> Answer here.',
+    ],
+    [
+      'invoke followed by an answer that starts with a tag',
+      'Hi\n<function_calls>\n<invoke name="web_search">\n</invoke>\n\n<b>Answer</b> here.',
+    ],
+    [
+      'malformed JSON followed by prose',
+      'Hi\n<tool_call>\n{"name":"web_search","arguments":{"q":"x"}\n\nThe answer is 42.',
+    ],
+  ])('keeps an unclosed block when an answer follows its body: %s', (_form, reply) => {
     expect(stripNarratedToolCalls(reply, TRUNCATED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
+  });
+
+  it.each([
+    ['invoke cut inside its outer close tag', '<function_calls>\n<invoke name="web_search">\n</invoke>\n</function_ca'],
+    ['invoke cut after its outer close tag opener', '<function_calls>\n<invoke name="web_search">\n</invoke>\n<'],
+    ['JSON cut after a blank line before a literal', '<tool_call>\n{"name":"web_search","arguments":{"a":\n\ntrue'],
+  ])('removes a cut-off block that is still open: %s', (_form, cut) => {
+    expect(stripNarratedToolCalls(`Hi\n${cut}`, TRUNCATED).text).toBe('Hi\n');
   });
 
   it('removes an unclosed block whose closed body is all that is left', () => {

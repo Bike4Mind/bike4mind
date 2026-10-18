@@ -69,6 +69,9 @@ const CUT_OFF_JSON_NAME = /"name"\s*:\s*"([^"\\]+)"/;
 const FENCE_MARKER = /`{3}|~{3}/;
 // A blank line, then text that is not a tag: the answer after an invoke/function body.
 const PROSE_AFTER_BLANK_LINE = /\n[ \t]*\r?\n[ \t]*[^<\s]/;
+const INNER_CLOSE = /<\/(?:[\w-]+:)?(?:invoke|function)>/g;
+const CALL_TAGS = /<\/?(?:[\w-]+:)?(?:function_calls|invoke|parameter|function|tool_call|tool_use)\b[^<>]*>/g;
+const JSON_LITERAL = /(?:true|false|null)\b/y;
 const BLANK_LINE_REST = /[ \t]*(?:\r?\n|$)/y;
 // Same fence rules as findLastChoicesFence in ./replyChoices.ts.
 const FENCE_OPEN_LINE = /^[ \t]*(`{3,}|~{3,})(.*)$/;
@@ -141,27 +144,52 @@ function cutOffToolNames(body: string, isMistral: boolean): string[] | null {
   return invoked.length > 0 ? invoked : null;
 }
 
+/** Whether an invoke/function body is still open: no answer follows its last inner close tag. */
+function tagBodyStillOpen(body: string): boolean {
+  let afterClose = -1;
+  for (const match of body.matchAll(INNER_CLOSE)) afterClose = match.index + match[0].length;
+  if (afterClose !== -1) {
+    let rest = body.slice(afterClose);
+    // A tag still being written at the very end is part of the call, not an answer.
+    const lastOpen = rest.lastIndexOf('<');
+    if (lastOpen !== -1 && !rest.includes('>', lastOpen)) rest = rest.slice(0, lastOpen);
+    if (rest.replace(CALL_TAGS, '').trim()) return false;
+  }
+  return !PROSE_AFTER_BLANK_LINE.test(body);
+}
+
 /**
  * Whether a cut-off body is still open at its end, so no answer can follow it. A JSON body that
- * already closed, or an invoke/function body followed by a blank line and prose, is a call missing
- * its close tag with the answer after it.
+ * already closed, or that a blank line and prose interrupt, and an invoke/function body with text
+ * after its last inner close tag, are calls missing their close tag with the answer after them.
  */
 function stillOpen(body: string, isMistral: boolean): boolean {
   const args = isMistral ? body.match(MISTRAL_ARGS_NAME) : null;
   const json = args ? body.slice(args[0].length) : body;
   const start = json.search(/\S/);
   if (start === -1) return true;
-  if (json[start] !== '{' && json[start] !== '[') return !isMistral && !PROSE_AFTER_BLANK_LINE.test(body);
+  if (json[start] !== '{' && json[start] !== '[') return !isMistral && tagBodyStillOpen(body);
   let depth = 0;
   let inString = false;
   let escaped = false;
+  let newlines = 0;
   for (let i = start; i < json.length; i++) {
     const char = json[i];
     if (inString) {
       if (escaped) escaped = false;
       else if (char === '\\') escaped = true;
       else if (char === '"') inString = false;
-    } else if (char === '"') inString = true;
+      continue;
+    }
+    if (char === '\n') newlines += 1;
+    if (/\s/.test(char)) continue;
+    // Outside a string, JSON never starts a line with a bare word other than a literal.
+    if (newlines >= 2 && /[A-Za-z]/.test(char)) {
+      JSON_LITERAL.lastIndex = i;
+      if (!JSON_LITERAL.test(json)) return false;
+    }
+    newlines = 0;
+    if (char === '"') inString = true;
     else if (char === '{' || char === '[') depth += 1;
     else if ((char === '}' || char === ']') && --depth === 0) return !json.slice(i + 1).trim();
   }
