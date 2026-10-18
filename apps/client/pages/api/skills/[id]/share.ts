@@ -44,7 +44,8 @@ const handler = baseApi().put(async (req, res) => {
 
   // Instance-wide publishing goes through the Skill Market (scanned and reviewed); only a
   // super-admin may turn the global flags on directly. Turning them OFF stays open to owners so
-  // a legacy global skill can be retracted.
+  // a legacy global skill can be retracted. Keep in sync with `canChangeSkillContent` in skillAccess.ts,
+  // which keeps the content of an already-global skill admin-only.
   if (!req.user!.isAdmin && (isGlobalRead === true || isGlobalWrite === true)) {
     throw new ForbiddenError('Publishing a skill to everyone goes through the Skill Market');
   }

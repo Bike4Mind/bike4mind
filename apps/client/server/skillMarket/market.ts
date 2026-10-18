@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
 import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -165,25 +165,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   disableModelInvocation: Boolean(skill.disableModelInvocation),
 });
 
-/**
- * Content identity of a skill, EXCLUDING its name: the name is the importer's slash-command handle
- * and may be changed on import to avoid a collision, which must not read as "locally modified".
- */
-export function skillContentHash(
-  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation'>
-): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        skill.description,
-        skill.body,
-        skill.argumentHint ?? '',
-        skill.allowedTools ?? [],
-        Boolean(skill.disableModelInvocation),
-      ])
-    )
-    .digest('hex');
-}
+export { skillContentHash } from './contentHash';
 
 const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const MAX_TAGS = 5;

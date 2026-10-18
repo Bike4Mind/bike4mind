@@ -146,6 +146,33 @@ describe('/api/skills/[id] PUT - global skill content goes through the Skill Mar
     expect(mockUpdate).toHaveBeenCalled();
   });
 
+  it('refuses a body change on a skill that is only globally writable', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalWrite: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed' });
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts an unchanged resubmit whose stored text differs only in normalized whitespace', async () => {
+    mockFindById.mockResolvedValue(
+      skillDoc({ isGlobalRead: true, description: 'd ', body: 'line one\r\nline two', argumentHint: '<x> ' })
+    );
+    const { req, res } = makeReqRes('PUT', OWNER, {
+      description: 'd',
+      body: 'line one\nline two',
+      argumentHint: '<x>',
+    });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalled();
+  });
+
+  it('accepts a partial update with undefined content fields on a global skill', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, { name: 'renamed', body: undefined, allowedTools: undefined });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', name: 'renamed' }, { new: true });
+  });
+
   it('lets a super-admin change the body of a global skill', async () => {
     mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
     const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed' });

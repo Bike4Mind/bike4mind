@@ -1,6 +1,7 @@
 // apps/client/server/utils/skillAccess.ts
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ISkill, IUserShare, IGroupShare, Permission } from '@bike4mind/common';
+import { skillContentHash } from '@server/skillMarket/contentHash';
 
 /**
  * Centralized access predicates for a skill, shared by every skill endpoint so
@@ -117,4 +118,23 @@ export const redactShareRosterForViewer = (
   if (canManageSharing) return skill;
   const { groups: _groups, ...rest } = skill;
   return { ...rest, users: skill.users?.filter(u => u.userId === actorId) ?? [] };
+};
+
+// Whitespace the edit form and validators normalize away, so an unchanged resubmit hashes equal.
+const normalizedContent = (skill: Partial<ISkill>) => ({
+  ...skill,
+  description: skill.description?.trim(),
+  body: skill.body?.replace(/\r\n/g, '\n'),
+  argumentHint: skill.argumentHint?.trim(),
+});
+
+/**
+ * Content-change access for a global skill. Instance-wide content goes through the Skill Market's
+ * scan and review, so only a super-admin may change what a global skill runs; the name (not part of
+ * `skillContentHash`) stays editable under `canEditSkill`. Keep in sync with share.ts, which gates
+ * turning the global flags on.
+ */
+export const canChangeSkillContent = (skill: ShareableSkill, patch: Partial<ISkill>, actor: SkillActor): boolean => {
+  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return true;
+  return skillContentHash(normalizedContent({ ...skill, ...patch })) === skillContentHash(normalizedContent(skill));
 };
