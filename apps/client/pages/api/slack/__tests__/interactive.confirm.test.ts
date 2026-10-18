@@ -20,6 +20,13 @@ vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-t
 vi.mock('@server/utils/pendingActionExecutor', () => ({
   executePendingAction: vi.fn(),
   cancelPendingActionOnQuest: vi.fn(),
+  isPendingActionRequester: vi.fn(),
+  MCP_DISABLED_MESSAGE: 'MCP disabled',
+}));
+vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
+vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/integrations/atlassian/confluenceAttachmentCleanup', () => ({
+  cleanupConfluencePageContent: vi.fn(),
 }));
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -27,6 +34,7 @@ vi.mock('@bike4mind/database', async () => {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: { findOne: vi.fn() },
+    Quest: { findById: vi.fn(), updateOne: vi.fn() },
   };
 });
 vi.mock('@bike4mind/database/infra', async () => {
@@ -35,28 +43,62 @@ vi.mock('@bike4mind/database/infra', async () => {
 });
 vi.mock('@bike4mind/slack', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/slack')>('@bike4mind/slack');
+  class StubResource {
+    getMcpEnvVariables = vi.fn().mockResolvedValue([{ key: 'ATLASSIAN_ACCESS_TOKEN', value: 't' }]);
+  }
   return {
     ...actual,
+    JiraResource: StubResource,
+    ConfluenceResource: StubResource,
     SlackAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
   };
 });
 
-import { User } from '@bike4mind/database';
+import { User, Quest } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
-import { cancelPendingActionOnQuest, executePendingAction } from '@server/utils/pendingActionExecutor';
+import {
+  cancelPendingActionOnQuest,
+  executePendingAction,
+  isPendingActionRequester,
+} from '@server/utils/pendingActionExecutor';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
+import { buildAttachmentDownloadButtons } from '@bike4mind/slack';
 import handler from '../interactive';
 
 const QUEST_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const PENDING_ACTION_TS = 1_700_000_000_000;
 const routeHandler = handler as unknown as (request: NextApiRequest, response: NextApiResponse) => Promise<void>;
 
-async function postAction(actionId: 'confirm_action' | 'cancel_action', value: string, responseUrl?: string) {
+function lastPosted(responseUrl: string) {
+  const lastCall = vi.mocked(fetch).mock.calls.at(-1);
+  expect(lastCall?.[0]).toBe(responseUrl);
+  return JSON.parse(String(lastCall?.[1]?.body)) as { text: string; response_type?: string };
+}
+
+/** The value of the Delete option on an attachment overflow menu block. */
+function deleteOptionValue(block: unknown): string {
+  const options = (block as { accessory?: { options?: Array<{ value: string }> } }).accessory?.options ?? [];
+  const value = options.find(option => option.value.startsWith('delete:'))?.value;
+  if (!value) throw new Error('no delete option on the block');
+  return value.slice('delete:'.length);
+}
+
+async function postAction(
+  actionId: string,
+  value: string,
+  responseUrl?: string,
+  extraAction: Record<string, unknown> = {},
+  extraPayload: Record<string, unknown> = {}
+) {
   const payload = {
     type: 'block_actions',
     user: { id: 'U123' },
     team: { id: 'T123', domain: 'test-workspace' },
-    actions: [{ action_id: actionId, value }],
+    actions: [{ action_id: actionId, value, ...extraAction }],
     ...(responseUrl ? { response_url: responseUrl } : {}),
+    ...extraPayload,
   };
   const rawBody = new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
   const request = Readable.from([Buffer.from(rawBody)]) as unknown as NextApiRequest;
@@ -86,7 +128,23 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     } as never);
     vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
     vi.mocked(cancelPendingActionOnQuest).mockResolvedValue({ success: true, message: 'Cancelled' });
+    vi.mocked(isPendingActionRequester).mockResolvedValue(true);
+    vi.mocked(isFeatureEnabled).mockResolvedValue(true);
   });
+
+  it.each(['confirm_action', 'cancel_action'] as const)(
+    'refuses %s from a user who does not own the quest, leaving the card in place',
+    async actionId => {
+      vi.mocked(isPendingActionRequester).mockResolvedValue(false);
+
+      const response = await postAction(actionId, `${QUEST_ID}:${PENDING_ACTION_TS}`);
+
+      expect(isPendingActionRequester).toHaveBeenCalledWith(QUEST_ID, 'user-1');
+      expect(executePendingAction).not.toHaveBeenCalled();
+      expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
+      expect(response._getJSONData()).toMatchObject({ replace_original: false, response_type: 'ephemeral' });
+    }
+  );
 
   it.each(['confirm_action', 'cancel_action'] as const)(
     'passes the displayed timestamp through the response_url path for %s',
@@ -135,14 +193,196 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     expect(executePendingAction).not.toHaveBeenCalled();
   });
 
-  it.each(['confirm_action', 'cancel_action'] as const)('accepts a legacy bare quest ID for %s', async actionId => {
-    const response = await postAction(actionId, QUEST_ID);
+  it('refuses a confirm whose button does not name the displayed action ts', async () => {
+    const response = await postAction('confirm_action', QUEST_ID);
 
     expect(response._getStatusCode()).toBe(200);
-    if (actionId === 'confirm_action') {
-      expect(executePendingAction).toHaveBeenCalledWith(QUEST_ID, expect.anything(), expect.anything(), undefined);
-      return;
-    }
+    expect(executePendingAction).not.toHaveBeenCalled();
+    expect(JSON.stringify(response._getJSONData())).toContain('out of date');
+  });
+
+  it('still accepts a legacy bare quest ID for cancel_action', async () => {
+    const response = await postAction('cancel_action', QUEST_ID);
+
+    expect(response._getStatusCode()).toBe(200);
     expect(cancelPendingActionOnQuest).toHaveBeenCalledWith(QUEST_ID, expect.anything(), undefined);
+  });
+
+  it.each(['confirm_action', 'cancel_action'] as const)(
+    'refuses %s from a bystander on the response_url path with an ephemeral reply',
+    async actionId => {
+      vi.mocked(isPendingActionRequester).mockResolvedValue(false);
+      const responseUrl = 'https://hooks.slack.test/x';
+
+      await postAction(actionId, `${QUEST_ID}:${PENDING_ACTION_TS}`, responseUrl);
+
+      expect(executePendingAction).not.toHaveBeenCalled();
+      expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
+      const lastCall = vi.mocked(fetch).mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe(responseUrl);
+      const posted = JSON.parse(String(lastCall?.[1]?.body)) as { replace_original: boolean; response_type: string };
+      expect(posted.replace_original).toBe(false);
+      expect(posted.response_type).toBe('ephemeral');
+    }
+  );
+
+  describe('with the MCP admin flag off', () => {
+    const responseUrl = 'https://hooks.slack.test/x';
+
+    beforeEach(() => {
+      vi.mocked(isFeatureEnabled).mockResolvedValue(false);
+    });
+
+    function lastPostedForDisabledFlag() {
+      const lastCall = vi.mocked(fetch).mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe(responseUrl);
+      return JSON.parse(String(lastCall?.[1]?.body)) as { text: string; response_type?: string };
+    }
+
+    it('answers an attachment download ephemerally without calling MCP', async () => {
+      await postAction('attachment_menu_1', '', responseUrl, {
+        selected_option: { value: `download:${QUEST_ID}:0` },
+      });
+
+      expect(isFeatureEnabled).toHaveBeenCalledWith('EnableMCPServer');
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+      const posted = lastPostedForDisabledFlag();
+      expect(posted.text).toContain('MCP disabled');
+      expect(posted.response_type).toBe('ephemeral');
+    });
+
+    it('answers an attachment download ephemerally when there is no response_url', async () => {
+      const response = await postAction('attachment_menu_1', '', undefined, {
+        selected_option: { value: `download:${QUEST_ID}:0` },
+      });
+
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+      expect(response._getJSONData()).toMatchObject({
+        text: expect.stringContaining('MCP disabled'),
+        response_type: 'ephemeral',
+      });
+    });
+
+    it('answers an attachment delete confirmed from the modal without calling MCP', async () => {
+      const privateMetadata = JSON.stringify({ buttonValue: `${QUEST_ID}:0`, responseUrl });
+
+      await postAction(
+        'modal_confirm_att_del',
+        '',
+        undefined,
+        {},
+        {
+          view: {
+            id: 'V1',
+            callback_id: 'confirm_att_del_modal',
+            state: { values: {} },
+            private_metadata: privateMetadata,
+          },
+        }
+      );
+
+      expect(isFeatureEnabled).toHaveBeenCalledWith('EnableMCPServer');
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+      expect(lastPostedForDisabledFlag().text).toContain('MCP disabled');
+    });
+  });
+
+  it('deletes the attachment its button names, not whatever now sits at that position', async () => {
+    const responseUrl = 'https://hooks.slack.test/delete';
+    // The message was rendered from [a, b, c, d]; the web delete button then pruned 'a'.
+    const attachmentInfo = (id: string, filename: string) => ({
+      source: 'jira' as const,
+      attachmentId: id,
+      filename,
+      emoji: ':paperclip:',
+      sizeFormatted: '1 KB',
+      issueKey: 'P-1',
+    });
+    const buttons = buildAttachmentDownloadButtons(
+      [
+        attachmentInfo('att-a', 'a.png'),
+        attachmentInfo('att-b', 'b.png'),
+        attachmentInfo('att-c', 'c.png'),
+        attachmentInfo('att-d', 'd.png'),
+      ],
+      QUEST_ID
+    );
+    const buttonValue = deleteOptionValue(buttons[2]);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      attachmentList: {
+        source: 'jira',
+        issueKey: 'P-1',
+        attachments: [
+          { id: 'att-b', filename: 'b.png', emoji: ':paperclip:', sizeFormatted: '1 KB' },
+          { id: 'att-c', filename: 'c.png', emoji: ':paperclip:', sizeFormatted: '1 KB' },
+          { id: 'att-d', filename: 'd.png', emoji: ':paperclip:', sizeFormatted: '1 KB' },
+        ],
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockResolvedValue({ content: [{ text: '{}' }] } as never);
+
+    await postAction(
+      'modal_confirm_att_del',
+      '',
+      responseUrl,
+      {},
+      {
+        view: {
+          callback_id: 'confirm_att_del_modal',
+          state: { values: {} },
+          private_metadata: JSON.stringify({ buttonValue, responseUrl }),
+        },
+      }
+    );
+
+    expect(invokeMcpHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'jira_delete_attachment',
+        toolArgs: expect.objectContaining({ attachmentId: 'att-c' }),
+      })
+    );
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      { _id: QUEST_ID },
+      { $pull: { 'attachmentList.attachments': { id: 'att-c' } } }
+    );
+  });
+
+  it('reports a failed attachment delete instead of claiming success', async () => {
+    const responseUrl = 'https://hooks.slack.test/delete';
+    vi.mocked(Quest.findById).mockResolvedValue({
+      attachmentList: {
+        source: 'confluence',
+        pageId: '555',
+        attachments: [{ id: 'att-1', filename: 'stale.png', emoji: ':paperclip:' }],
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockResolvedValue({
+      content: [{ type: 'text', text: 'Error: denied' }],
+      isError: true,
+    } as never);
+
+    await postAction(
+      'modal_confirm_att_del',
+      '',
+      responseUrl,
+      {},
+      {
+        view: {
+          callback_id: 'confirm_att_del_modal',
+          state: { values: {} },
+          private_metadata: JSON.stringify({ buttonValue: `${QUEST_ID}:att-1`, responseUrl }),
+        },
+      }
+    );
+
+    expect(invokeMcpHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'confluence_delete_attachment',
+        toolArgs: expect.objectContaining({ attachmentId: 'att-1' }),
+      })
+    );
+    expect(cleanupConfluencePageContent).not.toHaveBeenCalled();
+    expect(Quest.updateOne).not.toHaveBeenCalled();
+    expect(lastPosted(responseUrl).text).toContain('Failed to delete');
   });
 });

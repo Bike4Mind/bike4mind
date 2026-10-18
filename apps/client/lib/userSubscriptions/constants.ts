@@ -1,4 +1,5 @@
 import { LIBREONCOLOGY_PRO_PRICE_ID } from '@client/lib/entitlements/registry';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { SubscriptionPlanDetail, SubscriptionPlanInterval, UserSubscriptionTier } from './types';
 
 const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
@@ -62,14 +63,10 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     tier: UserSubscriptionTier.Basic,
     features: [
       'Models from OpenAI, Anthropic, Google, xAI, DeepSeek and Moonshot',
-      'Self-hosted Deepseek R1 & Phi-4 for private inference',
-      'Automatic model cost optimization',
       'Credits roll over for 3 months',
-      'Advanced prompt engineering tools',
       'Single API for all models',
-      'Priority support response',
     ],
-    description: 'Access every major AI model through one unified interface, with smart cost optimization.',
+    description: 'Access every major AI model through one unified interface.',
   },
 ];
 
@@ -96,3 +93,15 @@ export const SUBSCRIPTION_PLANS_MAP = SUBSCRIPTION_PLANS.reduce(
   },
   {} as Record<string, SubscriptionPlanDetail>
 );
+
+/**
+ * The Team (org seat) plan, as the tier and plan resolvers see it. Kept out of SUBSCRIPTION_PLANS
+ * because that list drives the individual checkout, plan-change and credit-granting flows, which
+ * Team billing does not go through. Seat members reach it via getActiveSubscriptionsForUser.
+ */
+export const TEAM_PLAN: Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> = {
+  priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+  name: 'Team',
+  interval: SubscriptionPlanInterval.Monthly,
+  tier: UserSubscriptionTier.Pro,
+};

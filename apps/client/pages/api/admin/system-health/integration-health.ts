@@ -82,7 +82,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError(`Invalid integration: ${integration}`);
       }
 
-      const result = await runProbe(integration as IntegrationName, logger);
+      const result = await runProbe(integration as IntegrationName);
 
       return res.json({
         status: result.status,

@@ -23,7 +23,18 @@ import {
   deleteFileContract,
 } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
-import { getQuestContract } from './quest.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
+import { getQuestContract, listQuestFilesContract } from './quest.contract';
+import {
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+} from './artifacts.contract';
+import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listWhatsNewContract } from './whatsNew.contract';
@@ -42,6 +53,13 @@ import {
   listVideoGenerationsContract,
   listVideoModelsContract,
 } from './videoGeneration.contract';
+import {
+  cancelMusicGenerationContract,
+  createMusicGenerationContract,
+  getMusicGenerationContract,
+  listMusicGenerationsContract,
+  listMusicModelsContract,
+} from './musicGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 import {
   listProjectsContract,
@@ -88,7 +106,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   updateFileContract,
   deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
+  listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
   listDataLakesContract,
@@ -102,6 +123,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getVideoGenerationContract,
   listVideoGenerationsContract,
   listVideoModelsContract,
+  cancelMusicGenerationContract,
+  createMusicGenerationContract,
+  getMusicGenerationContract,
+  listMusicGenerationsContract,
+  listMusicModelsContract,
   listVoicesContract,
   createVoiceSessionContract,
   endVoiceSessionContract,
@@ -109,6 +135,15 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectsContract,
   getProjectContract,
   createProjectContract,
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+  createTranscriptionUploadContract,
+  createTranscriptionContract,
   updateProjectContract,
   deleteProjectContract,
   listAgentsContract,

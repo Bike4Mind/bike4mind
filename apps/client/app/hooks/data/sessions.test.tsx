@@ -13,6 +13,7 @@ import {
   useCloneSession,
   useForkSession,
   useSnipSession,
+  useOwnSessionCount,
 } from './sessions';
 import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -507,7 +508,11 @@ describe('updateSessionsQueryData', () => {
 // Clone, fork and snip write their copy through updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
 // spliced into it - the same "Hide API" regression the gate exists for.
 describe('copy-path cache writes', () => {
-  beforeEach(() => vi.restoreAllMocks());
+  // restoreAllMocks only restores vi.spyOn spies; module-level vi.fn()s (toast, cloneSession) keep their calls unless cleared.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
 
   const unfilteredKey = ['sessions', 'own', '', ''];
   const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
@@ -567,6 +572,26 @@ describe('copy-path cache writes', () => {
     expectGatedCopy(queryClient);
   });
 
+  it('a rejected snip toasts the failure and leaves every cached list untouched', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    vi.spyOn(api, 'post').mockRejectedValueOnce(axiosRefusal(500, 'Internal error'));
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to snip session');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    for (const key of [unfilteredKey, hideApiKey]) {
+      expect(queryClient.getQueryData(key)).toEqual({
+        pages: [{ data: [], hasMore: false }],
+        pageParams: [{ page: 1 }],
+      });
+    }
+  });
+
   // Clone, fork and snip share the gate, so one hook covers the surface guard for all three.
   it('a surfaced copy is not inserted into a cached main list, nor a main-list copy into a surface list', async () => {
     const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
@@ -589,5 +614,26 @@ describe('copy-path cache writes', () => {
     expect(dataOf(queryClient, unfilteredKey).map(s => s.id)).toEqual(['main-copy']);
     expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['opti-copy']);
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+});
+
+describe('useOwnSessionCount', () => {
+  it('reads the count endpoint, and a cached count survives a sessions cache write', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { count: 3 } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useOwnSessionCount(), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(3));
+    expect(get).toHaveBeenCalledWith('/api/sessions/count');
+    // updateAllQueryData walks every ['sessions', ...] entry assuming a list shape; a number
+    // cached under that prefix made `'pages' in 3` throw on every session write.
+    expect(() =>
+      updateSessionsQueryData(queryClient, 'write', { id: 's1', name: 'n' } as ISessionDocument)
+    ).not.toThrow();
+    expect(result.current.data).toBe(3);
+    get.mockRestore();
   });
 });

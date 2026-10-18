@@ -4,18 +4,35 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
 
 /**
  * Rotation-aware access-token verification for the data subscribe/unsubscribe WS actions.
  *
- * Applies the same three gates as the REST strategy (auth/verifyJwtPayload.ts) and the CLI
- * verifier (cli/auth.ts verifyJwtToken): signature (with the rotation grace window), the
- * `typ` claim, and the tokenVersion kill switch. MUST stay in sync with those two - any gate
- * missing here lets a revoked or wrong-type token ride the socket after REST already refused it.
+ * Applies seven gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
+ * refusal, the `mfaPending` refusal, the tokenVersion kill switch, assertAccountStateUsable, and
+ * the enforceMFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
+ * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
+ * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
+ * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate
+ * and the mfaPending block in auth.ts. MUST stay in sync with those paths so a credential refused
+ * there cannot ride the socket instead.
+ *
+ * Unsubscribe shares this verifier, so a blocked account cannot unsubscribe either; disconnect.ts
+ * removes its subscribers when the socket closes.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
+  return (await verifyWsAccessTokenClaims(accessToken)).user;
+}
+
+/**
+ * verifyWsAccessToken plus the claims a Connection row records: the session id, the verified
+ * tokenVersion and the token's expiry. Used by reauth_connection to re-stamp a live socket.
+ */
+export async function verifyWsAccessTokenClaims(accessToken: string | undefined) {
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window. `previousKey`
@@ -38,6 +55,9 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   if ((decoded as { kind?: string }).kind === 'oauth') {
     throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
   }
+  if (decoded.mfaPending) {
+    throw new UnauthorizedError('MFA verification required');
+  }
 
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');
@@ -47,6 +67,17 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   if (!isTokenVersionCurrent(decoded.tokenVersion, user.tokenVersion)) {
     throw new UnauthorizedError('Session expired');
   }
+  assertAccountStateUsable(user);
+  // enforceMFA binds sessions minted before it applied, as on REST (auth.ts). Forbidden, not
+  // Unauthorized: the credential is valid, so a client must re-enroll rather than refresh.
+  if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+    throw new ForbiddenError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+  }
 
-  return user;
+  return {
+    user,
+    sid: typeof decoded.sid === 'string' ? decoded.sid : undefined,
+    tokenVersion: typeof decoded.tokenVersion === 'number' ? decoded.tokenVersion : 0,
+    expiresAt: typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : undefined,
+  };
 }

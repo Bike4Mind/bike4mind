@@ -18,6 +18,7 @@ import {
   IResearchTaskDeepResearch,
   IApiKeyRepository,
   IOrganizationRepository,
+  assertAuthOriginMatchesApiKey,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -48,9 +49,12 @@ interface ResearchTaskProcessAdapters {
   db: {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
-    fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite' | 'findChargeState'
+    >;
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
-    users: Pick<IUserRepository, 'findById'>;
+    users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     adminSettings: IAdminSettingsRepository;
     // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
     // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
@@ -545,6 +549,8 @@ const processDeepResearch = async (
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
+      // Runs off the research-task queue, after whatever request created the task.
+      authOrigin: 'internal',
       db: adapters.db,
       storage: {
         upload: adapters.storage.upload,
@@ -576,6 +582,8 @@ const processDeepResearch = async (
         logger?.info(`🔬 [DEEP_RESEARCH_FINISHED] Research completed with ${state.findings.length} findings`);
       },
     };
+    // Built by hand rather than through generateTools, so check the auth pair here too.
+    assertAuthOriginMatchesApiKey(toolContext.authOrigin, toolContext.apiKeyId);
 
     const result = await performDeepResearch(
       toolContext,

@@ -23,8 +23,11 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: subscriptionsData.current }),
 }));
 
+vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useTeamPlanAvailable: () => true }));
+
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetUserOrganizations: () => ({ data: [ORG], isLoading: false, isFetching: false }),
+  useGetManagedOrganizations: () => ({ data: [], isLoading: false, isFetching: false, refetch: vi.fn() }),
   useOrganizationSeats: () => ({ currentSeats: 1 }),
 }));
 

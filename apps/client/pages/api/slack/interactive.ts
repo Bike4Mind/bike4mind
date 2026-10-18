@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { WebClient } from '@slack/web-api';
 import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
 import { SlackDevWorkspace } from '@bike4mind/database/infra';
@@ -13,6 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config, isDevelopment } from '@server/utils/config';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
   JiraResource,
   ConfluenceResource,
@@ -24,7 +26,6 @@ import {
   SCHEDULE_MESSAGE_CALLBACK_ID,
   parseScheduleMessageSubmission,
   SlackAuditLogger,
-  getClientIp,
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
@@ -44,13 +45,20 @@ import {
   type ViewSubmissionResponse,
 } from '@bike4mind/slack';
 import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import {
+  executePendingAction,
+  cancelPendingActionOnQuest,
+  isPendingActionRequester,
+  MCP_DISABLED_MESSAGE,
+} from '@server/utils/pendingActionExecutor';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { getClientIp } from '@server/utils/ip';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1185,7 +1193,7 @@ async function handleImageModelSelection(
   }
 
   // Verify the clicking user owns this image generation request
-  if (pendingImgParams.userId && pendingImgParams.userId !== dbUser.id) {
+  if (pendingImgParams.userId !== dbUser.id) {
     logger.warn('🎨 [IMAGE-GEN] Unauthorized model picker click', {
       questId,
       questOwner: pendingImgParams.userId,
@@ -1267,6 +1275,13 @@ async function handleImageModelSelection(
   };
 }
 
+// Ephemeral and not replace_original, so a bystander's click leaves the requester's card intact.
+const NOT_REQUESTER_RESPONSE = {
+  text: '\u274C Only the person who requested this action can confirm or cancel it.',
+  replace_original: false,
+  response_type: 'ephemeral',
+} as const;
+
 /**
  * Handle confirm button click - execute the action from questId
  */
@@ -1281,6 +1296,24 @@ async function handleConfirmAction(
     questId,
   });
 
+  if (!(await isPendingActionRequester(questId, dbUser.id))) {
+    logger.warn('[Slack Interactive] Confirm clicked by someone other than the requester', {
+      userId: dbUser.id,
+      questId,
+    });
+    return NOT_REQUESTER_RESPONSE;
+  }
+
+  // A button that does not name the action it displayed cannot prove which action the click approves.
+  if (pendingActionTs === undefined) {
+    logger.warn('[Slack Interactive] Confirm button carries no pending action ts', { questId });
+    return {
+      text: '\u274C This confirmation is out of date. Please make the request again.',
+      replace_original: true,
+      response_type: 'in_channel',
+    };
+  }
+
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);
 
   return {
@@ -1294,10 +1327,18 @@ async function handleConfirmAction(
  * Handle cancel button click - clears pendingAction from the Quest
  */
 async function handleCancelAction(
-  _dbUser: any,
+  dbUser: any,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
 ): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-cancel' } });
+
+  if (!(await isPendingActionRequester(questId, dbUser.id))) {
+    logger.warn('[Slack Interactive] Cancel clicked by someone other than the requester', {
+      userId: dbUser.id,
+      questId,
+    });
+    return NOT_REQUESTER_RESPONSE;
+  }
 
   const result = await cancelPendingActionOnQuest(questId, logger, pendingActionTs);
 
@@ -1320,6 +1361,10 @@ async function handleAttachmentDownload(
 ): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-download' } });
 
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { text: `\u274C ${MCP_DISABLED_MESSAGE}`, response_type: 'ephemeral' };
+  }
+
   if (!buttonValue) {
     return {
       text: '❌ Missing attachment information',
@@ -1327,10 +1372,9 @@ async function handleAttachmentDownload(
     };
   }
 
-  // Parse compact reference: "questId:index"
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  // Parse compact reference: "questId:attachmentId"
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     logger.error('[Slack Interactive] Failed to parse attachment button value', { buttonValue });
     return {
       text: '❌ Invalid attachment data',
@@ -1342,9 +1386,11 @@ async function handleAttachmentDownload(
   const quest = await Quest.findById(questId);
   // any: attachmentList is defined in the schema but not yet typed on the interface
   const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.[index];
+  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
+    (candidate: any) => candidate.id === attachmentId
+  );
   if (!quest || !questAny?.attachmentList || !attachmentEntry) {
-    logger.error('[Slack Interactive] Quest or attachment not found', { questId, index });
+    logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
       response_type: 'ephemeral',
@@ -1352,7 +1398,7 @@ async function handleAttachmentDownload(
   }
 
   const { source } = questAny.attachmentList;
-  const { id: attachmentId, filename, emoji, sizeFormatted } = attachmentEntry;
+  const { filename, emoji, sizeFormatted } = attachmentEntry;
   const sessionId = quest.sessionId;
 
   logger.info('[Slack Interactive] Processing attachment download', {
@@ -1407,6 +1453,7 @@ async function handleAttachmentDownload(
       toolName,
       toolArgs: { attachmentId },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
     // Parse result
@@ -1490,16 +1537,15 @@ async function openAttachmentDeleteModal(
   botToken: string,
   responseUrl?: string
 ): Promise<Record<string, unknown>> {
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     return { text: '❌ Invalid attachment data', response_type: 'ephemeral' };
   }
 
   const quest = await Quest.findById(questId);
   // any: attachmentList is defined in the schema but not yet typed on the interface
   const questAny = quest as any;
-  const att = questAny?.attachmentList?.attachments?.[index];
+  const att = questAny?.attachmentList?.attachments?.find((candidate: any) => candidate.id === attachmentId);
   if (!quest || !questAny?.attachmentList || !att) {
     return { text: '❌ Attachment data expired. Please list attachments again.', response_type: 'ephemeral' };
   }
@@ -1629,19 +1675,21 @@ async function handleAttachmentDeleteFromModal(
   // After successful deletion, update the original message with refreshed attachment list
   if (isSuccess && responseUrl) {
     try {
-      const [questId, indexStr] = buttonValue.split(':');
-      const deletedIndex = parseInt(indexStr, 10);
+      const [questId, deletedAttachmentId] = buttonValue.split(':');
       const quest = await Quest.findById(questId);
       // any: attachmentList is defined in the schema but not yet typed on the interface
       const questAny = quest as any;
 
       if (quest && questAny?.attachmentList?.attachments) {
-        // Remove the deleted attachment and save
+        // Remove the deleted attachment by id. The $pull is atomic so it does not overwrite a
+        // concurrent removal of the same list (the web delete button prunes it the same way).
         const remainingAttachments = questAny.attachmentList.attachments.filter(
-          (_: unknown, i: number) => i !== deletedIndex
+          (att: any) => att.id !== deletedAttachmentId
         );
-        questAny.attachmentList.attachments = remainingAttachments;
-        await quest.save();
+        await Quest.updateOne(
+          { _id: questId },
+          { $pull: { 'attachmentList.attachments': { id: deletedAttachmentId } } }
+        );
 
         if (remainingAttachments.length > 0) {
           // Rebuild attachment list blocks
@@ -1696,6 +1744,10 @@ async function handleAttachmentDeleteFromModal(
 async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefined): Promise<Record<string, unknown>> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-delete' } });
 
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { text: `\u274C ${MCP_DISABLED_MESSAGE}`, response_type: 'ephemeral' };
+  }
+
   if (!buttonValue) {
     return {
       text: '❌ Missing attachment information',
@@ -1703,10 +1755,9 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     };
   }
 
-  // Parse compact reference: "questId:index"
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  // Parse compact reference: "questId:attachmentId"
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     logger.error('[Slack Interactive] Failed to parse attachment delete button value', { buttonValue });
     return {
       text: '❌ Invalid attachment data',
@@ -1716,19 +1767,18 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
 
   // Look up Quest to get attachment data
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.[index];
-  if (!quest || !questAny?.attachmentList || !attachmentEntry) {
-    logger.error('[Slack Interactive] Quest or attachment not found', { questId, index });
+  const attachmentList = quest?.attachmentList;
+  const attachmentEntry = attachmentList?.attachments.find(candidate => candidate.id === attachmentId);
+  if (!attachmentList || !attachmentEntry) {
+    logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
       response_type: 'ephemeral',
     };
   }
 
-  const { source } = questAny.attachmentList;
-  const { id: attachmentId, filename, emoji } = attachmentEntry;
+  const { source, pageId, pageTitle, issueKey } = attachmentList;
+  const { filename, emoji } = attachmentEntry;
 
   logger.info('[Slack Interactive] Processing attachment deletion', {
     source,
@@ -1742,32 +1792,40 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     const envVariables = await resource.getMcpEnvVariables();
     const toolName = source === 'jira' ? JIRA_DELETE_ATTACHMENT : CONFLUENCE_DELETE_ATTACHMENT;
 
-    await invokeMcpHandler({
+    const deleteResult = await invokeMcpHandler({
       envVariables,
       name: 'atlassian',
       toolName,
       toolArgs: { attachmentId, confirmed: true, _executeFromButton: true },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
+    if (isMcpToolError(deleteResult)) {
+      const reason = getMcpToolText(deleteResult) ?? 'Unknown error';
+      logger.error('[Slack Interactive] Attachment deletion failed', { error: reason, attachmentId, filename });
+      return {
+        text: `\u274C Failed to delete *${filename}*: ${reason}`,
+        response_type: 'ephemeral',
+        replace_original: true,
+      };
+    }
+
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
-    if (source === 'confluence' && questAny.attachmentList.pageId) {
+    if (source === 'confluence' && pageId) {
       try {
-        await cleanupConfluencePageContent(envVariables, questAny.attachmentList.pageId, filename, logger);
+        await cleanupConfluencePageContent(envVariables, pageId, filename, logger);
       } catch (cleanupError) {
         logger.warn('[Slack Interactive] Failed to clean up Confluence page content (non-fatal)', {
           error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          pageId: questAny.attachmentList.pageId,
+          pageId,
           filename,
         });
       }
     }
 
-    const confluenceLabel = questAny.attachmentList.pageTitle
-      ? `Confluence page *"${questAny.attachmentList.pageTitle}"*`
-      : `Confluence page *${questAny.attachmentList.pageId || ''}*`;
-    const sourceContext =
-      source === 'jira' ? `Jira ticket *${questAny.attachmentList.issueKey || ''}*` : confluenceLabel;
+    const confluenceLabel = pageTitle ? `Confluence page *"${pageTitle}"*` : `Confluence page *${pageId || ''}*`;
+    const sourceContext = source === 'jira' ? `Jira ticket *${issueKey || ''}*` : confluenceLabel;
 
     return {
       text: `🗑️ ${emoji} *${filename}* has been deleted from ${sourceContext}`,
@@ -1786,101 +1844,6 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
       replace_original: true,
     };
   }
-}
-
-/**
- * Remove Confluence storage format macros that reference a specific attachment.
- * Handles both <ac:image> tags and <ac:structured-macro ac:name="view-file"> tags.
- */
-function removeAttachmentMacros(content: string, filename: string): string {
-  const escaped = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Remove <ac:image> tags referencing the attachment (optionally wrapped in <p>)
-  const imageRegex = new RegExp(
-    `(?:<p>\\s*)?<ac:image[^>]*>[\\s\\S]*?<ri:attachment[^>]*ri:filename="${escaped}"[^/]*/?>\\s*</ac:image>(?:\\s*</p>)?`,
-    'g'
-  );
-  // Remove <ac:structured-macro ac:name="view-file"> tags referencing the attachment
-  const macroRegex = new RegExp(
-    `<ac:structured-macro[^>]*ac:name="view-file"[^>]*>[\\s\\S]*?<ri:attachment[^>]*ri:filename="${escaped}"[^/]*/?>` +
-      `[\\s\\S]*?</ac:structured-macro>`,
-    'g'
-  );
-  let cleaned = content.replace(imageRegex, '');
-  cleaned = cleaned.replace(macroRegex, '');
-  return cleaned;
-}
-
-/**
- * After deleting a Confluence attachment, clean up the page content
- * to remove inline macros (image previews, view-file macros) that reference it.
- */
-async function cleanupConfluencePageContent(
-  envVariables: Array<{ key: string; value: string }>,
-  pageId: string,
-  filename: string,
-  logger: Logger
-): Promise<void> {
-  const getEnv = (name: string) => envVariables.find(v => v.key === name)?.value || '';
-  const accessToken = getEnv('ATLASSIAN_ACCESS_TOKEN');
-  const cloudId = getEnv('ATLASSIAN_CLOUD_ID');
-
-  if (!accessToken || !cloudId) {
-    logger.warn('[Confluence Cleanup] Missing credentials, skipping page cleanup');
-    return;
-  }
-
-  const baseUrl = `https://api.atlassian.com/ex/confluence/${cloudId}/wiki/api/v2`;
-  const headers = {
-    Authorization: `Bearer ${accessToken}`,
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-  };
-
-  // Fetch page with raw storage format content
-  const pageRes = await fetch(`${baseUrl}/pages/${pageId}?body-format=storage`, { headers });
-  if (!pageRes.ok) {
-    logger.warn(`[Confluence Cleanup] Failed to fetch page ${pageId}: ${pageRes.status}`);
-    return;
-  }
-
-  const page = await pageRes.json();
-  const storageContent = page?.body?.storage?.value;
-  if (!storageContent) {
-    logger.info('[Confluence Cleanup] Page has no storage content to clean');
-    return;
-  }
-
-  const cleanedContent = removeAttachmentMacros(storageContent, filename);
-  if (cleanedContent === storageContent) {
-    logger.info('[Confluence Cleanup] No macros found referencing deleted attachment');
-    return;
-  }
-
-  const version = page?.version?.number;
-  if (typeof version !== 'number') {
-    logger.warn('[Confluence Cleanup] Could not determine page version');
-    return;
-  }
-
-  const updateRes = await fetch(`${baseUrl}/pages/${pageId}`, {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify({
-      id: pageId,
-      title: page.title,
-      body: { value: cleanedContent, representation: 'storage' },
-      status: 'current',
-      version: { number: version + 1 },
-    }),
-  });
-
-  if (!updateRes.ok) {
-    const errorText = await updateRes.text().catch(() => '');
-    logger.warn(`[Confluence Cleanup] Failed to update page ${pageId}: ${updateRes.status} ${errorText}`);
-    return;
-  }
-
-  logger.info(`[Confluence Cleanup] Removed macros for "${filename}" from page ${pageId}`);
 }
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {

@@ -4,7 +4,8 @@ import { BasePage } from './BasePage';
 
 export class ModelSelectorPage extends BasePage {
   async openModelSelector() {
-    await this.page.getByTestId('ai-settings-btn').first().click();
+    // Bounded: with no actionTimeout, a covered or missing button would wait out the whole test.
+    await this.page.getByTestId('ai-settings-btn').first().click({ timeout: TIMEOUTS.ACTION });
     // Wait for model list to finish loading (models + user data) before interacting.
     // The spinner may resolve instantly if data is cached, so also confirm at least
     // one model card is rendered as a reliable signal that the list is ready.
@@ -41,8 +42,8 @@ export class ModelSelectorPage extends BasePage {
    * Typing into the search box expands every backend accordion (see ModelSelection's
    * expandedBackends), so this surfaces matching models across all providers in one read.
    * Unavailable models render with `data-disabled` on their card and are excluded. The
-   * model name is the first `<p>` in each card (the body-md name Typography precedes the
-   * body-xs description). Favourited models appear twice (Favorites + backend section),
+   * model name is the text of the card's select button. Favourited models appear twice
+   * (Favorites + backend section),
    * so results are de-duplicated.
    */
   async getAvailableModelNames(searchTerm: string): Promise<string[]> {
@@ -67,7 +68,11 @@ export class ModelSelectorPage extends BasePage {
       await this.page.waitForTimeout(MODEL_SEARCH_DEBOUNCE_MS);
       const names = await dialog
         .locator('[data-testid^="model-card-"]:not([data-disabled])')
-        .evaluateAll(cards => cards.map(card => card.querySelector('p')?.textContent?.trim() ?? '').filter(Boolean));
+        .evaluateAll(cards =>
+          cards
+            .map(card => card.querySelector('[data-testid^="model-select-btn-"]')?.textContent?.trim() ?? '')
+            .filter(Boolean)
+        );
       results.push([...new Set(names)]);
     }
     await this.closeModelSelector();

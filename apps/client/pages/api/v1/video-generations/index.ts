@@ -7,7 +7,6 @@
  */
 import {
   createVideoGenerationContract,
-  GENERATION_JOB_ID_PATTERN,
   listVideoGenerationsContract,
   getVideoModelCapabilities,
   NotFoundError,
@@ -17,31 +16,19 @@ import {
   type GenerationJobSource,
   type VideoGenerationRequest,
 } from '@bike4mind/common';
-import { generationJobRepository } from '@bike4mind/database';
 import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/videoJobs';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
-import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
+import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { mapperDeps } from '@server/videoGenerations/routeDeps';
+import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const CURSOR_SCOPE = 'v1.video-generations';
-
-const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
-
-const readIdempotencyKey = (header: string | string[] | undefined): string | undefined => {
-  if (header === undefined) return undefined;
-  if (typeof header !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(header)) {
-    throw new UnprocessableEntityError('Idempotency-Key must be 1-255 printable ASCII characters', {
-      errorCode: 'invalid_idempotency_key',
-    });
-  }
-  return header;
-};
 
 // Omitted fields take the model's catalog defaults; createVideoJob then validates against its capabilities.
 const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationRequest => {
@@ -76,10 +63,12 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId: await resolveBillingOrgId(req, undefined) },
+      user: { id: req.user.id, organizationId },
       request,
       source,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
@@ -96,24 +85,13 @@ const listRouter = nextRouteForContract(listVideoGenerationsContract, {
   exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/video-generations'),
 }).get(async (req, res) => {
-  const { limit, cursor, state, source } = req.validatedQuery;
-  const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
-  // A decoded id is client-controlled; keep a malformed one away from Mongo (it would be a BSON 500).
-  if (beforeId !== undefined && !GENERATION_JOB_ID_PATTERN.test(beforeId)) {
-    throw new UnprocessableEntityError('Invalid cursor');
-  }
-  // One extra row tells whether another page exists without a count query.
-  const rows = await generationJobRepository.listByRequester({
-    requestedBy: req.user.id,
+  const { jobs, nextCursor } = await listOwnGenerationJobs({
+    ...req.validatedQuery,
+    userId: req.user.id,
     kind: 'video',
-    state,
-    source,
-    beforeId,
-    limit: limit + 1,
+    cursorScope: CURSOR_SCOPE,
   });
-  const page = rows.slice(0, limit);
-  const nextCursor = rows.length > limit ? encodeCursor(CURSOR_SCOPE, page[page.length - 1].id) : null;
-  const data = await Promise.all(page.map(job => toPublicVideoGeneration(job, mapperDeps)));
+  const data = await Promise.all(jobs.map(job => toPublicVideoGeneration(job, mapperDeps)));
   return res.json({ data, next_cursor: nextCursor });
 });
 

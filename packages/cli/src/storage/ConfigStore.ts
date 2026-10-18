@@ -5,7 +5,8 @@ import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
+import { isAuthTokenValid, swapActiveEnvAuth } from '@bike4mind/client-auth';
+import type { CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -246,17 +247,17 @@ const CliConfigSchema = z.object({
     maxTokens: z.number().optional(),
     temperature: z.number(),
     autoSave: z.boolean(),
-    autoCompact: z.boolean().optional().prefault(true),
+    autoCompact: z.boolean().prefault(true),
     // No prefault: an absent flag means "ask on launch" (consent-first), so the
     // tri-state must survive as undefined rather than being coerced to true/false.
     autoUpdate: z.boolean().optional(),
     theme: z.enum(['light', 'dark']),
     exportFormat: z.enum(['markdown', 'json']),
     maxIterations: z.number().nullable().prefault(10),
-    enableSkillTool: z.boolean().optional().prefault(true),
+    enableSkillTool: z.boolean().prefault(true),
     // Six always-on tools would sit in every completion's schema list; off by
     // default so only users who want persistent tracking pay for them.
-    enableWorkItemTools: z.boolean().optional().prefault(false),
+    enableWorkItemTools: z.boolean().prefault(false),
     /**
      * When false (or set via the `--no-remote-skills` CLI flag / the
      * `B4M_NO_REMOTE_SKILLS=1` env var), the CLI skips fetching skills from
@@ -264,20 +265,20 @@ const CliConfigSchema = z.object({
      * Defaults to true so authenticated users get cross-machine skill sync
      * out of the box.
      */
-    enableRemoteSkills: z.boolean().optional().prefault(true),
-    enableDynamicAgentCreation: z.boolean().optional().prefault(false),
-    enableCoordinatorMode: z.boolean().optional().prefault(false),
+    enableRemoteSkills: z.boolean().prefault(true),
+    enableDynamicAgentCreation: z.boolean().prefault(false),
+    enableCoordinatorMode: z.boolean().prefault(false),
     // Deliberately absent from the project/local schemas: checking runs the
     // repo's own tsc/eslint (and eslint configs are executable JS), so a cloned
     // repo must not be able to switch it on for whoever opens it.
-    postEditDiagnostics: z.boolean().optional().prefault(false),
+    postEditDiagnostics: z.boolean().prefault(false),
     /**
      * System-prompt variant. 'current' uses the elaborate behavioral-scaffolding
      * prompt; 'minimal' uses a pi-style short prompt. See packages/cli/src/core/prompts.ts.
      * Defaults to 'current' for backward compatibility; switch via /config or by
      * editing the config file directly.
      */
-    promptVariant: z.enum(['current', 'minimal']).optional().prefault('current'),
+    promptVariant: z.enum(['current', 'minimal']).prefault('current'),
     showThoughts: z.boolean().optional(),
     // Retention window for resumable sub-agent history (ms). Absent = use
     // DEFAULT_SUBAGENT_HISTORY_TTL_MS. See AgentHistoryStore / resume_agent.
@@ -308,13 +309,12 @@ const CliConfigSchema = z.object({
         })
         .catchall(z.boolean())
     )
-    .optional()
     .prefault({}),
-  trustedTools: z.array(z.string()).optional().prefault([]),
-  trustedProjects: z.array(z.string()).optional().prefault([]),
-  trustedMcpDefinitions: z.record(z.string(), z.array(z.string())).optional().prefault({}),
+  trustedTools: z.array(z.string()).prefault([]),
+  trustedProjects: z.array(z.string()).prefault([]),
+  trustedMcpDefinitions: z.record(z.string(), z.array(z.string())).prefault({}),
   sandbox: SandboxConfigSchema.optional(),
-  additionalDirectories: z.array(z.string()).optional().prefault([]),
+  additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
 });
 
@@ -837,29 +837,6 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
   );
 
   return merged;
-}
-
-/**
- * Normalize an API URL for use as an `authByEnv` cache key.
- *
- * Without normalization, `/set-api https://x.com` and `/set-api https://x.com/`
- * (or `HTTPS://X.com`) would create separate cache entries, defeating the
- * per-environment token reuse on a later `--dev` / `--prod` switch.
- */
-function normalizeEnvKey(url: string): string {
-  return url.toLowerCase().replace(/\/+$/, '');
-}
-
-/**
- * Treat an auth token as "authenticated" only when it has an `expiresAt` in
- * the future. The startup flow auto-refreshes expired tokens anyway, but
- * without this check the launch banner would briefly claim a saved login is
- * being reused when it's actually about to trigger a re-auth.
- */
-function hasValidAuth(auth: AuthTokens | undefined): boolean {
-  if (!auth) return false;
-  const expiresAt = new Date(auth.expiresAt);
-  return expiresAt > new Date();
 }
 
 /**
@@ -1630,7 +1607,6 @@ export class ConfigStore {
     const g = this.globalConfig!;
 
     const prevUrl = g.apiConfig?.customUrl || getDefaultApiUrl();
-    const prevKey = normalizeEnvKey(prevUrl);
 
     let newUrl: string;
     let newApiConfig: CliConfig['apiConfig'];
@@ -1644,37 +1620,24 @@ export class ConfigStore {
       newUrl = target.customUrl;
       newApiConfig = { customUrl: target.customUrl };
     }
-    const newKey = normalizeEnvKey(newUrl);
-
     const envName = getEnvironmentName(newApiConfig);
 
+    const swap = swapActiveEnvAuth(g, prevUrl, newUrl);
+
     // No-op when already pointed at the requested environment - leave auth alone.
-    if (prevKey === newKey) {
-      return { url: newUrl, envName, changed: false, authenticated: hasValidAuth(g.auth) };
+    if (!swap.changed) {
+      return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
     }
-
-    // Stash the current environment's token before switching away from it.
-    // Keyed by a normalized URL (lowercase, no trailing slash) so trivial input
-    // variations like `/set-api https://x.com/` vs `https://X.com` share an entry.
-    const authByEnv: Record<string, AuthTokens> = { ...(g.authByEnv || {}) };
-    if (g.auth) {
-      authByEnv[prevKey] = g.auth;
-    } else {
-      delete authByEnv[prevKey];
-    }
-
-    // Restore the target environment's previously-cached token (if any).
-    const restored = authByEnv[newKey];
 
     g.apiConfig = newApiConfig;
-    g.authByEnv = authByEnv;
-    g.auth = restored; // undefined → user will be prompted to /login
+    g.authByEnv = swap.authByEnv;
+    g.auth = swap.auth; // undefined -> user will be prompted to /login
 
     // No-arg save() persists these global mutations and refreshes features from
     // disk, so a concurrent `b4m plugin add` isn't reverted by this switch.
     await this.save();
 
-    return { url: newUrl, envName, changed: true, authenticated: hasValidAuth(restored) };
+    return { url: newUrl, envName, changed: true, authenticated: isAuthTokenValid(swap.auth) };
   }
 
   /**

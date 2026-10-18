@@ -7,6 +7,7 @@ import { KnowledgeType } from '@bike4mind/common';
 // fabFileVectorize's success path writes chunk vectors via withTransaction.
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -105,7 +106,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 import { dispatch as chunkDispatch } from './fabFileChunk';
 import { dispatch as vectorizeDispatch } from './fabFileVectorize';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -117,7 +118,8 @@ let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

@@ -9,7 +9,7 @@ import OrganizationAnalysisSection from '@client/app/components/organizations/Or
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
@@ -19,6 +19,7 @@ import {
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import {
   Avatar,
   Box,
@@ -78,10 +79,8 @@ const OrganizationPage: FC = () => {
     navigate({ to: '/organizations/$id', params: { id: id as string }, search: { tab }, replace: true });
   };
 
-  // Check user permissions.
-  // In the b4m client only the org owner can add/remove members.
-  // Admins who are merely members of the org are treated as regular members here;
-  // they can manage members via the dedicated Admin -> Organizations panel instead.
+  // The viewer's org permission set, which drives tab visibility (canManageOrg). The Members tab
+  // does not use it: each roster control there asks the server predicate behind its own endpoint.
   const userPermissions = useMemo(() => {
     if (!currentUser || !organization) return [];
     if (currentUser.id === organization.userId) return [Permission.read, Permission.update, Permission.share];
@@ -257,7 +256,7 @@ const OrganizationPage: FC = () => {
               <Typography level="title-lg" startDecorator={<GroupOutlinedIcon />} sx={{ mb: 3 }}>
                 Members ({currentSeats} / {maxSeats})
               </Typography>
-              {currentUser && <OrganizationMembers organization={organization} userPermissions={userPermissions} />}
+              {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {canManageGroups && (
               <TabPanel value={OrganizationTabs.Groups}>
@@ -373,8 +372,12 @@ const OrganizationHeader: FC<{
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
               {currentSeats} Members
             </Chip>
-            <Chip size="sm" variant="soft" startDecorator={<Bike4MindIcon size="14" />}>
-              {organization.currentCredits.toLocaleString()} Credits
+            <Chip
+              size="sm"
+              variant="soft"
+              startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
+            >
+              {formatCreditAmount(organization.currentCredits)} Credits
             </Chip>
             <Chip
               size="sm"
@@ -423,10 +426,14 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
         </Card>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
           <Stack spacing={1}>
-            <Typography level="body-xs" color="neutral" startDecorator={<Bike4MindIcon size="14" />}>
+            <Typography
+              level="body-xs"
+              color="neutral"
+              startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
+            >
               Available Credits
             </Typography>
-            <Typography level="h2">{organization.currentCredits.toLocaleString()}</Typography>
+            <Typography level="h2">{formatCreditAmount(organization.currentCredits)}</Typography>
           </Stack>
         </Card>
       </Stack>

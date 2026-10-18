@@ -51,7 +51,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 // own counter instead of one budget per caller.
 const perUserRateLimit = () =>
   rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
     bucket: '/api/v1/data-lakes/[id]/files/[file_id]',
   });

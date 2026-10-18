@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runTurn, type TurnContext } from './turnController';
 import { useCliStore } from '../store';
+import { whenTurnIdle } from './whenTurnIdle';
 import type { Session, Message, CliConfig, SessionStore, ConfigStore, CommandHistoryStore } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ReActAgent } from '@bike4mind/agents';
@@ -101,7 +102,7 @@ function seedSession(messages: Message[] = [], model = 'claude-sonnet-4-6'): Ses
 
 describe('runTurn', () => {
   beforeEach(() => {
-    useCliStore.setState({ session: null, pendingMessages: [], messageQueue: [], isThinking: false });
+    useCliStore.setState({ session: null, pendingMessages: [], messageQueue: [], isThinking: false, sessionHolds: 0 });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -197,6 +198,45 @@ describe('runTurn', () => {
     expect(setAbortController.mock.calls[0][0]).toBeInstanceOf(AbortController);
     expect(setAbortController.mock.calls[1][0]).toBeNull();
     expect(useCliStore.getState().isThinking).toBe(false);
+  });
+
+  it('holds the session until it settles, so a mid-turn append lands after it instead of being clobbered', async () => {
+    seedSession([]);
+    const appended: Message = { id: 'bang', role: 'assistant', content: 'shell output', timestamp: ISO };
+    const run = vi.fn(async () => {
+      // A `!command` finishing mid-turn, after ESC already cleared the spinner.
+      useCliStore.getState().setIsThinking(false);
+      whenTurnIdle(() => {
+        const session = useCliStore.getState().session!;
+        useCliStore.getState().setSession({ ...session, messages: [...session.messages, appended] });
+      });
+      return makeResult({ finalAnswer: 'reply' });
+    });
+
+    await runTurn('hi', makeCtx({ agent: { run } as unknown as ReActAgent }));
+
+    const contents = useCliStore.getState().session!.messages.map(message => message.content);
+    expect(contents).toEqual(['hi', 'reply', 'shell output']);
+    expect(useCliStore.getState().sessionHolds).toBe(0);
+  });
+
+  it('takes its hold before reading the session, so an append during its first await is not lost', async () => {
+    seedSession([]);
+    const appended: Message = { id: 'bang', role: 'assistant', content: 'shell output', timestamp: ISO };
+    const commandHistoryStore = {
+      // The first await in a turn, before it has written anything back.
+      add: vi.fn(async () => {
+        whenTurnIdle(() => {
+          const session = useCliStore.getState().session!;
+          useCliStore.getState().setSession({ ...session, messages: [...session.messages, appended] });
+        });
+      }),
+      list: vi.fn(async () => [] as string[]),
+    } as unknown as CommandHistoryStore;
+
+    await runTurn('hi', makeCtx({ commandHistoryStore }));
+
+    expect(useCliStore.getState().session!.messages.map(message => message.content)).toContain('shell output');
   });
 
   it('is a no-op when the agent is not initialized', async () => {
@@ -346,7 +386,8 @@ describe('runTurn', () => {
     // The compaction call (maxIterations: 1) only happens when shouldCompact
     // fired; the main-turn call follows it.
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
+    // No live view renders the summary, so it must not trade away transient retries.
+    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1, streamText: false });
   });
 
   it('compacts a Claude session at a window where the same non-Claude session does not', async () => {

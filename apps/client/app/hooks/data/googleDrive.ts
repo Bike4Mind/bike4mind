@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
+import type { DriveConnectionStatus, DriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
@@ -16,6 +16,9 @@ export type LakeDriveConnection = {
   lastError: string | null;
   lastUsedAt: string | null;
   connectedAt: string | null;
+  /** When the last sync run ended, whatever started it. `lastUsedAt` is the last Drive API call, not a sync. */
+  lastPolledAt: string | null;
+  syncSchedule: DriveSyncSchedule;
   /** How many documents this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
   /** A disconnect was accepted and its file purge is running in the background. */
@@ -126,6 +129,10 @@ function useLakeDriveConnectionOptions(dataLakeId: string | undefined, enabled: 
       if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
+      // A finished sync is when the not-ingested list changes (skips recorded, ingests cleared).
+      if (dataLakeId && previous?.status === 'syncing' && next?.status !== 'syncing') {
+        void queryClient.invalidateQueries({ queryKey: dataLakeKeys.skippedFilesOf(dataLakeId) });
+      }
       return response.data;
     },
     refetchInterval: (query: { state: { data?: LakeDriveConnectionResponse } }) =>
@@ -141,7 +148,9 @@ export function useConnectDriveFolderToLake() {
       const response = await api.post<{ connectionId: string; status: string }>('/api/data-lakes/drive-sync', input);
       return response.data;
     },
-    onSuccess: async (_data, { dataLakeId }) => {
+    // Settled, not success: a refused Re-sync can park the connection server-side (needs_reconnect,
+    // credential_error), and the card must show that rather than a cached 'connected'.
+    onSettled: async (_data, _error, { dataLakeId }) => {
       await queryClient.invalidateQueries({ queryKey: dataLakeKeys.driveConnection(dataLakeId) });
     },
   });

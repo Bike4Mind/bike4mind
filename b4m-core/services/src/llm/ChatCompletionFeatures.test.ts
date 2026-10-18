@@ -8,9 +8,11 @@ import {
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
   mergeLakeFirstListing,
-  resetForcedRetrievalFloorWarnings,
+  listLakesFirst,
+  FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
+import { lakeOrderScopes } from '../dataLakeService/lakeFairOrder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
 import type { ToolContext } from './tools/base/types';
@@ -26,7 +28,13 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { CitableSource, ISessionDocument, IChatHistoryItemDocument, SettingKey } from '@bike4mind/common';
+import type {
+  CitableSource,
+  ISessionDocument,
+  IChatHistoryItemDocument,
+  IMessage,
+  SettingKey,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -85,11 +93,9 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// getSettingsByNames caches process-wide, and so does the over-floor warn-once set; each test's
-// fixture must not see the last one's rows or warnings.
+// getSettingsByNames caches process-wide; each test's fixture must not see the last one's rows.
 beforeEach(() => {
   invalidateSettingsCache();
-  resetForcedRetrievalFloorWarnings();
 });
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
@@ -592,6 +598,19 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
   });
 
+  it('indexed: stamps each numbered citable with the [N] it answers to; named leaves it off', async () => {
+    type Citable = { id: string; metadata?: Record<string, unknown> };
+    const citablesOf = (quest: { promptMeta?: unknown }) =>
+      (quest.promptMeta as { citables?: Citable[] }).citables ?? [];
+
+    const indexed = await runRetrieval('indexed');
+    expect(citablesOf(indexed.quest).map(c => c.metadata?.citationIndex)).toEqual([1, 2]);
+
+    const named = await runRetrieval('named');
+    expect(citablesOf(named.quest).length).toBeGreaterThan(0);
+    expect(citablesOf(named.quest).every(c => !('citationIndex' in (c.metadata ?? {})))).toBe(true);
+  });
+
   it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
     const { quest } = await runRetrieval('indexed');
     const citables =
@@ -659,7 +678,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
       'indexed'
     );
     const quest = makeQuest({
-      promptMeta: { citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source' }] },
+      // Stamped by an earlier injection: left as-is, [3] would link to it although the model was told k=2.
+      promptMeta: {
+        citables: [{ id: 'pre-existing', type: 'document', title: 'Earlier source', metadata: { citationIndex: 3 } }],
+      },
     } as unknown as Partial<IChatHistoryItemDocument>);
     await feature.getContextMessages(
       quest,
@@ -670,6 +692,9 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     // the pre-existing citable is appended AFTER, never allowed to shift the index alignment.
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB', 'pre-existing']);
+    // The appended citable is not index-aligned, so it must not answer to any inline marker.
+    const indices = (citables as Array<{ metadata?: { citationIndex?: number } }>).map(c => c.metadata?.citationIndex);
+    expect(indices).toEqual([1, 2, undefined]);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('prefix')
     );
@@ -1112,6 +1137,41 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
     const targetHeading = `### doc-149.pdf (ID: ${TARGET})`;
 
+    const lake = (key: string) => ({
+      id: `lake-${key}`,
+      name: key,
+      slug: key,
+      datalakeTag: `datalake:${key}`,
+      fileTagPrefix: `${key}:`,
+      source: 'dynamic' as const,
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: `datalake:${key}`,
+        fileTagPrefix: `${key}:`,
+        creatorUserId: 'u1',
+      },
+    });
+    const fileInLake = (key: string, i: number, tags: { name: string }[] = [{ name: `datalake:${key}` }]) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `${key}${n}`,
+        fileName: `${key}-${n}.pdf`,
+        tags,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: STAMPED,
+      };
+    };
+    const stubLakeAccess = (feature: KnowledgeRetrievalFeature, lakes: ReturnType<typeof lake>[]) => {
+      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
+        lakeViewComplete: true,
+        excludedByAccessCount: 0,
+        dataLakeTags: lakes.map(l => l.datalakeTag),
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: lakes.map(l => l.fileTagPrefix),
+        lakes,
+      });
+    };
+
     const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
       const ctx = makeCtx({
         files: lakeFiles,
@@ -1242,6 +1302,261 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         expect.stringContaining('could not read EnableDataLakeVectorSearch - picking candidates by name'),
         expect.any(Error)
       );
+    });
+
+    it('without vector search, takes the by-name cut in turn from each lake of a multi-lake session', async () => {
+      // Lake a holds 150 files that all sort ahead of lake b's 10; the answer is in lake b.
+      const twoLakeFiles = [
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('b', i)),
+      ];
+      const answer = 'b005';
+      const ctx = makeCtx({
+        files: twoLakeFiles,
+        rows: ids =>
+          ids.map(id => ({
+            id: `ch-${id}`,
+            fabFileId: id,
+            text: `text ${id}`,
+            vector: id === answer ? [1, 0] : [0, 1],
+          })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({
+          data: twoLakeFiles.slice(0, page.limit),
+          hasMore: twoLakeFiles.length > page.limit,
+          total: twoLakeFiles.length,
+        })
+      );
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a', 'datalake:b']
+      );
+      const lakes = [lake('a'), lake('b')];
+      stubLakeAccess(feature, lakes);
+      const messages = await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const content = messages.map(m => m.content).join('\n');
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 1000 }));
+      expect(content).toContain(`### b-005.pdf (ID: ${answer})`);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.size).toBe(100);
+      expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(10);
+    });
+
+    it('lists each lake of a multi-lake session on its own, so a lake larger than the listing cannot starve the others', async () => {
+      // Lake a alone exceeds the 1000-row listing and every name sorts ahead of lake b's 5 files, so
+      // one union page by name never reaches lake b; the answer is in lake b.
+      const bigScope = [
+        ...Array.from({ length: 1200 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 5 }, (_, i) => fileInLake('b', i)),
+      ];
+      const answer = 'b003';
+      const ctx = makeCtx({
+        files: bigScope,
+        rows: ids =>
+          ids.map(id => ({
+            id: `ch-${id}`,
+            fabFileId: id,
+            text: `text ${id}`,
+            vector: id === answer ? [1, 0] : [0, 1],
+          })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      // Emulates the DB: only files in a scoped lake, by name, cut at the page size.
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }, _s, opts: { dataLakeTags: string[] }) => {
+        const inScope = bigScope.filter(f => f.tags.some(t => opts.dataLakeTags.includes(t.name)));
+        return Promise.resolve({
+          data: inScope.slice(0, page.limit),
+          hasMore: inScope.length > page.limit,
+          total: inScope.length,
+        });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a', 'datalake:b']
+      );
+      stubLakeAccess(feature, [lake('a'), lake('b')]);
+      const messages = await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const content = messages.map(m => m.content).join('\n');
+      expect(content).toContain(`### b-003.pdf (ID: ${answer})`);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(5);
+    });
+
+    it('bounds the per-lake listings of a session with many lakes to the cap plus the union query', async () => {
+      const keys = Array.from({ length: 12 }, (_, i) => String.fromCharCode(97 + i));
+      const files = keys.map(k => fileInLake(k, 0));
+      const ctx = makeCtx({ files, settings: { EnableDataLakeVectorSearch: false } });
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        keys.map(k => `datalake:${k}`)
+      );
+      stubLakeAccess(feature, keys.map(lake));
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledTimes(FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS + 1);
+    });
+
+    it('orders a multi-lake scope under the candidate cap fairly, so a chunk-heavy lake cannot spend the scan budget alone', async () => {
+      // 50 files fit under the cap, but lake a's 40 x 500 chunks dwarf the 4000-chunk budget and all
+      // sort ahead of lake b; scanned in plain name order, lake b would never be read.
+      const twoLakeFiles = [
+        ...Array.from({ length: 40 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('b', i)),
+      ];
+      const answer = 'b002';
+      const ctx = makeCtx({
+        files: twoLakeFiles,
+        rows: ids =>
+          ids.flatMap(id =>
+            Array.from({ length: id.startsWith('a') ? 500 : 1 }, (_, c) => ({
+              id: `ch-${id}-${String(c).padStart(3, '0')}`,
+              fabFileId: id,
+              text: `text ${id}`,
+              vector: id === answer ? [1, 0] : [0, 1],
+            }))
+          ),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a', 'datalake:b']
+      );
+      stubLakeAccess(feature, [lake('a'), lake('b')]);
+      const messages = await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const content = messages.map(m => m.content).join('\n');
+      expect(content).toContain(`### b-002.pdf (ID: ${answer})`);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('b')).length).toBeGreaterThan(0);
+    });
+
+    it('counts a registry lake reached by both its meta-tag and its prefix as one lake, so its listing is not widened', async () => {
+      const ctx = makeCtx({ files: lakeFiles.slice(0, 10), settings: { EnableDataLakeVectorSearch: false } });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:r']
+      );
+      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
+        lakeViewComplete: true,
+        excludedByAccessCount: 0,
+        dataLakeTags: ['datalake:r'],
+        dataLakeTagPrefixes: ['r:'],
+        scopedTagPrefixes: [],
+        lakes: [{ ...lake('r'), source: 'static' as const, membership: undefined }],
+      });
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+    });
+
+    it('keeps library files behind every lake when the by-name cut is fair across lakes and the library is included', async () => {
+      // Library files sort ahead of both lakes; the lake-first listing must still win every slot.
+      const lakeRows = [
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('m', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('n', i)),
+      ];
+      const libraryRows = Array.from({ length: 50 }, (_, i) => fileInLake('a', i, []));
+      const ctx = makeCtx({
+        files: lakeRows,
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        const data = restrict ? lakeRows : [...libraryRows, ...lakeRows];
+        return Promise.resolve({ data, hasMore: false, total: data.length });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:m', 'datalake:n'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const lakes = [lake('m'), lake('n')];
+      stubLakeAccess(feature, lakes);
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.size).toBe(100);
+      expect([...scanned].filter(id => id.startsWith('a'))).toHaveLength(0);
+      expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+    });
+
+    it('keeps library files in the fair share of a multi-lake session that never asked for "+ My files"', async () => {
+      const lakeRows = [
+        ...Array.from({ length: 150 }, (_, i) => fileInLake('m', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('n', i)),
+      ];
+      const libraryRows = Array.from({ length: 50 }, (_, i) => fileInLake('a', i, []));
+      const ctx = makeCtx({
+        files: lakeRows,
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        const data = restrict ? lakeRows : [...libraryRows, ...lakeRows];
+        return Promise.resolve({ data, hasMore: false, total: data.length });
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        []
+      );
+      stubLakeAccess(feature, [lake('m'), lake('n')]);
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('a')).length).toBeGreaterThan(0);
+      expect([...scanned].filter(id => id.startsWith('n'))).toHaveLength(10);
+    });
+
+    it('does not report a truncated listing when the union page holds every row but a lake exceeds its own share', async () => {
+      const row = (id: string) => ({ id });
+      const listing = await listLakesFirst({
+        scopes: lakeOrderScopes({
+          dataLakeTags: ['datalake:a', 'datalake:b'],
+          dataLakeTagPrefixes: [],
+          lakeMemberships: [],
+        }),
+        arms: { dataLakeTags: ['datalake:a', 'datalake:b'], dataLakeTagPrefixes: [], lakeMemberships: [] },
+        limit: 1000,
+        list: async (limit, arms) =>
+          arms.dataLakeTags.length === 2
+            ? { data: [row('a1'), row('b1')], hasMore: false }
+            : { data: [row(arms.dataLakeTags[0] === 'datalake:a' ? 'a1' : 'b1')], hasMore: limit < 1000 },
+      });
+      expect(listing.data.map(r => r.id)).toEqual(['a1', 'b1']);
+      expect(listing.hasMore).toBe(false);
     });
 
     it('issues no ANN query when the servable set already fits under the cap', async () => {
@@ -3556,30 +3871,89 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(injected).toEqual([0, 1, 2]);
   });
 
-  it("warns once per process when a configured absolute floor sits above the space's measured floor", async () => {
-    const turn = async () => {
+  const overFloorWarns = (ctx: ReturnType<typeof makeCtx>) =>
+    (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
+      String(c[0]).includes('the configured floor is above the 58% measured for this space')
+    ).length;
+
+  it('warns and tells the reader on every turn a configured minimum above the measured one rejects everything', async () => {
+    for (let turn = 0; turn < 2; turn++) {
       const ctx = makeCtx({
-        scores: [0.9, 0.7, 0.6],
+        scores: [0.7, 0.6],
         platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
       });
-      await run(ctx);
-      return (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
-        String(c[0]).includes('configured absolute floor 75% is above the 58% measured for embedding space')
-      ).length;
-    };
-    expect(await turn()).toBe(1);
-    expect(await turn()).toBe(0);
+      const { quest, injected } = await run(ctx);
+      expect(injected).toEqual([]);
+      expect(overFloorWarns(ctx)).toBe(1);
+      expect(quest.promptMeta?.retrievalFloorRejection).toEqual({
+        floorPct: 75,
+        measuredPct: 58,
+        embeddingModel: 'text-embedding-3-small',
+      });
+    }
   });
 
-  it('does not warn when a configured absolute floor is at or below the measured floor', async () => {
+  it('stays quiet when a configured minimum above the measured one still lets a passage through', async () => {
     const ctx = makeCtx({
       scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([0]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('treats an empty turn under the measured minimum as an ordinary miss: no warn, no reader notice', async () => {
+    const ctx = makeCtx({ scores: [0.5, 0.4], platform: smallSpace });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('does not report a configured minimum at or below the measured one that rejects everything', async () => {
+    const ctx = makeCtx({
+      scores: [0.5, 0.4],
       platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '58' },
     });
-    await run(ctx);
-    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
-      expect.stringContaining('configured absolute floor')
-    );
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('treats an operator floor as an ordinary miss when the top score is below the measured floor too', async () => {
+    // A configured 75 on a 3-small corpus, and a top score of 0.3. Clearing the setting would
+    // return nothing either, because 0.3 is below the 58% measured floor - so the configured value
+    // did not empty this turn, and reporting it as the cause would tell the reader to clear the
+    // setting when the real cause is that nothing in the library was relevant.
+    const ctx = makeCtx({
+      scores: [0.3],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('blames the operator floor when the top score lands exactly on the measured floor', async () => {
+    // 0.58 is exactly 3-small's measured 58% floor. The measured floor keeps a score on the line,
+    // so the configured 75 is what emptied this turn and the reader is told. Pins the boundary: a
+    // strict `>` would read a top sitting exactly on the measured floor as an ordinary miss.
+    const ctx = makeCtx({
+      scores: [0.58],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(1);
+    expect(quest.promptMeta?.retrievalFloorRejection).toEqual({
+      floorPct: 75,
+      measuredPct: 58,
+      embeddingModel: 'text-embedding-3-small',
+    });
   });
 
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
@@ -4937,6 +5311,137 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
       });
     });
 
+    // Picker scope (marked explicit) and a session started from a lake (library off): both name the
+    // lakes the answer should come from, so an attachment is no reason to skip them.
+    it.each([
+      ['picked in the lake picker', true, undefined],
+      ['picked in the lake picker with the library on', true, true],
+      ['started from a lake', undefined, false],
+    ])('still retrieves on an attachment turn in a session scoped to a lake %s', async (_label, explicit, library) => {
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        explicit,
+        undefined,
+        library
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      const messages = await scopedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'compare the attached draft with the lake'
+      );
+      expect(retrievalOf(withFiles)).toMatchObject({ attempted: true, mode: 'forced' });
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBeUndefined();
+      // The exemption is about grounding the turn, not merely attempting it: the passage the query
+      // matches is injected, so the lake really is searched alongside the attachment.
+      expect(retrievalOf(withFiles)?.outcome).toBe('ok');
+      expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
+    });
+
+    it('abstains on a lake-chosen attachment turn that finds no passage', async () => {
+      // Orthogonal to the [1,0] query, so nothing clears the floor and the turn grounds on nothing.
+      const ctx = makeCtx({
+        lakes: [LAKE],
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+      });
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      const messages = await scopedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'compare the attached draft with the lake'
+      );
+      // A lake-chosen attachment turn can now draw the abstention block, where before it never did.
+      // That is a user-visible change on a newly reached population, so it is pinned here.
+      expect(retrievalOf(withFiles)?.outcome).toBe('ok');
+      expect(messages[0]?.content).toContain('does not cover this');
+    });
+
+    it('still skips an attachment turn scoped by a tag that names no lake', async () => {
+      // A bare tag count would treat a content tag as a chosen lake and ground the turn across every
+      // reachable lake - the off-topic case the skip exists to prevent.
+      const contentTagFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['course-bio101'],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await contentTagFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof contentTagFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
+    it('still skips an attachment turn with no tags and the library off', async () => {
+      // The "all lakes" shape: an empty scope with the library off names no lake, so there is no
+      // chosen lake to ground against and the attachment stays the source.
+      const emptyScopeFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await emptyScopeFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof emptyScopeFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
+    it('still skips an attachment turn when the tags were only derived from attaching a lake file', async () => {
+      const derivedFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await derivedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof derivedFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
+    it('still skips an attachment turn in a session scoped to no lake, as the attachment', async () => {
+      const noLakeFeature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await noLakeFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof noLakeFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
     it('records the personal-corpus skip without claiming retrieval ran', async () => {
       const personalFeature = new KnowledgeRetrievalFeature({
         ...makeCtx(),
@@ -5044,6 +5549,167 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.outcome).toBe('failed');
     expect(retrieval?.surfaces).toEqual(expect.arrayContaining(['lake-memory', 'forced-retrieval']));
     expect(retrieval?.dataLakeTags).toContain('datalake:y');
+  });
+
+  describe('when the input budget drops the injected block', () => {
+    const webCitable = {
+      id: 'web-1',
+      type: 'website',
+      title: 'Example',
+      url: 'https://example.com',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      status: 'complete',
+    } as unknown as CitableSource;
+
+    const retrievedTurn = async (citationStyle?: 'named' | 'indexed') => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        undefined,
+        citationStyle
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+      return { feature, quest, messages };
+    };
+
+    it('withdraws the chips it published and warns that the passages were not used', async () => {
+      const { feature, quest } = await retrievedTurn();
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+
+      feature.onContextDropped(quest, new Set());
+
+      // A citable some other surface published is not this feature's to take back.
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('keeps the chips when only the lake prompt was dropped and the passages were delivered', async () => {
+      // Same source, two messages: the passages reached the model, so the citations are theirs to keep
+      // even though the small lake prompt beside them did not fit.
+      const { feature, quest, messages } = await retrievedTurn();
+      const lakePrompt = { role: 'system' as const, content: 'lake operating instructions' };
+
+      feature.onContextDropped(quest, new Set<IMessage>([lakePrompt, ...messages]));
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('withdraws the chips when another message was delivered but the passages were not', async () => {
+      // Delivery is per message, not "did anything reach the model": the source can keep one
+      // message while the passages block behind it is the one shed by the budget.
+      const { feature, quest } = await retrievedTurn();
+      const keptMessage = { role: 'system' as const, content: 'lake operating instructions' };
+
+      feature.onContextDropped(quest, new Set<IMessage>([keptMessage]));
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('withdraws only its own chips in indexed style, leaving the other surface unnumbered', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        undefined,
+        'indexed'
+      );
+      const quest = makeQuest();
+      quest.promptMeta = {
+        citables: [{ ...webCitable, metadata: { citationIndex: 7 } }],
+      } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['fileA', 'web-1']);
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      // The surviving citable was never part of this turn's numbering, so it must not answer to a [N].
+      expect(quest.promptMeta!.citables![0].metadata?.citationIndex).toBeUndefined();
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('does nothing on a turn that published no chips', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx({ files: [] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('leaves an earlier surface citable that shares a key with a retrieved one', async () => {
+      // Named style de-dupes against existing keys, so a retrieved file already published by another
+      // surface is not re-recorded - and must not be withdrawn by a drop.
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = {
+        citables: [{ id: 'fileA', type: 'document', title: 'Earlier view of A' }],
+      } as unknown as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('warns once when told twice, appending to warnings already present', async () => {
+      const { feature, quest } = await retrievedTurn();
+      quest.promptMeta!.warnings = ['earlier note'];
+
+      feature.onContextDropped(quest, new Set());
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.warnings).toEqual([
+        'earlier note',
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('does not withdraw chips published by an earlier turn', async () => {
+      const { feature, quest } = await retrievedTurn();
+      // A second retrieval that finds nothing must clear the keys the first turn recorded.
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        '   '
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
   });
 });
 
@@ -5289,5 +5955,182 @@ describe('mergeLakeFirstListing', () => {
       2
     );
     expect(merged.hasMore).toBe(false);
+  });
+});
+
+describe('KnowledgeRetrievalFeature follow-up questions', () => {
+  // Bag-of-words embedding over three axes: the two subjects and the pricing topic.
+  const embed = (text: string) => [
+    (text.match(/alder/gi) ?? []).length,
+    (text.match(/birchway/gi) ?? []).length,
+    (text.match(/pricing|price|cost/gi) ?? []).length,
+  ];
+  const passages = [
+    { id: 'c-alder', fabFileId: 'f-alder', text: 'ALDER_PRICING Alder pricing: seats are billed monthly.' },
+    { id: 'c-birch', fabFileId: 'f-birch', text: 'BIRCHWAY_PRICING Birchway pricing: the price is set per seat.' },
+  ];
+  const platform: Record<string, string> = {
+    forcedRetrievalMinSimilarityPct: '20',
+    forcedRetrievalRelativeFloorPct: '90',
+  };
+
+  const run = async (opts: {
+    priorUserPrompts?: string[];
+    message: string;
+    failContextEmbedding?: boolean;
+    embed?: (text: string) => number[];
+    minSimilarityPct?: string;
+  }) => {
+    const embedText = opts.embed ?? embed;
+    const generateEmbedding = vi.fn(async (text: string) => {
+      if (opts.failContextEmbedding && text !== opts.message) throw new Error('embedding outage');
+      return embedText(text);
+    });
+    const warn = vi.fn();
+    const settings: Record<string, string> = {
+      ...platform,
+      ...(opts.minSimilarityPct !== undefined ? { forcedRetrievalMinSimilarityPct: opts.minSimilarityPct } : {}),
+    };
+    const ctx = {
+      logger: { log: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
+      priorUserPrompts: opts.priorUserPrompts,
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'f-alder', fileName: 'alder.md', tags: [] },
+              { id: 'f-birch', fileName: 'birchway.md', tags: [] },
+            ],
+            hasMore: false,
+            total: 2,
+          }),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(passages.map(p => ({ ...p, vector: embedText(p.text) })))
+          ),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (key: string) => settings[key]),
+          findBySettingNames: vi.fn(async (names: string[]) =>
+            names
+              .filter(name => settings[name] != null)
+              .map(name => ({ settingName: name, settingValue: settings[name] }))
+          ),
+          findAll: vi.fn(async () =>
+            Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
+        },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const embeddingFactory = {
+      createEmbeddingService: () => ({ generateEmbedding }),
+      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    };
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      opts.message
+    );
+    const content = messages.map(m => m.content).join('\n');
+    return {
+      injected: ['ALDER_PRICING', 'BIRCHWAY_PRICING'].filter(marker => content.includes(marker)),
+      embeddedTexts: generateEmbedding.mock.calls.map(([text]) => text),
+      warn,
+    };
+  };
+
+  beforeEach(() => {
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('retrieves the wrong subject when the follow-up is embedded on its own', async () => {
+    const { injected } = await run({ message: 'What about their pricing?' });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('retrieves the subject of the earlier turn for a follow-up', async () => {
+    const { injected, embeddedTexts } = await run({
+      priorUserPrompts: ['Tell me about Alder.', 'What about their pricing?'],
+      message: 'What about their pricing?',
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+  });
+
+  it('follows an explicit switch to another subject', async () => {
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What does Birchway offer?',
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+  });
+
+  it('makes one embedding call for a self-contained message', async () => {
+    const message = 'Summarize the Birchway pricing model for a new enterprise customer during the first month';
+    const { embeddedTexts } = await run({ priorUserPrompts: ['Tell me about Alder.'], message });
+    expect(embeddedTexts).toEqual([message]);
+  });
+
+  it('falls back to the message alone when the earlier turns cannot be embedded', async () => {
+    const { injected, embeddedTexts, warn } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      failContextEmbedding: true,
+    });
+    expect(injected).toEqual(['BIRCHWAY_PRICING']);
+    // The context call is attempted even though it throws; a gate that skipped it silently would still
+    // return the message-alone result above, so assert the attempt and the warning, not only the output.
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('follow-up context embedding failed'), expect.anything());
+  });
+
+  it('keeps a passage the bare question alone cleared when the blend pulls it under the floor', async () => {
+    // Bare message to the Alder passage is 0.60; blended with the earlier turn it drops to 0.561, so a
+    // 58% absolute floor sits between the two readings - the shape of a topic switch after an earlier
+    // turn. The floor is on either reading, so the passage must still be injected rather than the turn
+    // abstaining. BIRCHWAY scores below the floor both ways and stays out.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0.2, 0.9798, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, 0.0318, 0.7994];
+      return [0, 0, 1];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
+  });
+
+  it('keeps the best admitted passage when the highest blended score was rejected', async () => {
+    // The BIRCHWAY chunk scores highest by the blended query (0.570) but clears no floor, while the
+    // Alder chunk is admitted only by its bare reading (0.60) at a blended 0.403. Measuring the
+    // relative cutoff from that rejected top score (0.90 * 0.570 = 0.513) would cut the one admitted
+    // passage and abstain; it has to measure from the best ADMITTED passage instead.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0, 1, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, -0.3, 0.7416];
+      return [0.2, 0.875, 0.4407];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
   });
 });

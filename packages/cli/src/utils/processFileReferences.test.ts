@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import { processFileReferences, hasFileReferences, extractFileReferences } from './processFileReferences.js';
 
-// Mock the fs module
-vi.mock('node:fs');
+// Mock the fs promises module
+vi.mock('node:fs/promises');
 
 describe('processFileReferences', () => {
   describe('extractFileReferences', () => {
@@ -206,13 +207,12 @@ describe('processFileReferences', () => {
 
     describe('successful file injection', () => {
       it('should inject file contents for valid file reference', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 100,
-        } as fs.Stats);
-        vi.mocked(fs.readFileSync).mockReturnValue('file contents here');
+        } as Stats);
+        vi.mocked(fsp.readFile).mockResolvedValue('file contents here');
 
         const result = await processFileReferences('Check @test.txt');
 
@@ -223,13 +223,12 @@ describe('processFileReferences', () => {
       });
 
       it('should inject multiple files', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 50,
-        } as fs.Stats);
-        vi.mocked(fs.readFileSync).mockReturnValueOnce('content 1').mockReturnValueOnce('content 2');
+        } as Stats);
+        vi.mocked(fsp.readFile).mockResolvedValueOnce('content 1').mockResolvedValueOnce('content 2');
 
         const result = await processFileReferences('@file1.ts and @file2.ts');
 
@@ -239,13 +238,12 @@ describe('processFileReferences', () => {
       });
 
       it('should allow explicit absolute paths', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 200,
-        } as fs.Stats);
-        vi.mocked(fs.readFileSync).mockReturnValue('absolute path contents');
+        } as Stats);
+        vi.mocked(fsp.readFile).mockResolvedValue('absolute path contents');
 
         const result = await processFileReferences('Check @/Users/erik/Downloads/file.md');
 
@@ -255,13 +253,12 @@ describe('processFileReferences', () => {
       });
 
       it('should allow explicit absolute paths without traversal', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 150,
-        } as fs.Stats);
-        vi.mocked(fs.readFileSync).mockReturnValue('config contents');
+        } as Stats);
+        vi.mocked(fsp.readFile).mockResolvedValue('config contents');
 
         const result = await processFileReferences('Load @/etc/app/config.json');
 
@@ -272,13 +269,12 @@ describe('processFileReferences', () => {
 
     describe('directory handling', () => {
       it('should handle directory references with item count', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => true,
           isFile: () => false,
           size: 0,
-        } as fs.Stats);
-        (vi.mocked(fs.readdirSync) as unknown as ReturnType<typeof vi.fn>).mockReturnValue([
+        } as Stats);
+        (vi.mocked(fsp.readdir) as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
           'file1.ts',
           'file2.ts',
           'subdir',
@@ -293,7 +289,7 @@ describe('processFileReferences', () => {
 
     describe('error cases', () => {
       it('should return error for non-existent file', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(false);
+        vi.mocked(fsp.stat).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
         const result = await processFileReferences('Check @nonexistent.txt');
 
@@ -326,12 +322,11 @@ describe('processFileReferences', () => {
       });
 
       it('should return error for binary file', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 1000,
-        } as fs.Stats);
+        } as Stats);
 
         const result = await processFileReferences('Check @image.png');
 
@@ -340,12 +335,11 @@ describe('processFileReferences', () => {
       });
 
       it('should return error for file exceeding size limit', async () => {
-        vi.mocked(fs.existsSync).mockReturnValue(true);
-        vi.mocked(fs.statSync).mockReturnValue({
+        vi.mocked(fsp.stat).mockResolvedValue({
           isDirectory: () => false,
           isFile: () => true,
           size: 20 * 1024 * 1024, // 20MB, exceeds 10MB limit
-        } as fs.Stats);
+        } as Stats);
 
         const result = await processFileReferences('Check @largefile.txt');
 

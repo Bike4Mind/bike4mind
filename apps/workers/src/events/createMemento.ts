@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';

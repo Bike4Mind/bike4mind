@@ -15,7 +15,7 @@ import type { Types } from 'mongoose';
  * identically - the claim is the single mutual-exclusion point between them - so the wiring lives
  * here once. The claim is an atomic pending|null -> scanning CAS, so only one runner can ever flip a
  * given row out of 'pending' - the callers here (and any concurrent hosted upload-path scan) cannot
- * double-process it. The hosted upload-time scan (server/s3/objectCreated.ts) guards differently (it
+ * double-process it. The hosted upload-time scan (apps/workers/src/s3/objectCreated.ts) guards differently (it
  * never writes the interim 'scanning' state), so this is a parallel guarantee, not the identical
  * mechanism.
  */
@@ -37,7 +37,13 @@ export function buildKnowledgeModerationDeps(
         { new: true }
       );
       return claimed
-        ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType, moderationClaimedAt: claimedAt }
+        ? {
+            _id: claimed._id,
+            id: claimed.id,
+            mimeType: claimed.mimeType,
+            sourceMetadata: claimed.sourceMetadata,
+            moderationClaimedAt: claimedAt,
+          }
         : null;
     },
     // Both writers below are guarded on the claim stamp, not on 'scanning' alone: the rescue sweep
@@ -59,10 +65,10 @@ export function buildKnowledgeModerationDeps(
           // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
           // moderationRescueSweep.ts. Written here because this is the single point every
           // transient failure on THIS door (the import path, the self-host webhook and the sweep's
-          // re-scan) funnels through. The hosted upload-time scan (server/s3/objectCreated.ts) has
-          // no equivalent release - a crashed hosted scan is only ever recovered by the sweep's own
-          // stale-claim reclaim, so its attempt count is undercounted relative to a row scanned
-          // through here.
+          // re-scan) funnels through. The hosted S3 handler (apps/workers/src/s3/objectCreated.ts) has no
+          // release - a crashed hosted scan is only ever recovered by the sweep's own stale-claim
+          // reclaim, so its attempt count is undercounted. The on-demand route releases through
+          // moderationScan.releaseModerationClaim, which writes the same bookkeeping.
           $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
           $inc: { moderationAttempts: 1 },
           $unset: { moderationClaimedAt: 1 },
@@ -85,6 +91,7 @@ export function buildKnowledgeModerationDeps(
       });
       return res.deletedCount > 0;
     },
+    measureSize: async filePath => (await storage.getMetadata(filePath)).size ?? Number.POSITIVE_INFINITY,
     downloadBytes: filePath => storage.download(filePath),
     downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
   };

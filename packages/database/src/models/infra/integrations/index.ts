@@ -1,5 +1,6 @@
 export * from './IntegrationAuditLogModel';
 export * from './IntegrationHealthCheckModel';
+export * from './IntegrationRequestModel';
 export * from './JiraWebhookConfigModel';
 export * from './JiraWebhookDeliveryModel';
 export * from './JiraWebhookSubscriptionModel';
@@ -11,6 +12,7 @@ export * from './OrgGoogleDriveConnectionModel';
 export * from './OrgJiraConnectionModel';
 export * from './OrgSlackWorkspaceModel';
 export * from './OrgWebhookConfigModel';
+export * from './orphanedLakeConnections';
 export * from './SlackAuditLogModel';
 export * from './SlackChannelConfigModel';
 export * from './SlackDevWorkspaceModel';

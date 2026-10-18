@@ -8,10 +8,12 @@ const ModelName = 'TavernWorld';
 // Types
 // ---------------------------------------------------------------------------
 
+export type TavernEditSource = 'user' | 'agent' | 'system';
+
 export interface ITavernWorldEditHistoryEntry {
   batchId: string;
   timestamp: Date;
-  source: 'user' | 'agent' | 'system';
+  source: TavernEditSource;
   sourceId?: string;
   forward: Array<{ key: string; gid: number }>;
   reverse: Array<{ key: string; gid: number | null }>; // null = remove override
@@ -123,6 +125,25 @@ function validateGid(gid: number): boolean {
   return Number.isInteger(gid) && gid >= 0;
 }
 
+/**
+ * Pure fold of one entry into an undo history. User edits truncate redo at the pointer; agent/system
+ * edits insert at the pointer so redo survives. Overflow past `cap` is evicted from the front.
+ */
+export function foldHistoryEntry<T>(
+  history: readonly T[],
+  undoPointer: number,
+  source: TavernEditSource,
+  entry: T,
+  cap = MAX_HISTORY_ENTRIES
+): { history: T[]; undoPointer: number } {
+  const next =
+    source === 'user'
+      ? [...history.slice(0, undoPointer), entry]
+      : [...history.slice(0, undoPointer), entry, ...history.slice(undoPointer)];
+  const evicted = Math.max(0, next.length - cap);
+  return { history: next.slice(evicted), undoPointer: Math.max(0, undoPointer - evicted + 1) };
+}
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
@@ -162,7 +183,7 @@ export const tavernWorldRepository = {
     floorId: string,
     expectedVersion: number,
     batch: Array<{ key: string; gid: number }>,
-    source: 'user' | 'agent' | 'system',
+    source: TavernEditSource,
     sourceId?: string
   ): Promise<ITavernWorldDoc | null> {
     // Validate batch size
@@ -217,27 +238,7 @@ export const tavernWorldRepository = {
       editsMap.set(edit.key, edit.gid);
     }
 
-    // Handle history: user edits truncate at undoPointer (discard redo), agent edits preserve redo
-    if (source === 'user') {
-      // Truncate redo entries
-      doc.editHistory.splice(doc.undoPointer);
-      // Append at end
-      doc.editHistory.push(historyEntry);
-    } else {
-      // Agent edit: insert at undoPointer position so it's the next thing to undo.
-      // Redo entries (after pointer) shift right, preserving them.
-      doc.editHistory.splice(doc.undoPointer, 0, historyEntry);
-    }
-
-    // Cap at MAX_HISTORY_ENTRIES, evict from front
-    let evicted = 0;
-    if (doc.editHistory.length > MAX_HISTORY_ENTRIES) {
-      evicted = doc.editHistory.length - MAX_HISTORY_ENTRIES;
-      doc.editHistory.splice(0, evicted);
-    }
-
-    // Update undoPointer: advance by 1 (new entry is now behind the pointer)
-    doc.undoPointer = Math.max(0, doc.undoPointer - evicted + 1);
+    const folded = foldHistoryEntry(doc.editHistory, doc.undoPointer, source, historyEntry);
 
     doc.version = expectedVersion + 1;
 
@@ -247,8 +248,8 @@ export const tavernWorldRepository = {
       {
         $set: {
           edits: doc.edits,
-          editHistory: doc.editHistory,
-          undoPointer: doc.undoPointer,
+          editHistory: folded.history,
+          undoPointer: folded.undoPointer,
           version: doc.version,
         },
       },

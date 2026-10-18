@@ -5,7 +5,7 @@ import { Resource } from 'sst';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@server/security/securityDashboardScoring';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';

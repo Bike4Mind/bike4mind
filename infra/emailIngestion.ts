@@ -163,9 +163,6 @@ export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
       generatedImagesBucket,
       websocketApi,
     ],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -227,7 +224,7 @@ const sesReceiptRule = sesReceiptRuleSet
         name: `${$app.stage}-email-ingest`, // Shortened to stay under 32 char limit
         recipients: [], // Empty array = catch-all for verified domain
         enabled: true,
-        scanEnabled: true, // Spam and virus scanning
+        scanEnabled: true, // Spam/virus scanning and SPF/DKIM/DMARC verdicts, which authenticateSender gates ingestion on
         tlsPolicy: 'Optional',
         s3Actions: [
           {
@@ -312,9 +309,6 @@ const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
     memory: '512 MB',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

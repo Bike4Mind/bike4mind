@@ -1,289 +1,46 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import SubscriptionModal from './SubscriptionModal';
-
-/**
- * The modal is where the delinquent row reaches the plan card: it filters the raw
- * subscription list down to non-terminal rows, marks the matching card as the current
- * plan and hands the same list to the button. Reverting that filter to
- * `status === 'active'` is invisible to every other test in the suite, so these
- * assertions are the ones that fail when the reachability fix is undone.
- */
-
-const PRICE_ID = 'price_pro';
-process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD = PRICE_ID;
-
-const cancelMutate = vi.fn();
-const subscribeMutate = vi.fn();
-const changeMutate = vi.fn();
-const portalMutate = vi.fn();
-const USER_ID = 'user_1';
-
-let subscriptions: IUserSubscription[] = [];
-let teamPlanEnabled = false;
-
-vi.mock('@client/app/hooks/data/subscriptions', () => ({
-  useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
-  useSubscribePlan: () => ({ mutate: (...args: unknown[]) => subscribeMutate(...args), isPending: false }),
-  useCancelSubscription: () => ({ mutate: (...args: unknown[]) => cancelMutate(...args), isPending: false }),
-  useChangeSubscription: () => ({ mutate: (...args: unknown[]) => changeMutate(...args), isPending: false }),
-}));
-
-vi.mock('@client/app/hooks/data/stripe', () => ({
-  useGetSubscriptionPlans: () => ({
-    data: [
-      { id: PRICE_ID, active: true, unit_amount: 1500 },
-      { id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, active: true, unit_amount: 3000 },
-    ],
-    isPending: false,
-  }),
-  useStripePortal: () => ({ mutate: (...args: unknown[]) => portalMutate(...args), isPending: false }),
-}));
-
-vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: USER_ID } }),
-}));
-
-let settingValues: Record<string, unknown> = {};
-
-vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'enableTeamPlan' ? teamPlanEnabled : (settingValues[key] ?? false)),
-  useConfig: () => ({ data: { seedStageName: 'production' } }),
-}));
-
-vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
-  useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: vi.fn() }),
-}));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: { credits?: string }) => (opts?.credits ? `${key}:${opts.credits}` : key),
-  }),
+  useTranslation: () => ({ t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key) }),
 }));
+vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
+vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSubscriptions: () => ({ data: [], isPending: false }),
+}));
+vi.mock('@client/app/hooks/data/stripe', () => ({ useGetSubscriptionPlans: () => ({ isLoading: false }) }));
+vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 10 }));
+vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 100 }));
+vi.mock('./CreditsSection', () => ({ CreditsSection: () => null }));
+vi.mock('./PlansSection', () => ({ PlansSection: () => null, PlansSectionSkeleton: () => null }));
+
+import SubscriptionModal from './SubscriptionModal';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-/** The modal reads only these fields; the mongo plumbing the interface carries is irrelevant. */
-const subRow = (overrides: Partial<IUserSubscription> = {}) =>
-  ({
-    subscriptionId: 'sub_1',
-    priceId: PRICE_ID,
-    status: 'active',
-    canceledAt: null,
-    periodStartsAt: new Date('2026-01-01T00:00:00Z'),
-    periodEndsAt: new Date('2026-02-01T00:00:00Z'),
-    ...overrides,
-  }) as unknown as IUserSubscription;
-
-const renderModal = () =>
-  render(
-    <TestWrapper>
-      <SubscriptionModal open onClose={vi.fn()} />
-    </TestWrapper>
-  );
-
-describe('SubscriptionModal - Team tab', () => {
-  beforeEach(() => {
-    subscriptions = [];
-  });
-
-  it('keeps the Business tab disabled while the team plan is switched off', () => {
-    teamPlanEnabled = false;
-    renderModal();
-
-    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).toHaveAttribute('aria-disabled', 'true');
-  });
-
-  it('quotes the minimum-seat Team price from Stripe once the team plan is on', async () => {
-    teamPlanEnabled = true;
-    renderModal();
-
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
-
-    // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
-    expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
-    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
-  });
-
-  it('quotes seats, price and pool size from the admin team plan settings', async () => {
-    teamPlanEnabled = true;
-    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
-    renderModal();
-
-    await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
-
-    expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
-    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
-    expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
-    settingValues = {};
-  });
-});
-
 describe('SubscriptionModal', () => {
-  beforeEach(() => {
-    subscriptions = [];
-    teamPlanEnabled = false;
-    settingValues = {};
-    cancelMutate.mockReset();
-    subscribeMutate.mockReset();
-    changeMutate.mockReset();
-    portalMutate.mockReset();
-    sessionStorage.clear();
-  });
-
-  it('says every account starts with free credits rather than claiming there is no free tier', () => {
-    settingValues = { defaultFreeCredits: 5000 };
-    renderModal();
-
-    expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
-      'subscription_modal.starter_credits'
+  it('opens the unified Billing view at the plans section', () => {
+    render(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
     );
-    expect(screen.queryByText(/no_free_tier/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('billing-section-credits')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-section-plans-heading')).toHaveFocus();
   });
 
-  it('makes no starter-credits claim when sign-ups are granted nothing', () => {
-    settingValues = { defaultFreeCredits: 0 };
-    renderModal();
-
-    expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();
-    expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
-  });
-
-  it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
-    subscriptions = [subRow({ status: 'past_due' })];
-
-    renderModal();
-
-    // The payment-issue copy, not the healthy "renews on" line.
-    expect(screen.getByText('subscriptions.payment_issue')).toBeInTheDocument();
-
-    await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: 'Cancel Subscription' }));
-
-    expect(cancelMutate).toHaveBeenCalledWith(PRICE_ID);
-  });
-
-  it('offers Subscribe, not Change, when the only plan the user holds is delinquent', () => {
-    // A grandfathered/legacy price: the delinquent row is on a different price than the
-    // one plan the modal renders. Change would 400 on the server's active-only lookup.
-    subscriptions = [subRow({ status: 'past_due', priceId: 'price_legacy' })];
-
-    renderModal();
-
-    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
-  });
-
-  it('still offers Change when the user holds a plan in good standing at another price', () => {
-    subscriptions = [subRow({ status: 'active', priceId: 'price_legacy' })];
-
-    renderModal();
-
-    expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
-  });
-
-  it('ignores a terminal row, so a finished plan is not shown as current', () => {
-    subscriptions = [subRow({ status: 'canceled' })];
-
-    renderModal();
-
-    expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
-  });
-
-  it.each([
-    ['stale delinquent row first', 'stale-first'],
-    ['active row first', 'active-first'],
-  ])('does not paint a healthy plan as payment-failed (%s)', (_label, order) => {
-    // A re-subscribe after a failed renewal leaves the old past_due row behind at the
-    // same price, and the subscription list is unsorted. First-match would show the
-    // paying user a red payment-failure banner on their own plan.
-    const stale = subRow({ status: 'past_due', subscriptionId: 'sub_stale' });
-    const live = subRow({ status: 'active', subscriptionId: 'sub_live' });
-    subscriptions = order === 'stale-first' ? [stale, live] : [live, stale];
-
-    renderModal();
-
-    expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
-    expect(screen.getByText('subscription_modal.subscription_renewal')).toBeInTheDocument();
-  });
-
-  describe('Manage Subscription', () => {
-    const manageButton = () => screen.queryByTestId('plan-card-manage-subscription-btn');
-
-    it('opens the Stripe portal for an active subscriber and returns them to the page they left', async () => {
-      subscriptions = [subRow({ status: 'active' })];
-      window.history.replaceState({}, '', '/notebooks?view=grid');
-
-      renderModal();
-
-      const button = manageButton();
-      expect(button).toHaveTextContent('profile.manage_subscription');
-      expect(button).toHaveClass('MuiButton-variantOutlined');
-
-      await userEvent.setup({ delay: null }).click(button!);
-
-      expect(portalMutate).toHaveBeenCalledWith(
-        { ownerType: SubscriptionOwnerType.User, ownerId: USER_ID },
-        expect.objectContaining({ onSuccess: expect.any(Function) })
-      );
-      // The return key is written only once the portal session exists, never on click.
-      expect(sessionStorage.getItem('__stripe_return')).toBeNull();
-      portalMutate.mock.calls[0][1].onSuccess();
-      expect(sessionStorage.getItem('__stripe_return')).toBe('/notebooks?view=grid');
-    });
-
-    it('makes Manage the primary action for a delinquent subscriber and keeps Cancel', () => {
-      subscriptions = [subRow({ status: 'past_due' })];
-
-      renderModal();
-
-      expect(screen.getByText('subscriptions.payment_issue')).toBeInTheDocument();
-      expect(manageButton()).toHaveClass('MuiButton-variantSolid');
-      expect(screen.getByRole('button', { name: 'Cancel Subscription' })).toHaveClass('MuiButton-variantOutlined');
-    });
-
-    it('stays available on a plan that is canceled but not yet ended, so the user can resume it', () => {
-      subscriptions = [subRow({ status: 'active', canceledAt: new Date('2026-01-15T00:00:00Z') })];
-
-      renderModal();
-
-      expect(manageButton()).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Subscription ends on/ })).toBeDisabled();
-    });
-
-    it('is not offered to a non-subscriber', () => {
-      subscriptions = [];
-
-      renderModal();
-
-      expect(manageButton()).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
-    });
-
-    it('is not offered on a plan card the user does not hold', () => {
-      subscriptions = [subRow({ status: 'active', priceId: 'price_legacy' })];
-
-      renderModal();
-
-      expect(manageButton()).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
-    });
-
-    it('is not offered on an admin-granted plan, which the portal refuses', () => {
-      subscriptions = [subRow({ subscriptionId: 'admin_grant_x', source: SubscriptionSource.AdminGrant })];
-
-      renderModal();
-
-      expect(manageButton()).not.toBeInTheDocument();
-    });
+  it('renders nothing while closed', () => {
+    render(
+      <TestWrapper>
+        <SubscriptionModal open={false} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
   });
 });

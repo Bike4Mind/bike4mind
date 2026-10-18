@@ -10,6 +10,7 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
@@ -194,8 +195,17 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
-  /** Ids of the video generation jobs this quest started */
+  /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
+
+  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  generationJobs?: GenerationJobRef[];
+
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentVideoClipsClaimed?: number;
+
+  /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentMusicTracksClaimed?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
@@ -845,6 +855,29 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+
+  /**
+   * When the open voice call was first seen connected (the client's connect report or the first
+   * provider turn). Null until then and cleared when the hold settles; a call that never
+   * connected is not billed.
+   */
+  voiceConnectedAt?: Date | null;
+
+  /** Latest sign of life from the open voice call (client heartbeat, provider turn or transcript frame). */
+  voiceLastActivityAt?: Date | null;
+
+  /**
+   * Credits billed so far against the open realtime voice hold, one response at a time.
+   * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
+   */
+  voiceBilledCredits?: number;
+}
+
+/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
+export interface VoiceHoldMarkers {
+  voiceConnectedAt?: Date | null;
+  voiceLastActivityAt?: Date | null;
+  voiceBilledCredits?: number | null;
 }
 
 ///////////
@@ -1134,4 +1167,79 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Add `credits` to the billed total of the voice hold that started at `startedAt`. Resolves the
+   * total billed before this charge, or null when that hold is no longer open.
+   */
+  addVoiceBilledCredits: (sessionId: string, startedAt: Date, credits: number) => Promise<number | null>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` (or, for a
+   * realtime hold, before `realtimeStartedBefore`) and never settled, at most `limit` of them.
+   * `realtime` marks a hold billed per response (it carries `voiceBilledCredits`).
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    realtimeStartedBefore: Date,
+    limit: number
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      voiceReservedCredits: number;
+      voiceSessionStartedAt: Date;
+      voiceConnectedAt: Date | null;
+      voiceLastActivityAt: Date | null;
+      realtime: boolean;
+    }>
+  >;
+
+  /**
+   * Record that the session's open voice call is connected and alive at `at`: sets
+   * voiceConnectedAt the first time and advances voiceLastActivityAt. With `holdStartedAt`, only the
+   * hold that started then is touched; with `realtimeOnly`, only a realtime hold (one carrying
+   * voiceBilledCredits). Resolves false (and writes nothing) when no matching open hold exists.
+   */
+  recordVoiceActivity: (
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<boolean>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller
+   * that cleared it, what realtime responses had billed against it (null for a hold never billed per
+   * response); null when it was already settled or replaced by a newer call. With `realtimeOnly`,
+   * a hold without the realtime marker (an ElevenLabs call) is left untouched and resolves null.
+   */
+  claimVoiceHold: (
+    sessionId: string,
+    startedAt: Date,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<{ billedCredits: number | null } | null>;
+
+  /**
+   * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
+   * before the reserve was taken) or no hold at all. A realtime hold gets the billed-credits marker;
+   * any other has it removed. Resolves false (and writes nothing) when a concurrent bootstrap won.
+   */
+  openVoiceHold: (
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
+   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
+   * already holds a newer call.
+   */
+  restoreVoiceHold: (
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    markers?: VoiceHoldMarkers
+  ) => Promise<boolean>;
 }

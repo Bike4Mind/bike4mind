@@ -7,6 +7,7 @@ import {
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
   KnowledgeType,
+  StorageLimitError,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
   isLakeIngestable,
@@ -20,7 +21,7 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
@@ -92,7 +93,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
     userId,
     db: { dataLakes: dataLakeRepository },
   });
-  await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
+  const clientTagLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -165,8 +166,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
 
   for (const { item: fileItem, supported } of resolvedFiles) {
     if (!fileItem.fileSize) throw new BadRequestError('No file size provided');
-    if (fileItem.fileSize >= maxFileSize)
-      throw new BadRequestError(`File "${fileItem.fileName}" exceeds maximum file size`);
+    if (fileItem.fileSize >= maxFileSize) {
+      throw new StorageLimitError(`File "${fileItem.fileName}" exceeds maximum file size`, {
+        errorCode: 'file_too_large',
+        used_bytes: 0,
+        limit_bytes: maxFileSize,
+        requested_bytes: fileItem.fileSize,
+        owner: 'user',
+      });
+    }
     // Reject unsupported/binary types (e.g. .exe) at the ingest door - the
     // chunker can't vectorize them, so accepting them yields corrupt lake
     // state (a FabFile with 0 chunks).
@@ -227,6 +235,14 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
         ...(fileItem.tags || []),
       ].filter((tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i);
       const tags = await applyFallbackTags(merged);
+      // Same owner rule as fabFileService.createFabFile, over the authorized lakes THIS file joins
+      // (client tags differ per file). Folded like the dedupe above.
+      const fileTagNames = new Set(tags.map(tag => tag.name.toLowerCase()));
+      const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(
+        [...(dataLake ? [dataLake] : []), ...clientTagLakes].filter(lake =>
+          fileTagNames.has(lake.datalakeTag.toLowerCase())
+        )
+      );
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
       // correlates the file to its batch and updates batch progress. Without this the
@@ -247,6 +263,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
           // through. This web upload door is the common case the lake previously could not identify
           // (sourceType left unset); the connector and chat-platform doors already stamp their own.
           sourceType: FabFileSourceType.MANUAL_UPLOAD,
+          ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
           ...(fileItem.contentHash && { contentHash: fileItem.contentHash }),
           ...(fileItem.relativePath && { relativePath: fileItem.relativePath }),
           ...(data.batchId && { batchId: data.batchId }),

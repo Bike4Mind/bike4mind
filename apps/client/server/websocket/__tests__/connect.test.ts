@@ -17,6 +17,14 @@ const h = vi.hoisted(() => ({
   isTokenVersionCurrent: vi.fn(),
   verifyToken: vi.fn(),
   verifyApiKey: vi.fn(),
+  assertAccountStateUsable: vi.fn(),
+  assertRealtimeSessionActive: vi.fn(),
+}));
+
+const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
+vi.mock('@server/websocket/realtimeSession', () => ({
+  gatewayCapExpiry: () => GATEWAY_CAP_EXPIRY,
+  assertRealtimeSessionActive: h.assertRealtimeSessionActive,
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -40,6 +48,9 @@ vi.mock('@bike4mind/common', () => ({
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
 vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
+vi.mock('@server/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: h.assertAccountStateUsable,
+}));
 vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
@@ -75,6 +86,35 @@ describe('web $connect ticket path', () => {
     );
     // no scopes on a ticket connection
     expect(h.connectionCreate.mock.calls[0][0]).not.toHaveProperty('scopes');
+  });
+
+  it("records the ticket's sid, tokenVersion and auth expiry on the connection", async () => {
+    const authExpiresAt = new Date('2030-01-01T00:30:00Z');
+    (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1', authExpiresAt });
+
+    await call(eventWith({ ticket: 't-abc' }));
+
+    expect(h.assertRealtimeSessionActive).toHaveBeenCalledWith('sid-1');
+    expect(h.connectionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ sid: 'sid-1', tokenVersion: 5, authExpiresAt })
+    );
+    expect(h.connectionCreate.mock.calls[0][0]).not.toHaveProperty('apiKeyId');
+  });
+
+  it('refuses a ticket whose session has been revoked', async () => {
+    (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
+    (h.assertRealtimeSessionActive as Mock).mockRejectedValueOnce(new Error('Session expired'));
+
+    await expect(call(eventWith({ ticket: 't-abc' }))).rejects.toThrow('Session expired');
+    expect(h.connectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the gateway cap for a ticket minted without an expiry', async () => {
+    (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5 });
+
+    await call(eventWith({ ticket: 't-abc' }));
+
+    expect(h.connectionCreate).toHaveBeenCalledWith(expect.objectContaining({ authExpiresAt: GATEWAY_CAP_EXPIRY }));
   });
 
   it('rejects a replayed or expired ticket (consume returns null)', async () => {

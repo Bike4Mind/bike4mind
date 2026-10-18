@@ -14,7 +14,7 @@
  * make the gate flip on the second iteration.
  *
  * Lives in `utils/` rather than next to the executor because both the prompt-side gate
- * (`queueHandlers/agentExecutor.ts`) and the persistence-side gate (`persistAgentArtifacts.ts`)
+ * (`apps/workers/src/queueHandlers/agentExecutor.ts`) and the persistence-side gate (`persistAgentArtifacts.ts`)
  * must answer this question identically - two gates that can disagree is the defect this replaced -
  * and `utils/` is the half both may depend on. `resolveUserArtifactGate` at the bottom joins it for
  * the same reason: the browser-initiated `POST /api/artifacts` write is a third surface that must

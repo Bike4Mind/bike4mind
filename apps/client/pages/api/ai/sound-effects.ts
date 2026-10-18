@@ -1,5 +1,7 @@
+import { randomUUID } from 'crypto';
 import {
-  ApiKeyType,
+  isSupportedElevenLabsFormat,
+  UnprocessableEntityError,
   shouldPersistGeneratedAudio,
   generateSoundEffectContract,
   SoundGenerationVendor,
@@ -9,15 +11,15 @@ import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
 
-// The stored key type each vendor needs. Resolved per-user first, then falling
-// back to the admin-configured key (getEffectiveApiKey), so the feature works
-// out of the box on platforms that provide a shared provider key.
-const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
-  elevenlabs: ApiKeyType.elevenlabs,
+// Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
+// billed, then could be neither labelled nor saved.
+const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => boolean> = {
+  elevenlabs: isSupportedElevenLabsFormat,
 };
 
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
@@ -36,9 +38,15 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
 
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+    throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
+  }
+
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
-    { type: PROVIDER_API_KEY_TYPE[provider] },
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
@@ -67,7 +75,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
-  const sessionId = `sound-effects-${userId}-${Date.now()}`;
+  const sessionId = `sound-effects-${userId}-${randomUUID()}`;
   const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
@@ -126,21 +134,25 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
-  // preference or `preview`): a save failure never blocks returning audio the
-  // caller was already charged for.
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
   const save =
-    userId &&
-    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-      ? await persistGeneratedAudio({
-          userId,
-          audio,
-          contentType,
-          format,
-          source: 'sound-effect',
-          text,
-          logger: req.logger,
-        })
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: {
+              generator: 'sound_effect',
+              provider,
+              prompt: text,
+              ...(durationSeconds !== undefined && { durationSeconds }),
+              ...(promptInfluence !== undefined && { promptInfluence }),
+            },
+          },
+          req.logger
+        )
       : undefined;
 
   return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });

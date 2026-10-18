@@ -1,5 +1,8 @@
+import { randomUUID } from 'crypto';
 import {
   ApiKeyType,
+  isSupportedElevenLabsFormat,
+  UnprocessableEntityError,
   shouldPersistGeneratedAudio,
   generateMusicContract,
   MusicGenerationVendor,
@@ -9,7 +12,7 @@ import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
@@ -18,6 +21,12 @@ import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSour
 // out of the box on platforms that provide a shared provider key.
 const PROVIDER_API_KEY_TYPE: Record<MusicGenerationVendor, ApiKeyType> = {
   elevenlabs: ApiKeyType.elevenlabs,
+};
+
+// Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
+// billed, then could be neither labelled nor saved.
+const SUPPORTS_OUTPUT_FORMAT: Record<MusicGenerationVendor, (format: string) => boolean> = {
+  elevenlabs: isSupportedElevenLabsFormat,
 };
 
 // Provider-agnostic background-music generation. Meters usage: because the cost
@@ -37,6 +46,12 @@ const PROVIDER_API_KEY_TYPE: Record<MusicGenerationVendor, ApiKeyType> = {
 const handler = nextRouteForContract(generateMusicContract).post(async (req, res) => {
   const { provider, prompt, lengthMs, forceInstrumental, modelId, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
+
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+    throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
+  }
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -69,7 +84,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
-  const sessionId = `music-${userId}-${Date.now()}`;
+  const sessionId = `music-${userId}-${randomUUID()}`;
   const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
@@ -127,21 +142,19 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
-  // preference or `preview`): a save failure never blocks returning audio the
-  // caller was already charged for.
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
   const save =
-    userId &&
-    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-      ? await persistGeneratedAudio({
-          userId,
-          audio,
-          contentType,
-          format,
-          source: 'music',
-          text: prompt,
-          logger: req.logger,
-        })
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+          },
+          req.logger
+        )
       : undefined;
 
   return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });

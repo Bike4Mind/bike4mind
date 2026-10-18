@@ -6,7 +6,11 @@ import {
   type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
   pricingTierForTokens,
+  publishesCacheReadRate,
+  PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -20,7 +24,11 @@ import {
   IUserRepository,
   normalizeMultimodalMessages,
   BadRequestError,
+  HTTPError,
   type CompletionSource,
+  UNKNOWN_MODEL_ERROR_CODE,
+  DEGENERATE_FINISH_REASON,
+  estimateStreamedOutputTokens,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -39,7 +47,7 @@ import {
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
-  type ApiKeyTable,
+  isModelProviderConfigured,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -68,11 +76,14 @@ export interface CompletionParams {
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
     /**
-     * Forwarded to the adapter, which only the OpenAI (reasoning models), Kimi (K3
-     * only) and DeepSeek backends read. Every other backend (Anthropic, Gemini,
-     * Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
+     * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only),
+     * DeepSeek and Anthropic (direct and Bedrock) backends read. Gemini, xAI and
+     * Ollama drop it, so it is a silent no-op there. With `thinking.enabled`, Claude
+     * keeps thinking on and uses this as its effort.
      */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
+    /** See the `thinking` field of CompletionRequestSchema. */
+    thinking?: { enabled: boolean; budget_tokens?: number };
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -148,6 +159,12 @@ export interface CompletionParams {
   alwaysRecordUsage?: boolean;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
+  /**
+   * Called once, after model resolution and the credit hold, immediately before the provider call.
+   * The SSE route commits its 200 here, so anything thrown earlier can still be a real HTTP status.
+   * A throw from it refunds the hold.
+   */
+  onReady?: () => void | Promise<void>;
 }
 
 /**
@@ -166,14 +183,17 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Backends whose server caches prompt prefixes without a client flag; they only get the cache
  * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
- * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
- * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
- * options.cacheStrategy.enableCaching, which this path never sets.
+ * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
+ * model that publishes cache_read, the same condition this path checks. Ollama publishes no
+ * cache_read; Bedrock's cache_control is gated on options.cacheStrategy.enableCaching, which this
+ * path never sets.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
 ]);
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
@@ -228,7 +248,12 @@ function estimateReservationUsd(
     writeEnd = lastFlagged;
     hoistsSystem = true;
   } else {
-    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    // Mirror the adapter gate exactly: for a backend that forwards cache reads only for a model
+    // publishing cache_read on every tier, a single tier carrying one must not discount the hold,
+    // or settlement bills full-rate input against a discounted reservation.
+    const publishesCacheRead = PUBLISHED_CACHE_READ_BACKENDS.has(modelInfo.backend)
+      ? publishesCacheReadRate(modelInfo)
+      : tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
     readEnd = lastAssistantIndex - 1;
     hoistsSystem = false;
@@ -286,8 +311,7 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
 }
 
 /**
- * Shared LLM completion logic
- * Used by Next.js API route, Lambda function, and available for 3rd party integrations
+ * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -339,8 +363,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
+        logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
+          userId,
+          organizationId: organization.id,
+        });
         throw new BadRequestError(
-          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+          'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
         );
       }
     }
@@ -357,18 +385,41 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   const models = await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
-  const llm = getLlmByModel(apiKeys as ApiKeyTable, {
+  // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
+  if (modelInfo?.disabled) {
+    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+    throw new BadRequestError(
+      `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
+  const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
   });
 
   if (!llm) {
-    // Only an id outside the static catalog is caller input. A catalogued model with no backend
-    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
-    const message = `Failed to create LLM backend for model: ${model}`;
-    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
+    const unknownModel = new BadRequestError(
+      `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+    if (!catalogued) throw unknownModel;
+    const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
+      logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
+      return false;
+    });
+    if (!providerConfigured)
+      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
+        errorCode: 'provider_not_configured',
+      });
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
+    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
+    throw unknownModel;
   }
 
   llm.currentModel = model;
@@ -427,6 +478,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
+    // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
+    // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+    ...(options?.thinking?.enabled && modelInfo?.can_think
+      ? { thinking: { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 } }
+      : {}),
   };
 
   if (options?.response_format) {
@@ -535,17 +591,47 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Per-request breakdown of the same totals, from adapters that report it; prices each request on
+  // its own long-context tier. Same assign-not-add contract.
+  let finalTurnUsage: TurnUsage[] | undefined;
+  // Informational subset of finalOutputTokens, never billed. Undefined until a provider
+  // reports a count, and checked against undefined (not truthiness) so a reported 0 survives.
+  let finalReasoningTokens: number | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
   let finalStopReason: string | undefined;
+  // Every char streamed to the caller, for pricing a first call that was cut short (see below).
+  let streamedOutputChars = 0;
+
+  const settledUsdCost = (pricedModel: ModelInfo): number =>
+    finalTurnUsage?.length
+      ? getTurnsCost(pricedModel, finalTurnUsage)
+      : getTextModelCost(
+          pricedModel,
+          finalInputTokens,
+          finalOutputTokens,
+          finalCacheReadTokens,
+          finalCacheCreationTokens
+        );
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    // Latched only alongside outputTokens so the pair always comes from the same frame.
+    // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
+    // fully-filtered reply - still latches its count instead of dropping it.
+    if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
+      finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
+    // output the provider bills on this call.
+    if (info?.channel !== 'tool-artifact') {
+      for (const t of text) streamedOutputChars += t?.length ?? 0;
+    }
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(
@@ -564,6 +650,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   };
 
   try {
+    await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
     // If completion fails, refund the reserved credits to whichever pool paid
@@ -602,13 +689,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           outputTokens: finalOutputTokens,
           cachedInputTokens: finalCacheReadTokens,
           cacheWriteTokens: finalCacheCreationTokens,
-          costUsd: getTextModelCost(
-            modelInfo,
-            finalInputTokens,
-            finalOutputTokens,
-            finalCacheReadTokens,
-            finalCacheCreationTokens
-          ),
+          costUsd: settledUsdCost(modelInfo),
           creditsCharged: 0,
           status: isRefusal ? 'refusal' : 'error',
           latencyMs: Date.now() - completionStartTime,
@@ -616,6 +697,21 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
     }
     throw error;
+  }
+
+  // Any adapter reporting a prompt but 0 output on a Stop or degenerate abort lands here (today only
+  // Claude, which sends output tokens on message_delta alone); call 2+ is estimated in the adapter.
+  // The char sum counts think markup. Zero usage on an abort is a different gap, left as it was.
+  if (
+    finalOutputTokens === 0 &&
+    finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens > 0 &&
+    streamedOutputChars > 0 &&
+    (params.abortSignal?.aborted || finalStopReason === DEGENERATE_FINISH_REASON)
+  ) {
+    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, model);
+    if (finalTurnUsage?.length) {
+      finalTurnUsage = [...finalTurnUsage.slice(0, -1), { ...finalTurnUsage.at(-1)!, outputTokens: finalOutputTokens }];
+    }
   }
 
   // Send final credit info to client so it shows the accurate final count.
@@ -629,13 +725,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalCredits = 0;
 
   if (modelInfo) {
-    finalUsdCost = getTextModelCost(
-      modelInfo,
-      finalInputTokens,
-      finalOutputTokens,
-      finalCacheReadTokens,
-      finalCacheCreationTokens
-    );
+    finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
 
     logger?.info?.(
@@ -650,6 +740,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     await onChunk([], {
       inputTokens: finalInputTokens,
       outputTokens: finalOutputTokens,
+      ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
       cacheReadInputTokens: finalCacheReadTokens || undefined,
       cacheCreationInputTokens: finalCacheCreationTokens || undefined,
       creditsUsed: finalCredits,

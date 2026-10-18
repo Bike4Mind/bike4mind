@@ -8,15 +8,17 @@
  *   app/premium-generated/premiumRoutes.generated.ts   - Tanstack SPA routes
  *   app/premium-generated/premiumNavItems.generated.ts  - nav/HUD slots
  *   app/premium-generated/premiumRouteIndexing.generated.ts - robots/sitemap policy
- *   app/premium-generated/premiumNotebookSidenav.generated.ts - notebook sidenav slot
+ *   app/premium-generated/premiumNotebookSidenavs.generated.ts - notebook sidenav slots
  *   app/premium-generated/premiumReplyAccessories.generated.ts - chat reply accessory slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
+ *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
+ *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -67,6 +69,8 @@ function pointsAtLink(pkgName, dir) {
   });
 }
 
+// Overlay discovery here must stay in sync with scripts/link-premium-overlays.mjs, which
+// declares the packages this finds as apps/client dependencies so pnpm links them.
 function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
@@ -297,53 +301,132 @@ function generateRouteIndexing(packages) {
   );
 }
 
-// --- Generate notebook sidenav slot ---
+// --- Generate notebook sidenav slots ---
 
 // A premium package can contribute a full-surface sidenav body that REPLACES the
-// default notebook sidenav on its own appShell route (b4mContributions.
-// notebookSidenavExport -> a module default-exporting the component). Core STATICALLY
-// imports this generated module (same annotate-both-forms rule as routes/nav), so the
-// premium package specifier must live ONLY here - the present form names it, the fork
-// emits the `null` form and never references the absent package. A single slot: the
-// notebook shell shows one premium sidenav per route, so if multiple packages declare
-// one, the first wins (with a warning).
-function generateNotebookSidenav(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts');
-  const typeImport = `import type { PremiumNotebookSidenav } from '../premiumContract';`;
+// default notebook sidenav on ONE of its own appShell routes. The contribution names
+// both the route and the module:
+//
+//   "notebookSidenavExport": { "path": "/<surface>", "exportFrom": "<pkg>/client/sidenav" }
+//
+// Core STATICALLY imports this generated module (same annotate-both-forms rule as
+// routes/nav), so the premium package specifier must live ONLY here - the present form
+// names it, the fork emits the empty array and never references the absent package.
+//
+// The route is the overlay's knowledge, not core's, so it rides in the manifest rather than
+// a pathname core names: that is what lets more than one overlay own a surface.
+//
+// LEGACY STRING FORM (deprecated): a bare specifier with no `path`. It predates the
+// per-route list, so it keeps `LEGACY_SIDENAV_PATH` and warns. Delete this branch - and
+// the constant - once every overlay declares its own path.
+//
+// `LEGACY_SIDENAV_PATH` MUST stay equal to `OPTI_SURFACE`'s `routePrefix` in
+// b4m-core/common/src/surfaces.ts - the one registered workspace with a non-null id, so the bare
+// specifier's route is unambiguous today. A legacy overlay keeps its nav on hosting routes only
+// while the two match.
+const LEGACY_SIDENAV_PATH = '/opti';
 
-  const contributors = packages.filter(p => p.contributions.notebookSidenavExport);
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.notebookSidenavExport, p.name, 'notebookSidenavExport')
-  );
+// An appShell route path, interpolated raw into a generated string literal and compared
+// against `location.pathname`. Narrow on purpose: nothing that could terminate the literal
+// or inject code, and each segment must be NON-EMPTY. That last part rejects three shapes
+// no real pathname can equal - `/`, a trailing-slash `/x/`, and a protocol-relative-looking `//x`.
+//
+// LOWER CASE ONLY, deliberately: the consumer compares `path` to `pathname` with `===`, so a
+// mis-cased `/Surface` would validate, emit, and then silently never match - the overlay would
+// get the default sidenav on its own surface with nothing warning. Rejecting it here is the
+// only place that mistake is visible.
+const ROUTE_PATH_RE = /^\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/;
+
+function assertRoutePath(value, pkgName, field) {
+  if (typeof value !== 'string' || !ROUTE_PATH_RE.test(value) || value.split('/').some(seg => seg === '..' || seg === '.')) {
+    throw new Error(
+      `[codegen] invalid ${field} path from package "${pkgName}": ` +
+        `${JSON.stringify(value)} is not an origin-relative route path of lower-case [a-z0-9/._-]`
+    );
+  }
+}
+
+// Normalize either contribution form to `{ path, spec }`, or null when absent.
+function readSidenavContribution(pkg) {
+  const value = pkg.contributions.notebookSidenavExport;
+  if (!value) return null;
+  if (typeof value === 'string') {
+    console.warn(
+      `[codegen] WARNING: package "${pkg.name}" declares b4mContributions.notebookSidenavExport ` +
+        `as a bare specifier; that form is deprecated and assumes "${LEGACY_SIDENAV_PATH}". ` +
+        `Declare { "path": "...", "exportFrom": "..." } instead.`
+    );
+    assertModuleSpecifier(value, pkg.name, 'notebookSidenavExport');
+    return { path: LEGACY_SIDENAV_PATH, spec: value };
+  }
+  assertModuleSpecifier(value.exportFrom, pkg.name, 'notebookSidenavExport.exportFrom');
+  assertRoutePath(value.path, pkg.name, 'notebookSidenavExport');
+  return { path: value.path, spec: value.exportFrom };
+}
+
+function generateNotebookSidenavs(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumNotebookSidenavs.generated.ts');
+  // The single-slot file this replaced. It is gitignored, so an existing dev or
+  // CI tree still has yesterday's copy sitting next to the new one; nothing imports it,
+  // but a stale generated file naming an overlay is exactly what the fork build must not
+  // find. Drop this sweep once no checkout predates the rename.
+  rmSync(join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts'), { force: true });
+  const typeImport = `import type { PremiumNotebookSidenavEntry } from '../premiumContract';`;
+
+  const contributors = packages
+    .map(p => ({ pkg: p, sidenav: readSidenavContribution(p) }))
+    .filter(c => c.sidenav);
 
   if (contributors.length === 0) {
     writeFile(
       outPath,
-      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumNotebookSidenav: PremiumNotebookSidenav = null;\n`
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumNotebookSidenavs: PremiumNotebookSidenavEntry[] = [];\n`
     );
     return;
   }
 
-  if (contributors.length > 1) {
-    console.warn(
-      `[codegen] WARNING: multiple packages declare b4mContributions.notebookSidenavExport ` +
-        `(${contributors.map(p => p.name).join(', ')}); using the first (${contributors[0].name}).`
-    );
+  // Two overlays claiming one route would make the rendered nav depend on directory order.
+  // The first wins - and the loser is DROPPED here rather than left to lose at match time,
+  // so the generated file does not carry a dead `dynamic()` import of a module nothing can
+  // ever render (which would also pull that overlay into the route's chunk graph).
+  const seen = new Map();
+  const chosen = [];
+  for (const entry of contributors) {
+    const prior = seen.get(entry.sidenav.path);
+    if (prior) {
+      console.warn(
+        `[codegen] WARNING: packages "${prior}" and "${entry.pkg.name}" both contribute a notebook ` +
+          `sidenav for "${entry.sidenav.path}"; using the first ("${prior}").`
+      );
+      continue;
+    }
+    seen.set(entry.sidenav.path, entry.pkg.name);
+    chosen.push(entry);
   }
 
-  const spec = contributors[0].contributions.notebookSidenavExport;
+  const imports = chosen
+    .map(({ sidenav }, i) =>
+      `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
+    )
+    .join('\n');
+
+  const entries = chosen
+    .map(({ pkg, sidenav }, i) => `  // Source: ${pkg.name}\n  { path: '${sidenav.path}', component: Sidenav${i} }`)
+    .join(',\n');
+
   writeFile(
     outPath,
     `${GENERATED_BANNER}
 import dynamic from 'next/dynamic';
 ${typeImport}
 
-// Source: ${contributors[0].name} via b4mContributions.notebookSidenavExport
-// Lazy-loaded (ssr: false) so the premium surface's bundle stays out of every other route.
-export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
-  () => import('${spec}').then(m => ({ default: m.default })),
-  { ssr: false }
-);
+// Each sidenav is lazy-loaded (ssr: false) so a premium surface's bundle stays out of
+// every other route - including the routes of the OTHER overlays listed here.
+${imports}
+
+export const premiumNotebookSidenavs: PremiumNotebookSidenavEntry[] = [
+${entries}
+];
 `
   );
 }
@@ -515,6 +598,67 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
     if (shown.length > 0) displays.set(workspaceId, shown);
   }
   return { table, displays };
+}
+
+// Tools a workspace denies to every session whose surface matches (b4mContributions.workspaceDeniedTools,
+// `{ "<workspace id>": ["<tool name>"] }`). Pure data, applied at read time and never written onto sessions.
+// Native tool names are lowercase, but an MCP id is `${serverName.toLowerCase()}__${originalToolName}`
+// (see toolGenerators.ts), so the tool half of a `server__tool` entry keeps the upstream server's case.
+// The prefix stays lowercase; the MCP runtime lowercases it. Read-time matching is exact, so a mixed-case
+// workspace id (whose surface is compared verbatim) is still rejected below.
+const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
+
+function generateWorkspaceDeniedTools(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
+  const field = 'workspaceDeniedTools';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> tool names, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, tools] of Object.entries(declared)) {
+      if (!WORKSPACE_ID_RE.test(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+        );
+      }
+      if (workspaceId !== workspaceId.toLowerCase()) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase, because surface ids are matched exactly`
+        );
+      }
+      if (!Array.isArray(tools) || !tools.every(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool))) {
+        throw new Error(
+          `[codegen] invalid ${field} tools for "${workspaceId}" from package "${pkg.name}": ` +
+            `expected an array of lowercase tool names or \`server__tool\` MCP ids, got ${JSON.stringify(tools)}`
+        );
+      }
+      const list = merged.get(workspaceId) ?? [];
+      for (const tool of tools) {
+        if (!list.includes(tool)) list.push(tool);
+      }
+      merged.set(workspaceId, list);
+    }
+  }
+
+  const entries = [...merged].map(
+    ([workspaceId, tools]) =>
+      `  ${JSON.stringify(workspaceId)}: [${tools.map(tool => JSON.stringify(tool)).join(', ')}],`
+  );
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = ${body};\n`
+  );
 }
 
 function generateWorkspaceCopyEntitlements(packages) {
@@ -964,6 +1108,40 @@ function generateSystemPrompts(packages) {
   );
 }
 
+// Premium packages can run their own grant after a partner signup rule matches
+// (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
+// PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
+// file, so like the LLM tools it must exist in BOTH forms.
+function generatePartnerSignupHooks(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts');
+  const typeImport = `import type { PartnerSignupHook } from '@server/entitlements/partnerSignupHooks';`;
+
+  const contributors = packages.filter(p => p.contributions.partnerSignupHooksExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.partnerSignupHooksExport, p.name, 'partnerSignupHooksExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { partnerSignupHooks as hooks${i} } from '${p.contributions.partnerSignupHooksExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...hooks${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1218,12 +1396,13 @@ ensureDir(GENERATED_DIR);
 generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
 generateRouteIndexing(linkedPackages);
-generateNotebookSidenav(linkedPackages);
+generateNotebookSidenavs(linkedPackages);
 generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generatePartnerSignupHooks(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
@@ -1233,6 +1412,7 @@ generateInfraGlue(packages);
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
+generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 
 console.log('[codegen] done.');

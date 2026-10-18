@@ -87,6 +87,27 @@ describe('useStreamingQueryUpdates', () => {
     expect(updater({ quest: undefined }).completed).toBe(true);
   });
 
+  it('merges a partial promptMeta from a later frame over the one before it', () => {
+    const { result, setChatCompletion } = renderUpdates(undefined);
+
+    act(() => result.current.updateStreamingQuest({ id: 'q1', sessionId: 's1', replies: ['a'] }, false));
+    // An optimized frame carries only what changed: a cleared citable list.
+    act(() =>
+      result.current.updateStreamingQuest(
+        { id: 'q1', sessionId: 's1', replies: ['ab'], promptMeta: { citables: [] } },
+        false
+      )
+    );
+
+    const updater = setChatCompletion.mock.calls[1][0] as (prev: any) => any;
+    const quest = updater({
+      quest: { id: 'q1', promptMeta: { model: 'gpt', warnings: ['note'], citables: [{ id: 'fileA' }] } },
+    }).quest;
+
+    // The cleared citables win; everything the full frame delivered survives.
+    expect(quest.promptMeta).toEqual({ model: 'gpt', warnings: ['note'], citables: [] });
+  });
+
   it('returns referentially stable callbacks across re-renders', () => {
     const chatCompletionRef = { current: { rapidReply: undefined } };
     const setChatCompletion = vi.fn();

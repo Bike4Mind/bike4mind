@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes, settingsMap } from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
@@ -353,6 +353,22 @@ describe('createFabFile MaxFileSize enforcement - cleared setting no longer bloc
       )
     ).resolves.toBeDefined();
   });
+
+  it('refuses a file over the cap with a file_too_large code and the byte counts', async () => {
+    const limit = settingsMap.MaxFileSize.defaultValue! * 1024 * 1024;
+
+    await expect(
+      createFabFile(
+        mockUserId,
+        { fileName: 'huge.txt', mimeType: 'text/plain', fileSize: limit + 1, type: KnowledgeType.FILE },
+        mockAdapters
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      info: { errorCode: 'file_too_large', limit_bytes: limit, requested_bytes: limit + 1, owner: 'user' },
+    });
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('createFabFile provenance', () => {
@@ -623,5 +639,112 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
 
     expect(result.tags).toBeUndefined();
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('createFabFile - owning organization', () => {
+  const orgLake = {
+    id: 'lake-1',
+    datalakeTag: 'datalake:team',
+    createdByUserId: 'u1',
+    organizationId: 'org-1',
+    createdAt: new Date('2026-01-01'),
+  };
+
+  function ownerAdapters(): CreateFabFileAdapters {
+    return {
+      db: {
+        // any: only the fields prepareFabFile reads are stubbed.
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1' } as any) },
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn(async (tag: string) => (tag === orgLake.datalakeTag ? (orgLake as any) : null)),
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://signed'), upload: vi.fn() },
+    };
+  }
+
+  const file = { ...base, fileName: 'notes.txt', mimeType: 'text/plain' };
+
+  it('persists the org of the org-owned lake the file joins', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+
+  // The request's organizationId is the user's selected org, which is a display preference: a file
+  // uploaded with an org selected stays personal unless it joins one of that org's lakes.
+  it('never persists the caller-supplied organizationId', async () => {
+    const created = await createFabFile('u1', { ...file, organizationId: 'org-from-request' }, ownerAdapters());
+    expect(created).not.toHaveProperty('organizationId');
+  });
+
+  it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, organizationId: 'org-from-request', tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+});
+
+describe('createFabFile - organization storage limit lookup', () => {
+  beforeEach(() => invalidateSettingsCache());
+  afterEach(() => invalidateSettingsCache());
+
+  // Shaped like the real repositories: findById is a prototype method that reads `this`, so it
+  // only works when called on the adapter, not as a detached function.
+  class OrganizationsAdapter {
+    private readonly model = new Map([['org-1', { id: 'org-1', storageLimit: 1000, currentStorageSize: 0 }]]);
+    async findById(id: string) {
+      return (this.model.get(id) ?? null) as never;
+    }
+  }
+
+  const MB = 1024 * 1024;
+  const orgFile = (organizationId?: string) => ({
+    fileName: 'report.md',
+    mimeType: 'text/markdown',
+    fileSize: 10,
+    type: KnowledgeType.TEXT,
+    ...(organizationId && { organizationId }),
+  });
+  const deps = (opts: { organizations?: OrganizationsAdapter; user?: Record<string, unknown> } = {}) =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0, ...opts.user }),
+        },
+        ...(opts.organizations && { organizations: opts.organizations }),
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/x'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('looks the organization up through the adapter it was given', async () => {
+    await expect(
+      createFabFile('u1', orgFile('org-1'), deps({ organizations: new OrganizationsAdapter() }))
+    ).resolves.toMatchObject({ id: 'fab-1' });
+  });
+
+  it('refuses an organization id the adapter does not find', async () => {
+    await expect(
+      createFabFile('u1', orgFile('org-missing'), deps({ organizations: new OrganizationsAdapter() }))
+    ).rejects.toThrow('Organization not found');
+  });
+
+  it('falls back to the per-user limit when no organizations adapter is wired', async () => {
+    await expect(createFabFile('u1', orgFile('org-1'), deps())).resolves.toMatchObject({ id: 'fab-1' });
+    await expect(
+      createFabFile('u1', orgFile('org-1'), deps({ user: { storageLimit: 1, currentStorageSize: 1 * MB } }))
+    ).rejects.toThrow('File size exceeds storage limit');
   });
 });

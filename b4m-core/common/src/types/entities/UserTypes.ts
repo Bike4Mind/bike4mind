@@ -168,8 +168,6 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
-  /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
-  saveGeneratedAudio?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
 }
@@ -246,8 +244,10 @@ export interface IUser extends ICreditHolder {
   /**
    * Invite-resolved credit amount awaiting proof of email ownership. Set at
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
-   * registerViaOTC or the email-verify route. Null when nothing is pending - the
-   * open-registration path leaves it null and grants `defaultFreeCredits` instead.
+   * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
+   * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
+   * nothing is pending - the open-registration path leaves it null and grants
+   * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
   level: UserLevelType;
@@ -277,6 +277,11 @@ export interface IUser extends ICreditHolder {
    * Multi-Factor Authentication configuration
    */
   mfa: IMFAConfig | null;
+  /**
+   * Last accepted TOTP time step; a code at or below it is a replay. Kept outside `mfa` because
+   * MFA success writes replace that subdocument whole and would roll a concurrent claim back.
+   */
+  totpLastStep?: number | null;
 
   /**
    * The IDs of the system files that the user has created and enabled on their profile
@@ -675,6 +680,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
+   * Whether any user other than `excludeUserId` holds `email`, compared trimmed and
+   * case-insensitively. Engine-portable (MongoDB and DocumentDB), unlike the collation lookups.
+   */
+  existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
+  /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
+  existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
+  /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
    * cannot mistake it for a single-user operation.
@@ -684,6 +696,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   clearOrganizationPointer: (organizationId: string) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
+  /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
+  addTagsToUser: (userId: string, tags: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
   /** Charge `count` referrals (floored at zero) and add the invites they created to `regInvites`. */
@@ -705,6 +719,15 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByIdWithNotionToken: (id: string) => Promise<IUserDocument | null>;
   findByIdWithMfaSecrets: (id: string) => Promise<IUserDocument | null>;
   atomicRecordMfaFailedAttempt: (userId: string) => Promise<IUserDocument | null>;
+  atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
+  atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
+  atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
+  /**
+   * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
+   * Returns null when a concurrent setup replaced the secret, so a code verified against a
+   * superseded secret never enables a secret the user's authenticator does not hold.
+   */
+  atomicEnableMfa: (userId: string, totpSecret: string) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
   // `id` is included so callers can map results back to the requested ids (Mongoose adds the
@@ -732,6 +755,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * @param count - The amount to increment by (can be negative for decrements)
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
+  /**
+   * Compare-and-set `currentStorageSize`: writes `next` only while the stored counter still equals
+   * `expected` (a missing counter counts as 0). Returns false when a concurrent charge or refund moved
+   * it, so a recalculated absolute value never overwrites an adjustment it did not see.
+   */
+  setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
+  findCurrentStorageSize: (userId: string) => Promise<number | null>;
+  /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */
+  listUserIdsAfter: (afterId: string | null, limit: number) => Promise<string[]>;
   /**
    * Atomically bump the user's tokenVersion - the server-side session kill switch.
    * Every currently-issued access/refresh token for the user carries the old version and

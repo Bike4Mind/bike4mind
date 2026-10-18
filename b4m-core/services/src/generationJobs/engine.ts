@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import { MAX_STEP_ATTEMPTS, pollDelaySeconds } from './backoff';
 import type {
+  CancelRequestOutcome,
   GenerationJobEngineDeps,
   GenerationJobHandler,
   GenerationJobStepContext,
@@ -16,6 +17,10 @@ import type {
 } from './types';
 
 const isTerminal = (state: GenerationJobState) => TERMINAL_GENERATION_JOB_STATES.includes(state);
+
+// A sync submit always commits the job out of running, so a sync job leased while still running died mid-call.
+const isOrphanedSubmit = (job: IGenerationJobDocument, handler: GenerationJobHandler) =>
+  !!job.submitAttemptedAt && (job.state === 'pending' || (job.state === 'running' && handler.submitMode === 'sync'));
 
 // SQS delayed delivery can land slightly early; dropping an on-time message would stall the job until the sweep.
 const EARLY_DELIVERY_GRACE_MS = 2000;
@@ -33,6 +38,11 @@ export type StepOptions = {
 
 const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
 
+const CANCELLED_BY_USER: GenerationJobCommit = {
+  state: 'cancelled',
+  error: { code: 'cancelled', message: 'Cancelled by the user' },
+};
+
 type Lease = Extract<GenerationJobCommitGuard, { kind: 'lease' }>;
 
 /**
@@ -48,13 +58,29 @@ export class GenerationJobEngine {
     if (deps.leaseMs <= STEP_COMMIT_MARGIN_MS) {
       throw new Error(`leaseMs must exceed ${STEP_COMMIT_MARGIN_MS}ms, got ${deps.leaseMs}`);
     }
-    this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler]));
+    // The one narrowing point: handlers are typed per kind, and the map is keyed by kind, so the handler looked up
+    // for a job's kind only ever receives jobs of that kind. Every use below goes through this map.
+    this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler as GenerationJobHandler]));
   }
 
-  async requestCancel(jobId: string): Promise<IGenerationJobDocument | null> {
-    const job = await this.deps.repository.requestCancel(jobId);
-    if (job) await this.deps.enqueue(job.id, 0);
-    return job;
+  async requestCancel(target: Pick<IGenerationJobDocument, 'id' | 'kind'>): Promise<CancelRequestOutcome> {
+    const options = { beforeSubmitOnly: this.handlerFor(target).submitMode === 'sync' };
+    const requested = await this.deps.repository.requestCancel(target.id, options);
+    if (requested) return this.cancelRequested(requested);
+    const job = await this.deps.repository.findById(target.id);
+    // A sync submit refused the cancel, then retried back to an unsubmitted pending: it is cancellable again.
+    if (job?.state === 'pending' && !job.submitAttemptedAt) {
+      const retried = await this.deps.repository.requestCancel(target.id, options);
+      return retried ? this.cancelRequested(retried) : { status: 'not_cancellable', job };
+    }
+    // Refused while running: only a sync job whose provider call has started.
+    if (job?.state === 'running') return { status: 'not_cancellable', job };
+    return { status: 'unchanged', job };
+  }
+
+  private async cancelRequested(job: IGenerationJobDocument): Promise<CancelRequestOutcome> {
+    await this.deps.enqueue(job.id, 0);
+    return { status: 'requested', job };
   }
 
   /**
@@ -95,7 +121,7 @@ export class GenerationJobEngine {
     const context: GenerationJobStepContext = { signal: AbortSignal.timeout(stepBudgetMs) };
 
     // Checked before cancel and deadline so neither can suppress the orphan alarm.
-    if (job.state === 'pending' && job.submitAttemptedAt) {
+    if (isOrphanedSubmit(job, handler)) {
       this.deps.logger.error('generation_job_orphaned_submit', {
         jobId: job.id,
         kind: job.kind,
@@ -113,10 +139,7 @@ export class GenerationJobEngine {
     // Storing means the provider already produced (and billed) the output, so a cancel no longer saves anything.
     if (job.cancelRequested && job.state !== 'storing') {
       if (job.state === 'running') await this.bestEffortCancel(job, handler, context);
-      return this.toTerminal(job, handler, lease, {
-        state: 'cancelled',
-        error: { code: 'cancelled', message: 'Cancelled by the user' },
-      });
+      return this.toTerminal(job, handler, lease, CANCELLED_BY_USER);
     }
 
     // An early or duplicate delivery would otherwise fork a second, permanent message chain for the job.
@@ -134,11 +157,12 @@ export class GenerationJobEngine {
       });
     }
 
+    if (job.state === 'pending') return this.submit(job, handler, lease, context);
     const result = await this.runStep(job, handler, context);
     return this.apply(job, handler, lease, result, context);
   }
 
-  private handlerFor(job: IGenerationJobDocument): GenerationJobHandler {
+  private handlerFor(job: Pick<IGenerationJobDocument, 'kind'>): GenerationJobHandler {
     const handler = this.handlers.get(job.kind);
     if (!handler) throw new Error(`no generation job handler registered for kind '${job.kind}'`);
     return handler;
@@ -149,7 +173,6 @@ export class GenerationJobEngine {
     handler: GenerationJobHandler,
     context: GenerationJobStepContext
   ): Promise<StepResult> {
-    if (job.state === 'pending') return this.submit(job, handler, context);
     try {
       return job.state === 'running' ? await handler.poll(job, context) : await handler.store(job, context);
     } catch (error) {
@@ -158,14 +181,27 @@ export class GenerationJobEngine {
     }
   }
 
+  private async submit(
+    job: IGenerationJobDocument,
+    handler: GenerationJobHandler,
+    lease: Lease,
+    context: GenerationJobStepContext
+  ): Promise<StepOutcome> {
+    const markRunning = handler.submitMode === 'sync';
+    const attempted = await this.deps.repository.markSubmitAttempted(job.id, this.deps.now(), { markRunning });
+    // A cancel that landed after this step's own check. The provider was never called, so nothing is billed.
+    if (!attempted) return this.toTerminal(job, handler, lease, CANCELLED_BY_USER);
+    if (markRunning) await this.safeNotify(attempted);
+    return this.apply(job, handler, lease, await this.callSubmit(job, handler, context), context);
+  }
+
   // A provider job created by a submit we cannot see would bill without ever being polled, so any submit whose
   // outcome is unknown fails the job rather than risk a duplicate. See GenerationJobHandler.submit.
-  private async submit(
+  private async callSubmit(
     job: IGenerationJobDocument,
     handler: GenerationJobHandler,
     context: GenerationJobStepContext
   ): Promise<StepResult> {
-    await this.deps.repository.markSubmitAttempted(job.id, this.deps.now());
     try {
       return await handler.submit(job, context);
     } catch (error) {
@@ -207,7 +243,8 @@ export class GenerationJobEngine {
           });
         }
         // A retry from pending is a definitive submit rejection that created nothing, so resubmitting is safe.
-        const clearSubmit = job.state === 'pending' ? { submitAttemptedAt: null } : {};
+        // The state reset undoes a sync submit's move to running.
+        const clearSubmit = job.state === 'pending' ? { state: 'pending' as const, submitAttemptedAt: null } : {};
         return this.advance(job, lease, { attempts, ...clearSubmit }, pollDelaySeconds(attempts - 1));
       }
       case 'succeeded':

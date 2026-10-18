@@ -54,7 +54,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -73,15 +73,15 @@ function infoDescription(): string {
     `Each API key has a per-minute and a per-day request ceiling, by default ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
-      'Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint excepted):',
+      'Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):',
     ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. The streaming completions endpoint is the exception: ' +
-      '`POST /api/ai/v1/completions` opens its `200` event stream before rate-limiting, so an exceeded ' +
-      'ceiling arrives as an in-stream `error` event rather than a `429`. ' +
-      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, the `GET` list ' +
-      'endpoints for `/api/v1/sessions` and `/api/v1/video-generations`, and the poll endpoints listed under ' +
+      'that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it ' +
+      'opens its event stream. ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
+      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',
@@ -89,7 +89,7 @@ function infoDescription(): string {
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
       "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
-      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      'which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with ' +
       '`422` and ' +
       '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
       '(see Async jobs), so check both places.',
@@ -123,9 +123,14 @@ function infoDescription(): string {
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
     '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
+    '- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call ' +
+      'returns the text. Long audio can outlast the request timeout and fail with a `504`; see that ' +
+      'endpoint for the limit.',
     '',
     'Poll with a backoff of a few seconds: each poll counts against the per-minute limit.',
     '',
@@ -355,8 +360,25 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
-    { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    {
+      name: 'Audio',
+      description:
+        'Speech, music, and sound-effect generation. For music, use `POST /api/v1/music-generations`; ' +
+        '`/api/ai/music` is deprecated.',
+    },
+    {
+      name: 'Music',
+      description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',
+    },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Transcriptions',
+      description: 'Speech-to-text: upload an audio file, then transcribe it.',
+    },
+    {
+      name: 'Artifacts',
+      description: 'Diagrams, charts, code and documents kept in sessions, with their version history.',
+    },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     {
       name: 'Videos',

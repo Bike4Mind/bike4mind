@@ -1,18 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { B4mApiError } from '@bike4mind/sdk';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
 const mockPut = vi.fn();
 const mockDelete = vi.fn();
-const mockAxiosPost = vi.fn();
+// The SDK calls go through ApiClient.fetch.
+const mockFetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
     put = mockPut;
     delete = mockDelete;
-    getAxiosInstance = () => ({ post: mockAxiosPost });
+    fetch = mockFetch;
   },
   // Mirrors the real class identity mapApiError keys on: the mocked module and the
   // code under test must share the same class, or `instanceof` would never match.
@@ -35,6 +37,23 @@ const axiosError = (status: number, opts: { headers?: Record<string, string>; da
     headers: opts.headers ?? {},
     config: {} as InternalAxiosRequestConfig,
   } as AxiosResponse);
+
+const jsonResponse = (body: unknown, init: { status?: number; headers?: Record<string, string> } = {}) =>
+  new Response(JSON.stringify(body), {
+    status: init.status ?? 200,
+    headers: { 'content-type': 'application/json', ...init.headers },
+  });
+
+/** The last request the SDK sent through ApiClient.fetch. */
+function sent() {
+  const [url, init] = mockFetch.mock.calls[mockFetch.mock.calls.length - 1] ?? [];
+  return {
+    url: String(url),
+    method: init?.method,
+    body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    redirect: init?.redirect,
+  };
+}
 
 describe('B4mApiClient', () => {
   let client: B4mApiClient;
@@ -74,9 +93,9 @@ describe('B4mApiClient', () => {
   });
 
   it('gets a notebook by id (url-encoded)', async () => {
-    mockGet.mockResolvedValue({ id: 'n 1' });
-    await client.getNotebook('n 1');
-    expect(mockGet).toHaveBeenCalledWith('/api/sessions/n%201');
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'n 1' }));
+    await expect(client.getNotebook('n 1')).resolves.toEqual({ id: 'n 1' });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/sessions/n%201', method: 'GET' });
   });
 
   it('posts the briefcase catalog queries and unwraps the catalog map', async () => {
@@ -100,72 +119,90 @@ describe('B4mApiClient', () => {
   });
 
   it('creates a notebook with only the provided fields', async () => {
-    mockPost.mockResolvedValue({ id: 'n1' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB' });
-    expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB' });
+    expect(sent()).toEqual({
+      url: 'http://localhost:3000/api/v1/sessions',
+      method: 'POST',
+      body: { name: 'My NB' },
+      redirect: undefined,
+    });
   });
 
   it('queues an image generation, mapping notebookId to sessionId and omitting unset fields', async () => {
-    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
 
     await client.generateImage({ prompt: 'a lighthouse', model: 'gpt-image-1', notebookId: 'nb1' });
 
-    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
-      prompt: 'a lighthouse',
-      model: 'gpt-image-1',
-      sessionId: 'nb1',
+    expect(sent()).toMatchObject({
+      url: 'http://localhost:3000/api/v1/image-generations',
+      method: 'POST',
+      body: { prompt: 'a lighthouse', model: 'gpt-image-1', sessionId: 'nb1' },
     });
   });
 
   it('forwards size and projectId on an image generation', async () => {
-    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
 
     await client.generateImage({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
 
-    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
-      prompt: 'p',
-      model: 'gpt-image-1',
-      size: '1024x1024',
-      projectId: 'p1',
-    });
+    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
   });
 
   it('sends prompt_resolution on an image generation when promptResolution is set', async () => {
-    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+    mockFetch.mockResolvedValue(jsonResponse({ quest: { id: 'q1' } }));
 
     await client.generateImage({ prompt: 'p', model: 'gpt-image-2', promptResolution: 'literal' });
 
-    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
-      prompt: 'p',
-      model: 'gpt-image-2',
-      prompt_resolution: 'literal',
-    });
+    expect(sent().body).toEqual({ prompt: 'p', model: 'gpt-image-2', prompt_resolution: 'literal' });
   });
 
   it('forwards dataLakeId on create only when set', async () => {
-    mockPost.mockResolvedValue({ id: 'n1' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });
-    expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB', dataLakeId: 'lake-1' });
+    expect(sent().body).toEqual({ name: 'My NB', dataLakeId: 'lake-1' });
   });
 
   const NB_ID = '64b7f0c2a1e4d5f6a7b8c9d0';
 
   it('renames a notebook via PUT with only the name', async () => {
-    mockPut.mockResolvedValue({ id: NB_ID });
+    mockFetch.mockResolvedValue(jsonResponse({ id: NB_ID }));
     await client.renameNotebook(NB_ID, 'Renamed');
-    expect(mockPut).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { name: 'Renamed' });
+    expect(sent()).toMatchObject({
+      url: `http://localhost:3000/api/sessions/${NB_ID}`,
+      method: 'PUT',
+      body: { name: 'Renamed' },
+    });
   });
 
   it('clones a notebook via POST .../clone', async () => {
-    mockPost.mockResolvedValue({ id: 'n2' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'n2' }));
     await client.cloneNotebook(NB_ID);
-    expect(mockPost).toHaveBeenCalledWith(`/api/sessions/${NB_ID}/clone`, {});
+    expect(sent()).toMatchObject({
+      url: `http://localhost:3000/api/v1/sessions/${NB_ID}/clone`,
+      method: 'POST',
+      body: {},
+    });
+  });
+
+  it('stops one turn via POST .../chat/stop-reply with its quest id and a short timeout', async () => {
+    mockPost.mockResolvedValue({ status: 'cancelled' });
+    await client.stopReply(NB_ID, 'q1');
+    expect(mockPost).toHaveBeenCalledWith(
+      `/api/sessions/${NB_ID}/chat/stop-reply`,
+      { questId: 'q1' },
+      { timeout: 10_000 }
+    );
   });
 
   it('deletes a notebook via DELETE without following redirects', async () => {
-    mockDelete.mockResolvedValue({ newLastNotebookId: null });
+    mockFetch.mockResolvedValue(jsonResponse({ newLastNotebookId: null }));
     await expect(client.deleteNotebook(NB_ID)).resolves.toEqual({ newLastNotebookId: null });
-    expect(mockDelete).toHaveBeenCalledWith(`/api/sessions/${NB_ID}`, { maxRedirects: 0 });
+    expect(sent()).toMatchObject({
+      url: `http://localhost:3000/api/sessions/${NB_ID}`,
+      method: 'DELETE',
+      redirect: 'manual',
+    });
   });
 
   // '' or '.' would reach DELETE /api/sessions (delete-all) after the trailing-slash redirect.
@@ -175,32 +212,29 @@ describe('B4mApiClient', () => {
       await expect(client.renameNotebook(id, 'x')).rejects.toThrow('Invalid notebook id');
       await expect(client.cloneNotebook(id)).rejects.toThrow('Invalid notebook id');
       await expect(client.deleteNotebook(id)).rejects.toThrow('Invalid notebook id');
-      expect(mockPut).not.toHaveBeenCalled();
-      expect(mockPost).not.toHaveBeenCalled();
-      expect(mockDelete).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     }
   );
 
   it('lists data lakes with flat limit/cursor params and maps next_cursor', async () => {
-    mockGet.mockResolvedValue({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], next_cursor: 'c2' });
+    mockFetch.mockResolvedValue(jsonResponse({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], next_cursor: 'c2' }));
     const result = await client.listDataLakes({ limit: 10, cursor: 'c1' });
-    expect(mockGet).toHaveBeenCalledWith('/api/v1/data-lakes', { params: { limit: 10, cursor: 'c1' } });
+    expect(sent().url).toBe('http://localhost:3000/api/v1/data-lakes?limit=10&cursor=c1');
     expect(result).toEqual({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], nextCursor: 'c2' });
   });
 
   it('omits cursor when listing the first page of data lakes', async () => {
-    mockGet.mockResolvedValue({ data: [], next_cursor: null });
+    mockFetch.mockResolvedValue(jsonResponse({ data: [], next_cursor: null }));
     const result = await client.listDataLakes({ limit: 25 });
-    expect(mockGet).toHaveBeenCalledWith('/api/v1/data-lakes', { params: { limit: 25 } });
-    // toHaveBeenCalledWith treats `cursor: undefined` as absent; pin that the key is not sent at all.
-    expect(mockGet.mock.calls[0][1].params).not.toHaveProperty('cursor');
+    expect(sent().url).toBe('http://localhost:3000/api/v1/data-lakes?limit=25');
     expect(result).toEqual({ data: [], nextCursor: null });
   });
 
   it('sends a chat message with wait:false and maps notebookId to sessionId', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'q1', status: 'queued' }));
     await client.sendChat({ notebookId: 'nb1', message: 'hi', model: 'gpt' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/chat', method: 'POST' });
+    expect(sent().body).toEqual({
       sessionId: 'nb1',
       message: 'hi',
       model: 'gpt',
@@ -209,9 +243,9 @@ describe('B4mApiClient', () => {
   });
 
   it('starts a new conversation when no notebookId is supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'queued', sessionId: 'fresh-nb' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'q1', status: 'queued', sessionId: 'fresh-nb' }));
     await client.sendChat({ message: 'hi' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+    expect(sent().body).toEqual({
       newConversation: true,
       message: 'hi',
       wait: false,
@@ -219,9 +253,9 @@ describe('B4mApiClient', () => {
   });
 
   it('forwards a supplied systemPrompt in the chat body', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'q1', status: 'queued' }));
     await client.sendChat({ notebookId: 'nb1', message: 'hi', systemPrompt: 'Reply only in haiku.' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+    expect(sent().body).toEqual({
       sessionId: 'nb1',
       message: 'hi',
       systemPrompt: 'Reply only in haiku.',
@@ -229,9 +263,15 @@ describe('B4mApiClient', () => {
     });
   });
   it('omits systemPrompt entirely from the body when not supplied', async () => {
-    mockPost.mockResolvedValue({ id: 'q1', status: 'queued' });
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'q1', status: 'queued' }));
     await client.sendChat({ notebookId: 'nb1', message: 'hi' });
-    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: false });
+    expect(sent().body).toEqual({ sessionId: 'nb1', message: 'hi', wait: false });
+  });
+
+  it('polls the v1 quest route', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ id: 'q 1', status: 'done', sessionId: 's1' }));
+    await expect(client.getQuest('q 1')).resolves.toMatchObject({ status: 'done' });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/quests/q%201', method: 'GET' });
   });
 
   it('searches the knowledge base via semantic-search and returns scores', async () => {
@@ -275,14 +315,9 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
   });
 
-  const jsonBody = (value: unknown) => ({
-    data: Buffer.from(JSON.stringify(value)),
-    headers: { 'content-type': 'application/json' },
-  });
-
   it('generates a sound effect with base64 encoding and parses the JSON body', async () => {
-    mockAxiosPost.mockResolvedValue(
-      jsonBody({
+    mockFetch.mockResolvedValue(
+      jsonResponse({
         delivery: 'inline',
         audio: 'YXVkaW8tYnl0ZXM=',
         contentType: 'audio/mpeg',
@@ -301,9 +336,10 @@ describe('B4mApiClient', () => {
       format: 'mp3_44100_128',
     });
 
-    expect(mockAxiosPost).toHaveBeenCalledWith(
-      '/api/ai/sound-effects',
-      {
+    expect(sent()).toMatchObject({
+      url: 'http://localhost:3000/api/ai/sound-effects',
+      method: 'POST',
+      body: {
         provider: 'elevenlabs',
         text: 'thunderclap',
         durationSeconds: 3,
@@ -311,8 +347,7 @@ describe('B4mApiClient', () => {
         format: 'mp3_44100_128',
         encoding: 'base64',
       },
-      { responseType: 'arraybuffer' }
-    );
+    });
     expect(result).toEqual({
       delivery: 'inline',
       audio: 'YXVkaW8tYnl0ZXM=',
@@ -325,8 +360,13 @@ describe('B4mApiClient', () => {
   });
 
   it('returns the url variant for an oversized sound effect', async () => {
-    mockAxiosPost.mockResolvedValue(
-      jsonBody({ delivery: 'url', url: 'https://signed.example/big.mp3', bytes: 9_000_000, contentType: 'audio/mpeg' })
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        delivery: 'url',
+        url: 'https://signed.example/big.mp3',
+        bytes: 9_000_000,
+        contentType: 'audio/mpeg',
+      })
     );
 
     await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'long' })).resolves.toEqual({
@@ -338,16 +378,17 @@ describe('B4mApiClient', () => {
   });
 
   it('normalizes an old server raw-bytes answer into the inline variant using the X-B4M-Audio headers', async () => {
-    mockAxiosPost.mockResolvedValue({
-      data: Buffer.from('audio-bytes'),
-      headers: {
-        'content-type': 'audio/mpeg',
-        'x-b4m-audio-saved': 'true',
-        'x-b4m-audio-fab-file-id': 'fab1',
-        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
-        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
-      },
-    });
+    mockFetch.mockResolvedValue(
+      new Response(Buffer.from('audio-bytes'), {
+        headers: {
+          'content-type': 'audio/mpeg',
+          'x-b4m-audio-saved': 'true',
+          'x-b4m-audio-fab-file-id': 'fab1',
+          'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
+          'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+        },
+      })
+    );
 
     const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'thunderclap' });
 
@@ -363,17 +404,16 @@ describe('B4mApiClient', () => {
   });
 
   it('drops the old-server file headers when the save header is not "true"', async () => {
-    // A duplicated header arrives as an array; only the scalar string form is kept,
-    // and none of the file headers are read at all unless the save actually succeeded.
-    mockAxiosPost.mockResolvedValue({
-      data: Buffer.from('audio-bytes'),
-      headers: {
-        'content-type': 'audio/mpeg',
-        'x-b4m-audio-saved': 'false',
-        'x-b4m-audio-fab-file-id': ['fab1', 'fab2'],
-        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
-      },
-    });
+    mockFetch.mockResolvedValue(
+      new Response(Buffer.from('audio-bytes'), {
+        headers: {
+          'content-type': 'audio/mpeg',
+          'x-b4m-audio-saved': 'false',
+          'x-b4m-audio-fab-file-id': 'fab1',
+          'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+        },
+      })
+    );
 
     const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
 
@@ -384,7 +424,7 @@ describe('B4mApiClient', () => {
   });
 
   it('reports not-saved for an old-server answer with no audio headers beyond the content type', async () => {
-    mockAxiosPost.mockResolvedValue({ data: Buffer.from('bytes'), headers: { 'content-type': 'audio/mpeg' } });
+    mockFetch.mockResolvedValue(new Response(Buffer.from('bytes'), { headers: { 'content-type': 'audio/mpeg' } }));
 
     const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
 
@@ -392,41 +432,29 @@ describe('B4mApiClient', () => {
     expect((result as Record<string, unknown>).fabFileId).toBeUndefined();
   });
 
-  it('decodes an arraybuffer error body so mapApiError can read the server message', async () => {
-    const bodyBytes = Buffer.from(JSON.stringify({ error: 'Sound generation failed' }));
-    mockAxiosPost.mockRejectedValue(axiosError(502, { data: bodyBytes }));
+  it('surfaces an audio failure as a B4mApiError mapApiError can read', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Sound generation failed' }, { status: 502 }));
 
-    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
-      response: { data: { error: 'Sound generation failed' } },
-    });
-  });
-
-  it('decodes an already-stringified error body (non-Node adapter shape)', async () => {
-    mockAxiosPost.mockRejectedValue(
-      axiosError(503, { data: JSON.stringify({ error: 'No elevenlabs API key configured' }) })
-    );
-
-    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
-      response: { data: { error: 'No elevenlabs API key configured' } },
-    });
+    const error = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' }).catch(e => e);
+    expect(error).toBeInstanceOf(B4mApiError);
+    expect(mapApiError(error, 'http://x')).toBe('Sound generation failed');
   });
 
   it('synthesizes speech through the TTS route with base64 encoding', async () => {
-    mockAxiosPost.mockResolvedValue(jsonBody({ audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true }));
+    mockFetch.mockResolvedValue(jsonResponse({ audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true }));
 
     const result = await client.synthesizeSpeech({ text: 'Hello', provider: 'openai', voice: 'alloy' });
 
-    expect(mockAxiosPost).toHaveBeenCalledWith(
-      '/api/ai/tts',
-      { text: 'Hello', provider: 'openai', voice: 'alloy', encoding: 'base64' },
-      { responseType: 'arraybuffer' }
-    );
+    expect(sent()).toMatchObject({
+      url: 'http://localhost:3000/api/ai/tts',
+      body: { text: 'Hello', provider: 'openai', voice: 'alloy', encoding: 'base64' },
+    });
     expect(result).toMatchObject({ kind: 'audio', data: { audio: 'YWJj' } });
   });
 
   it('returns the url variant for oversized TTS audio', async () => {
-    mockAxiosPost.mockResolvedValue(
-      jsonBody({
+    mockFetch.mockResolvedValue(
+      jsonResponse({
         delivery: 'url',
         url: 'https://signed.example/offload.mp3',
         bytes: 5_000_000,
@@ -441,38 +469,18 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('returns a saved file from a legacy 413 whose error body arrives as bytes', async () => {
-    mockAxiosPost.mockRejectedValue(
-      axiosError(413, {
-        data: Buffer.from(
-          JSON.stringify({
-            error: 'Response too large',
-            provider: 'elevenlabs',
-            saved: true,
-            fabFileId: 'fab1',
-            fileUrl: 'https://signed.example/audio.mp3',
-          })
-        ),
-      })
-    );
-
-    await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toMatchObject({
-      kind: 'saved-too-large',
-      data: { fabFileId: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
-    });
-  });
-
   it('returns a saved file from an oversized billed TTS response', async () => {
-    mockAxiosPost.mockRejectedValue(
-      axiosError(413, {
-        data: {
+    mockFetch.mockResolvedValue(
+      jsonResponse(
+        {
           error: 'Response too large',
           provider: 'elevenlabs',
           saved: true,
           fabFileId: 'fab1',
           fileUrl: 'https://signed.example/audio.mp3',
         },
-      })
+        { status: 413 }
+      )
     );
 
     await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toMatchObject({
@@ -482,17 +490,17 @@ describe('B4mApiClient', () => {
   });
 
   it('preserves an oversized TTS error when no saved file can be retrieved', async () => {
-    mockAxiosPost.mockRejectedValue(axiosError(413, { data: { error: 'Response too large', provider: 'openai' } }));
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Response too large', provider: 'openai' }, { status: 413 }));
 
-    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ status: 413 });
   });
 
   it('keeps the saved file id and fallback provider from an oversized TTS response without a URL', async () => {
-    mockAxiosPost.mockRejectedValue(
-      axiosError(413, {
-        data: { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
-        headers: { 'x-b4m-tts-provider-fallback-from': 'openai' },
-      })
+    mockFetch.mockResolvedValue(
+      jsonResponse(
+        { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
+        { status: 413, headers: { 'x-b4m-tts-provider-fallback-from': 'openai' } }
+      )
     );
 
     await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toEqual({
@@ -502,19 +510,32 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('rethrows an oversized TTS error whose body does not match the 413 schema', async () => {
-    mockAxiosPost.mockRejectedValue(
-      axiosError(413, { data: { error: 'Response too large', saved: true, fabFileId: 'fab1' } })
+  it('drops a fallback provider header that names no known vendor', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse(
+        { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
+        { status: 413, headers: { 'x-b4m-tts-provider-fallback-from': 'nobody' } }
+      )
     );
 
-    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
+    expect(await client.synthesizeSpeech({ text: 'Hello' })).not.toHaveProperty('fallbackFrom');
   });
 
-  it('rethrows a non-413 TTS failure unchanged', async () => {
-    const failure = axiosError(500, { data: { error: 'Failed to generate speech' } });
-    mockAxiosPost.mockRejectedValue(failure);
+  it('rethrows an oversized TTS error whose body does not match the 413 schema', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ error: 'Response too large', saved: true, fabFileId: 'fab1' }, { status: 413 })
+    );
 
-    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toBe(failure);
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ status: 413 });
+  });
+
+  it('rethrows a non-413 TTS failure', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Failed to generate speech' }, { status: 500 }));
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({
+      status: 500,
+      message: 'Failed to generate speech',
+    });
   });
 
   it('lists projects with nested pagination and normalizes the envelope', async () => {
@@ -553,21 +574,99 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/projects/p%201');
   });
 
-  it('creates a project, forwarding name, description and non-empty id lists', async () => {
-    mockPost.mockResolvedValue({ id: 'p1' });
-    await client.createProject({ name: 'Apollo', description: 'Moon', sessionIds: ['s1'], fileIds: ['f1'] });
-    expect(mockPost).toHaveBeenCalledWith('/api/projects', {
+  const v1Project = {
+    id: 'p1',
+    name: 'Apollo',
+    description: 'Moon',
+    session_ids: ['s1'],
+    file_ids: ['f1'],
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-02T00:00:00.000Z',
+  };
+
+  it('creates a project via v1, mapping the id lists and the snake_case resource', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Project, { status: 201 }));
+    const project = await client.createProject({
       name: 'Apollo',
       description: 'Moon',
       sessionIds: ['s1'],
       fileIds: ['f1'],
     });
+    expect(sent()).toMatchObject({
+      url: 'http://localhost:3000/api/v1/projects',
+      method: 'POST',
+      body: { name: 'Apollo', description: 'Moon', session_ids: ['s1'], file_ids: ['f1'] },
+    });
+    expect(project).toEqual({
+      id: 'p1',
+      name: 'Apollo',
+      description: 'Moon',
+      sessionIds: ['s1'],
+      fileIds: ['f1'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    });
   });
 
   it('omits empty id lists when creating a project', async () => {
-    mockPost.mockResolvedValue({ id: 'p1' });
+    mockFetch.mockResolvedValue(jsonResponse(v1Project, { status: 201 }));
     await client.createProject({ name: 'Apollo', description: 'Moon', sessionIds: [], fileIds: [] });
-    expect(mockPost).toHaveBeenCalledWith('/api/projects', { name: 'Apollo', description: 'Moon' });
+    expect(sent().body).toEqual({ name: 'Apollo', description: 'Moon' });
+  });
+
+  const v1Artifact = {
+    id: 'a1',
+    type: 'html',
+    title: 'Spec',
+    description: null,
+    version: 1,
+    version_tag: null,
+    status: 'draft',
+    tags: ['docs'],
+    session_id: 's1',
+    project_id: null,
+    visibility: 'private',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    content: '<h1>Spec</h1>',
+  };
+
+  it('creates an artifact via v1, sending snake_case ids and mapping the resource', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    const artifact = await client.createArtifact({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      notebookId: 's1',
+      projectId: 'p1',
+      tags: ['docs'],
+    });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/artifacts', method: 'POST' });
+    expect(sent().body).toStrictEqual({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      session_id: 's1',
+      project_id: 'p1',
+      tags: ['docs'],
+    });
+    expect(artifact).toEqual({
+      id: 'a1',
+      type: 'html',
+      title: 'Spec',
+      version: 1,
+      notebookId: 's1',
+      projectId: undefined,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('sends only the required artifact fields when the optional ones are omitted', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    await client.createArtifact({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B', tags: [] });
+    expect(sent().body).toStrictEqual({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' });
   });
 
   it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
@@ -620,6 +719,31 @@ describe('mapApiError', () => {
     vi.useRealTimers();
   });
 
+  const sdkError = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    new B4mApiError(status, body, new Headers(headers));
+
+  it('maps an SDK B4mApiError like the axios error it replaced', () => {
+    expect(mapApiError(sdkError(401, { error: 'x' }), 'http://x')).toContain('authentication failed');
+    expect(mapApiError(sdkError(401, { error: 'No key', errorCode: 'provider_not_configured' }), 'http://x')).toContain(
+      'provider API key'
+    );
+    expect(mapApiError(sdkError(403, {}), 'http://x', 'ai:chat')).toContain('recommended scope: ai:chat');
+    expect(mapApiError(sdkError(429, { error: 'Slow down' }, { 'retry-after': '12' }), 'http://x')).toBe(
+      'Slow down (retry after 12s)'
+    );
+    expect(mapApiError(sdkError(400, { error: 'Query is required' }), 'http://x')).toBe('Query is required');
+  });
+
+  it('maps an SDK 404 without the JSON envelope (route missing) to a server-too-old hint', () => {
+    const msg = mapApiError(sdkError(404, '<!DOCTYPE html><title>404</title>'), 'http://x');
+    expect(msg).toContain('predates this CLI');
+    expect(msg).toContain('http://x');
+  });
+
+  it('keeps the server message for an SDK 404 that carries the JSON envelope (resource missing)', () => {
+    expect(mapApiError(sdkError(404, { error: 'Session not found' }), 'http://x')).toBe('Session not found');
+  });
+
   it('maps 401 to a re-auth hint', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
   });
@@ -666,6 +790,16 @@ describe('mapApiError', () => {
     );
     expect(msg).toContain('CSRF protection triggered');
     expect(msg).not.toContain('API key forbidden');
+  });
+
+  it('surfaces the user-scope ownership message on a 403 instead of the key-scope hint', () => {
+    const msg = mapApiError(
+      axiosError(403, { data: { error: 'You can only publish to your own user scope' } }),
+      'http://x',
+      'files:write'
+    );
+    expect(msg).toContain('You can only publish to your own user scope');
+    expect(msg).not.toContain('recommended scope');
   });
 
   it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
@@ -741,5 +875,99 @@ describe('mapApiError', () => {
 
   it('falls back to the message for a non-axios error', () => {
     expect(mapApiError(new Error('boom'), 'http://x')).toBe('boom');
+  });
+});
+
+describe('B4mApiClient publish', () => {
+  let client: B4mApiClient;
+  const globalFetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', globalFetch);
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens a draft and finalizes it through the authenticated client', async () => {
+    mockPost.mockResolvedValueOnce({ draftId: 'd1', uploadUrls: [] }).mockResolvedValueOnce({ publicId: 'p1' });
+    const request = {
+      tier: 'user' as const,
+      scopeId: 'u1',
+      slug: 'chart-abc',
+      title: 'Chart',
+      files: [{ path: 'index.html', size: 3, mimeType: 'text/html' }],
+    };
+
+    await client.requestPublishUpload(request);
+    await client.finalizePublish('d1');
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/api/publish/artifact/upload-url', request);
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/api/publish/artifact/finalize', { draftId: 'd1' });
+  });
+
+  it('looks up an existing publication by the caller of an artifact', async () => {
+    const page = { publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'chart-1', visibility: 'public' };
+    mockGet.mockResolvedValueOnce({ artifacts: [page] }).mockResolvedValueOnce({ artifacts: [] });
+
+    await expect(client.findPublishedArtifact('artifact_1')).resolves.toEqual(page);
+    await expect(client.findPublishedArtifact('artifact_2')).resolves.toBeNull();
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/api/publish/artifacts', {
+      params: { sourceArtifactId: 'artifact_1', limit: 1 },
+    });
+  });
+
+  it('PUTs draft bytes with plain fetch so no auth header breaks a presigned signature', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile(
+      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      '<p/>',
+      'text/html'
+    );
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1');
+    expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
+  });
+
+  it('resolves a self-host relative proxy URL against the base URL', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
+
+    expect(String(globalFetch.mock.calls[0][0])).toBe(
+      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    );
+  });
+
+  it('fails loudly when the upload is rejected', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+      'publish upload failed (403)'
+    );
+  });
+});
+
+describe('mapApiError publish slug collisions', () => {
+  it('surfaces the server message instead of a key-scope hint', () => {
+    const err = axiosError(403, {
+      data: { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' },
+    });
+
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
+  });
+
+  it('keeps the key-scope hint for any other 403', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
+      'recommended scope: files:write'
+    );
   });
 });

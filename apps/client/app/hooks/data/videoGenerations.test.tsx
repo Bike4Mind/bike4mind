@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   readyState: 1,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  selectedAccount: null as { id: string; personal: boolean } | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
@@ -19,6 +20,9 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ readyState: h.readyState, subscribeToAction: vi.fn() }),
 }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: { getState: () => ({ selectedAccount: h.selectedAccount }) },
+}));
 
 import { listOf, rangeModel, readyOutput, videoJob } from './__test__/videoGenerationFixtures';
 import type { VideoGenerationList } from './videoGenerationCache';
@@ -51,6 +55,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 beforeEach(() => {
   vi.clearAllMocks();
   h.readyState = 1;
+  h.selectedAccount = null;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
 
@@ -230,6 +235,17 @@ describe('useVideoGeneration', () => {
     expect(h.get).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a finished job over a refetch that was read before it finished', async () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1', state: 'succeeded' }));
+    h.get.mockResolvedValue({
+      data: videoJob({ id: 'job-1', state: 'running', updated_at: '2026-10-07T00:01:00.000Z' }),
+    });
+    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await result.current.refetch();
+    expect(h.get).toHaveBeenCalled();
+    expect(queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail('job-1'))?.state).toBe('succeeded');
+  });
+
   it('does not refetch on mount when the detail is already cached', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1' }), {
       updatedAt: Date.now() - 120_000,
@@ -273,6 +289,35 @@ describe('useCreateVideoGeneration', () => {
     expect(list?.pages[0].data.map(job => job.id)).toEqual(['new', 'old']);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
     expect(h.toastSuccess).toHaveBeenCalled();
+  });
+
+  it('bills the org selected in the account switcher at submit time', async () => {
+    h.post.mockResolvedValue({ data: videoJob({ id: 'new', state: 'pending' }) });
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    h.selectedAccount = { id: 'org-1', personal: false };
+    await act(async () => {
+      await result.current.mutateAsync(body);
+    });
+    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', { ...body, organization_id: 'org-1' });
+  });
+
+  it('bills personal credits explicitly when the switcher shows the personal account', async () => {
+    h.post.mockResolvedValue({ data: videoJob({ id: 'new', state: 'pending' }) });
+    h.selectedAccount = { id: 'user-1', personal: true };
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(body);
+    });
+    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', { ...body, organization_id: null });
+  });
+
+  it('omits organization_id while the switcher has no selection, so the server bills the home org', async () => {
+    h.post.mockResolvedValue({ data: videoJob({ id: 'new', state: 'pending' }) });
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(body);
+    });
+    expect(h.post.mock.calls[0][1]).not.toHaveProperty('organization_id');
   });
 
   it('toasts the message for the refusal code, not the server text', async () => {

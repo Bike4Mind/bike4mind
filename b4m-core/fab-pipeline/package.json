@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/fab-pipeline",
-  "version": "2.0.0",
+  "version": "2.1.2",
   "publishConfig": {
     "access": "restricted"
   },
@@ -23,6 +23,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./ssrf": {
+      "import": {
+        "types": "./dist/ssrf.d.mts",
+        "default": "./dist/ssrf.mjs"
+      },
+      "require": {
+        "types": "./dist/ssrf.d.cts",
+        "default": "./dist/ssrf.cjs"
+      }
     }
   },
   "files": [
@@ -40,15 +50,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
-    "@aws-sdk/client-s3": "^3.1080.0",
-    "@aws-sdk/credential-provider-node": "^3.972.63",
-    "@aws-sdk/s3-request-presigner": "^3.1080.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
+    "@aws-sdk/client-s3": "^3.1150.0",
+    "@aws-sdk/credential-provider-node": "^3.972.86",
+    "@aws-sdk/s3-request-presigner": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/db-core": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@opensearch-project/opensearch": "2.11.0",
-    "@smithy/node-http-handler": "^4.9.3",
+    "@smithy/node-http-handler": "^4.12.1",
     "axios": "1.20.0",
     "cheerio": "1.2.0",
     "file-type": "^22.1.0",
@@ -57,10 +67,11 @@
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
+    "undici": "^7.29.0",
     "unpdf": "^1.6.2",
     "voyageai": "^0.4.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "peerDependencies": {
     "mongoose": "^8.22.1"

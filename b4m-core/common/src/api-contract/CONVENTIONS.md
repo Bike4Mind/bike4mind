@@ -146,20 +146,29 @@ re-deciding per endpoint:
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
-| No provider key configured for this deployment | `503` | `provider_not_configured` |
+| Model id unknown or not available to the caller | `400` | `unknown_model` |
+| The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
+| User storage quota exceeded | `400` | `storage_limit_exceeded` |
+| Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
+| Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
+| Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
+| Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
-`503`).
+`503`, `504`).
 
 A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
 resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong
@@ -224,17 +233,15 @@ of credits" across the whole surface.
 
 `402` stays out of the allowed set so an endpoint choosing it fails the build.
 `/api/ai/tts` was the last holdout and has been moved onto `422` +
-`errorCode: "insufficient_credits"`; the uncontracted legacy routes
-`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` still answer `402` and are
-frozen pending their own deprecation (section 7).
+`errorCode: "insufficient_credits"`.
 
 ### One error-code vocabulary
 
 Where an error carries a machine-readable classifier it is the field `errorCode`, and its
 value comes from **one** enumerated union: `API_ERROR_CODES` (`src/apiErrorCodes.ts`).
 
-Per-surface tuples may *narrow* it - `QUEST_ERROR_CODES` for the SSE frame,
-`TTS_ERROR_CODES` for the audio routes - but each declares
+Per-surface tuples may *narrow* it - `QUEST_ERROR_CODES` for quest errors,
+`COMPLETION_SSE_ERROR_CODES` for the completions SSE frame, `TTS_ERROR_CODES` for the audio routes - but each declares
 `satisfies readonly ApiErrorCode[]`, so a code that is not in the shared union fails the
 build. A narrowing is fine; a second union that merely shares the field name is what this
 rule forbids, and is what the TTS provider codes were before they were folded in.
@@ -243,10 +250,13 @@ Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local 
 
 ### Streaming surfaces classify in-band
 
-A streaming endpoint flushes its headers before it authenticates or prices anything, so
-once the stream is open the status is pinned at `200` and every failure past that point
-is reported as an in-band `error` event. That event is the endpoint's whole error
-surface: the status table and the envelope gate above never see it.
+A streaming endpoint validates, authenticates, rate-limits and prices a request before it
+commits its `200`, so every failure it can detect up front is an ordinary JSON error with a
+real status, declared like any other (`registerContract` injects the `401`, the scope `403`
+and the validation status for streaming operations too). Only a failure after the stream has
+opened - the provider failing, or credits running out mid-generation - is reported as an
+in-band `error` event, and that event is the part of the error surface the status table and
+the envelope gate above never see.
 
 **[gated]** A contract with `streaming: true` must publish, in its `200` event schema, a
 `type: "error"` variant carrying a required `message` string and an **optional**
@@ -260,10 +270,14 @@ regex-matching the prose `message` to detect mid-generation credit exhaustion.
 The field is `code` rather than `errorCode` on the SSE frames: they shipped that way and
 are published wire shapes, so what had to be shared was the vocabulary, not the key.
 
-The pairing a caller needs is worth stating in the contract `description`, because it
-differs per surface: `/api/chat` and `/api/embed/chat` can still refuse pre-stream with a
-classified `422`, whereas `/api/ai/v1/completions` cannot and reports even a pre-token
-refusal in-band.
+`/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
+codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
+model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+reaches the client.
+
+The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,
+`/api/embed/chat` and `/api/ai/v1/completions` all refuse pre-stream with a classified
+`422`, and report only a mid-generation exhaustion in-band.
 
 ### Why RFC 9457 is not the answer here
 
@@ -311,6 +325,11 @@ for the whole window. Removing an alias is a major-version change.
   window was possible. Its create body is strict so a stale field such as `callbackUrl`
   fails with a 422 rather than being dropped. A future in-place change needs a comparable
   reason; "the new shape is nicer" is not one.
+- Second precedent: `files[].url` on `GET /api/v1/quests/{id}` (and the generation-callback
+  body) went from a permanent public URL to a presigned one that expires in about an hour.
+  The shape is unchanged; only the lifetime is. Keeping the permanent URL would have kept
+  generated media readable by anyone holding the link, so no sunset window was offered. It
+  shipped as a breaking (`!`) release so SDK consumers that store the URL get a signal.
 
 ---
 
@@ -396,14 +415,27 @@ names gets `undefined`.
 
 ## 7. Deprecation
 
-Nothing published is ever silently removed. Deprecating anything - a field, an alias, a
-whole endpoint - means: mark it deprecated in the contract, state a sunset date in the
-description, keep serving it until that date, and announce it before the date rather
-than after.
+Nothing published is ever silently removed while anyone is left to warn. Deprecating
+anything - a field, an alias, a whole endpoint - means: mark it deprecated in the
+contract, state a sunset date in the description, keep serving it until that date, and
+announce it before the date rather than after.
 
-Undocumented legacy routes still count as published if they are reachable.
-`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` both serve TTS today with no
-contract and no stated deprecation; they need one before they can go.
+For a whole endpoint, that is one field on its contract:
+`deprecated: { since, sunset, successor? }` (dates `YYYY-MM-DD`, checked by
+`defineEndpoint`). It flags the operation `deprecated: true` in the spec, leads its
+description with the sunset and successor, and makes the Next adapter send RFC 9745
+`Deprecation`, RFC 8594 `Sunset` and `Link: rel="successor-version"` on every response
+the handler produces. `POST /api/ai/music` is the reference.
+
+Undocumented legacy routes still count as published if they are reachable, so they go
+through the same window unless nobody is left to warn. Check who calls one first: the
+admin **API Key Scope Preflight** tab lists every API key that hit a path prefix over the
+90-day usage log, and session traffic is not recorded per route, so also confirm no
+first-party code calls it. Only a route with no first-party callers and no recent
+API-key traffic may be removed without a sunset window. The legacy TTS aliases
+`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` were removed on that basis in
+favour of `/api/ai/tts`: no first-party callers, and no API-key traffic in the five
+weeks before removal.
 
 ---
 

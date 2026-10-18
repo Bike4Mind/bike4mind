@@ -367,10 +367,9 @@ export function resolveIdentifyEffect(params: {
 /**
  * Whether identify's access token may be written into the token store.
  *
- * Only when we hold none. /api/identify echoes back whatever token the request carried and mints
- * a fresh one ONLY when there was none, so for a browser this value is almost always a copy of
- * what we already have - and `identity.data` is a CACHED react-query payload that can be several
- * rotations old.
+ * Only when we hold none. /api/identify never mints; it only echoes back the bearer token the
+ * request carried, so for a browser this value is a copy of what we already have - and
+ * `identity.data` is a CACHED react-query payload that can be several rotations old.
  *
  * The identify effect re-runs on every accessToken change, so writing unconditionally means each
  * freshly rotated token is immediately overwritten by the older one captured in the cache. The

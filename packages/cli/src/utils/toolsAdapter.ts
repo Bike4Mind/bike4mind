@@ -76,6 +76,10 @@ class NoOpStorage extends BaseStorage {
     return `/tmp/${destination}`;
   }
 
+  async uploadFile(localPath: string, destination: string, options?: Record<string, unknown>): Promise<string> {
+    return `/tmp/${destination}`;
+  }
+
   async download(path: string): Promise<Buffer> {
     throw new Error('Download not supported in CLI');
   }
@@ -119,12 +123,10 @@ class CliLogger extends Logger {
 }
 
 /**
- * Shared context for agent observation tracking
- * This allows tool wrappers to add observations to the current agent
+ * Per-agent state the tool wrappers share with their entry point.
  */
 interface AgentContext {
   currentAgent: any | null; // ReActAgent instance
-  observationQueue: Array<{ toolName: string; result: unknown }>; // Queue observations to add after actions
   /** Called (synchronously, must not block) after a file-writing tool succeeds, with the path as the tool received it. */
   onFileChanged?: (filePath: string) => void;
 }
@@ -146,26 +148,21 @@ function notifyFileChanged(
 }
 
 /**
- * Wrap a tool with permission checking, server routing, and observation tracking.
+ * Wrap a tool with the plan-mode and permission gates, the shell sandbox, a checkpoint before an
+ * approved file write, and server routing (which redacts and caps the output).
  */
-export function wrapToolWithPermission(
-  tool: ICompletionOptionTools,
-  permissionManager: PermissionManager,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
-  agentContext: AgentContext,
-  configStore: any,
-  apiClient: ApiClient,
-  sandboxOrchestrator?: SandboxOrchestrator,
-  /** Live, mutable allow-list shared with the core tool context. The path
-   *  access-grant flow pushes onto this in place so grants take effect on the
-   *  next call without rebuilding tools. */
-  allowedDirectories?: string[],
-  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at
-   *  the less-permissive of this and the live store mode, so a subagent can never
-   *  exceed its parent's authority yet still tightens if the user switches to plan
-   *  mode mid-run. Undefined for the main agent (uses the live store mode). */
-  interactionModeOverride?: InteractionMode
-): ICompletionOptionTools {
+export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapToolDeps): ICompletionOptionTools {
+  const {
+    permissionManager,
+    showPermissionPrompt,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories,
+    interactionModeOverride,
+    checkpointStore,
+  } = deps;
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
 
@@ -268,10 +265,11 @@ export function wrapToolWithPermission(
       const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
 
       /**
-       * Shared execution flow: run tool, capture violations, offer retry on
-       * sandbox failure, and record observation.
+       * Shared execution flow: checkpoint, run the tool, capture violations, offer
+       * retry on sandbox failure or a path denial, then fire the post-tool signals.
        */
       async function executeAndRecord(): Promise<string> {
+        await checkpointBeforeWrite(checkpointStore, toolName, args);
         let result: string;
         try {
           result = await executeWithFuzzyConfirmation(toolName, execArgs, apiClient, originalFn, showPermissionPrompt);
@@ -306,7 +304,6 @@ export function wrapToolWithPermission(
           originalFn,
           showPermissionPrompt
         );
-        agentContext.observationQueue.push({ toolName, result });
         notifyFileChanged(agentContext, toolName, execArgs, result);
         // Process-hook (host action_required signal): a tool finished - clear the
         // block sentinel (matcher "*").
@@ -326,9 +323,7 @@ export function wrapToolWithPermission(
           ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
           : liveInteractionMode;
         if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
-          agentContext.observationQueue.push({ toolName, result });
-          return result;
+          return `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
         }
 
         // Command-level risk gate: inspect the actual command text (not just the
@@ -460,9 +455,8 @@ export function wrapToolWithPermission(
 }
 
 /**
- * Collaborators the permission wrapper needs. Bundled so the several entrypoints
- * that build raw tool lists (MCP tools, skill, get_file_structure, find_definition)
- * can route them through the ONE wrapper without repeating its long argument list.
+ * Collaborators the permission wrapper needs. Bundled so every entrypoint that builds a tool
+ * list (B4M, MCP, CLI-built and delegation tools) routes it through the ONE wrapper.
  */
 export interface WrapToolDeps {
   permissionManager: PermissionManager;
@@ -471,9 +465,16 @@ export interface WrapToolDeps {
   configStore: any; // ConfigStore instance (no shared interface)
   apiClient: ApiClient;
   sandboxOrchestrator?: SandboxOrchestrator;
-  /** Live, mutable allow-list shared with the core tool context (see wrapToolWithPermission). */
+  /** Live, mutable allow-list shared with the core tool context. The path access-grant flow
+   *  pushes onto it in place, so a grant takes effect on the next call without rebuilding tools. */
   allowedDirectories?: string[];
+  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at the
+   *  less-permissive of this and the live store mode, so a subagent can never exceed
+   *  its parent's authority yet still tightens if the user switches to plan mode
+   *  mid-run. Undefined for the main agent (uses the live store mode). */
   interactionModeOverride?: InteractionMode;
+  /** Snapshots a file before an approved write so /undo can restore it. */
+  checkpointStore?: CheckpointStore | null;
 }
 
 /**
@@ -482,18 +483,60 @@ export interface WrapToolDeps {
  * constructed outside generateCliTools is wrapped here before it reaches the agent.
  */
 export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
-  return tools.map(tool =>
-    wrapToolWithPermission(
-      tool,
-      deps.permissionManager,
-      deps.showPermissionPrompt,
-      deps.agentContext,
-      deps.configStore,
-      deps.apiClient,
-      deps.sandboxOrchestrator,
-      deps.allowedDirectories,
-      deps.interactionModeOverride
-    )
+  return tools.map(tool => wrapToolWithPermission(tool, deps));
+}
+
+/**
+ * The CLI-built tools in the order they are offered to the model. Each entry point passes
+ * only what it built, so an optional group is absent when its config gate is off or when
+ * that entry point does not build it at all (the decision / blocker / review tools are
+ * interactive-only).
+ */
+export interface CliToolListInput {
+  /** `tool_search`, when deferred tool schemas exist. Offered ahead of the rest of the list. */
+  toolSearchTool?: ICompletionOptionTools | null;
+  agentDelegateTool: ICompletionOptionTools;
+  backgroundTools: ICompletionOptionTools[];
+  resumeAgentTool: ICompletionOptionTools;
+  writeTodosTool: ICompletionOptionTools;
+  /** Durable decision / blocker / review-gate tools (interactive only). */
+  decisionLogTool?: ICompletionOptionTools | null;
+  blockerTools?: ICompletionOptionTools[];
+  reviewGateTool?: ICompletionOptionTools | null;
+  findDefinitionTool: ICompletionOptionTools;
+  getFileStructureTool: ICompletionOptionTools;
+  /** Persistent work-item tools, off unless the config opts in. */
+  workItemTools?: ICompletionOptionTools[];
+  skillTool?: ICompletionOptionTools | null;
+  dynamicAgentTool?: ICompletionOptionTools | null;
+  /** `coordinate_task`, when coordinator mode is on. */
+  coordinateTaskTool?: ICompletionOptionTools | null;
+}
+
+/**
+ * Assemble the CLI-built tool list and route it through the ONE permission wrapper (plan-mode
+ * gate, deny list, output redaction and cap). Every entry point - interactive, headless and ACP
+ * - builds its list here so no CLI-built tool, `tool_search` included, can skip the gate.
+ */
+export function buildCliToolList(input: CliToolListInput, wrapDeps: WrapToolDeps): ICompletionOptionTools[] {
+  return wrapTools(
+    [
+      ...(input.toolSearchTool ? [input.toolSearchTool] : []),
+      input.agentDelegateTool,
+      ...input.backgroundTools,
+      input.resumeAgentTool,
+      input.writeTodosTool,
+      ...(input.decisionLogTool ? [input.decisionLogTool] : []),
+      ...(input.blockerTools ?? []),
+      ...(input.reviewGateTool ? [input.reviewGateTool] : []),
+      input.findDefinitionTool,
+      input.getFileStructureTool,
+      ...(input.workItemTools ?? []),
+      ...(input.skillTool ? [input.skillTool] : []),
+      ...(input.dynamicAgentTool ? [input.dynamicAgentTool] : []),
+      ...(input.coordinateTaskTool ? [input.coordinateTaskTool] : []),
+    ],
+    wrapDeps
   );
 }
 
@@ -964,47 +1007,28 @@ export function wrapToolWithHooks(
   };
 }
 
-/**
- * Tools that modify files and should trigger automatic checkpointing
- */
+/** Tools that modify the file at `args.path` and are snapshotted before they run. */
 const CHECKPOINT_TOOLS = new Set(['create_file', 'edit_local_file', 'delete_file']);
 
 /**
- * Wrap a tool with automatic checkpointing before file modifications
- *
- * Creates a snapshot of target files in the shadow git repo BEFORE
- * the tool executes, enabling undo/restore functionality.
- *
- * Checkpoint failures are caught silently and never block tool execution.
+ * Snapshot the target of a file write in the shadow git repo so /undo can restore it. Called
+ * once the permission gate approves the write, so a write denied there or blocked by plan mode
+ * leaves no checkpoint (a later fuzzy-edit re-prompt or directory grant can still be denied after
+ * it). A checkpoint failure never blocks the write.
  */
-function wrapToolWithCheckpointing(
-  tool: ICompletionOptionTools,
-  checkpointStore: CheckpointStore | null
-): ICompletionOptionTools {
-  if (!checkpointStore || !CHECKPOINT_TOOLS.has(tool.toolSchema.name)) {
-    return tool;
+async function checkpointBeforeWrite(
+  checkpointStore: CheckpointStore | null | undefined,
+  toolName: string,
+  args: unknown
+): Promise<void> {
+  if (!checkpointStore || !CHECKPOINT_TOOLS.has(toolName)) return;
+  const filePath = (args as Record<string, unknown> | undefined)?.path;
+  if (typeof filePath !== 'string' || filePath.length === 0) return;
+  try {
+    await checkpointStore.createCheckpoint(toolName, [filePath], `before-${toolName}-${path.basename(filePath)}`);
+  } catch {
+    // Best effort: losing an undo point must not fail the user's write.
   }
-
-  const originalFn = tool.toolFn;
-  const toolName = tool.toolSchema.name;
-
-  return {
-    ...tool,
-
-    toolFn: async (args: any) => {
-      const filePath = (args as Record<string, unknown>)?.path as string | undefined;
-
-      if (filePath) {
-        try {
-          await checkpointStore.createCheckpoint(toolName, [filePath], `before-${toolName}-${path.basename(filePath)}`);
-        } catch {
-          // Checkpoint failure should NEVER block tool execution
-        }
-      }
-
-      return originalFn(args);
-    },
-  };
 }
 
 /**
@@ -1054,7 +1078,7 @@ export interface ToolFilter {
 }
 
 /**
- * Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
+ * Generate CLI-friendly tools with permission wrapping and server routing
  * Disables tools that require web app context
  *
  * @param toolFilter - Optional filter to restrict tool access (for subagents)
@@ -1122,6 +1146,9 @@ export async function generateCliTools(
       apiKeys: null,
       adminSettings: mockAdminSettings,
     },
+    // The signed-in user, running tools on their own machine. Spelled out because this object is
+    // `any`, so typecheck cannot require it (see ToolContext.authOrigin).
+    authOrigin: 'session',
   };
 
   // B4M tools enabled for CLI (subset of shared tools)
@@ -1187,21 +1214,19 @@ export async function generateCliTools(
     codeMinifier
   );
 
-  // Convert to array and wrap with permission checks, checkpointing, server routing, and observation tracking
-  let tools = Object.entries(toolsMap).map(([_, tool]) => {
-    const permissionWrapped = wrapToolWithPermission(
-      tool,
-      permissionManager,
-      showPermissionPrompt,
-      agentContext,
-      configStore,
-      apiClient,
-      sandboxOrchestrator,
-      liveAllowedDirectories,
-      interactionModeOverride
-    );
-    return wrapToolWithCheckpointing(permissionWrapped, checkpointStore ?? null);
-  });
+  // Convert to array and route every tool through the permission wrapper
+  const wrapDeps: WrapToolDeps = {
+    permissionManager,
+    showPermissionPrompt,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories: liveAllowedDirectories,
+    interactionModeOverride,
+    checkpointStore,
+  };
+  let tools = wrapTools(Object.values(toolsMap), wrapDeps);
 
   // Apply tool filter if provided (for subagents)
   if (toolFilter) {

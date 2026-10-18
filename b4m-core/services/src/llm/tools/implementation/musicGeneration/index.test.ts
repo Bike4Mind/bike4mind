@@ -1,160 +1,239 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ToolContext } from '../../base/types';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  ARTIST_REFERENCE_REFUSAL,
+  isMusicToolConfig,
+  musicGenerationTool,
+  namesArtistReference,
+  type MusicToolConfig,
+} from './index';
 
-// The tool resolves the ElevenLabs key via getEffectiveApiKey and generates via the
-// aiMusicService vendor factory; both are mocked so no network/key is needed.
-const mockGenerate = vi.fn();
-const mockGetEffectiveApiKey = vi.fn();
-const mockPersistFab = vi.fn().mockResolvedValue(undefined);
+const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return { ...actual, aiMusicService: vi.fn(() => ({ generate: mockGenerate })) };
-});
+type BuildOptions = { questId?: string; usableModels?: MusicToolConfig['usableModels'] };
 
-vi.mock('../../../../apiKeyService', async importOriginal => {
-  const actual = await importOriginal<typeof import('../../../../apiKeyService')>();
-  return { ...actual, getEffectiveApiKey: mockGetEffectiveApiKey };
-});
-
-vi.mock('../../helpers/persistGeneratedFile', () => ({
-  persistGeneratedFileAsFabFile: mockPersistFab,
-}));
-
-// Imported after the mocks so the tool picks up the mocked dependencies.
-const { musicGenerationTool } = await import('./index');
-
-function createFakeContext(): ToolContext & {
-  onStart: ReturnType<typeof vi.fn>;
-  onFinish: ReturnType<typeof vi.fn>;
-  statusUpdate: ReturnType<typeof vi.fn>;
-} {
-  return {
+const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = {}) => {
+  const { usableModels = ['test-music'] } = options;
+  const questId = 'questId' in options ? options.questId : 'q1';
+  const statusUpdate = vi.fn().mockResolvedValue(undefined);
+  const onStart = vi.fn();
+  const onFinish = vi.fn();
+  const config: MusicToolConfig = { usableModels, createJob };
+  const context = {
     userId: 'u1',
-    user: {} as ToolContext['user'],
+    organizationId: 'org1',
     sessionId: 's1',
-    logger: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as unknown as ToolContext['logger'],
-    db: {} as ToolContext['db'],
-    storage: {} as ToolContext['storage'],
-    imageGenerateStorage: {
-      upload: vi.fn().mockResolvedValue('stored-key.mp3'),
-      getSignedUrl: vi.fn(),
-      getPublicUrl: vi.fn(),
-    },
-    statusUpdate: vi.fn().mockResolvedValue(undefined),
-    onStart: vi.fn().mockResolvedValue(undefined),
-    onFinish: vi.fn().mockResolvedValue(undefined),
-    llm: {} as ToolContext['llm'],
+    questId,
+    statusUpdate,
+    onStart,
+    onFinish,
   } as never;
-}
-
-function run(context: ToolContext, args: Record<string, unknown>) {
-  return musicGenerationTool.implementation(context, undefined).toolFn(args);
-}
+  return { tool: musicGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish };
+};
 
 describe('music_generation tool', () => {
-  beforeEach(() => {
-    mockGenerate.mockReset();
-    mockGetEffectiveApiKey.mockReset();
-    mockPersistFab.mockClear();
-    mockGenerate.mockResolvedValue({ audio: Buffer.from('fake-mp3'), contentType: 'audio/mpeg' });
-    mockGetEffectiveApiKey.mockResolvedValue('el-key');
-  });
-
-  it('gates credits, generates, stores the track, and renders it inline', async () => {
-    const context = createFakeContext();
-    const result = await run(context, { prompt: 'lofi study beats' });
-
-    // Affordability gate runs first (onStart) with the deterministic length + provider.
-    expect(context.onStart).toHaveBeenCalledWith('music_generation', {
-      provider: 'elevenlabs',
-      lengthMs: expect.any(Number),
-      modelId: 'music_v1',
-      prompt: 'lofi study beats',
+  it('starts an agent-sourced job for the notebook and message, and returns the job id with an estimate', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+    expect(createJob.mock.calls[0][0]).toMatchObject({
+      source: 'agent',
+      sessionId: 's1',
+      questId: 'q1',
+      user: { id: 'u1', organizationId: 'org1' },
+      request: { model: 'test-music', prompt: 'a sea shanty' },
     });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
 
-    // Stored in the generated-content bucket as an .mp3, with the audio Content-Type.
-    expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
-    const [, filename, options] = (context.imageGenerateStorage.upload as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(filename).toMatch(/\.mp3$/);
-    expect(options).toEqual({ ContentType: 'audio/mpeg' });
+  it('song prompts written from chat describe style without naming artists', async () => {
+    const named = [
+      'upbeat pop in the style of Some Singer',
+      'sounds like The Example Group',
+      'inspired by Name Surname, slow tempo',
+      'a slow ballad inspired by the Example Group',
+      'In the style of Some Singer, a slow ballad',
+      'A ballad. Sounds like \u00c9mile Example',
+      'A ROCK SONG IN THE STYLE OF SOME SINGER',
+      'in the vein of Some Singer',
+      'in the style of Motown, inspired by Some Singer',
+      'in the style of Detroit Example Singer',
+      'in the style of J. Example Singer',
+    ];
+    for (const prompt of named) {
+      const createJob = vi.fn().mockResolvedValue(okJob);
+      const { tool, statusUpdate } = build(createJob);
+      const result = await tool.toolFn({ model: 'test-music', prompt });
+      expect(result).toMatch(/^Music generation failed \(artist_reference\).*rewrite/i);
+      expect(createJob).not.toHaveBeenCalled();
+      expect(statusUpdate).not.toHaveBeenCalled();
+    }
 
-    // On success the charge is reserved via onFinish (host settles + appends to
-    // quest.images), carrying the billing params so only a delivered track is billed.
-    expect(context.onFinish).toHaveBeenCalledWith('music_generation', {
-      paths: ['stored-key.mp3'],
-      provider: 'elevenlabs',
-      lengthMs: expect.any(Number),
-      modelId: 'music_v1',
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const described = 'upbeat indie pop, jangly guitars, handclaps, 120 bpm, in the style of 2010s radio hits';
+    expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt: described })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an artist-shaped prompt at most once per turn, so a false positive cannot block the song', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const prompt = 'a sonnet set to lute music, inspired by Example Soloist';
+    expect(await tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
+    expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+
+    // The refusal belongs to the built tool, so the next turn gets its own.
+    const fresh = build(createJob);
+    expect(await fresh.tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('only inspects the capitalized run on the same line as the style phrase', () => {
+    expect(namesArtistReference('warm and slow, inspired by\nSome Singer')).toBe(true);
+    expect(namesArtistReference('in the style of jazz\nVerse 1 starts quiet')).toBe(false);
+    expect(namesArtistReference('in the style of Latin\nVerse one')).toBe(false);
+  });
+
+  it('allows genre and regional style words after style phrases', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const prompts = [
+      'a track in the style of Motown',
+      'sounds like Latin jazz with congas',
+      'sounds like Spanish guitar',
+      'in the vein of Celtic folk, fiddle and whistle',
+      'Like a lullaby, inspired by Delta blues',
+      'a track in the style of Motown.',
+      'in the style of Motown. Female vocals, warm',
+      'sounds like Celtic-Irish fusion',
+      'in the style of A minor ballad, piano only',
+      "warm strings, inspired by Nashville's session players",
+    ];
+    for (const prompt of prompts) {
+      expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    }
+    expect(createJob).toHaveBeenCalledTimes(prompts.length);
+  });
+
+  it('passes lyrics, instrumental and length through and leaves omitted fields to the job', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    await tool.toolFn({ model: 'test-music', prompt: 'p', lyrics: '[Verse]\nla la', durationSeconds: 10 });
+    await tool.toolFn({ model: 'test-music', prompt: 'p', instrumental: true });
+    expect(createJob.mock.calls[0][0].request).toEqual({
+      model: 'test-music',
+      prompt: 'p',
+      lyrics: '[Verse]\nla la',
+      durationSeconds: 10,
     });
-    expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
-    expect(result).toBe('Successfully generated music');
+    expect(createJob.mock.calls[1][0].request).toEqual({ model: 'test-music', prompt: 'p', instrumental: true });
   });
 
-  it('clamps a below-minimum length up to the provider floor', async () => {
-    const context = createFakeContext();
-    await run(context, { prompt: 'ambient', lengthMs: 100 });
-    const [, gated] = (context.onStart as ReturnType<typeof vi.fn>).mock.calls[0];
-    // MIN_MUSIC_LENGTH_MS is 3000; a 100ms request must be floored, not passed through.
-    expect(gated.lengthMs).toBe(3_000);
+  it('returns a readable refusal without a card when the job is refused', async () => {
+    const createJob = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      code: 'unsupported_duration',
+      message: 'duration 20s is not supported',
+    });
+    const { tool, statusUpdate } = build(createJob);
+    const result = await tool.toolFn({ model: 'test-music', prompt: 'p', durationSeconds: 20 });
+    expect(result).toBe('Music generation failed (unsupported_duration): duration 20s is not supported');
+    expect(statusUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects an empty prompt without gating credits or calling the provider', async () => {
-    const context = createFakeContext();
-    const result = await run(context, { prompt: '   ' });
-    expect(result).toMatch(/non-empty music prompt/i);
-    expect(context.onStart).not.toHaveBeenCalled();
-    expect(mockGenerate).not.toHaveBeenCalled();
+  it('refuses to report an idempotent replay of a job that already ended without a song', async () => {
+    const createJob = vi.fn().mockResolvedValue({
+      ok: true,
+      created: false,
+      job: { id: 'job1', state: 'failed', error: { code: 'provider_error', message: 'boom' } },
+    });
+    const { tool, statusUpdate } = build(createJob);
+    const result = await tool.toolFn({ model: 'test-music', prompt: 'p' });
+    expect(result).toBe('Music generation failed (provider_error): an identical request already ended without a song.');
+    expect(statusUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects a non-finite lengthMs with the friendly message, before gating or generating', async () => {
-    const context = createFakeContext();
-    // A lax-schema caller passing a non-numeric lengthMs clamps to NaN; the guard must
-    // return the tool's own message instead of letting estimateMusicCredits throw a
-    // generic error from the onStart gate.
-    const result = await run(context, { prompt: 'ambient', lengthMs: 'soon' as unknown as number });
-    expect(result).toMatch(/length.*must be a number/i);
-    expect(context.onStart).not.toHaveBeenCalled();
-    expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
-    expect(mockGenerate).not.toHaveBeenCalled();
+  it('still reports an idempotent replay of a job that already succeeded', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: false, job: { id: 'job1', state: 'succeeded' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-music', prompt: 'p' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
   });
 
-  it('checks the key before the affordability gate, so a keyless caller never reaches onStart', async () => {
-    mockGetEffectiveApiKey.mockResolvedValue(undefined);
-    const context = createFakeContext();
-    const result = await run(context, { prompt: 'jazz' });
-    expect(result).toMatch(/currently unavailable/i);
-    // Key check runs first: the caller learns the key is missing rather than seeing a
-    // misleading "insufficient credits" from the gate.
-    expect(context.onStart).not.toHaveBeenCalled();
-    expect(mockGenerate).not.toHaveBeenCalled();
-    // onFinish reserves the charge; a missing key must never settle a charge.
-    expect(context.onFinish).not.toHaveBeenCalled();
+  // The dead-job guard only applies to a replay: a job created now must show its card even if it is already terminal.
+  it('still reports a freshly created job that is already terminal', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: true, job: { id: 'job1', state: 'blocked' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-music', prompt: 'p' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
   });
 
-  it('returns the provider error as the tool result without throwing or billing', async () => {
-    mockGenerate.mockRejectedValue(new Error('provider exploded'));
-    const context = createFakeContext();
-    const result = await run(context, { prompt: 'techno' });
-    expect(result).toMatch(/Error: provider exploded/);
-    expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
-    // A failed generation must not settle a charge - onFinish is never reached.
-    expect(context.onFinish).not.toHaveBeenCalled();
+  it('rejects a model the caller cannot use before starting a job', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    await expect(tool.toolFn({ model: 'lyria-3.5', prompt: 'p' })).rejects.toThrow();
+    expect(createJob).not.toHaveBeenCalled();
   });
 
-  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
-    const context = createFakeContext();
-    await run(context, { prompt: 'lofi' });
-    expect(mockPersistFab).toHaveBeenCalledTimes(1);
+  it('uses a stable idempotency key per quest and request, and none without a quest', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    await tool.toolFn({ model: 'test-music', prompt: 'p' });
+    await tool.toolFn({ model: 'test-music', prompt: 'p' });
+    const [first, second] = createJob.mock.calls.map(call => call[0].idempotencyKey);
+    expect(first).toMatch(/^agent:u1:q1:[0-9a-f]{32}$/);
+    expect(second).toBe(first);
+
+    const noQuest = vi.fn().mockResolvedValue(okJob);
+    await build(noQuest, { questId: undefined }).tool.toolFn({ model: 'test-music', prompt: 'p' });
+    expect(noQuest.mock.calls[0][0].idempotencyKey).toBeUndefined();
   });
 
-  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
-    const context = createFakeContext();
-    (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
-    const result = await run(context, { prompt: 'lofi' });
-    expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
-    expect(mockPersistFab).not.toHaveBeenCalled();
-    expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
-    expect(result).toBe('Successfully generated music');
+  it('never bills through onStart/onFinish: the job holds and settles the credits', async () => {
+    const { tool, onStart, onFinish } = build(vi.fn().mockResolvedValue(okJob));
+    await tool.toolFn({ model: 'test-music', prompt: 'p' });
+    expect(onStart).not.toHaveBeenCalled();
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it('propagates a createJob failure without emitting a card', async () => {
+    const createJob = vi.fn().mockRejectedValue(new Error('db down'));
+    const { tool, statusUpdate } = build(createJob);
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'p' })).rejects.toThrow('db down');
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  // The job is created and billed before the card is announced, so a statusUpdate failure must not be swallowed:
+  // the caller sees the error and the running job is left for the websocket/reload to pick up.
+  it('propagates a statusUpdate failure after the job was created', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool, statusUpdate } = build(createJob);
+    statusUpdate.mockRejectedValue(new Error('socket closed'));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'p' })).rejects.toThrow('socket closed');
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers only the usable models in a plain JSON Schema', () => {
+    const { tool } = build(vi.fn(), { usableModels: ['test-music', 'music_v2'] });
+    const { parameters } = tool.toolSchema;
+    expect(parameters).not.toHaveProperty('$schema');
+    expect(parameters.properties.model).toMatchObject({ enum: ['test-music', 'music_v2'] });
+  });
+
+  it('builds an inert tool when no config is wired', async () => {
+    const tool = musicGenerationTool.implementation({ userId: 'u1' } as never, undefined);
+    expect(await tool.toolFn({})).toContain('not available');
+  });
+
+  it('rejects an empty or malformed config', () => {
+    expect(isMusicToolConfig({ usableModels: [], createJob: vi.fn() })).toBe(false);
+    expect(isMusicToolConfig({ usableModels: ['test-music'] })).toBe(false);
+    expect(isMusicToolConfig(null)).toBe(false);
+    expect(isMusicToolConfig({ usableModels: ['test-music'], createJob: vi.fn() })).toBe(true);
   });
 });

@@ -33,7 +33,7 @@ import {
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
-import { AdminVideoModelsSetting } from './AdminVideoModelsSetting';
+import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
@@ -334,8 +334,9 @@ const AdminSettingsTab: React.FC = () => {
       if (
         [
           'logoSettings',
-          // Per-model video toggles are rendered by <AdminVideoModelsSetting />
+          // Per-model video and music toggles are rendered by <AdminGenerationModelsSetting />
           'videoGeneration',
+          'musicGeneration',
           // Ordered model list is rendered by <AdminRecommendedModelsSetting />
           'recommendedModelIds',
           'RapidReplySettings',
@@ -584,7 +585,7 @@ const AdminSettingsTab: React.FC = () => {
 
         {category === 'AI' && <AdminRecommendedModelsSetting />}
 
-        {category === 'AI' && <AdminVideoModelsSetting />}
+        {category === 'AI' && <AdminGenerationModelsSetting />}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever

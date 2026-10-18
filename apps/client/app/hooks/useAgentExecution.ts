@@ -37,7 +37,12 @@ import {
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
-import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
+import {
+  addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
+  appendReplyToLatestOptimisticBubble,
+  swapOptimisticPromptBubbleId,
+} from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
@@ -112,6 +117,13 @@ interface AgentExecuteStart {
    * (classifier- or rule-based complexity-routed).
    */
   routingSource?: 'mention' | 'agent_literal' | 'toggle' | 'classifier' | 'user-default' | 'complexity';
+  /**
+   * Extra system context for this run only (a programmatic launch's `systemContext`). The
+   * executor appends it to the run's system message. Kept off the execution doc's own fields
+   * and the Quest; carried in the server-only checkpoint so continuations keep it.
+   * Server-capped at `PROMPT_TEXT_MAX`.
+   */
+  systemContext?: string;
 }
 
 interface AgentExecuteAbort {
@@ -302,6 +314,14 @@ export function useAgentExecutionSubscriptions(): void {
           // tool callbacks). Guard at the client so a typo or new upstream
           // value can't silently corrupt store state.
           store().setStatus(msg.executionId, msg.status as AgentExecutionStatus);
+        }
+        // sessionId is set by `execution_started`, which the worker sends before any tool can start a job.
+        const sessionId = store().executions[msg.executionId]?.sessionId;
+        if (sessionId && msg.questId && msg.generationJobs?.length) {
+          addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
+        }
+        if (sessionId && msg.questId && msg.pendingAction) {
+          setPendingActionOnRunBubble(queryClient, sessionId, msg.questId, msg.pendingAction);
         }
       })
     );

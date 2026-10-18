@@ -66,6 +66,22 @@ export const get = async (userId: string, parameters: GetArtifactParameters, ada
 };
 
 /**
+ * The read rule `get` enforces, for callers that hold an artifact without going through `get`.
+ * Structural, so a full document or a field projection both satisfy it; `permissions` may be absent
+ * (legacy rows and projections hand one in - see isPublicArtifact in `@bike4mind/common`).
+ */
+export function canUserReadArtifact(
+  userId: string,
+  artifact: {
+    userId: string;
+    visibility?: string;
+    permissions?: { canRead?: string[]; isPublic?: boolean };
+  }
+): boolean {
+  return canUserAccessArtifact(userId, artifact, 'read');
+}
+
+/**
  * Check if user can access artifact based on permissions and visibility
  */
 function canUserAccessArtifact(userId: string, artifact: any, accessType: 'read' | 'write' | 'delete'): boolean {

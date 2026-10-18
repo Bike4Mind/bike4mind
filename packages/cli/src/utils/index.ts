@@ -2,7 +2,9 @@ export {
   generateCliTools,
   wrapTools,
   wrapToolWithPermission,
+  buildCliToolList,
   type AgentContext,
+  type CliToolListInput,
   type WrapToolDeps,
   type PermissionPromptKind,
 } from './toolsAdapter';
@@ -23,7 +25,6 @@ export {
 export { logger } from './Logger';
 export { searchCommands } from './fuzzySearch';
 export {
-  walkDirectory,
   searchFiles,
   formatFileSize,
   invalidateFileCache,

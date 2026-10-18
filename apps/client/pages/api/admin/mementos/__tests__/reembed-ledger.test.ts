@@ -52,6 +52,7 @@ const stats = (over: Record<string, unknown> = {}) => ({
   backfilled: 0,
   noFact: 0,
   noProviderKey: 0,
+  embedderUnavailable: 0,
   failed: 0,
   providerCalls: 0,
   embedderError: null,
@@ -118,6 +119,29 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     expect(data).toMatchObject({ dryRun: true, backfilled: 500, hasMore: false, nextAfter: p('a') });
   });
 
+  it('surfaces a keyless principal in failedPrincipals during a dry run', async () => {
+    listPrincipals.mockResolvedValue([p('a'), p('b')]);
+    migrateMock
+      .mockResolvedValueOnce(
+        stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] })
+      )
+      .mockResolvedValueOnce(stats({ backfilled: 3, providerCalls: 3 }));
+
+    const data = (await post({}))._getJSONData();
+
+    expect(migrateMock).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+    expect(data.failedPrincipals).toEqual([
+      { ...p('a'), error: 'embedding service unavailable for owner o1: no key' },
+    ]);
+    expect(data).toMatchObject({
+      dryRun: true,
+      noProviderKey: 5,
+      backfilled: 3,
+      processedPrincipals: 2,
+      hasMore: false,
+    });
+  });
+
   it('reports hasMore with the last principal as cursor on a full page', async () => {
     listPrincipals.mockResolvedValue(Array.from({ length: 25 }, (_, i) => p(`l${String(i).padStart(2, '0')}`)));
 
@@ -171,6 +195,18 @@ describe('/api/admin/mementos/reembed-ledger', () => {
       hasMore: false,
       nextAfter: p('b'),
     });
+  });
+
+  it('lists a transient build failure distinctly from a missing key', async () => {
+    listPrincipals.mockResolvedValue([p('a')]);
+    migrateMock.mockResolvedValueOnce(stats({ embedderUnavailable: 3, embedderError: 'timeout' }));
+
+    const data = (await post({ execute: true }))._getJSONData();
+
+    expect(data.failedPrincipals).toEqual([
+      { ...p('a'), error: 'embedding service build failed for owner o1, retried next walk: timeout' },
+    ]);
+    expect(data).toMatchObject({ embedderUnavailable: 3, noProviderKey: 0 });
   });
 
   it('resumes rather than passes a principal that failed on only the leftover budget', async () => {

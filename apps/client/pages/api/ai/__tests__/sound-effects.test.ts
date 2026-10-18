@@ -13,7 +13,7 @@ const {
   userIncrement,
   orgIncrement,
   recordUsage,
-  persistGeneratedAudio,
+  saveGeneratedAssetToFiles,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
@@ -25,7 +25,7 @@ const {
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
-  persistGeneratedAudio: vi.fn(),
+  saveGeneratedAssetToFiles: vi.fn(),
 }));
 
 // Contract-adapter mock: stands in for the nextRouteForContract prelude, running
@@ -104,8 +104,8 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
-vi.mock('@server/utils/persistGeneratedAudio', () => ({
-  persistGeneratedAudio: (...a: unknown[]) => persistGeneratedAudio(...a),
+vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+  saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
 }));
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
@@ -145,12 +145,12 @@ beforeEach(() => {
     userIncrement,
     orgIncrement,
     recordUsage,
-    persistGeneratedAudio,
+    saveGeneratedAssetToFiles,
   ].forEach(m => m.mockReset());
   recordUsage.mockResolvedValue(undefined);
   // Default: persistence is a no-op that reports "not saved", so tests not
   // exercising the save path see no persisted-file headers.
-  persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'error' });
+  saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'error' });
   upload.mockReset().mockResolvedValue(undefined);
   getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
@@ -277,17 +277,33 @@ describe('POST /api/ai/sound-effects', () => {
   it('forwards the persisted-file id, name, and signed URL as response headers', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-    persistGeneratedAudio.mockResolvedValue({
+    saveGeneratedAssetToFiles.mockResolvedValue({
       saved: true,
-      fabFileId: 'fab1',
+      fileId: 'fab1',
+      s3Key: 'k/audio.mp3',
       fileName: 'sound-effect-rain.mp3',
       fileUrl: 'https://signed.example/audio.mp3',
     });
 
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
+    expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      {
+        userId: expect.any(String),
+        bytes: expect.any(Buffer),
+        contentType: expect.any(String),
+        generation: {
+          generator: 'sound_effect',
+          provider: expect.any(String),
+          prompt: 'rain',
+          durationSeconds: 3,
+          promptInfluence: 0.6,
+        },
+      },
+      expect.anything()
+    );
     // The signed URL must ride the header: the CLI cannot re-resolve one via
     // GET /api/files/:id until the async moderation scan flips the file to 'clean'.
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
@@ -299,7 +315,7 @@ describe('POST /api/ai/sound-effects', () => {
   it('reports not-saved and forwards no file headers when persistence fails', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
-    persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+    saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
 
     const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
     await promise;
@@ -312,12 +328,59 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
   });
 
+  it('keeps a requested prompt influence of 0', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation.promptInfluence).toBe(0);
+  });
+
+  it('leaves prompt influence off the stored metadata when the request omitted it', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('promptInfluence');
+  });
+
   it('rejects an invalid body (422) without resolving a key', async () => {
     const { res, promise } = run({ text: '' });
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
+  });
+
+  it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3, format });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toContain(`'${format}'`);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('still answers 502 when refunding the failed generation also fails', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+    generate.mockRejectedValue(new Error('provider down'));
+    userIncrement.mockResolvedValueOnce({ currentCredits: 850 }).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
   });
 
   it('maps an upstream provider failure to 502 and refunds the reservation', async () => {
@@ -516,7 +579,8 @@ describe('POST /api/ai/sound-effects', () => {
   describe('generated-audio delivery', () => {
     const savedCopy = {
       saved: true,
-      fabFileId: 'fab1',
+      fileId: 'fab1',
+      s3Key: 'k/audio.mp3',
       fileName: 'audio-1.mp3',
       fileUrl: 'https://signed.example/audio.mp3',
     };
@@ -528,7 +592,7 @@ describe('POST /api/ai/sound-effects', () => {
     });
 
     it('returns base64 JSON with the audio and save fields for encoding: base64', async () => {
-      persistGeneratedAudio.mockResolvedValue(savedCopy);
+      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
       const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
       await promise;
       expect(res._getStatusCode()).toBe(200);
@@ -536,7 +600,10 @@ describe('POST /api/ai/sound-effects', () => {
         delivery: 'inline',
         audio: Buffer.from('boom').toString('base64'),
         contentType: 'audio/mpeg',
-        ...savedCopy,
+        saved: true,
+        fabFileId: savedCopy.fileId,
+        fileName: savedCopy.fileName,
+        fileUrl: savedCopy.fileUrl,
       });
     });
 
@@ -544,12 +611,12 @@ describe('POST /api/ai/sound-effects', () => {
       const { res, promise } = run({ text: 'thunder', preview: true });
       await promise;
       expect(res._getStatusCode()).toBe(200);
-      expect(persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(saveGeneratedAssetToFiles).not.toHaveBeenCalled();
       expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
     });
 
     it('reports saveSkippedReason in the base64 body when the save was skipped', async () => {
-      persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+      saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
       const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
       await promise;
       expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
@@ -558,7 +625,7 @@ describe('POST /api/ai/sound-effects', () => {
     it('serves an oversized base64 result by the saved copy URL without offloading', async () => {
       const audio = oversized();
       generate.mockResolvedValue({ audio, contentType: 'audio/mpeg' });
-      persistGeneratedAudio.mockResolvedValue(savedCopy);
+      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
       const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
       await promise;
       expect(res._getStatusCode()).toBe(200);

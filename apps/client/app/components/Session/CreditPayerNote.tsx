@@ -1,5 +1,4 @@
 import type { IProjectDocument, ISessionDocument } from '@bike4mind/common';
-import { Typography } from '@mui/joy';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -18,6 +17,8 @@ interface PayerNoteArgs {
  * The composer's payer line, or null when the user is in their own notebook. The server bills the
  * organization the send carries, else the SENDER (ChatCompletionProcess credit
  * reservation) - never the notebook's or project's owner, which a member could easily assume.
+ * Restated statically in SHARED_USAGE_BILLING_NOTE (inbox/Invites.tsx) and
+ * PROJECT_MEMBERS_BILLING_NOTE (Project/Members.tsx) - keep in sync.
  */
 export function payerNoteText({ currentUserId, session, projects, account }: PayerNoteArgs): string | null {
   if (!currentUserId || !session) return null;
@@ -32,8 +33,12 @@ export function payerNoteText({ currentUserId, session, projects, account }: Pay
 
 const JOINED_PROJECTS_STALE_MS = 5 * 60 * 1000;
 
-/** One quiet line above the composer naming who pays for answers in a notebook the user does not own. */
-export function CreditPayerNote({ session }: { session: ISessionDocument | null | undefined }) {
+/**
+ * Who pays for answers in a notebook the user does not own, as one line, or null when it is their
+ * own (or credits are not enforced). The balance chip on the composer's status line shows it as an
+ * info mark and puts the line first in its tooltip (CreditBalanceChip).
+ */
+export function useCreditPayerNote(session: ISessionDocument | null | undefined): string | null {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const currentUserId = useUser(s => s.currentUser?.id);
   const organizationId = useLLM(s => s.organizationId);
@@ -50,16 +55,5 @@ export function CreditPayerNote({ session }: { session: ISessionDocument | null 
   const account = organizationId
     ? { name: selectedAccount?.id === organizationId ? selectedAccount.name : 'your organization', personal: false }
     : null;
-  const text = payerNoteText({ currentUserId, session, projects, account });
-  if (!text) return null;
-
-  return (
-    <Typography
-      data-testid="session-credit-payer-note"
-      level="body-xs"
-      sx={{ color: 'text.tertiary', mb: 0.5, px: 0.5 }}
-    >
-      {text}
-    </Typography>
-  );
+  return payerNoteText({ currentUserId, session, projects, account });
 }

@@ -16,6 +16,9 @@ import BaseRepository from '@bike4mind/db-core';
  * hook. They exist so a "user was logged out" report can be answered from one query instead of
  * code archaeology. session_reuse_revoked and session_recovered also emit CloudWatch metrics
  * in Lumina5/AuthSecurity and drive the alarms in infra/alarms.ts.
+ *
+ * `step_up_success` / `step_up_failed` record re-verification for sensitive account changes
+ * (apps/client/pages/api/auth/step-up).
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -35,7 +38,9 @@ export type UserAuthAuditEvent =
   | 'trusted_device_granted'
   | 'trusted_device_used'
   | 'trusted_device_revoked'
-  | 'oauth_grant_revoked';
+  | 'oauth_grant_revoked'
+  | 'step_up_success'
+  | 'step_up_failed';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -56,6 +61,8 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'trusted_device_used',
   'trusted_device_revoked',
   'oauth_grant_revoked',
+  'step_up_success',
+  'step_up_failed',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {
@@ -124,11 +131,15 @@ const UserAuthAuditLogSchema = new Schema<IUserAuthAuditLogDocument>(
 UserAuthAuditLogSchema.index({ userId: 1, createdAt: -1 });
 UserAuthAuditLogSchema.index({ event: 1, createdAt: -1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with IntegrationAuditLog).
-UserAuthAuditLogSchema.index(
-  { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
-);
+/**
+ * TTL on createdAt: auth audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235950_set-user-auth-audit-log-retention).
+ */
+export const USER_AUTH_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
+UserAuthAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: USER_AUTH_AUDIT_LOG_RETENTION_SECONDS });
 
 export const UserAuthAuditLogModel: Model<IUserAuthAuditLogDocument> =
   (mongoose.models.UserAuthAuditLog as unknown as Model<IUserAuthAuditLogDocument>) ??
@@ -148,7 +159,11 @@ class UserAuthAuditLogRepository extends BaseRepository<IUserAuthAuditLogDocumen
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
   }
 
-  async findByUserAndEvent(userId: string, event: UserAuthAuditEvent, limit = 50): Promise<IUserAuthAuditLogDocument[]> {
+  async findByUserAndEvent(
+    userId: string,
+    event: UserAuthAuditEvent,
+    limit = 50
+  ): Promise<IUserAuthAuditLogDocument[]> {
     return this.model.find({ userId, event }).sort({ createdAt: -1 }).limit(limit);
   }
 }

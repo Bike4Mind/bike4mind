@@ -57,8 +57,9 @@ describe('settings/update clearing the absolute floor (real Mongo)', () => {
     await put('');
     expect(await adminSettingsRepository.findBySettingName(KEY)).toBeNull();
 
-    await put('60');
-    expect((await adminSettingsRepository.findBySettingName(KEY))?.settingValue).toBe(60);
+    // Below every measured floor, so the default embedding model cannot make the write ask for a confirmation.
+    await put('50');
+    expect((await adminSettingsRepository.findBySettingName(KEY))?.settingValue).toBe(50);
     expect(await AdminSettings.collection.countDocuments({ settingName: KEY })).toBe(1);
   });
 });

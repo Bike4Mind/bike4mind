@@ -30,7 +30,8 @@
     "title": "Changelog"
   },
   "feedback": {
-    "send": "Send Feedback"
+    "send": "Send Feedback",
+    "rollupTitle": "Your feedback"
   },
   "terms_policies": "Terms & Policies",
   "cookie_settings": "Cookie settings",
@@ -46,9 +47,11 @@
     "title": "Projects"
   },
   "sidenav": {
+    "studio": "Studio",
     "pin": "Pin sidebar",
     "unpin": "Unpin sidebar",
     "help": "Help Center",
+    "skillMarket": "Skill Market",
     "sessions": {
       "sort": {
         "label": "Sort By",
@@ -186,7 +189,8 @@
     "messages": "Messages",
     "invites": "Invites",
     "sendMessage": "Send a Message",
-    "noMessages": "No messages"
+    "noMessages": "No messages",
+    "title_unread": "Inbox, unread items"
   },
   "addSomething": "Add {{ name }}",
   "deleteAllSomething": "Delete All {{ name }}",
@@ -221,6 +225,16 @@
     "backToEmail": "Back to email",
     "checkYourEmail": "Check your email",
     "codeSent": "Verification code sent! Check your email.",
+    "rateLimitedMinutes_one": "Too many code requests. Please try again in {{count}} minute.",
+    "rateLimitedMinutes_other": "Too many code requests. Please try again in {{count}} minutes.",
+    "rateLimitedSeconds_one": "Too many code requests. Please try again in {{count}} second.",
+    "rateLimitedSeconds_other": "Too many code requests. Please try again in {{count}} seconds.",
+    "rateLimitedLater": "Too many code requests. Please try again later.",
+    "rateLimitRetryNow": "That request did not go through. Please try again.",
+    "rateLimitedSupport": "Still stuck? Contact support and we will help you sign in.",
+    "retryIn": "Try again in {{time}}",
+    "passwordlessHint": "Sign-in is passwordless. We will email you a one-time code.",
+    "noPasswordNeeded": "No password needed for email sign-in. We email you a fresh code each time.",
     "codeSentTo": "We sent a code to <email>{{email}}</email>",
     "emailRequired": "Email is required",
     "enterEmail": "Enter your email address",
@@ -240,7 +254,7 @@
     "showPassword": "Show password",
     "enterEmailOrUsername": "Enter email or username",
     "enterPassword": "Enter password",
-    "signInOrCreate": "Sign in or create an account to continue",
+    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account.",
     "justAMoment": "Just a moment...",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
@@ -274,7 +288,7 @@
       "registrationFailed": "Registration failed. Please try again later.",
       "validation": {
         "generic": "Invalid input",
-        "invalidUsername": "Username can only contain letters, numbers, underscores, periods, and dashes",
+        "invalidUsername": "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters).",
         "passwordMismatch": "Passwords do not match",
         "passwordRequirements": "Password must be at least 8 characters, with upper and lower case letters, a number, and a special character"
       }
@@ -293,6 +307,17 @@
     "upload": "Upload Files",
     "long_title": "File Browser"
   },
+  "newChat": "New chat",
+  "a11y": {
+    "advanced_search": "Advanced search and actions",
+    "collapse_sidebar": "Collapse sidebar",
+    "close_files": "Close files",
+    "change_profile_photo": "Change profile photo",
+    "clear_type_filter": "Clear type filter",
+    "previous_page": "Previous page",
+    "next_page": "Next page",
+    "page_number": "Page {{page}}"
+  },
   "view": "View",
   "info": "Info",
   "clone": "Clone",
@@ -303,10 +328,45 @@
     "tooltip": "Profile",
     "collection": "Collection",
     "collections": {
-      "all_types": "All Types"
+      "all_types": "All Types",
+      "type_filter": "Filter by type"
     },
     "users_profile": "{{ name }}'s Profile",
     "storage_used": "Storage Used",
+    "storage_breakdown": {
+      "show": "What's using my storage?",
+      "hide": "Hide breakdown",
+      "loading": "Loading breakdown...",
+      "error": "Couldn't load the storage breakdown.",
+      "retry": "Retry",
+      "empty": "No stored files yet.",
+      "files_one": "{{count}} file",
+      "files_other": "{{count}} files",
+      "archived": "{{size}} archived",
+      "unaccounted": "Unaccounted",
+      "unaccounted_hint": "Difference between your usage counter and the files counted just now. A file changing mid-count can cause a small, temporary gap.",
+      "overcounted": "Not yet in your usage counter",
+      "overcounted_hint": "Your files add up to more than your usage counter shows. A file changing mid-count can cause a small, temporary gap.",
+      "open_lake": "Open lake",
+      "unavailable_lake": "{{source}}: lake unavailable",
+      "no_lake": "{{source}}: no lake",
+      "source": {
+        "manual_upload": "Uploads",
+        "salesforce": "Salesforce",
+        "google_drive": "Google Drive",
+        "slack": "Slack",
+        "proposal_approval": "Approved proposals",
+        "github": "GitHub",
+        "tool_generated": "Generated files"
+      },
+      "media": {
+        "image": "Generated images",
+        "audio": "Generated audio",
+        "video": "Generated video",
+        "document": "Generated documents",
+        "other": "Other generated files"
+      }
+    },
     "credits": "Credits",
     "subscription": "Subscription",
     "edit": "Edit Profile",
@@ -331,7 +391,30 @@
     "payment_issue": "Payment failed - update your payment method to keep this plan."
   },
   "billing": {
-    "title": "Billing"
+    "title": "Billing",
+    "balance": "Balance",
+    "credits_heading": "Top up credits",
+    "credits_sub": "One-time packs, added to your balance. No subscription needed.",
+    "credits_sub_with_plan": "One-time packs, added on top of your monthly allowance.",
+    "free_plan": "Free",
+    "free_plan_detail": "Pay as you go with credit packs",
+    "low_org": "An organization admin can add credits to this account.",
+    "low_with_plan": "Top up to keep working until your allowance renews.",
+    "low_without_plan": "A plan adds credits every month; a pack tops you up now.",
+    "payment_failed": "Payment failed",
+    "plan": "Plan",
+    "plan_fallback": "Subscription",
+    "plan_unavailable": "Unavailable",
+    "plan_unavailable_detail": "We could not load your plan.",
+    "plans_change": "Your plan",
+    "plans_change_sub": "Manage, change or cancel your subscription.",
+    "plans_heading": "Plans",
+    "plans_heading_sub": "Monthly plans with a credit allowance.",
+    "plans_upgrade": "Upgrade",
+    "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
+    "retry": "Retry",
+    "see_plans": "See plans",
+    "top_up": "Top up"
   },
   "credits": {
     "title": "Credits",
@@ -345,7 +428,7 @@
     "model_pricing": "Model Pricing",
     "text_models": "Text Models",
     "image_models": "Image Models",
-    "pricing_per_1k_tokens": "Pricing shown in credits per 1,000 tokens",
+    "pricing_per_1m_tokens": "Pricing shown in credits per 1,000,000 tokens",
     "pricing_per_generation": "Pricing shown in credits per image generation",
     "model_name": "Model Name",
     "price_tier": "Price Tier",
@@ -359,7 +442,8 @@
     "usage_pattern": "Based on your usage pattern from the last {{days}} days",
     "credits_used": "Credits Used",
     "credits_purchased": "Credits Purchased",
-    "net_credits": "Net Credits"
+    "net_credits": "Net Credits",
+    "unit": "credits"
   },
   "time": {
     "last_7_days": "Last 7 days",
@@ -386,6 +470,7 @@
     "failed_to_load_data": "Failed to load data. Please try again later."
   },
   "integrations": {
+    "title": "Integrations",
     "atlassian": {
       "reconnect_required": "Your Atlassian connection has expired. Please reconnect your account."
     }
@@ -396,7 +481,7 @@
     "current_credits": "Current credits amount",
     "best_value": "Best Value",
     "purchase_success": "Purchased {{credits}} credits",
-    "history_title": "Credits Purchase History",
+    "history_title": "Credits purchase history",
     "purchase": "Purchase",
     "no_transactions": "No transactions yet",
     "low_credits": "Your credits are low",
@@ -407,7 +492,15 @@
       "completed": "Completed",
       "pending": "Pending",
       "failed": "Failed"
-    }
+    },
+    "buy_pack": "Buy {{credits}} credits for {{price}}",
+    "choose_pack": "Choose a credit pack",
+    "history_usage_hint": "This lists purchases only.",
+    "organization_credits_active": "Organization Credits Active",
+    "rate_per_thousand": "{{rate}} per 1,000 credits",
+    "see_usage": "See usage",
+    "shared_rate": "Every pack is the same rate: {{rate}} per 1,000 credits.",
+    "switch_to_personal": "Switch to your personal account to purchase credits for personal use."
   },
   "settings": {
     "title": "Settings",
@@ -574,6 +667,22 @@
     "update_success": "Updated system priority for \"{{fileName}}\".",
     "update_error": "Failed to update system priority."
   },
+  "media_player": {
+    "load_failed": "This file could not be played",
+    "retry": "Retry",
+    "download_failed": "Failed to download file",
+    "open_video": "Open {{name}}"
+  },
+  "generated_filter": {
+    "label": "Generated"
+  },
+  "generation_details": {
+    "title": "Generation details",
+    "model": "Model",
+    "duration": "Length",
+    "prompt": "Prompt",
+    "lyrics": "Lyrics"
+  },
   "file_actions": {
     "notes": "Notes",
     "notes_placeholder": "Add notes about this file...",
@@ -600,7 +709,7 @@
   },
   "subscription_modal": {
     "title": "Subscription",
-    "description": "Access every major AI model through one unified interface. Run advanced models like Deepseek R1 privately.",
+    "description": "Access every major AI model through one unified interface.",
     "starter_credits": "Every account starts with free credits; subscribe for a monthly allowance.",
     "credits_rollover": "Unused credits roll over for 3 months.",
     "monthly_billing": "Monthly Billing",
@@ -612,7 +721,9 @@
     "personal": "Personal",
     "business": "Business",
     "team": "Team",
-    "enterprise": "Enterprise"
+    "enterprise": "Enterprise",
+    "audience_label": "Plan type",
+    "includes": "Includes"
   },
   "agents": {
     "title": "Agents",
@@ -640,6 +751,16 @@
   },
   "skills": {
     "title": "Skills",
-    "command_palette_description": "Manage reusable instruction templates"
+    "command_palette_description": "Manage reusable instruction templates",
+    "market_title": "Skill Market",
+    "market_command_palette_description": "Browse, import and publish community skills"
+  },
+  "apiKeys": {
+    "title": "API Keys"
+  },
+  "connections": {
+    "menuTooltip": "Integrations like Google Drive and Slack, plus API keys for your own code",
+    "sections": "Connections sections",
+    "title": "Connections"
   }
 }

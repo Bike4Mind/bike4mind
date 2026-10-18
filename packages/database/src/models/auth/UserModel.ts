@@ -13,8 +13,9 @@ import {
   MFA_ATTEMPT_RESET_WINDOW_MS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
+import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -68,10 +69,11 @@ const UserNoteSchema = new Schema<IUserNote>(
 
 const MFASchema = new Schema(
   {
-    // Plaintext TOTP secret + backup codes - never serialize to a client. select:false
-    // keeps them out of every default query/response; the MFA subsystem loads them
-    // explicitly via findByIdWithMfaSecrets (+select). `totpEnabled` (not select:false)
-    // is the flag callers use to detect that MFA is configured.
+    // TOTP secret (encrypted at rest, see encryptTotpSecretInUpdate) + hashed backup codes -
+    // never serialize to a client. select:false keeps them out of every default
+    // query/response; the MFA subsystem loads them explicitly via findByIdWithMfaSecrets
+    // (+select), which decrypts the secret. `totpEnabled` (not select:false) is the flag
+    // callers use to detect that MFA is configured.
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
@@ -145,7 +147,6 @@ const UserPreferencesSchema = new Schema(
     // ExperimentalFeatureToggle silently reverts to 'off' on reload.
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
-    saveGeneratedAudio: { type: Boolean },
     showSplashCards: { type: Boolean },
   },
   { _id: false }
@@ -267,6 +268,12 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
   }
 
+  /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
+  async addTagsToUser(userId: string, tags: string[]): Promise<void> {
+    if (tags.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
   /** Remove one group id from one user. */
   async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
@@ -331,6 +338,31 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.model.findOne({ email }).collation({ locale: 'en', strength: 2 });
   }
 
+  async existsOtherUserWithEmail(email: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('email', email, excludeUserId);
+  }
+
+  async existsOtherUserWithUsername(username: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('username', username, excludeUserId);
+  }
+
+  // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
+  // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
+  // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.
+  private async existsOtherUserWithValue(
+    field: 'email' | 'username',
+    value: string,
+    excludeUserId: string | undefined
+  ): Promise<boolean> {
+    const normalized = value.normalize('NFC').trim();
+    if (!normalized) return false;
+    const filter: Record<string, unknown> = {
+      [field]: { $regex: `^\\s*${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+    };
+    if (excludeUserId) filter._id = { $ne: excludeUserId };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   async findOrCreateByEmail(email: string, defaults: Partial<IUserDocument>): Promise<IUserDocument> {
     try {
       const doc = await this.model.findOneAndUpdate(
@@ -367,10 +399,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result ? result.toJSON() : null;
   }
 
-  /** Loads a user WITH the select:false MFA secrets - for server-side MFA verification only. */
+  /**
+   * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
+   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
+   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
     const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
-    return result ? result.toJSON() : null;
+    if (!result) return null;
+    const user: IUserDocument = result.toJSON();
+    if (user.mfa?.totpSecret) {
+      user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    return user;
   }
 
   /**
@@ -381,50 +422,86 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    */
   async atomicRecordMfaFailedAttempt(userId: string): Promise<IUserDocument | null> {
     const now = new Date();
-    const lockoutUntil = new Date(now.getTime() + MFA_LOCKOUT_DURATION_MS);
+    const result = await this.model.findOneAndUpdate({ _id: userId }, mfaAttemptPipeline(now), { new: true });
+    return result ? result.toJSON() : null;
+  }
 
-    // Stage 1: increment failedAttempts, resetting to 1 if the last failure was over an hour ago.
-    // Stage 2: conditionally set lockedUntil from stage 1's output (same pipeline, atomic).
+  /**
+   * Book an MFA attempt BEFORE the code is compared, refusing while the user is locked out.
+   * Counting only after a failed compare lets a burst of concurrent guesses all pass the lockout
+   * check first; reserving up front caps the codes compared per window at MFA_MAX_FAILED_ATTEMPTS.
+   * A successful verify clears the counter in its own write.
+   */
+  async atomicReserveMfaAttempt(userId: string): Promise<{ reserved: boolean; user: IUserDocument | null }> {
+    const now = new Date();
     const result = await this.model.findOneAndUpdate(
-      { _id: userId },
-      [
-        {
-          $set: {
-            'mfa.failedAttempts': {
-              $cond: {
-                if: {
-                  $and: [
-                    { $gt: [{ $ifNull: ['$mfa.lastFailedAttempt', null] }, null] },
-                    {
-                      $gt: [
-                        { $subtract: [now, { $ifNull: ['$mfa.lastFailedAttempt', now] }] },
-                        MFA_ATTEMPT_RESET_WINDOW_MS,
-                      ],
-                    },
-                  ],
-                },
-                then: 1, // stale window — reset counter, this attempt is attempt #1
-                else: { $add: [{ $ifNull: ['$mfa.failedAttempts', 0] }, 1] },
-              },
-            },
-            'mfa.lastFailedAttempt': now,
-          },
-        },
-        {
-          $set: {
-            'mfa.lockedUntil': {
-              $cond: {
-                if: { $gte: ['$mfa.failedAttempts', MFA_MAX_FAILED_ATTEMPTS] },
-                then: lockoutUntil,
-                else: '$$REMOVE',
-              },
-            },
-          },
-        },
-      ],
+      { _id: userId, $or: [{ 'mfa.lockedUntil': null }, { 'mfa.lockedUntil': { $lte: now } }] },
+      mfaAttemptPipeline(now),
       { new: true }
     );
+    if (result) return { reserved: true, user: result.toJSON() };
+    // Locked (or gone): report the current lockout state without counting another attempt.
+    const current = await this.model.findOne({ _id: userId });
+    return { reserved: false, user: current ? current.toJSON() : null };
+  }
 
+  /**
+   * Record `step` as the last accepted TOTP time step, only if it is newer than the stored one.
+   * Returns false when the step was already used, so a code cannot be replayed within its window.
+   */
+  async atomicClaimTotpStep(userId: string, step: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, $or: [{ totpLastStep: null }, { totpLastStep: { $lt: step } }] },
+      { $set: { totpLastStep: step } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
+   * exactly once per code, so a backup code cannot be consumed by two requests at once. A
+   * whole-document write from a pre-read snapshot would instead restore a code another request
+   * had already spent, so consumption must be this targeted `$pull`.
+   */
+  async atomicConsumeBackupCode(userId: string, codeHash: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, 'mfa.backupCodes': codeHash },
+      { $pull: { 'mfa.backupCodes': codeHash } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Enable MFA only if the stored secret is still the one just verified (`totpSecret`) and MFA is
+   * still disabled. Two concurrent enrollments can otherwise interleave so that a code checked
+   * against the first secret enables the second: the authenticator holds one secret and the user
+   * is locked out. Matching on the verified secret makes the write refuse instead.
+   *
+   * The stored secret is random-IV ciphertext, so `totpSecret` (plaintext) can never match it in a
+   * filter. Decrypt-compare first, then condition the write on the exact stored value: a concurrent
+   * re-setup writes fresh ciphertext, so the compare-and-set still refuses.
+   */
+  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+    const current = await this.model
+      .findOne({ _id: userId })
+      .select('+mfa.totpSecret')
+      .lean<{ mfa?: { totpSecret?: string } }>();
+    const storedSecret = current?.mfa?.totpSecret;
+    if (!storedSecret || decryptAtRest(storedSecret) !== totpSecret) return null;
+
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpSecret': storedSecret, 'mfa.totpEnabled': false },
+      {
+        $set: {
+          'mfa.totpEnabled': true,
+          'mfa.failedAttempts': 0,
+          'mfa.lastUsedAt': new Date(),
+          updatedAt: new Date(),
+        },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+      },
+      { new: true }
+    );
     return result ? result.toJSON() : null;
   }
 
@@ -442,6 +519,38 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
       .select('name email username lastActiveAt isOnline photoUrl');
+  }
+
+  /**
+   * What the admin integration-demand requester list shows per user: name, email and the
+   * organization the user belongs to today, plus whether the account is soft-deleted (a
+   * `deletedAt` is set). Inclusion projection only; a deleted account is returned, not filtered,
+   * so the caller can blank it rather than lose the row.
+   */
+  async findRequesterProfilesByIds(
+    ids: string[]
+  ): Promise<Array<{ id: string; name?: string; email?: string; organizationId: string | null; deleted: boolean }>> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('name email organizationId deletedAt')
+      .lean<
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          name?: string;
+          email?: string;
+          organizationId?: mongoose.Types.ObjectId | null;
+          deletedAt?: Date | null;
+        }>
+      >();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      name: doc.name,
+      email: doc.email,
+      organizationId: doc.organizationId ? String(doc.organizationId) : null,
+      deleted: !!doc.deletedAt,
+    }));
   }
 
   /**
@@ -514,6 +623,33 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       ],
       { new: true }
     );
+  }
+
+  async setCurrentStorageIfUnchanged(userId: string, expected: number, next: number): Promise<boolean> {
+    // `null` also matches a missing field, which every reader treats as 0.
+    const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
+    const res = await this.model.updateOne(
+      { _id: userId, currentStorageSize: counterFilter },
+      { $set: { currentStorageSize: next } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  async findCurrentStorageSize(userId: string): Promise<number | null> {
+    if (!mongoose.isValidObjectId(userId)) return null;
+    const row = await this.model
+      .findById(userId, { currentStorageSize: 1 })
+      .lean<{ currentStorageSize?: number | null }>();
+    return row ? (row.currentStorageSize ?? 0) : null;
+  }
+
+  async listUserIdsAfter(afterId: string | null, limit: number): Promise<string[]> {
+    const rows = await this.model
+      .find(afterId ? { _id: { $gt: afterId } } : {}, { _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
   }
 
   /**
@@ -870,6 +1006,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // MFA (Multi-Factor Authentication) field
     mfa: { type: MFASchema, default: null },
+    // Last accepted TOTP time step (unix seconds / 30), see IUser.totpLastStep.
+    totpLastStep: { type: Number, default: null },
 
     // User preferences
     showCreditsUsed: { type: Boolean, default: true },
@@ -1025,6 +1163,49 @@ export const changeStorageSize = async function (user: IUserDocument, size: numb
 };
 
 /**
+ * Update pipeline counting one MFA attempt at `now`. Stage 1 increments failedAttempts, resetting
+ * to 1 when the last failure is older than the reset window; stage 2 sets lockedUntil from stage
+ * 1's output, so the increment and the lockout land in one atomic write.
+ */
+function mfaAttemptPipeline(now: Date): PipelineStage.Set[] {
+  return [
+    {
+      $set: {
+        'mfa.failedAttempts': {
+          $cond: {
+            if: {
+              $and: [
+                { $gt: [{ $ifNull: ['$mfa.lastFailedAttempt', null] }, null] },
+                {
+                  $gt: [
+                    { $subtract: [now, { $ifNull: ['$mfa.lastFailedAttempt', now] }] },
+                    MFA_ATTEMPT_RESET_WINDOW_MS,
+                  ],
+                },
+              ],
+            },
+            then: 1,
+            else: { $add: [{ $ifNull: ['$mfa.failedAttempts', 0] }, 1] },
+          },
+        },
+        'mfa.lastFailedAttempt': now,
+      },
+    },
+    {
+      $set: {
+        'mfa.lockedUntil': {
+          $cond: {
+            if: { $gte: ['$mfa.failedAttempts', MFA_MAX_FAILED_ATTEMPTS] },
+            then: new Date(now.getTime() + MFA_LOCKOUT_DURATION_MS),
+            else: '$$REMOVE',
+          },
+        },
+      },
+    },
+  ];
+}
+
+/**
  * Structural guard for the select:false MFA secrets (`mfa.totpSecret` / `mfa.backupCodes`).
  *
  * Because those fields are select:false, any read other than `findByIdWithMfaSecrets` returns an
@@ -1057,7 +1238,44 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
   this.setUpdate(update);
 }
 
+/**
+ * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
+ * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
+ * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
+ * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
+ */
+function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
+  const update = this.getUpdate() as Record<string, unknown> | null;
+  if (!update || Array.isArray(update)) return;
+
+  const encryptIn = (container: Record<string, unknown> | undefined) => {
+    if (!container) return;
+    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
+    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
+      container.mfa = { ...mfa, totpSecret: encryptAtRest(mfa.totpSecret) };
+    }
+    const dotted = container['mfa.totpSecret'];
+    if (typeof dotted === 'string') {
+      container['mfa.totpSecret'] = encryptAtRest(dotted);
+    }
+  };
+
+  encryptIn(update);
+  encryptIn(update.$set as Record<string, unknown> | undefined);
+  this.setUpdate(update);
+}
+
 UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], stripSecretlessMfaFromUpdate);
+UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecretInUpdate);
+
+// The document-save counterpart of encryptTotpSecretInUpdate (User.create / doc.save()).
+UserSchema.pre('save', function (next) {
+  if (this.mfa?.totpSecret && this.isModified('mfa.totpSecret')) {
+    this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  next();
+});
 
 export const User =
   (mongoose.models.User as unknown as IUserModel) ?? model<IUserDocument, IUserModel>('User', UserSchema);

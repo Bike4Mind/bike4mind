@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
@@ -13,7 +13,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AiEvents,
+  ChatModelName,
+  IMessage,
+  isStorageLimitError,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
@@ -252,6 +259,7 @@ export const handler = withEventContext(async (event, logger) => {
           {
             db: {
               fabFiles: fabFileRepository,
+              users: userRepository,
               dataLakes: dataLakeRepository,
               adminSettings: adminSettingsRepository,
               scopedSettings: scopedSettingsRepository,
@@ -364,10 +372,9 @@ export const handler = withEventContext(async (event, logger) => {
       }
     });
   } catch (error) {
-    const isStorageLimitError = error instanceof Error && error.message.includes('storage limit');
-    if (isStorageLimitError) {
+    if (isStorageLimitError(error) && error.info.errorCode !== 'file_too_large') {
       logger.warn(
-        `Storage limit exceeded for user ${user.id} — summary saved to session but FabFile not created for RAG indexing`
+        `Storage limit exceeded for user ${user.id} - summary saved to session; knowledge file not created or updated for RAG indexing`
       );
     } else {
       throw error;

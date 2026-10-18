@@ -20,7 +20,7 @@ import { createFabFile } from '@server/managers/fabFileManager';
 import { evaluateConnectorCopyDeletion } from '@server/integrations/google/drive/connectorCopyGate';
 import { getFilesStorage } from '@server/utils/storage';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 
 // Shared by the connector ingests: driveLakeIngest.ts and githubLakeIngest.ts (via githubLakeSlice.ts).
 
@@ -253,7 +253,13 @@ export async function ingestLakeFile(args: {
   logger: Logger;
 }) {
   const { data, ability, lake, membershipActor, batchId, bytes, fileKey, logger } = args;
-  const fabFile = await createFabFile(data, ability);
+  // The connector's user uploads, but an org lake's files belong to the org. The file joins only
+  // this lake, so fabFilesService.pickOwnerOrganizationId reduces to the lake's own org.
+  const ownerOrganizationId = lake.organizationId || undefined;
+  const fabFile = await createFabFile(
+    { ...data, ...(ownerOrganizationId && { organizationId: ownerOrganizationId }) },
+    ability
+  );
 
   // This door stamps the lake's meta-tag directly into `tags` at creation (above) rather than
   // going through `addFileToLake` - there is no FabFile yet for that door to gate on when the

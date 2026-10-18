@@ -140,7 +140,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_projects` | List the projects you can access, including shared ones | `projects:read` |
 | `get_project` | Fetch one project by id | `projects:read` |
 | `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
-| `send_message` | Send a chat message and wait for the reply (sends progress for a `progressToken`, stops on cancel); returns its cited sources (`citables`) | `ai:chat` |
+| `send_message` | Send a chat message and wait for the reply (sends progress for a `progressToken`, cancel stops the turn on the server); returns its cited sources (`citables`), and fails on an errored or stopped turn | `ai:chat` |
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
 | `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
 | `list_files` | Search your files | `files:read` |
@@ -148,6 +148,8 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
 | `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
 | `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
+| `create_artifact` | Create a private artifact (`type`, `title`, `content` required; optional `description`, `notebookId`, `projectId`, `tags`); a written document goes in `type: 'html'` | `notebooks:write` |
+| `publish_artifact` | Publish an artifact you own to a shareable `/p/...` link; republishing updates the existing page and keeps its visibility unless `visibility` (`public` or `private`) is passed, and a first publish is `public` | `files:write` |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
 
@@ -156,6 +158,10 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 - **Too large to inline** - no audio block; a time-limited `url` to the audio and its `byteLength`, plus `saved` and `file` describing any saved copy (`saved: false` when none was kept, e.g. with `preview: true`).
 
 `generate_sound_effect` returns the same three shapes.
+
+`create_artifact` returns `{ id, type, title, version, notebookId, projectId, createdAt }`; pass the `id` to `publish_artifact` to share it.
+
+`publish_artifact` uploads the artifact's raw content and the server renders the page, so the result matches a publish from the app's Share flow. An artifact you already published, from the app or from this tool, is updated in place at its existing link. It returns `{ publicId, url, visibility }`, where `url` is absolute. The publish routes require no API-key scope today, so `files:write` is advisory.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

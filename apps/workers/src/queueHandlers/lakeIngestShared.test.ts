@@ -49,7 +49,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 
 import { createLakeIngestRetirer, ingestLakeFile } from './lakeIngestShared';
 
@@ -100,6 +100,21 @@ describe('ingestLakeFile', () => {
       { fabFileId: 'ff1', fileName: 'a.md', relativePath: 'docs/a.md', status: 'pending' },
     ]);
     expect(h.upload).toHaveBeenCalledWith(Buffer.from('x'), 'k.md', { ContentType: 'text/markdown' });
+    expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('organizationId');
+  });
+
+  it("stamps an org lake's org as the owner, not the connecting user", async () => {
+    await ingestLakeFile({
+      data: { userId: 'u1', fileName: 'a.md', mimeType: 'text/markdown', filePath: 'k.md' } as never,
+      ability: {} as never,
+      lake: { id: 'lake1', datalakeTag: 'datalake:lake1', organizationId: 'org-1' } as never,
+      membershipActor,
+      batchId: 'b1',
+      bytes: Buffer.from('x'),
+      fileKey: 'k.md',
+      logger,
+    });
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ userId: 'u1', organizationId: 'org-1' });
   });
 });
 

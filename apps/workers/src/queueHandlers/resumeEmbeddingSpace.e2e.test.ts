@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import mongoose from 'mongoose';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -51,7 +52,7 @@ import {
 } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 
 const DEPLOYMENT_DEFAULT = 'text-embedding-3-small';
 const COMMITTED_SPACE = 'voyage-3';
@@ -73,7 +74,8 @@ let replSet: Awaited<ReturnType<typeof createMongoReplSet>> | undefined;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

@@ -27,7 +27,11 @@ function makeSyncedRepo() {
     createIfUnderCap: vi.fn().mockImplementation(storeDoc),
     // rotate.ts mutates apiKey in place then calls update - the mutation lands on `stored` too
     findByUserIdAndId: vi.fn().mockImplementation(() => Promise.resolve(stored)),
-    update: vi.fn().mockResolvedValue(undefined),
+    // Honours the reserved `unset` option like the real BaseModel.update
+    update: vi.fn().mockImplementation((_patch: unknown, options?: { unset?: string[] }) => {
+      for (const field of options?.unset ?? []) delete (stored as unknown as Record<string, unknown>)[field];
+      return Promise.resolve(undefined);
+    }),
     findActiveByKeyPrefix: vi
       .fn()
       .mockImplementation((prefix: string) => Promise.resolve(stored?.keyPrefix === prefix ? stored : null)),
@@ -105,7 +109,7 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
     expect(getStored()!.usage.totalSpendCredits).toBe(4200);
   });
 
-  it('rotation stores the SHA-256 digest of the new key and never returns it', async () => {
+  it('rotation stores the SHA-256 digest of the new key, drops keyHash, and never returns either', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = { db: { userApiKeys: repo as any, organizations: {} as any } };
@@ -116,10 +120,29 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
     const result = await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
     const digest = createHash('sha256').update(result.key).digest('hex');
 
-    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'key-1', keyDigest: digest }));
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'key-1', keyDigest: digest }), {
+      unset: ['keyHash'],
+    });
     expect(getStored()!.keyDigest).toBe(digest);
     expect(result).not.toHaveProperty('keyDigest');
     expect(result).not.toHaveProperty('keyHash');
+  });
+
+  it('rotating a legacy bcrypt key leaves it with a new digest and no keyHash, and only the new key validates', async () => {
+    const { repo, getStored } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any, organizations: {} as any } };
+
+    const { key: legacyKey } = await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    delete getStored()!.keyDigest;
+    getStored()!.keyHash = `__h__:${legacyKey}`; // what the bcrypt test stub produces for the key
+
+    const { key: rotatedKey } = await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(getStored()).not.toHaveProperty('keyHash');
+    expect(getStored()!.keyDigest).toBe(createHash('sha256').update(rotatedKey).digest('hex'));
+    expect((await validateUserApiKey(rotatedKey, adapters)).isValid).toBe(true);
+    expect((await validateUserApiKey(legacyKey, adapters)).isValid).toBe(false);
   });
 
   it('original key is invalid after rotation', async () => {
@@ -171,13 +194,10 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
       expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
       expect(key).toMatch(/^b4m_live_/);
-      expect(repo.update).toHaveBeenCalledWith({
-        id: 'key-1',
-        keyHash: expect.any(String),
-        keyDigest: expect.any(String),
-        keyPrefix: expect.any(String),
-        userId: 'admin-user',
-      });
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: 'key-1', keyDigest: expect.any(String), keyPrefix: expect.any(String), userId: 'admin-user' },
+        { unset: ['keyHash'] }
+      );
 
       // The rotated credential must authenticate as the admin who now holds it,
       // not as the teammate who minted it.
@@ -210,12 +230,10 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
       expect(stored.userId).toBe('minter');
       expect(result.previousOwnerUserId).toBeUndefined();
-      expect(repo.update).toHaveBeenCalledWith({
-        id: 'key-1',
-        keyHash: expect.any(String),
-        keyDigest: expect.any(String),
-        keyPrefix: expect.any(String),
-      });
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: 'key-1', keyDigest: expect.any(String), keyPrefix: expect.any(String) },
+        { unset: ['keyHash'] }
+      );
       // The owner's receivers keep verifying: their own rotation leaves the signing secret alone.
       expect(result.callbackSigningSecret).toBeUndefined();
       expect(repo.setCallbackSigningSecret).not.toHaveBeenCalled();
@@ -389,5 +407,39 @@ describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
 
     expect(result.previousOwnerUserId).toBe('owner-1');
     expect(adapters.db.userApiKeys.update).toHaveBeenCalled();
+  });
+});
+
+describe('rotateUserApiKey - realtime connections', () => {
+  const setup = async (endConnections: ReturnType<typeof vi.fn>) => {
+    const { repo } = makeSyncedRepo();
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+        realtimeConnections: { endConnections },
+      },
+    };
+    await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    return { repo, adapters };
+  };
+
+  it("ends the key's realtime connections after the secret is rotated", async () => {
+    const endConnections = vi.fn().mockResolvedValue({ connectionIds: ['conn-1'] });
+    const { repo, adapters } = await setup(endConnections);
+
+    await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(endConnections).toHaveBeenCalledWith({ apiKeyId: 'key-1' });
+    expect(repo.update.mock.invocationCallOrder[0]).toBeLessThan(endConnections.mock.invocationCallOrder[0]);
+  });
+
+  it('still returns the new key when ending connections fails', async () => {
+    const endConnections = vi.fn().mockRejectedValue(new Error('db down'));
+    const { adapters } = await setup(endConnections);
+
+    const result = await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(result.key).toMatch(/^b4m_live_/);
   });
 });

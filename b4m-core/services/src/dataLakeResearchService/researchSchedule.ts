@@ -9,7 +9,12 @@ import type {
 } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT, RESEARCH_REVIEW_BACKLOG_LIMIT_MAX } from '@bike4mind/common';
 import type { LakeConfigAuditLakeRef } from '../dataLakeService/recordLakeConfigChange';
-import { isResearchRunRefusal, startResearchRun, type StartResearchRunAdapters } from './startResearchRun';
+import {
+  isResearchRunCreditRefusal,
+  isResearchRunRefusal,
+  startResearchRun,
+  type StartResearchRunAdapters,
+} from './startResearchRun';
 
 /**
  * Scheduled research runs: which configs are due, whether each one may start, and when it is next
@@ -140,6 +145,9 @@ async function fireScheduledConfig(
     run = await startResearchRun(config.id, lake, { trigger: 'periodic' }, { db, logger, now: () => at });
   } catch (error) {
     if (isResearchRunRefusal(error)) return { outcome: 'skipped', at, reason: error.reason };
+    // The credit pre-flight's 422 is a skip like any other spend rail, not a failed tick: a broke
+    // owner clears, and the caller's retry-in-an-hour path is the right response.
+    if (isResearchRunCreditRefusal(error)) return { outcome: 'skipped', at, reason: 'insufficient_credits' };
     throw error;
   }
 

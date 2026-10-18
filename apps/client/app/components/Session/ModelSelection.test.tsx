@@ -1,6 +1,7 @@
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
@@ -19,6 +20,9 @@ import ModelSelection, {
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
+// Text models appended to the accessible list per test; reset in afterEach below.
+const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
+const favoriteModelIds = vi.hoisted(() => new Set<string>());
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -48,8 +52,8 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [textModel, imageModel],
-    accessibleTextModels: [textModel],
+    accessibleModels: [textModel, imageModel, ...extraTextModels],
+    accessibleTextModels: [textModel, ...extraTextModels],
     accessibleImageModels: [imageModel],
     accessibleVideoModels: [],
     isLoading: false,
@@ -80,7 +84,11 @@ vi.mock('@client/app/hooks/data/useModelStats', () => ({
 }));
 
 vi.mock('@client/app/hooks/useFavoriteModels', () => ({
-  useFavoriteModels: () => ({ isFavorite: () => false, toggleFavorite: vi.fn() }),
+  useFavoriteModels: () => ({
+    favoriteModelIds,
+    isFavorite: (id: string) => favoriteModelIds.has(id),
+    toggleFavorite: vi.fn(),
+  }),
 }));
 
 vi.mock('@client/app/utils/modelRanking', () => ({
@@ -109,24 +117,28 @@ vi.mock('./AISettings/MetaDataChips', () => ({
 // (notebooklist.*) that only exist here.
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const renderSelection = (props: {
+type SelectionProps = {
+  model?: string;
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
-}) =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <ModelSelection
-        model={textModel.id}
-        setModel={props.setModel ?? vi.fn()}
-        onSelectionComplete={props.onSelectionComplete}
-        imageModel={false}
-        showAllModels
-        modelFilter="all"
-        onSettingsClick={props.onSettingsClick}
-      />
-    </CssVarsProvider>
-  );
+};
+
+const selectionTree = (props: SelectionProps) => (
+  <CssVarsProvider theme={appTheme}>
+    <ModelSelection
+      model={props.model ?? textModel.id}
+      setModel={props.setModel ?? vi.fn()}
+      onSelectionComplete={props.onSelectionComplete}
+      imageModel={false}
+      showAllModels
+      modelFilter="all"
+      onSettingsClick={props.onSettingsClick}
+    />
+  </CssVarsProvider>
+);
+
+const renderSelection = (props: SelectionProps) => render(selectionTree(props));
 
 describe('ModelSelection apply behavior', () => {
   beforeEach(() => {
@@ -441,5 +453,257 @@ describe('ModelSelection recommended group', () => {
     adminSettings.recommendedModelIds = ['no-such-model'];
     renderSelection({});
     expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection duplicate and unavailable rows', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+    favoriteModelIds.clear();
+    adminSettings.recommendedModelIds = [];
+  });
+
+  it('shows a Bedrock model once and hides its unavailable foundation-id twin', () => {
+    extraTextModels.push(
+      {
+        ...textModel,
+        id: 'global.anthropic.claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Bedrock,
+      } as ModelInfo,
+      {
+        ...textModel,
+        id: 'anthropic.claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Bedrock,
+        disabled: true,
+      } as ModelInfo
+    );
+    renderSelection({});
+
+    expect(screen.getByTestId('model-card-global.anthropic.claude-opus-5-5')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-card-anthropic.claude-opus-5-5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+  });
+
+  it('hides disabled favorites and recommendations when they are not active', () => {
+    const unavailableId = 'anthropic.claude-opus-5-5';
+    extraTextModels.push({ ...textModel, id: unavailableId, backend: ModelBackend.Bedrock, disabled: true });
+    favoriteModelIds.add(unavailableId);
+    adminSettings.recommendedModelIds = [unavailableId];
+    renderSelection({});
+
+    expect(screen.queryByTestId(`model-card-${unavailableId}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recommended-section')).not.toBeInTheDocument();
+  });
+
+  it('shows an unavailable active model and its enabled profile twin', () => {
+    const activeId = 'anthropic.claude-opus-5-5';
+    const enabledId = 'global.anthropic.claude-opus-5-5';
+    extraTextModels.push(
+      { ...textModel, id: activeId, backend: ModelBackend.Bedrock, disabled: true },
+      { ...textModel, id: enabledId, backend: ModelBackend.Bedrock }
+    );
+    renderSelection({ model: activeId });
+
+    expect(screen.getByTestId(`model-card-${activeId}`)).toHaveAttribute('data-disabled');
+    expect(screen.getByTestId(`model-card-${enabledId}`)).toBeInTheDocument();
+  });
+
+  it('keeps pinned twin ids in their sections when the active alias wins the provider row', () => {
+    const activeId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    extraTextModels.push(
+      { ...textModel, id: activeId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: pinnedId, backend: ModelBackend.OpenAI }
+    );
+    favoriteModelIds.add(pinnedId);
+    adminSettings.recommendedModelIds = [pinnedId];
+    renderSelection({ model: activeId });
+
+    expect(within(screen.getByTestId('recommended-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+    expect(within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+  });
+
+  it('keeps a Favorites card mounted and focused when selecting it flips the provider-row winner', () => {
+    const aliasId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    const laterFavoriteId = 'gpt-later-favorite';
+    extraTextModels.push(
+      { ...textModel, id: aliasId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: pinnedId, backend: ModelBackend.OpenAI },
+      { ...textModel, id: laterFavoriteId, backend: ModelBackend.OpenAI }
+    );
+    favoriteModelIds.add(pinnedId);
+    favoriteModelIds.add(laterFavoriteId);
+    const { rerender } = renderSelection({ model: aliasId });
+
+    const favorites = screen.getByTestId('favorites-section');
+    const selectButton = within(favorites).getByTestId(`model-select-btn-${pinnedId}`);
+    selectButton.focus();
+    expect(selectButton).toHaveFocus();
+
+    rerender(selectionTree({ model: pinnedId }));
+
+    const afterSelect = within(screen.getByTestId('favorites-section')).getByTestId(`model-select-btn-${pinnedId}`);
+    expect(afterSelect).toBe(selectButton);
+    expect(afterSelect).toHaveFocus();
+    expect(afterSelect).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  describe('search over pinned twins', () => {
+    const aliasId = 'gpt-4.1';
+    const pinnedId = 'gpt-4.1-2025-04-14';
+    const searchFor = async (term: string) => {
+      fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+        target: { value: term },
+      });
+      await waitFor(() => expect(screen.getByTestId('model-search-input').querySelector('input')).toHaveValue(term));
+    };
+
+    beforeEach(() => {
+      extraTextModels.push(
+        { ...textModel, id: aliasId, name: 'Alpha Active', description: '', backend: ModelBackend.OpenAI },
+        { ...textModel, id: pinnedId, name: 'Beta Pinned', description: '', backend: ModelBackend.OpenAI }
+      );
+      favoriteModelIds.add(pinnedId);
+    });
+
+    it('leaves a pinned twin out of Favorites when the search matches only the active winner', async () => {
+      renderSelection({ model: aliasId });
+      expect(within(screen.getByTestId('favorites-section')).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+
+      await searchFor('alpha');
+
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${pinnedId}`)).not.toBeInTheDocument());
+      expect(screen.queryByTestId('favorites-section')).not.toBeInTheDocument();
+      expect(screen.getByTestId(`model-card-${aliasId}`)).toBeInTheDocument();
+    });
+
+    it('still lists a pinned twin in Favorites when the search matches only that twin', async () => {
+      renderSelection({ model: aliasId });
+
+      await searchFor('beta');
+
+      await waitFor(() => expect(screen.queryByTestId(`model-card-${aliasId}`)).not.toBeInTheDocument());
+      const favorites = screen.getByTestId('favorites-section');
+      expect(within(favorites).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
+      expect(screen.queryByText(/No models found/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the unavailable active model unselectable by click and by keyboard target', () => {
+    const activeId = 'anthropic.claude-opus-5-5';
+    extraTextModels.push({ ...textModel, id: activeId, backend: ModelBackend.Bedrock, disabled: true });
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ model: activeId, setModel, onSelectionComplete });
+
+    expect(screen.getByTestId(`model-select-btn-${activeId}`)).toBeDisabled();
+    fireEvent.click(screen.getByTestId(`model-card-${activeId}`));
+    fireEvent.click(screen.getByTestId(`model-select-btn-${activeId}`));
+
+    expect(setModel).not.toHaveBeenCalled();
+    expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelSelection direct and Bedrock routes', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+  });
+
+  const directHaiku = {
+    ...textModel,
+    id: 'claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
+    backend: ModelBackend.Anthropic,
+  } as ModelInfo;
+  const bedrockHaiku = {
+    ...textModel,
+    id: 'global.anthropic.claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
+    backend: ModelBackend.Bedrock,
+  } as ModelInfo;
+
+  it('lists the Bedrock route under its own labelled heading, after the direct row', () => {
+    extraTextModels.push(bedrockHaiku, directHaiku);
+    renderSelection({});
+
+    const bedrockSection = screen.getByTestId('bedrock-route-section-Anthropic-text');
+    expect(within(bedrockSection).getByText('Via AWS Bedrock')).toBeInTheDocument();
+    expect(within(bedrockSection).getByTestId(`model-card-${bedrockHaiku.id}`)).toBeInTheDocument();
+    expect(within(bedrockSection).queryByTestId(`model-card-${directHaiku.id}`)).not.toBeInTheDocument();
+
+    const directCard = screen.getByTestId(`model-card-${directHaiku.id}`);
+    expect(directCard.compareDocumentPosition(bedrockSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // The catch-all "Other" group mixes makers, so the explanation must not name the group or claim
+  // the Bedrock rows are copies of the direct ones above them.
+  it('explains the Bedrock heading without naming the group', async () => {
+    extraTextModels.push(
+      { ...textModel, id: 'remote-mistral', name: 'Remote Mistral', backend: ModelBackend.Ollama } as ModelInfo,
+      {
+        ...textModel,
+        id: 'mistral.mistral-large-2407-v1:0',
+        name: 'Mistral Large',
+        backend: ModelBackend.Bedrock,
+      } as ModelInfo
+    );
+    renderSelection({});
+    // "Other" starts collapsed; a search expands every group.
+    fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+      target: { value: 'mistral' },
+    });
+
+    const bedrockSection = await screen.findByTestId('bedrock-route-section-Other-text');
+    expect(
+      within(bedrockSection).getByText("Served through AWS Bedrock instead of the provider's own API.")
+    ).toBeInTheDocument();
+    expect(within(bedrockSection).queryByText(/Other's/)).not.toBeInTheDocument();
+  });
+
+  it('adds no route heading when a maker is served by one route only', () => {
+    extraTextModels.push(bedrockHaiku);
+    renderSelection({});
+
+    expect(screen.getByTestId(`model-card-${bedrockHaiku.id}`)).toBeInTheDocument();
+    expect(screen.queryByText('Via AWS Bedrock')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection keyboard access', () => {
+  afterEach(() => {
+    extraTextModels.length = 0;
+  });
+
+  it.each(['{Enter}', ' '])('selects a model with %s on its focusable button', async key => {
+    const user = userEvent.setup();
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    const selectButton = screen.getByTestId(`model-select-btn-${imageModel.id}`);
+    expect(selectButton.tagName).toBe('BUTTON');
+    expect(selectButton).toHaveAccessibleName(imageModel.name);
+    expect(screen.getByTestId(`model-select-btn-${textModel.id}`)).toHaveAttribute('aria-pressed', 'true');
+
+    selectButton.focus();
+    await user.keyboard(key);
+
+    expect(setModel).toHaveBeenCalledWith(imageModel.id);
+    expect(onSelectionComplete).toHaveBeenCalledOnce();
+  });
+
+  it('names the star and settings buttons after their model', () => {
+    renderSelection({ onSettingsClick: vi.fn() });
+
+    expect(screen.getByTestId(`favorite-toggle-${textModel.id}`)).toHaveAccessibleName(
+      `Add ${textModel.name} to favorites`
+    );
+    expect(screen.getByTestId(`model-view-more-${textModel.id}`)).toHaveAccessibleName(
+      `View ${textModel.name} details and settings`
+    );
   });
 });

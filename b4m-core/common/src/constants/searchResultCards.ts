@@ -56,7 +56,7 @@ const FENCE_OPEN_RE = new RegExp(
  *   - apps/client/app/utils/sessionMarkdownExport.ts (copy session as markdown)
  *   - apps/client/app/utils/sessionExport.ts / bulkNotebookExport.ts (session/notebook export)
  *   - apps/workers/src/queueHandlers/questExport.ts (quest-plan export ZIP)
- *   - apps/client/server/queueHandlers/slackQuestProcessor.ts (Slack push/desktop notification text)
+ *   - apps/workers/src/queueHandlers/slackQuestProcessor.ts (Slack push/desktop notification text)
  *   - b4m-core/slack/src/utils/slackMarkdown.ts (Slack message delivery)
  *   - b4m-core/slack/src/handlers/WorkflowStepHandler.ts (workflow-step output/notification text)
  *   - b4m-core/services/src/notebookCurationService/markdownGenerator.ts (curated transcript body)

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS, StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -33,7 +33,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Passthrough the wrapper so the raw handler runs without connectDB / Config.
-vi.mock('@server/utils/eventContext', () => ({
+vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
@@ -212,6 +212,30 @@ describe('sessionSummarization summary-file lookup', () => {
       expect.objectContaining({ id: 'fabfile-owner' }),
       expect.anything()
     );
+  });
+
+  it('skips a re-summary that would grow the file past the quota, keeping the old file', async () => {
+    h.fabFileStore.push({ id: 'fabfile-owner', userId: OWNER, sessionId: SESSION_ID, tags: [] });
+    h.updateFabFile.mockRejectedValueOnce(
+      new StorageLimitError('File size exceeds storage limit', {
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    // The rewrite is charged to the owner, so the update needs the user repository.
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ users: expect.anything() }) })
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('not created or updated'));
   });
 
   // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
@@ -548,5 +572,44 @@ describe('sessionSummarization requester write-time re-check', () => {
 
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessionSummarization when the summary file cannot be stored', () => {
+  const refusal = (errorCode: 'storage_limit_exceeded' | 'file_too_large') =>
+    new StorageLimitError('reworded message that matches nothing', {
+      errorCode,
+      used_bytes: 0,
+      limit_bytes: 1,
+      requested_bytes: 2,
+      owner: 'user',
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockImplementation(async () => null);
+  });
+
+  it('swallows a storage quota refusal and warns, whatever its message says', async () => {
+    h.createFabFile.mockRejectedValue(refusal('storage_limit_exceeded'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit exceeded'));
+  });
+
+  it('rethrows a per-file size refusal', async () => {
+    h.createFabFile.mockRejectedValue(refusal('file_too_large'));
+
+    await expect(run()).rejects.toBeInstanceOf(StorageLimitError);
+  });
+
+  it('rethrows a plain error even when its message quotes the old storage text', async () => {
+    h.createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
+
+    await expect(run()).rejects.toThrow('File size exceeds storage limit');
   });
 });

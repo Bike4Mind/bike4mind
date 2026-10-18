@@ -1,10 +1,10 @@
-import { Warning as WarningIcon, Delete, PushPinOutlined as PushPinOutlinedIcon } from '@mui/icons-material';
-import { red } from '@client/app/utils/themes/colors';
+import { Warning as WarningIcon, DeleteOutline, PushPinOutlined as PushPinOutlinedIcon } from '@mui/icons-material';
+import { gray, red } from '@client/app/utils/themes/colors';
 import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typography } from '@mui/joy';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment } from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -24,6 +24,7 @@ import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
 import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
 import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
+import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useQueryClient } from '@tanstack/react-query';
 
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
@@ -37,23 +38,24 @@ import PublicIcon from '@mui/icons-material/Public';
 import TableChartIcon from '@mui/icons-material/TableChart';
 import MarkdownIcon from '@mui/icons-material/TextSnippet';
 
+// Same frame as a tool card in the Tools dropdown (ToolContainer in ToolsSection) - keep the two in
+// sync. Shorter than a tool card (one line, no description), and unlike one the row opens the file,
+// so it keeps a hover. Nothing in a row is taller than 24px (icon slot, row actions), so it is 40px.
 const FileItemContainer = React.forwardRef<HTMLDivElement, { children: React.ReactNode }>(({ children }, ref) => {
   return (
     <Box
       ref={ref}
       sx={theme => ({
-        backgroundColor: theme.palette.background.body,
+        backgroundColor: theme.palette.mode === 'light' ? gray[0] : theme.palette.background.surface2,
         borderRadius: 5,
         display: 'flex',
         alignItems: 'center',
-        p: '8px',
-        gap: '12px',
+        p: '8px 12px',
+        gap: 2,
         '&:hover': {
           bgcolor: theme.palette.notebooklist.hoverBg,
         },
         transition: 'background-color 0.2s',
-        border: '1px solid',
-        borderColor: 'border.light',
       })}
     >
       {children}
@@ -62,6 +64,18 @@ const FileItemContainer = React.forwardRef<HTMLDivElement, { children: React.Rea
 });
 
 FileItemContainer.displayName = 'FileItemContainer';
+
+// Row actions (remove, use in this notebook): grey icon that turns full colour on hover, no frame,
+// like the dropdown header's buttons.
+const ROW_ACTION_SX = {
+  ...HEADER_ICON_BUTTON_SX,
+  width: 24,
+  height: 24,
+  minWidth: 24,
+  minHeight: 24,
+  p: 0,
+  m: 0,
+} as const;
 
 const mimeTypeToIcon: Record<MimeType | 'default', React.JSX.Element | undefined> = {
   'text/plain': <DescriptionIcon />,
@@ -75,7 +89,7 @@ const mimeTypeToIcon: Record<MimeType | 'default', React.JSX.Element | undefined
 
 const getIconForMimeType = (mimeType?: MimeType | string, file?: IFabFileDocument): React.ReactNode => {
   // All icons/images will be wrapped in a fixed-size container for alignment
-  const containerSize = 32;
+  const containerSize = 24;
   if (mimeType?.startsWith('image/') && file && (file.fileUrl || file.presignedUrl)) {
     const imageUrl = file.fileUrl || file.presignedUrl;
     return (
@@ -121,7 +135,7 @@ const getIconForMimeType = (mimeType?: MimeType | string, file?: IFabFileDocumen
         ? React.cloneElement(icon, {
             sx: {
               color: (theme: any) => `${theme.palette.text.primary}80`,
-              fontSize: '1.5rem',
+              fontSize: '1.25rem',
               flexShrink: 0,
             },
           })
@@ -358,13 +372,6 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
 
   const handlePromote = useCallback(
     (file: IFabFileDocument) => {
-      // An unscanned or blocked image must not acquire a knowledgeIds entry: that entry
-      // follows the file into clones, exports and the project fan-out. Documents resolve
-      // to 'clean' immediately, so this only ever holds back an image mid-scan.
-      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
-        toast.error('That image is still being scanned - try again in a moment');
-        return;
-      }
       // An explicit user gesture, so project propagation keeps its default.
       void addToNotebookContext(currentSessionId, file)
         .then(written => {
@@ -527,10 +534,10 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                           handleReprocessFile(file);
                         }}
                         sx={{
-                          width: 32,
-                          height: 32,
-                          minWidth: 32,
-                          minHeight: 32,
+                          width: 24,
+                          height: 24,
+                          minWidth: 24,
+                          minHeight: 24,
                           p: 0,
                           m: 0,
                         }}
@@ -631,10 +638,10 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                           handleReprocessFile(file);
                         }}
                         sx={{
-                          width: 32,
-                          height: 32,
-                          minWidth: 32,
-                          minHeight: 32,
+                          width: 24,
+                          height: 24,
+                          minWidth: 24,
+                          minHeight: 24,
                           p: 0,
                           m: 0,
                         }}
@@ -660,17 +667,9 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                             e.stopPropagation();
                             handleRemove(file.id);
                           }}
-                          sx={{
-                            width: 24,
-                            height: 24,
-                            minWidth: 24,
-                            minHeight: 24,
-                            p: 0,
-                            m: 0,
-                            ml: 0.5,
-                          }}
+                          sx={{ ...ROW_ACTION_SX, ml: 0.5 }}
                         >
-                          <Delete sx={{ fontSize: '0.875rem' }} />
+                          <DeleteOutline sx={{ fontSize: '0.875rem' }} />
                         </IconButton>
                       )}
                     </Box>
@@ -731,11 +730,12 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                           e.stopPropagation();
                           handlePromote(file);
                         }}
+                        sx={ROW_ACTION_SX}
                       >
                         {isPending(file.id) ? (
                           <CircularProgress size="sm" sx={{ width: 20, height: 20 }} />
                         ) : (
-                          <PushPinOutlinedIcon sx={{ fontSize: '1rem' }} />
+                          <PushPinOutlinedIcon sx={{ fontSize: '0.875rem' }} />
                         )}
                       </IconButton>
                     </Tooltip>

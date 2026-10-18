@@ -30,7 +30,8 @@
     "title": "Journal des modifications"
   },
   "feedback": {
-    "send": "Envoyer des commentaires"
+    "send": "Envoyer des commentaires",
+    "rollupTitle": "Vos retours"
   },
   "terms_policies": "Conditions et politiques",
   "login": "Connexion",
@@ -166,7 +167,8 @@
     "messages": "Messages",
     "invites": "Invitations",
     "sendMessage": "Envoyer un message",
-    "noMessages": "Aucun message"
+    "noMessages": "Aucun message",
+    "title_unread": "Boîte de réception, éléments non lus"
   },
   "addSomething": "Ajouter {{ name }}",
   "deleteAllSomething": "Supprimer tout {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Se renouvelle le {{ date }}"
   },
   "billing": {
-    "title": "Facturation"
+    "title": "Facturation",
+    "balance": "Solde",
+    "credits_heading": "Recharger des crédits",
+    "credits_sub": "Packs ponctuels, ajoutés à votre solde. Aucun abonnement requis.",
+    "credits_sub_with_plan": "Packs ponctuels, ajoutés en plus de votre allocation mensuelle.",
+    "free_plan": "Gratuit",
+    "free_plan_detail": "Payez à l'usage avec des packs de crédits",
+    "low_org": "Un administrateur de l'organisation peut ajouter des crédits à ce compte.",
+    "low_with_plan": "Rechargez pour continuer jusqu'au renouvellement de votre allocation.",
+    "low_without_plan": "Un forfait ajoute des crédits chaque mois ; un pack vous recharge maintenant.",
+    "payment_failed": "Échec du paiement",
+    "plan": "Forfait",
+    "plan_fallback": "Abonnement",
+    "plan_unavailable": "Indisponible",
+    "plan_unavailable_detail": "Impossible de charger votre forfait.",
+    "plans_change": "Votre forfait",
+    "plans_change_sub": "Gérez, modifiez ou résiliez votre abonnement.",
+    "plans_heading": "Forfaits",
+    "plans_heading_sub": "Forfaits mensuels avec une allocation de crédits.",
+    "plans_upgrade": "Passer à un forfait",
+    "plans_upgrade_sub": "Obtenez une allocation mensuelle de crédits au lieu de recharger à la main.",
+    "retry": "Réessayer",
+    "see_plans": "Voir les forfaits",
+    "top_up": "Recharger"
   },
   "credits": {
     "title": "Crédits",
@@ -314,7 +339,8 @@
     "usage_pattern": "Basé sur votre modèle d'utilisation des {{days}} derniers jours",
     "credits_used": "Crédits Utilisés",
     "credits_purchased": "Crédits Achat",
-    "net_credits": "Crédits Nets"
+    "net_credits": "Crédits Nets",
+    "unit": "crédits"
   },
   "time": {
     "last_7_days": "Derniers 7 jours",
@@ -362,7 +388,15 @@
       "completed": "Terminé",
       "pending": "En attente",
       "failed": "Échoué"
-    }
+    },
+    "buy_pack": "Acheter {{credits}} crédits pour {{price}}",
+    "choose_pack": "Choisissez un pack de crédits",
+    "history_usage_hint": "Seuls les achats sont listés ici.",
+    "organization_credits_active": "Crédits de l'organisation actifs",
+    "rate_per_thousand": "{{rate}} pour 1 000 crédits",
+    "see_usage": "Voir l'utilisation",
+    "shared_rate": "Tous les packs ont le même tarif : {{rate}} pour 1 000 crédits.",
+    "switch_to_personal": "Passez à votre compte personnel pour acheter des crédits à usage personnel."
   },
   "settings": {
     "title": "Paramètres",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée. Exécutez des modèles avancés comme Deepseek R1 en toute confidentialité.",
+    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée.",
     "no_free_tier": "PAS DE NIVEAU GRATUIT - AXÉ SUR LES PROFESSIONNELS.",
     "credits_rollover": "Les crédits non utilisés se reportent pendant 3 mois.",
     "monthly_billing": "Facturation Mensuelle",
@@ -543,7 +577,9 @@
     "personal": "Personnel",
     "business": "Affaires",
     "team": "Équipe",
-    "enterprise": "Entreprise"
+    "enterprise": "Entreprise",
+    "audience_label": "Type de forfait",
+    "includes": "Inclut"
   },
   "agents": {
     "title": "Agents",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Compétences",
     "command_palette_description": "Gérer les modèles d'instruction réutilisables"
+  },
+  "apiKeys": {
+    "title": "Clés API"
+  },
+  "connections": {
+    "menuTooltip": "Intégrations comme Google Drive et Slack, plus des clés API pour votre propre code",
+    "sections": "Sections des connexions",
+    "title": "Connexions"
   }
 }

@@ -1,24 +1,58 @@
-import { FabFile, userRepository } from '@bike4mind/database';
+import { changeStorageSize, FabFile, userRepository } from '@bike4mind/database';
+import { chargedBytes, type IUserDocument } from '@bike4mind/common';
 import type { ClientSession, Types } from 'mongoose';
 
 /**
  * Claims the right to charge the bytes of an object written at `uploadedAt` to its FabFile's owner,
  * by advancing `storageChargedAt` with a compare-and-set. Only an upload newer than the last charge
  * wins, so a redelivered S3 event, or the event for a notebook import's object that the import
- * already stamped in its own transaction (stampImportedKnowledgeRows), charges nothing - while a
- * later content rewrite to the same path still does.
+ * already stamped in its own transaction (stampImportedKnowledgeRows), charges nothing. A winning
+ * claim also writes `fileSize: size` and returns `size - chargedBytes(preImage)`, the same move a
+ * content rewrite's commit makes (commitContentRewrite in
+ * b4m-core/services/src/fabFileService/rewriteStorage.ts), so a rewrite's event and its commit add up
+ * to the new size in either order. Returns null when the claim lost.
+ *
+ * `statusBeforeUpload` is the row's status as the event handler read it, before it marked the row
+ * `complete`: the charge rule reads `status`, so judging the pre-image by the handler's own flip would
+ * count a legacy no-status row as already charged and undercharge it by its old size.
  */
 export const claimStorageCharge = async (
   fabFileId: Types.ObjectId | string,
   uploadedAt: Date,
+  size: number,
+  statusBeforeUpload: string | null | undefined,
   session?: ClientSession
-): Promise<boolean> => {
-  const res = await FabFile.updateOne(
+): Promise<number | null> => {
+  const pre = await FabFile.findOneAndUpdate(
     { _id: fabFileId, $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: uploadedAt } }] },
-    { $set: { storageChargedAt: uploadedAt } },
-    session ? { session } : {}
-  );
-  return res.modifiedCount > 0;
+    { $set: { storageChargedAt: uploadedAt, fileSize: size } },
+    {
+      new: false,
+      projection: { fileSize: 1, storageChargedAt: 1, createdAt: 1 },
+      ...(session ? { session } : {}),
+    }
+  ).lean();
+  return pre ? size - chargedBytes({ ...pre, status: statusBeforeUpload }) : null;
+};
+
+/**
+ * Charges an uploaded object's bytes to `user` once per write, through claimStorageCharge.
+ * Mutates `user` only; the caller saves it in the same `session`. A won claim also records `size` as
+ * the row's `fileSize`. Shared by the hosted S3 event
+ * (objectCreated.ts) and the self-host MinIO webhook (pages/api/internal/s3/object-created.ts).
+ */
+export const chargeUploadedObject = async (
+  fabFileId: Types.ObjectId | string,
+  user: IUserDocument,
+  size: number,
+  uploadedAt: Date,
+  statusBeforeUpload: string | null | undefined,
+  session: ClientSession
+): Promise<boolean> => {
+  const delta = await claimStorageCharge(fabFileId, uploadedAt, size, statusBeforeUpload, session);
+  if (delta === null) return false;
+  await changeStorageSize(user, delta);
+  return true;
 };
 
 /**

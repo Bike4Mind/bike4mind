@@ -32,7 +32,9 @@ import {
   Option,
 } from '@mui/joy';
 import dynamic from 'next/dynamic';
-import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
+import { IFabFileDocument, isMediaOnlyMimeType, ISessionDocument } from '@bike4mind/common';
+import MediaPlayer from '@client/app/components/Media/MediaPlayer';
+import GenerationDetails from '@client/app/components/Media/GenerationDetails';
 import TextViewer from './TextViewer';
 import MarkdownViewer, { UnmarkedCitedPassage } from './MarkdownViewer';
 import { citedPassageForFile } from './citedPassage';
@@ -103,6 +105,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -1013,7 +1016,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       }
     } catch (error) {
       console.error('Edit failed:', error);
-      toast.error('Failed to generate edit');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to generate edit');
       throw error; // Re-throw to let EditFileDialog handle it
     }
   };
@@ -1046,7 +1049,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       setFileRefreshKey(prev => prev + 1);
     } catch (error) {
       console.error('Apply edit failed:', error);
-      toast.error('Failed to apply changes');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to apply changes');
     }
   };
 
@@ -2380,7 +2383,8 @@ export const FileContent = ({
       // The PDF branch below renders PdfViewer straight off `signedUrl` and never reads
       // `content`; fetching it here would re-download the file and extract its text on the
       // main thread through the lazily-loaded unpdf (and its ~1.6 MB pdf.js bundle) for nothing.
-      if (file.mimeType === SupportedFabFileMimeTypes.PDF) {
+      // Audio and video play straight off the URL too; their bytes are never text.
+      if (file.mimeType === SupportedFabFileMimeTypes.PDF || isMediaOnlyMimeType(file.mimeType)) {
         setContent('');
         setIsLoading(false);
         return;
@@ -2423,6 +2427,16 @@ export const FileContent = ({
 
     fetchContent();
   }, [file?.id, file?.mimeType, file?.fileUrlExpireAt, file?.fileUrl, signedUrl, bustCache]); // specific file properties, not the whole file object
+
+  // The player re-signs its own URL, so it does not wait for the signed-URL grace period below.
+  if (file && !fetching && isMediaOnlyMimeType(file.mimeType)) {
+    return (
+      <Stack spacing={2} sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+        <MediaPlayer file={{ ...file, fileUrl: signedUrl || file.fileUrl }} />
+        <GenerationDetails file={file} />
+      </Stack>
+    );
+  }
 
   if (!file || fetching || isLoading || !readyToShow) {
     return (

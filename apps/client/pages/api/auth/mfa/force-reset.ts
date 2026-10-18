@@ -2,12 +2,18 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository, trustedDeviceRepository, passkeyCredentialRepository } from '@bike4mind/database';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { logAuthAudit } from '@server/utils/authAudit';
 import * as z from 'zod';
 
 const forceResetBodySchema = z.object({
   userId: z.string().min(1),
+});
+
+const forceResetResponseSchema = z.object({
+  success: z.boolean(),
+  user: selfUserResponseSchema,
 });
 
 const handler = baseApi().post(
@@ -20,6 +26,14 @@ const handler = baseApi().post(
 
     const { userId } = forceResetBodySchema.parse(req.body);
 
+    // Resetting your own MFA must go through /api/auth/mfa/disable, which requires recent
+    // verification and honours enforceMFA. Ids compare case-insensitively: Mongo resolves an
+    // upper-case hex id to the same user.
+    if (adminUser.id.toLowerCase() === userId.toLowerCase()) {
+      return res.status(403).json({ error: 'Use Profile > Settings > Security to turn off your own MFA.' });
+    }
+
+    let resetBody: unknown;
     try {
       // A suspected-compromise reset must not leave an enrolled passkey able to satisfy MFA.
       // Removed before the reset commits, so a failure here leaves MFA intact rather than
@@ -51,11 +65,14 @@ const handler = baseApi().post(
         });
       }
 
-      res.json({ ...result, user: redactUserSecretsForSelf(result.user) });
+      resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
     } catch (error: any) {
       console.error('Error force resetting MFA:', error);
-      res.status(400).json({ error: error.message || 'Failed to reset MFA' });
+      return res.status(400).json({ error: error.message || 'Failed to reset MFA' });
     }
+
+    // Outside the try so a response-boundary failure stays an opaque 500, not a 400.
+    return respond(res, forceResetResponseSchema, resetBody);
   })
 );
 

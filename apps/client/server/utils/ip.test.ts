@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Request } from 'express';
 import { getClientIp, truncateIp } from './ip';
 
@@ -142,6 +142,101 @@ describe('getClientIp', () => {
   it('returns "unknown" when nothing is resolvable', () => {
     const req = mockReq({});
     expect(getClientIp(req)).toBe('unknown');
+  });
+});
+
+describe('getClientIp on self-host', () => {
+  const SPOOFED_HEADERS = {
+    'cloudfront-viewer-address': '8.8.8.8:443',
+    'cf-connecting-ip': '8.8.4.4',
+    'true-client-ip': '9.9.9.9',
+    'x-real-ip': '1.0.0.1',
+    'x-client-ip': '1.1.1.1',
+    'fly-client-ip': '4.4.4.4',
+  };
+
+  beforeEach(() => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe('without TRUSTED_PROXY_HOPS', () => {
+    it('ignores every forwarding header and uses the socket address', () => {
+      const req = mockReq({
+        headers: { ...SPOOFED_HEADERS, 'x-forwarded-for': '2.2.2.2' },
+        socketIp: '192.168.1.20',
+      });
+      expect(getClientIp(req)).toBe('192.168.1.20');
+    });
+
+    it('treats TRUSTED_PROXY_HOPS=0 the same as unset', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '0');
+      const req = mockReq({ headers: { 'x-forwarded-for': '2.2.2.2' }, socketIp: '192.168.1.20' });
+      expect(getClientIp(req)).toBe('192.168.1.20');
+    });
+
+    it('falls back to req.ip, then "unknown", when there is no socket address', () => {
+      expect(getClientIp(mockReq({ headers: SPOOFED_HEADERS, ip: '10.0.0.9' }))).toBe('10.0.0.9');
+      expect(getClientIp(mockReq({ headers: SPOOFED_HEADERS }))).toBe('unknown');
+    });
+  });
+
+  describe('with TRUSTED_PROXY_HOPS', () => {
+    it('takes the hop the trusted proxy appended, not a client-prepended leftmost token', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const req = mockReq({
+        headers: { ...SPOOFED_HEADERS, 'x-forwarded-for': '2.2.2.2, 3.3.3.3' },
+        socketIp: '172.18.0.5',
+      });
+      expect(getClientIp(req)).toBe('3.3.3.3');
+    });
+
+    it('counts hops from the right through a proxy chain', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '2');
+      const req = mockReq({ headers: { 'x-forwarded-for': '2.2.2.2, 3.3.3.3, 172.18.0.9' } });
+      expect(getClientIp(req)).toBe('3.3.3.3');
+    });
+
+    it('keeps a private client address, which is legitimate on a LAN', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const req = mockReq({ headers: { 'x-forwarded-for': '192.168.1.20' }, socketIp: '172.18.0.5' });
+      expect(getClientIp(req)).toBe('192.168.1.20');
+    });
+
+    it('strips ports from the selected hop', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      expect(getClientIp(mockReq({ headers: { 'x-forwarded-for': '2.2.2.2, 3.3.3.3:5123' } }))).toBe('3.3.3.3');
+      expect(getClientIp(mockReq({ headers: { 'x-forwarded-for': '[2001:db8::1]:5123' } }))).toBe('2001:db8::1');
+    });
+
+    it('takes the leftmost token when the chain is shorter than the hop count', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '3');
+      const req = mockReq({ headers: { 'x-forwarded-for': '3.3.3.3, 172.18.0.9' } });
+      expect(getClientIp(req)).toBe('3.3.3.3');
+    });
+
+    it('falls back to the socket address when x-forwarded-for is absent', () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const req = mockReq({ headers: SPOOFED_HEADERS, socketIp: '172.18.0.5' });
+      expect(getClientIp(req)).toBe('172.18.0.5');
+    });
+  });
+
+  it.each(['-1', '1.5', 'one', '1 2'])('throws on a malformed TRUSTED_PROXY_HOPS (%s)', value => {
+    vi.stubEnv('TRUSTED_PROXY_HOPS', value);
+    expect(() => getClientIp(mockReq({ headers: { 'x-forwarded-for': '2.2.2.2' } }))).toThrow(
+      /TRUSTED_PROXY_HOPS must be a non-negative integer/
+    );
+  });
+
+  it('leaves deployed stages on the header chain even when TRUSTED_PROXY_HOPS is set', () => {
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+    const req = mockReq({ headers: { 'cloudfront-viewer-address': '8.8.8.8:443', 'x-forwarded-for': '2.2.2.2' } });
+    expect(getClientIp(req)).toBe('8.8.8.8');
   });
 });
 

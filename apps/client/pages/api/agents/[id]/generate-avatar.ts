@@ -21,7 +21,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@server/utils/imageLogger';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -494,7 +494,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     });
 
     // Let the shared error handler render this with its real status and message
-    // (400, "File size exceeds storage limit"), same as every other upload door.
+    // (400 with a storage `code` and byte counts), same as every other upload door.
     if (error instanceof BadRequestError) {
       throw error;
     }

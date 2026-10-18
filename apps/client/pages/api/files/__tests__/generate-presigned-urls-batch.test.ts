@@ -6,7 +6,8 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertLakeAdmission: vi.fn(),
-  assertCanWriteDataLakeTags: vi.fn(),
+  // Resolves the lakes it authorized; [] when the request carries no client meta-tag.
+  assertCanWriteDataLakeTags: vi.fn(async () => []),
   findByDatalakeTag: vi.fn(),
   // The real fallback tagger checks the lake's prefix against other lakes in scope before
   // stamping a content tag; without this it takes its overlap-check-failed path on every test.
@@ -161,6 +162,41 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
     h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
+  });
+
+  it('stamps the lake org as owner of every file uploaded into an org lake', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...LAKE, organizationId: 'orga', createdAt: new Date() });
+    const { res } = makeRes();
+    await run({ files: [file(), file({ fileName: 'b.txt' })], dataLakeSlug: 'acme-2026' }, res);
+
+    expect(h.createFabFile.mock.calls.map(call => (call[0] as { organizationId?: string }).organizationId)).toEqual([
+      'orga',
+      'orga',
+    ]);
+  });
+
+  it("leaves a personal lake's files personal", async () => {
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res);
+
+    expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('organizationId');
+  });
+
+  it('gives the owner from a client meta-tag only to the file that carries it', async () => {
+    const orgLake = { id: 'lake-2', datalakeTag: 'datalake:team', organizationId: 'org-2', createdAt: new Date() };
+    h.assertCanWriteDataLakeTags.mockResolvedValue([orgLake]);
+    h.findByDatalakeTag.mockImplementation(async (tag: string) => (tag === orgLake.datalakeTag ? orgLake : null));
+    const { res } = makeRes();
+    await run({ files: [file({ tags: [{ name: 'datalake:team', strength: 1 }] }), file({ fileName: 'b.txt' })] }, res);
+
+    // Files are created under Promise.all, so key by name rather than call order.
+    const owners = Object.fromEntries(
+      h.createFabFile.mock.calls.map(call => {
+        const created = call[0] as { fileName: string; organizationId?: string };
+        return [created.fileName, created.organizationId];
+      })
+    );
+    expect(owners).toEqual({ 'report.txt': 'org-2', 'b.txt': undefined });
   });
 
   it('gives a flat upload a tag under the lake prefix, not just the meta-tag', async () => {
@@ -487,9 +523,16 @@ describe('POST /api/files/generate-presigned-urls-batch - MaxFileSize resolution
     vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
     const { res } = makeRes();
 
-    await expect(run({ files: [file({ fileSize: mb(DEFAULT_MB + 5) })] }, res)).rejects.toThrow(
-      /exceeds maximum file size/i
-    );
+    await expect(run({ files: [file({ fileSize: mb(DEFAULT_MB + 5) })] }, res)).rejects.toMatchObject({
+      message: expect.stringMatching(/exceeds maximum file size/i),
+      info: {
+        errorCode: 'file_too_large',
+        owner: 'user',
+        used_bytes: 0,
+        limit_bytes: mb(DEFAULT_MB),
+        requested_bytes: mb(DEFAULT_MB + 5),
+      },
+    });
     expect(h.createFabFile).not.toHaveBeenCalled();
   });
 

@@ -3,6 +3,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
+  lakeSkippedFileRepository,
   isGitHubLakeSyncClaimLive,
   orgGitHubLakeConnectionRepository,
   organizationRepository,
@@ -694,7 +695,7 @@ async function disableAndPurgeSlice(
   }
   // Keeps a user-requested disconnect from reading as stalled while it progresses; no-op for a revoke.
   await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id);
-  return purgeConnectionIngestedFiles(
+  const purged = await purgeConnectionIngestedFiles(
     lake,
     limit =>
       fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, {
@@ -708,6 +709,9 @@ async function disableAndPurgeSlice(
       sliceSize: REVOKE_PURGE_SLICE_SIZE,
     }
   );
+  // The repo's not-ingested list goes with its files, once the last slice has drained.
+  if (!purged.remaining) await lakeSkippedFileRepository.deleteForSource(lake.id, 'github');
+  return purged;
 }
 
 /**

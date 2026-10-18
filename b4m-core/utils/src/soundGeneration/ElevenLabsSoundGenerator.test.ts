@@ -68,6 +68,14 @@ describe('ElevenLabsSoundGenerator', () => {
     expect(result.contentType).toBe('audio/L16');
   });
 
+  it('refuses an unsupported output format before calling the provider', async () => {
+    const fetchImpl = mockFetch('x');
+    const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl });
+
+    await expect(generator.generate('beep', { format: 'alaw_8000' })).rejects.toThrow(/Unsupported .* alaw_8000/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('throws with the upstream status and body on a non-ok response', async () => {
     const fetchImpl = mockFetch('quota exceeded', false, 401);
     const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl });

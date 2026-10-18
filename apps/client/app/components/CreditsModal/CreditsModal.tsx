@@ -1,5 +1,6 @@
 import PaymentButton from '@client/app/components/Credits/PaymentButton';
 import SubscribeButton from '@client/app/components/Credits/SubscribeButton';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
@@ -166,12 +167,13 @@ const CreditsModal = () => {
                         },
                       }}
                     >
-                      <Typography level="h1">{pkg.credits.toLocaleString()} Credits</Typography>
+                      <Typography level="h1">{formatCreditAmount(pkg.credits)} Credits</Typography>
                       <Typography level="body-md">${pkg.price}</Typography>
                       <PaymentButton
                         transactionType={TransactionType.Package}
                         packageId={pkg.id}
-                        onPayment={() => handlePaymentComplete(pkg.credits)}
+                        ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
+                        onPayment={handlePaymentComplete}
                       />
                     </Card>
                   ))}
@@ -220,12 +222,16 @@ const CreditsModal = () => {
                       }}
                     >
                       <Typography level="h2">{plan.name}</Typography>
-                      <Typography level="h3">{plan.credits.toLocaleString()} Credits</Typography>
+                      <Typography level="h3">{formatCreditAmount(plan.credits)} Credits</Typography>
                       <Typography level="body-md">${centsToDollars(priceMap?.[plan.priceId])}/month</Typography>
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 30000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                      <SubscribeButton
+                        priceId={plan.priceId}
+                        planName={plan.name}
+                        cancellableSubscriptions={cancellableSubscriptions}
+                      />
                     </Card>
                   ))}
                 </Box>
@@ -249,12 +255,16 @@ const CreditsModal = () => {
                       }}
                     >
                       <Typography level="h2">{plan.name}</Typography>
-                      <Typography level="h3">{plan.credits.toLocaleString()} Credits</Typography>
+                      <Typography level="h3">{formatCreditAmount(plan.credits)} Credits</Typography>
                       <Typography level="body-md">${centsToDollars(priceMap?.[plan.priceId])}/year</Typography>
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 365000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                      <SubscribeButton
+                        priceId={plan.priceId}
+                        planName={plan.name}
+                        cancellableSubscriptions={cancellableSubscriptions}
+                      />
                     </Card>
                   ))}
                 </Box>

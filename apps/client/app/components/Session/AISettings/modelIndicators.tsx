@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Tooltip, Typography } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import CheckIcon from '@mui/icons-material/Check';
-import ConstructionIcon from '@mui/icons-material/Construction';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import SpeedIcon from '@mui/icons-material/Speed';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import type { ModelInfo } from '@bike4mind/common';
@@ -145,17 +145,28 @@ const TOUCH_TOOLTIP_MS = 3000;
 const useTapTooltip = () => {
   const noHover = useMediaQuery('(hover: none)');
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => setOpen(false), TOUCH_TOOLTIP_MS);
-    return () => clearTimeout(timer);
+    // Joy only closes a controlled tooltip on blur or mouseleave, neither of which a tap
+    // elsewhere fires on this unfocusable anchor. The anchor's own tap toggles via onClick.
+    const closeOnTapAway = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnTapAway);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', closeOnTapAway);
+    };
   }, [open]);
 
   if (!noHover) return { tooltipProps: {}, anchorProps: {} };
   return {
     tooltipProps: { open, onClose: () => setOpen(false), disableTouchListener: true },
     anchorProps: {
+      ref: anchorRef,
       onClick: (event: React.MouseEvent) => {
         event.stopPropagation();
         setOpen(prev => !prev);
@@ -182,7 +193,8 @@ export const MetricIcon = ({
 }) => {
   const { tooltipProps, anchorProps } = useTapTooltip();
   return (
-    <Tooltip title={tooltip} placement="top" {...tooltipProps}>
+    // Capped so the longer cost tooltip wraps instead of running off a phone screen
+    <Tooltip title={tooltip} placement="top" sx={{ maxWidth: 'min(280px, calc(100vw - 16px))' }} {...tooltipProps}>
       <Box
         role="img"
         aria-label={label}
@@ -240,13 +252,15 @@ export const MetricIndicators: React.FC<{
   priceTier: { tier: string; variant: ChipVariant };
   modelSpeed: ModelSpeed | null;
   statsLoading: boolean;
+  /** Adds the credit figure to the cost tooltip; without it the tooltip names the tier only. */
+  model?: ModelInfo;
   size?: number;
   filled?: boolean;
-}> = ({ priceTier, modelSpeed, statsLoading, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
+}> = ({ priceTier, modelSpeed, statsLoading, model, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
   <>
     <MetricIcon
       label={`${priceTier.tier} cost`}
-      tooltip={getPriceTierTooltip(priceTier.tier)}
+      tooltip={getPriceTierTooltip(priceTier.tier, model)}
       size={size}
       filled={filled}
     >
@@ -306,7 +320,7 @@ export const CapabilityIndicators: React.FC<{ model: ModelInfo; size?: number; f
 
     {model.supportsTools && (
       <MetricIcon label="Tools" tooltip="Able to use a growing list of tools" size={size} filled={filled}>
-        <ConstructionIcon sx={{ fontSize: glyphPx(size), color: 'text.tertiary' }} />
+        <HandymanIcon sx={{ fontSize: glyphPx(size), color: 'text.tertiary' }} />
       </MetricIcon>
     )}
   </>

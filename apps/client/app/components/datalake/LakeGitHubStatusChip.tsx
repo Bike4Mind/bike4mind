@@ -1,4 +1,5 @@
 import { Chip, Tooltip } from '@mui/joy';
+import { useMinuteTick } from '@client/app/hooks/useMinuteTick';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
@@ -14,6 +15,7 @@ export default function LakeGitHubStatusChip({ lakeId, organizationId }: { lakeI
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   const gitHubEnabled = !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
   const { data: connection } = useLakeGitHubConnection(lakeId, gitHubEnabled);
+  useMinuteTick(gitHubEnabled && !!connection);
   if (!gitHubEnabled || !connection) return null;
 
   const { title, color } = describeGitHubConnection(connection);

@@ -14,9 +14,6 @@ vi.mock('../subscription/CreditsModal', () => ({
 vi.mock('../subscription/SubscriptionModal', () => ({
   default: () => null,
 }));
-vi.mock('./useProCreditOffer', () => ({
-  useProCreditOffer: () => ({ name: 'Professional', credits: 50000, priceLabel: '$30' }),
-}));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { name: 'Sam', username: 'sam' } }),
 }));
@@ -74,8 +71,8 @@ describe('InsufficientCreditsNotice', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Buy a credit pack');
-    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent('Subscribe to Professional');
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
+    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Subscribe$/);
   });
 
   it('opens the purchase modal when the CTA is clicked', () => {

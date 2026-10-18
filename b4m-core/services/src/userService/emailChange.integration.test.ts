@@ -33,7 +33,7 @@ describe('Email Change Flow - Integration Tests', () => {
       db: {
         users: {
           findById: vi.fn().mockResolvedValue(mockUser),
-          findByEmail: vi.fn().mockResolvedValue(null),
+          existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
           findByPendingEmailToken: vi.fn(),
           update: vi.fn().mockImplementation(user => {
             Object.assign(mockUser, user);
@@ -226,10 +226,7 @@ describe('Email Change Flow - Integration Tests', () => {
   describe('Security: Email enumeration prevention', () => {
     it('should silently fail when new email is already taken (prevent enumeration)', async () => {
       const takenEmail = 'taken@example.com';
-      mockAdapters.db.users.findByEmail.mockResolvedValue({
-        id: 'differentUserId',
-        email: takenEmail,
-      });
+      mockAdapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
 
       // Should not throw error (silent fail)
       await expect(
@@ -248,9 +245,7 @@ describe('Email Change Flow - Integration Tests', () => {
       expect(mockAdapters.mailer.sendEmailChangeVerification).not.toHaveBeenCalled();
     });
 
-    it('should allow email change if same user already has that email (edge case)', async () => {
-      mockAdapters.db.users.findByEmail.mockResolvedValue(mockUser);
-
+    it('excludes the requesting user from the availability check', async () => {
       await expect(
         requestEmailChange(
           {
@@ -262,6 +257,7 @@ describe('Email Change Flow - Integration Tests', () => {
       ).resolves.not.toThrow();
 
       expect(mockUser.pendingEmail).toBe('another@example.com');
+      expect(mockAdapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('another@example.com', mockUser.id);
     });
   });
 

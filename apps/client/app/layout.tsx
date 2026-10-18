@@ -6,12 +6,13 @@ import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
-import { gaBootstrapScript } from './utils/gaConsentBootstrap';
+import { gaBootstrapScript, getGaMeasurementId } from './utils/gaConsentBootstrap';
 import { Metadata } from 'next';
 
 // Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
 // deliberate no-op. See infra/web.ts for why a wrong value is worse than unset.
 const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
+const GA_MEASUREMENT_ID = getGaMeasurementId();
 
 // The app's UI face, applied to <html>. A Franklin Gothic revival, and a text
 // face first: it sets reply prose as well as interface chrome, so it has to hold
@@ -83,25 +84,17 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body>
         <ColorSchemeScript />
-        {process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && (
+        {GA_MEASUREMENT_ID && (
           <>
             <Script
-              src={`https://www.googletagmanager.com/gtag/js?id=${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}`}
+              src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`}
               strategy="afterInteractive"
             />
             <Script id="google-analytics" strategy="afterInteractive">
-              {gaBootstrapScript(process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID, GA_COOKIE_DOMAIN)}
+              {gaBootstrapScript(GA_MEASUREMENT_ID, GA_COOKIE_DOMAIN)}
             </Script>
           </>
         )}
-        <Script id="mailerlite" strategy="afterInteractive">
-          {`
-            // Load mailerlite script
-            (function(m,l,s,c){m[l]=m[l]||function(){(m[l].q=m[l].q||[]).push(arguments)};
-            m[l].s=Date.now();c=s.createElement('script');c.async=1;c.src='/scripts/ml.js';
-            s.getElementsByTagName('head')[0].appendChild(c);})(window,'ml',document);
-          `}
-        </Script>
         <AppRouterCacheProvider options={{ key: 'joy' }}>
           <SerwistProvider swUrl="/serwist/sw.js">
             <ClientProviders>{children}</ClientProviders>

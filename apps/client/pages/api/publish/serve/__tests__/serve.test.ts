@@ -716,6 +716,42 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(data).not.toContain('<title>&lt;artifact');
   });
 
+  it('strips markdown markers from a reply title derived before the write path stripped them', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        title: 'Session 1 Recap: *Tides of the Drowned Crown*',
+        renderedBody: '## Session 1 Recap: *Tides of the Drowned Crown*\n\nRecap body',
+      })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>Session 1 Recap: Tides of the Drowned Crown</title>');
+    expect(data).not.toContain('*Tides');
+  });
+
+  it('keeps a caller-supplied reply title verbatim', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({ title: '*Draft* v2', renderedBody: 'Recap body', description: undefined })
+    );
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>*Draft* v2</title>');
+  });
+
+  it('keeps an embedded artifact name verbatim when the viewer falls back to it', async () => {
+    const named = HTML_ARTIFACT.replace('title="Tip Calculator"', 'title="tip_calc_v2 *beta*"');
+    mockArtifactFindOne.mockReturnValue(htmlReply({ title: '', renderedBody: named }));
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>tip_calc_v2 *beta*</title>');
+  });
+
   it('serves the ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
     mockArtifactFindOne.mockReturnValue(htmlReply());
     const { res, promise } = run(['r', 'rhtml'], { a: '0' });
@@ -2083,6 +2119,37 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     await promise;
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });
+
+  // An anonymous navigation can't identify a signed-in viewer, so the wrapper asks the widget to
+  // report one through /api/publish/view - but only while the gear still waits on a first view.
+  describe('the widget view-report marker', () => {
+    const bundleHtml = Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>');
+    const WIDGET_TAG = /<script src="\/api\/publish\/widget"([^>]*) defer><\/script>/;
+
+    it('marks the widget on a bundle with no external view yet', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('marks it on a share-link view too', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', externalViewCount: 0 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('drops the marker once an external view has landed, so readers stop exchanging tokens', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 1 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe('');
+    });
+  });
 });
 
 describe('GET /api/publish/serve - embed allowlist', () => {
@@ -2832,7 +2899,7 @@ describe('GET /api/publish/serve - Save as PDF', () => {
 
     const data = res._getData() as string;
     expect(data).toContain('class="b4m-bar-print"');
-    expect(data).toContain('<script src="/api/publish/widget" defer></script>');
+    expect(data).toMatch(/<script src="\/api\/publish\/widget"[^>]* defer><\/script>/);
     expect(data).not.toContain('b4m-annotate-root'); // the comment mount stays opt-in
     // Shipped hidden: the widget reveals it, so no-JS viewers never see a dead button.
     expect(data).toContain('<button class="b4m-bar-print" type="button" hidden>');
@@ -2995,6 +3062,103 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  describe('one sign-up CTA per page', () => {
+    // Bytes as already-published artifacts carry them: the brand footer card baked directly in
+    // front of the gate (the test env has no marketing URL, so the renderer omits the card).
+    const FOOTER_CARD =
+      '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">\n' +
+      '  <a href="https://acme.example/?utm_source=shared-artifact&utm_medium=share-footer&utm_campaign=publish&utm_content=artifact" target="_blank" rel="noopener noreferrer">\n' +
+      '    <span>Try Acme</span>\n' +
+      '  </a>\n' +
+      '</div>';
+    const footerAndGateBytes = async () => {
+      const baked = (await bakedBundleBytes()).toString('utf-8');
+      const gateAt = baked.lastIndexOf('<input type="checkbox" id="b4m-gate-dismiss"');
+      return Buffer.from(baked.slice(0, gateAt) + FOOTER_CARD + baked.slice(gateAt));
+    };
+    const FOOTER_CTA = 'utm_medium=share-footer';
+    const BAR_CTA = '<a class="b4m-bar-cta"';
+    const HIDDEN_BAR_CTA = /<a class="b4m-bar-cta"[^>]*\shidden>/;
+    const HELD_FOOTER = '<div id="b4m-footer-held" style="display:none"><div style="margin-top:3rem';
+    const GATE_BRIDGE = "b4m:'gate-ready'";
+
+    it('keeps only the gate visible in the bundle an anonymous viewer is served', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getData() as string;
+      expect(data).toContain(GATE);
+      expect(data).toContain('baked body');
+      // The card is held hidden (not removed) so the gate bridge can restore it for a member.
+      expect(data.match(/utm_medium=share-footer/g)).toHaveLength(1);
+      expect(data).toContain(HELD_FOOTER);
+      expect(data).toContain(GATE_BRIDGE);
+    });
+
+    it('hides the bar CTA on the wrapper around that bundle, keeping the bar', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      const data = res._getData() as string;
+      expect(data).toMatch(HIDDEN_BAR_CTA);
+      expect(data).toContain('<div class="b4m-bar">');
+      expect(data).toContain('class="b4m-bar-report"');
+      // Marks the frame for the widget, which drops the gate for a signed-in viewer.
+      expect(data).toMatch(/<iframe [^>]* data-b4m-gate /);
+    });
+
+    it('leaves a signed-in viewer the footer card and the bar CTA, with no gate', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(await footerAndGateBytes());
+      const raw = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+      await raw.promise;
+      const rawData = raw.res._getData() as string;
+      expect(rawData).not.toContain(GATE);
+      expect(rawData).toContain(FOOTER_CTA);
+      expect(rawData).not.toContain(HELD_FOOTER);
+      expect(rawData).not.toContain(GATE_BRIDGE);
+
+      const page = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+      await page.promise;
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).toContain(BAR_CTA);
+      expect(wrapper).not.toMatch(HIDDEN_BAR_CTA);
+      expect(wrapper).not.toContain('data-b4m-gate');
+    });
+
+    it('keeps only the footer card for an anonymous viewer of a gate-less page that carries one', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from(`<html><body><h1>Hi</h1>${FOOTER_CARD}</body></html>`));
+      const page = run(['u', 'scope123', 'my-slug']);
+      await page.promise;
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).toMatch(HIDDEN_BAR_CTA);
+      expect(wrapper).toContain('class="b4m-bar-report"');
+      // No gate in the frame, so no bridge to talk to.
+      expect(wrapper).not.toContain('data-b4m-gate');
+
+      const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+      await isolated.promise;
+      const data = isolated.res._getData() as string;
+      expect(data).not.toContain(GATE);
+      expect(data).toContain(FOOTER_CTA);
+    });
+
+    it('keeps the bar CTA for an externally built bundle with neither gate nor footer card', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+      const page = run(['u', 'scope123', 'my-slug']);
+      await page.promise;
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).toContain(BAR_CTA);
+      expect(wrapper).not.toMatch(HIDDEN_BAR_CTA);
+    });
   });
 
   it('strips the baked gate from a public bundle behind an access gate', async () => {

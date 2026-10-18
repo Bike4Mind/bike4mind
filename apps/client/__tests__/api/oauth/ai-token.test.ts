@@ -32,6 +32,7 @@ vi.mock('@bike4mind/common', () => ({
 
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...args: any[]) => mockTryIncrement(...args),
   },
@@ -57,12 +58,20 @@ vi.mock('@bike4mind/database/auth', () => ({
 
 const mockCreateUserApiKey = vi.fn();
 const mockRevokeUserApiKey = vi.fn();
+// The service barrel is mocked to avoid its full dependency graph, so the TTL is
+// mirrored here rather than imported; the services suite pins MAX_EXCHANGE_KEY_TTL_MS.
 vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'api_key_user_cap',
   userApiKeyService: {
-    createUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
+    MAX_EXCHANGE_KEY_TTL_MS: 15 * 60 * 1000,
+    createExchangeUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
     revokeUserApiKey: (...a: any[]) => mockRevokeUserApiKey(...a),
   },
+}));
+
+// The real resolver pulls in @bike4mind/fab-pipeline, which needs far more of @bike4mind/common.
+vi.mock('@server/utils/ip', () => ({
+  getClientIp: (req: { headers: Record<string, string | undefined> }) => req.headers['x-forwarded-for'],
 }));
 
 const mockVerifyIdToken = vi.fn();
@@ -81,6 +90,7 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 // Real consent gate (pure) - exercises the actual invariant, not a stub.
 
 import handler from '../../../pages/api/oauth/ai-token';
+import { realtimeConnectionRepository } from '@bike4mind/database';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { BadRequestError } from '@bike4mind/common';
 import { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
@@ -265,12 +275,12 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       scope: 'ai:generate',
     });
 
-    // minted with exactly ai:generate, oauth-exchange metadata, and an expiry ~15m out
+    // minted through the exchange entry point with exactly ai:generate, the client tag, and an expiry ~15m out
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
     const [userId, params] = mockCreateUserApiKey.mock.calls[0];
     expect(userId).toBe('b4m-user-1');
     expect(params.scopes).toEqual(['ai:generate']);
-    expect(params.metadata).toMatchObject({ createdFrom: 'oauth-exchange', oauthClientId: 'client-1' });
+    expect(params.metadata).toMatchObject({ oauthClientId: 'client-1' });
     expect(params.expiresAt).toBeInstanceOf(Date);
     const ttlMs = params.expiresAt.getTime() - Date.now();
     expect(ttlMs).toBeGreaterThan(890_000);
@@ -368,6 +378,13 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect.objectContaining({ keyId: 'old-key' }),
       expect.anything()
     );
+    // Identity, not equality: a shallow copy of the repository must fail.
+    const [, , adapters] = mockRevokeUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
     // revoke happens before mint
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateUserApiKey.mock.invocationCallOrder[0]

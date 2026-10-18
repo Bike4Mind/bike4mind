@@ -38,6 +38,7 @@ export type {
   SubagentDispatchConfig,
   ChildExecutionStatus,
   BackgroundDispatchResult,
+  SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
@@ -52,6 +53,7 @@ export {
   resolveWebSearchProvider,
   resolveWebSearchProviders,
   searchWithHedge,
+  safeHostname,
 } from './tools/implementation/websearch';
 export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';

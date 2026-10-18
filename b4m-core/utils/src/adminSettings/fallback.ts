@@ -17,8 +17,11 @@ export interface FallbackAttempt {
  * their HTTP status lives on `$metadata.httpStatusCode`, not `response.status`. Read both
  * shapes so a Bedrock 503 ServiceUnavailableException (whose message matches no substring
  * trigger) still falls back instead of hard-failing.
+ *
+ * Also classifies provider failures for the completions SSE route
+ * (apps/client/server/chatCompletion/external/sseRoute.ts).
  */
-function getHttpStatus(error: Error): number | undefined {
+export function getHttpStatus(error: Error): number | undefined {
   if (isAxiosError(error)) {
     return error.response?.status;
   }
@@ -123,6 +126,8 @@ export function shouldTriggerFallback(error: Error): boolean {
     // available' trigger requires the literal word "model"; this provider message says
     // "<name> is not available", so it needs its own substring.
     'is not available',
+    // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
+    'no longer available to new users',
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
     // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
     // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
@@ -156,13 +161,23 @@ export function isOverloadedError(error: Error): boolean {
 }
 
 /**
+ * Whether a model can stand in for a failed chat model. Every caller is a text chat, so an
+ * image/speech/video model never qualifies, and a request that carries tools needs a model that
+ * accepts them - otherwise the hop just trades one provider error for another.
+ */
+function canServeChat(model: ModelInfo, requireTools?: boolean): boolean {
+  return model.type === 'text' && (!requireTools || !!model.supportsTools);
+}
+
+/**
  * Validate fallback model passed from frontend
  */
 export function validateFallbackModel(
   fallbackModelId: string,
   availableModels: ModelInfo[],
   apiKeyTable: ApiKeyTable,
-  logger: Logger
+  logger: Logger,
+  requireTools?: boolean
 ): ModelInfo | null {
   logger.info(`🔄 Validating fallback model ${fallbackModelId} from frontend`);
 
@@ -171,6 +186,11 @@ export function validateFallbackModel(
 
   if (!model) {
     logger.warn(`⚠️ Fallback model ${fallbackModelId} not found in available models`);
+    return null;
+  }
+
+  if (!canServeChat(model, requireTools)) {
+    logger.warn(`Fallback model ${fallbackModelId} cannot serve this chat (type: ${model.type})`);
     return null;
   }
 
@@ -216,6 +236,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',
     'claude-opus-4-8',
@@ -252,7 +273,13 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   ],
   'global.anthropic.claude-fable-5-1': ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'gpt-5'],
   'global.anthropic.claude-fable-5': ['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'gpt-5'],
-  'global.anthropic.claude-opus-5-5': ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5'],
+  'global.anthropic.claude-opus-5-5': [
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'gpt-5',
+  ],
   'global.anthropic.claude-opus-5': ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5'],
   'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
   'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
@@ -262,6 +289,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-5-20250929',
     'gpt-5',
   ],
+  'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
@@ -328,14 +356,16 @@ function findAutomaticFallback(
   apiKeyTable: ApiKeyTable,
   logger: Logger,
   excludeModelIds?: Set<string>,
-  preferUntriedBackend?: boolean
+  preferUntriedBackend?: boolean,
+  requireTools?: boolean
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
 
   // A disabled model is still listed so the picker can grey it out, but it must never
   // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
   // a raw provider error on the next hop, so it is not a candidate.
-  const hasValidKey = (m: ModelInfo) => !m.disabled && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+  const hasValidKey = (m: ModelInfo) =>
+    !m.disabled && canServeChat(m, requireTools) && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
 
   // Get preference list for this model. Copied because the table is shared and
   // the generic tail below is pushed onto this list.
@@ -431,6 +461,8 @@ export type LlmWithFallbackOptions = {
    * provider overload that triggered the fallback in the first place.
    */
   endUserId?: string | null;
+  /** The request carries tools, so only a tool-capable model may take over. */
+  requireTools?: boolean;
 };
 
 /**
@@ -475,7 +507,8 @@ export async function getLlmWithFallback(
       apiKeyTable,
       logger,
       excludeModelIds,
-      options.preferUntriedBackend
+      options.preferUntriedBackend,
+      options.requireTools
     );
 
     if (!automaticFallback) {
@@ -499,7 +532,13 @@ export async function getLlmWithFallback(
   }
 
   // Validate fallback model provided by frontend
-  const fallbackModel = validateFallbackModel(fallbackModelId, availableModels, apiKeyTable, logger);
+  const fallbackModel = validateFallbackModel(
+    fallbackModelId,
+    availableModels,
+    apiKeyTable,
+    logger,
+    options.requireTools
+  );
 
   if (!fallbackModel) {
     logger.error('❌ No valid fallback model available after validation');

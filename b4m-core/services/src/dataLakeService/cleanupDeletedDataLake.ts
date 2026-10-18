@@ -6,11 +6,13 @@ import type {
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunRepository,
   ILakeMembershipDecisionRepository,
+  ILakeSkippedFileRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -37,6 +39,8 @@ interface CleanupDeletedDataLakeAdapters {
      * are lake-scoped, and a host that never wired the repair has no rows to sweep.
      */
     lakeMembershipDecisions?: Pick<ILakeMembershipDecisionRepository, 'deleteForLake'>;
+    /** Optional like the rows above: the not-ingested list is lake-scoped, see ILakeSkippedFile. */
+    lakeSkippedFiles?: Pick<ILakeSkippedFileRepository, 'deleteForLake'>;
     /**
      * Optional for the same reason again: research configs and their run history (#1682) are
      * lake-scoped, and a host that never wired the producer has no rows to sweep.
@@ -300,11 +304,23 @@ export const cleanupDeletedDataLake = async (
           await storage.delete(currentKey);
         }
       }
-      if (deleteFileAndChunks) {
-        await deleteFileAndChunks(id);
-      } else {
-        await db.fabFiles.hardDeleteOneById(id);
-        await db.fabFileChunks.deleteManyByFabFileId(id);
+      // Legal-hold errors are permanent; re-throwing would DLQ-loop forever. Skip and log.
+      // The catch wraps both branches: the production worker injects deleteFileAndChunks
+      // (see dataLakeCleanup.ts), and that path also throws on a blocked file.
+      // All other errors are treated as transient and re-thrown for DLQ retry (see comment above).
+      try {
+        if (deleteFileAndChunks) {
+          await deleteFileAndChunks(id);
+        } else {
+          await db.fabFiles.hardDeleteOneById(id);
+          await db.fabFileChunks.deleteManyByFabFileId(id);
+        }
+      } catch (err) {
+        if (isLegalHoldError(err)) {
+          logger?.warn('[dataLake] skipping blocked file in sweep (legal hold)', { fabFileId: id });
+          return;
+        }
+        throw err;
       }
     },
     async slice => {
@@ -370,6 +386,9 @@ export const cleanupDeletedDataLake = async (
   // per-document sweep: the rows carry ids, a file name and a curator's note rather than document
   // prose, so unlike 4f this is tidiness, not retention. Idempotent.
   await db.dataLakeCorpusActions?.deleteForLake(dataLakeId);
+
+  // 4h. And the not-ingested list: names and paths of source files the lake never held. Idempotent.
+  await db.lakeSkippedFiles?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

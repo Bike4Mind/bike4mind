@@ -114,6 +114,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
         noncurrentDays: 1,
       },
     },
+    {
+      // Pre-overwrite backups from a text AI edit (apply-edit.ts); nothing reads them back.
+      // Prefix must stay in sync with TEXT_EDIT_BACKUP_PREFIX (apps/client/server/utils/textEditBackupPrefix.ts).
+      id: 'expire-text-edit-backups',
+      status: 'Enabled',
+      filter: {
+        prefix: 'text-edit-backups/',
+      },
+      expiration: {
+        days: 30,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
   ],
 });
 
@@ -246,15 +261,12 @@ const appFilesBucketNotification = appFilesBucket.notify({
     {
       name: 'uploadComplete',
       function: {
-        handler: 'apps/client/server/s3/appFileUploadComplete.func',
+        handler: 'apps/workers/src/s3/appFileUploadComplete.func',
         runtime: 'nodejs24.x',
         link: [...allSecrets, websocketApi],
         vpc: lambdaVpc,
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        logging: {
-          retention: '3 days',
         },
       },
       events: ['s3:ObjectCreated:*'],
@@ -371,9 +383,6 @@ const uploadCompleteFunction = new sst.aws.Function('HistoryUploadCompleteFuncti
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: '3 days',
-  },
 });
 
 const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunction', {
@@ -383,9 +392,6 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   vpc: lambdaVpc,
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '3 days',
   },
   timeout: '5 minutes', // Longer timeout for large imports
   memory: '1024 MB', // More memory for processing

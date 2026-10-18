@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import type { ApiClient } from '../auth/ApiClient.js';
+import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { CustomCommand } from './types.js';
 import { isReservedCommandName } from '../config/commands.js';
 
@@ -28,6 +28,8 @@ interface RemoteSkillDocument {
   /** Owning user. A foreign value means the skill is only visible via
    *  `isGlobalRead` (cross-account) and must not be registered locally. */
   userId?: string;
+  /** Set on a Skill Market import: owned by the user but authored by someone else. */
+  importedFrom?: { listingId: string };
 }
 
 interface RemoteSkillListResponse {
@@ -62,7 +64,7 @@ export class RemoteSkillSource {
   private readonly pageLimit: number;
 
   constructor(
-    private readonly apiClient: ApiClient,
+    private readonly apiClient: Pick<AuthenticatedApiClient, 'get' | 'getCurrentUser'>,
     options: RemoteSkillSourceOptions = {}
   ) {
     this.cacheFilePath = options.cacheFilePath ?? path.join(os.homedir(), '.bike4mind', 'cache', 'remote-skills.json');
@@ -116,7 +118,9 @@ export class RemoteSkillSource {
    * - a name that shadows a built-in OR a first-party feature slash command
    *   (tavern/quest/hearth), which would otherwise hijack the command, and
    * - a foreign-owned skill (a `userId` other than the current user's), which is
-   *   only visible cross-account via `isGlobalRead`.
+   *   only visible cross-account via `isGlobalRead`, and
+   * - a Skill Market import: the user owns the copy but someone else wrote it, and local commands run
+   *   as trusted instructions next to shell/file tools (the web app wraps it as untrusted instead).
    * Own, system (no `userId`), and org-scoped (server-gated, no `userId`) skills pass.
    *
    * Unauthenticated contract (fail-closed, intentional): when getCurrentUser()
@@ -131,6 +135,7 @@ export class RemoteSkillSource {
       .filter(skill => {
         if (isReservedCommandName(skill.name)) return false;
         if (skill.userId && skill.userId !== currentUserId) return false;
+        if (skill.importedFrom) return false;
         return true;
       })
       .map(skill => this.toCustomCommand(skill));

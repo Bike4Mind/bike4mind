@@ -25,6 +25,17 @@ describe('resolveRequestClient', () => {
 });
 
 describe('resolveApiCompletionSource', () => {
+  it('recognizes the Desktop AuthService headers without treating them as CLI', () => {
+    expect(resolveApiCompletionSource({ 'User-Agent': 'b4m-desktop/1.2.3', 'X-B4M-Client': 'b4m-desktop/1.2.3' })).toBe(
+      'desktop'
+    );
+    expect(resolveApiCompletionSource({ 'X-B4M-Client': 'B4M-DESKTOP/1.2.3' })).toBe('desktop');
+    for (const client of ['b4m-desktop/', 'wrapper b4m-desktop/1', 'b4m-desktop/1 extra']) {
+      expect(resolveApiCompletionSource({ 'user-agent': client })).toBe('api');
+    }
+    expect(resolveApiCompletionSource({ 'user-agent': 'curl/8', 'x-b4m-client': 'b4m-desktop/1' })).toBe('api');
+  });
+
   it('returns "cli" for the b4m-cli User-Agent', () => {
     expect(resolveApiCompletionSource({ 'user-agent': 'b4m-cli/0.9.3' })).toBe('cli');
   });
@@ -60,10 +71,28 @@ describe('resolveApiCompletionSource', () => {
   it('rejects substrings that contain but do not start with the CLI prefix', () => {
     expect(resolveApiCompletionSource({ 'user-agent': 'wrapper b4m-cli/0.9.3' })).toBe('api');
   });
+
+  it("returns 'desktop' for a b4m-desktop/ User-Agent", () => {
+    expect(resolveApiCompletionSource({ 'user-agent': 'b4m-desktop/1.2.0' })).toBe('desktop');
+    expect(resolveApiCompletionSource({ 'User-Agent': 'B4M-Desktop/1.2.0' })).toBe('desktop');
+  });
+
+  it("returns 'desktop' for a b4m-desktop/ x-b4m-client header with no User-Agent", () => {
+    expect(resolveApiCompletionSource({ 'x-b4m-client': 'b4m-desktop/1.2.0' })).toBe('desktop');
+    expect(resolveApiCompletionSource({ 'X-B4M-Client': 'b4m-desktop/1.2.0' })).toBe('desktop');
+  });
+
+  it('keeps a desktop x-b4m-client from overriding a non-desktop User-Agent', () => {
+    expect(resolveApiCompletionSource({ 'user-agent': 'curl/8.4.0', 'x-b4m-client': 'b4m-desktop/1.2.0' })).toBe('api');
+  });
+
+  it('rejects substrings that contain but do not start with the desktop prefix', () => {
+    expect(resolveApiCompletionSource({ 'user-agent': 'wrapper b4m-desktop/1.2.0' })).toBe('api');
+  });
 });
 
 describe('isApiKeyCompletionSource', () => {
-  it('is true only for api and cli', () => {
-    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli']);
+  it('is true only for api, cli and desktop', () => {
+    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli', 'desktop']);
   });
 });

@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { ApiErrorCode } from '../apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
+import { StorageLimitErrorInfoSchema } from '../errors';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
@@ -7,6 +13,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
+import { ChatToolModeSchema } from './promptMeta';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -56,7 +63,7 @@ export const SimplifiedChatRequestSchema = z.object({
   // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
   // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
   // tools and supplies the set; absent that too, it falls back to enableTools behavior.
-  toolMode: z.enum(['fast', 'smart']).optional(),
+  toolMode: ChatToolModeSchema.optional(),
   // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
   // intent to enable tools, so no companion toolMode/enableTools is required - the array
   // used to be dropped in silence without one. Unknown ids are filtered by the handler
@@ -185,7 +192,7 @@ export const ChatAckSchema = z.object({
   tools: z
     .object({
       // Absent when the caller named tools without sending a mode.
-      toolMode: z.enum(['fast', 'smart']).optional(),
+      toolMode: ChatToolModeSchema.optional(),
       // Smart mode only: what the prompt-based recommender picked.
       autoSelectedTools: z.array(z.string()).optional(),
       effectiveTools: z.array(z.string()),
@@ -316,16 +323,42 @@ export const ApiErrorSchema = z.object({
  * both of those 422s are *thrown*, so errorHandler serves the body and adds
  * `name`. Extending is what keeps that documented here (and what drops it again
  * on the sunset date) instead of leaving a bespoke copy behind to drift.
+ *
+ * Also covers `spend_cap_exceeded`; the name is a published OpenAPI component, so it stays.
  */
 export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
-  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
-  // so a rename there breaks this rather than silently publishing a dead code.
-  errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
+  // QUEST_ERROR_CODES is itself typed against apiErrorCodes.ts, so a rename there breaks this
+  // rather than silently publishing a dead code.
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
 });
+
+/**
+ * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll and
+ * `sessionId` is the notebook the turn was recorded in, so a caller that sent no `sessionId` can
+ * continue the conversation it just started (same field name as the ACK and the `wait: true` body).
+ */
+export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
+ * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
+ * together, which the endpoint's 400 description states for integrators.
+ */
+export const StorageLimitErrorSchema = ApiErrorSchema.extend(StorageLimitErrorInfoSchema.partial().shape);
 
 /** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
 export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
+});
+
+/** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
+export const UnknownModelErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(UNKNOWN_MODEL_ERROR_CODE).optional(),
 });
 
 /**
@@ -344,4 +377,12 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .array(z.string())
     .optional()
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
+
+/**
+ * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
+ * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ */
+export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
 });

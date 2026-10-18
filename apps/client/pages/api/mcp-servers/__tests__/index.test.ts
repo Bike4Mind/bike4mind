@@ -35,6 +35,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/mcp', () => ({}));
+// The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
+vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
 vi.mock('@server/utils/errors', () => ({ BadRequestError: class extends Error {} }));
 vi.mock('@bike4mind/utils', () => ({
@@ -138,10 +140,8 @@ describe('POST /api/mcp-servers', () => {
 
     await runPost();
 
-    expect(mockUpdate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ id: 's1', enabled: true }),
-      { unset: ['toolSchemasFetchedAt'] }
-    );
+    expect(mockUpdate).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 's1', enabled: true }), {
+      unset: ['toolSchemasFetchedAt'],
+    });
   });
 });

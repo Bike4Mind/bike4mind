@@ -6,6 +6,7 @@ import {
   createDriveClient,
   listFolderChildren,
   isValidDriveFolderId,
+  withDriveReconnectOnAuthError,
 } from '@server/integrations/google/drive/driveClient';
 
 /**
@@ -29,7 +30,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
 
     const accessToken = await getValidUserDriveAccessToken(req.user.id);
     const drive = createDriveClient(accessToken);
-    const files = await listFolderChildren(drive, folderId);
+    const files = await withDriveReconnectOnAuthError(() => listFolderChildren(drive, folderId));
 
     return res.json({ folderId, count: files.length, files });
   })

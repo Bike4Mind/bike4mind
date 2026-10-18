@@ -3,11 +3,45 @@ import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
+const {
+  mockUserFindById,
+  mockAdminUpdateUser,
+  mockUpdateUser,
+  mockCount,
+  mockSessionEnded,
+  mockRequireStepUp,
+  txnState,
+} = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
   mockAdminUpdateUser: vi.fn(),
   mockUpdateUser: vi.fn(),
   mockCount: vi.fn(),
+  mockSessionEnded: vi.fn(),
+  mockRequireStepUp: vi.fn(),
+  // Records whether a findById read ran inside the change callback, so a test can pin the
+  // session-end snapshot to the write's own transaction instead of a stale read before it.
+  txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
+}));
+
+// Runs the change and the session-end decision exactly as the real helper does (its transaction
+// and revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
+vi.mock('@server/auth/endUserSessions', () => ({
+  commitWithSessionEnd: async (
+    _req: unknown,
+    change: () => Promise<unknown>,
+    sessionEndFor: (result: unknown) => unknown
+  ) => {
+    txnState.changeRunning = true;
+    let result: unknown;
+    try {
+      result = await change();
+    } finally {
+      txnState.changeRunning = false;
+    }
+    const end = sessionEndFor(result);
+    if (end) await mockSessionEnded(end);
+    return result;
+  },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -37,8 +71,10 @@ vi.mock('@server/utils/ip', () => ({
   truncateIp: (ip: string) => ip,
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async orig => ({
   userService: {
+    // The real block-state rules, so a snapshot missing any block field is caught.
+    entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
@@ -46,25 +82,50 @@ vi.mock('@bike4mind/services', () => ({
     adminUpdateUserSchema: z.object({
       id: z.string(),
       name: z.string().optional(),
+      email: z.string().optional(),
+      password: z.string().optional(),
       isAdmin: z.boolean().optional(),
       tags: z.array(z.string()).nullable().optional(),
       currentCredits: z.number().optional(),
       creditReason: z.string().optional(),
+      password: z.string().nullable().optional(),
+      email: z.string().optional(),
+      isBanned: z.boolean().optional(),
+      moderationStatus: z.string().optional(),
     }),
-    updateUserSchema: z.object({ name: z.string().optional(), role: z.string().optional() }),
+    updateUserSchema: z.object({
+      name: z.string().optional(),
+      role: z.string().optional(),
+      password: z.string().nullable().optional(),
+    }),
   },
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...a: unknown[]) => {
       const result = mockUserFindById(...a);
       // Mirrors Mongoose's Query: chainable via .select()/.lean(), but also
       // directly awaitable (the handler awaits User.findById(userId) bare in
       // its post-update refetch), so `then` needs to resolve to the same result.
+      let projected = result;
       const query = {
-        select: () => query,
-        lean: () => Promise.resolve(result),
+        // Applies the projection like Mongo would, so a field dropped from a .select() is absent.
+        select: (fields: string) => {
+          const keep = fields.split(' ');
+          // The session-end snapshot is the only read that asks for every block field; note
+          // whether it happened inside the change callback (the transaction) or before it.
+          if (fields === 'isAdmin email isBanned disputePending moderation') {
+            txnState.snapshotReadInsideChange = txnState.changeRunning;
+          }
+          projected =
+            result && typeof result === 'object'
+              ? Object.fromEntries(Object.entries(result).filter(([key]) => keep.includes(key)))
+              : result;
+          return query;
+        },
+        lean: () => Promise.resolve(projected),
         then: (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
           Promise.resolve(result).then(onFulfilled, onRejected),
       };
@@ -80,6 +141,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+
+// The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 
 import handler from '../update';
 
@@ -111,6 +175,176 @@ beforeEach(() => {
   mockAdminUpdateUser.mockReset().mockResolvedValue(undefined);
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
+  mockSessionEnded.mockReset().mockResolvedValue(undefined);
+  txnState.changeRunning = false;
+  txnState.snapshotReadInsideChange = undefined;
+  mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+});
+
+describe('PUT /api/users/:id/update - changing your own password', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+  const stepUpRequired = Object.assign(new ForbiddenError('Recent verification required'), {
+    additionalInfo: { code: 'step_up_required' },
+  });
+
+  it('requires recent verification and does not write without it', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'new-password' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  // applyBaseUserUpdates hashes '' as a real password, so the gate must not use a truthiness check.
+  it('gates an empty-string password too', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: '' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty-string password from an API key outright', async () => {
+    const { promise } = run({
+      user: SELF,
+      userId: 'u1',
+      body: { password: '' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('writes once recently verified', async () => {
+    const { res, promise } = run({ user: SELF, userId: 'u1', body: { password: 'new-password' } });
+    await promise;
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates an admin changing their own password too', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { password: 'new-password' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses a password from an API key outright', async () => {
+    const { promise } = run({
+      user: SELF,
+      userId: 'u1',
+      body: { password: 'new-password' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('treats an upper-case form of your own id as yourself', async () => {
+    const ownId = '65a1b2c3d4e5f6a7b8c9d0e1';
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({
+      user: { ...ADMIN, id: ownId },
+      userId: ownId.toUpperCase(),
+      body: { password: 'new-password' },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('gates an admin changing their own email, and writes once recently verified', async () => {
+    mockRequireStepUp.mockRejectedValueOnce(stepUpRequired);
+    const blocked = run({ user: ADMIN, userId: ADMIN.id, body: { email: 'new@example.com' } });
+    await expect(blocked.promise).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'step_up_required' },
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+
+    const allowed = run({ user: ADMIN, userId: ADMIN.id, body: { email: 'new@example.com' } });
+    await allowed.promise;
+    expect(allowed.res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(2);
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an admin changing their own email with an API key', async () => {
+    const { promise } = run({
+      user: ADMIN,
+      userId: ADMIN.id,
+      body: { email: 'new@example.com' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('leaves updates without a password ungated', async () => {
+    await run({ user: SELF, userId: 'u1', body: { name: 'New' } }).promise;
+    await run({ user: SELF, userId: 'u1', body: { password: null } }).promise;
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/users/:id/update - an admin changing another user's credentials or role", () => {
+  const stepUpRequired = Object.assign(new ForbiddenError('Recent verification required'), {
+    additionalInfo: { code: 'step_up_required' },
+  });
+  const API_KEY = { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] };
+  const gatedBodies: Array<[string, Record<string, unknown>]> = [
+    ['password', { password: 'reset-value' }],
+    ['email', { email: 'other@example.com' }],
+    ['an admin-role grant', { isAdmin: true }],
+  ];
+
+  it.each(gatedBodies)('requires recent verification for %s and does not write without it', async (_label, body) => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each(gatedBodies)('writes %s once recently verified', async (_label, body) => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body });
+    await promise;
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(gatedBodies)('refuses %s from an API key before any write', async (_label, body) => {
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body, apiKeyInfo: API_KEY });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringMatching(/signed-in session/),
+    });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('does not gate setting isAdmin: true on a user who is already an admin', async () => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['revoking the admin role', { isAdmin: false }],
+    ['a ban', { isBanned: true }],
+    ['an unrelated field', { name: 'Renamed' }],
+  ])('leaves %s ungated, including with an API key', async (_label, body) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
+    await run({ user: ADMIN, userId: 'other-user', body }).promise;
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body, apiKeyInfo: API_KEY });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('PUT /api/users/:id/update - lockout guard', () => {
@@ -148,8 +382,10 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // Called once for the post-update refetch, NOT again from inside the lockout guard.
-    expect(mockUserFindById).toHaveBeenCalledTimes(1);
+    // Only the in-transaction snapshot and the post-update refetch; the guard's isAdmin read
+    // is skipped entirely.
+    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 
@@ -157,7 +393,9 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserFindById).toHaveBeenCalledTimes(1);
+    // Role-grant check, in-transaction snapshot and refetch; no lockout guard read.
+    expect(mockUserFindById).toHaveBeenCalledTimes(3);
+    expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 
@@ -356,5 +594,167 @@ describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields gua
 
     const parsed = userService.adminUpdateUserSchema.parse({ id: 'u1', currentCredits: 500, adminNote: 'comped' });
     expect(parsed).not.toHaveProperty('adminNote');
+  });
+});
+
+describe('PUT /api/users/:id/update - ends sessions on credential and account-state changes', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+  const BEFORE = { id: 'target', email: 'old@example.com', isBanned: false, disputePending: false };
+
+  /** The pre-update snapshot (findById) and the user as adminUpdateUser wrote it. */
+  function adminEdit(before: object, written: object) {
+    mockUserFindById.mockReturnValue(before);
+    mockAdminUpdateUser.mockResolvedValue(written);
+  }
+
+  it('signs the user out everywhere after a self-service password change', async () => {
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'n3w-Passw0rd!' } });
+    await promise;
+
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
+  });
+
+  it('signs the user out everywhere when the self-service password is an empty string', async () => {
+    // The service writes `""` like any other password (it only skips undefined/null), so the
+    // session-end gate must match that rule rather than the string's truthiness.
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: '' } });
+    await promise;
+
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
+  });
+
+  it('leaves sessions alone for a self-service update that sets no password', async () => {
+    const { promise } = run({ user: SELF, userId: 'u1', body: { name: 'New Name', password: null } });
+    await promise;
+
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
+    ['sets an empty-string password', { password: '' }, BEFORE, 'password_changed'],
+    ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
+    ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
+    [
+      'suspends them',
+      { moderationStatus: 'suspended' },
+      { ...BEFORE, moderation: { status: 'suspended' } },
+      'account_blocked',
+    ],
+  ])('signs the target out everywhere when an admin %s', async (_label, body, written, reason) => {
+    adminEdit(BEFORE, written);
+    const { promise } = run({ user: ADMIN, userId: 'target', body });
+    await promise;
+
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'target', reason, actorUserId: ADMIN.id });
+  });
+
+  it('reads the session-end snapshot inside the write, not before it', async () => {
+    // The reason has to see the state the write saw; a read before the write can be stale by the
+    // time it commits (and stays stale across a transaction retry).
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { promise } = run({ user: ADMIN, userId: 'target', body: { isBanned: true } });
+    await promise;
+
+    expect(txnState.snapshotReadInsideChange).toBe(true);
+  });
+
+  it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com', isBanned: true });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { password: 'n3w-Passw0rd!', email: 'new@example.com', isBanned: true },
+    });
+    await promise;
+
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded.mock.calls[0][0].reason).toBe('account_blocked');
+  });
+
+  it('records no separate actor when an admin changes their own password', async () => {
+    adminEdit({ ...BEFORE, id: ADMIN.id }, { ...BEFORE, id: ADMIN.id });
+    const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { password: 'n3w-Passw0rd!' } });
+    await promise;
+
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: ADMIN.id, reason: 'password_changed' });
+  });
+
+  it.each([
+    ['a name-only edit', BEFORE, BEFORE],
+    ['re-saving the same email', BEFORE, BEFORE],
+    ['saving a banned user', { ...BEFORE, isBanned: true }, { ...BEFORE, isBanned: true }],
+    [
+      'saving a user already under a dispute hold',
+      { ...BEFORE, disputePending: true },
+      { ...BEFORE, disputePending: true },
+    ],
+    [
+      'saving an already suspended user',
+      { ...BEFORE, moderation: { status: 'suspended' } },
+      { ...BEFORE, moderation: { status: 'suspended' } },
+    ],
+  ])('leaves sessions alone for %s', async (_label, before, written) => {
+    adminEdit(before, written);
+    const { promise } = run({ user: ADMIN, userId: 'target', body: { name: 'x', email: 'old@example.com' } });
+    await promise;
+
+    expect(mockSessionEnded).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['self-service', SELF, 'u1'],
+    ['admin', ADMIN, 'target'],
+  ])('fails the %s request when the session end fails', async (_label, user, userId) => {
+    adminEdit(BEFORE, BEFORE);
+    mockSessionEnded.mockRejectedValue(new Error('db down'));
+    const { promise } = run({ user, userId, body: { password: 'n3w-Passw0rd!' } });
+
+    await expect(promise).rejects.toThrow('db down');
+  });
+});
+
+describe('PUT /api/users/:id/update - respond() boundary', () => {
+  const profile = {
+    id: 'u1',
+    name: 'Existing Name',
+    securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
+    userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
+    notInSchema: 'x',
+  };
+
+  it('admin branch keeps ignoredFields, securityQuestions and userNotes and strips an undeclared key', async () => {
+    mockUserFindById.mockReturnValue(profile);
+    const { res, promise } = run({ user: ADMIN, userId: 'u1', body: { name: 'New Name', adminNote: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(['adminNote']);
+    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.userNotes).toEqual(profile.userNotes);
+    expect(json).not.toHaveProperty('notInSchema');
+  });
+
+  it('self branch keeps ignoredFields and securityQuestions, drops userNotes, and strips an undeclared key', async () => {
+    mockUserFindById.mockReturnValue(profile);
+    const { res, promise } = run({
+      user: { id: 'u1', isAdmin: false },
+      userId: 'u1',
+      body: { name: 'N', tags: ['x'] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(['tags']);
+    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json).not.toHaveProperty('userNotes');
+    expect(json).not.toHaveProperty('notInSchema');
   });
 });

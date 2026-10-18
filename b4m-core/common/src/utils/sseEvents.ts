@@ -1,9 +1,9 @@
 /**
- * Server-Sent Events (SSE) utilities for CLI LLM completions
- * Shared between Next.js API route and Lambda function
+ * SSE event types and helpers for CLI/API completions (ChatCompletion service and CLI client).
  */
-import type { QuestErrorCode } from '../types/entities/SessionTypes';
+import type { CompletionSseErrorCode } from '../schemas/cliCompletions';
 import type { StreamChannel } from './streamVisibility';
+import type { TurnUsage } from '../models';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -16,6 +16,8 @@ export interface SSEContentEvent {
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
+    /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+    reasoningTokens?: number;
     /** Anthropic-style cache token deltas */
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
@@ -62,11 +64,10 @@ export interface SSEErrorEvent {
   /** Correlation ID for this request, when available. */
   requestId?: string;
   /**
-   * Machine-readable classifier (see QUEST_ERROR_CODES), when the failure is a
-   * recognized billing/policy condition. Absent for unclassified errors - clients
-   * must treat it as optional.
+   * Machine-readable classifier (see COMPLETION_SSE_ERROR_CODES): a billing code or a provider
+   * code. Absent for unclassified errors - clients must treat it as optional.
    */
-  code?: QuestErrorCode;
+  code?: CompletionSseErrorCode;
 }
 
 /**
@@ -89,9 +90,13 @@ export interface CompletionInfo {
   }>;
   inputTokens?: number;
   outputTokens?: number;
+  /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+  reasoningTokens?: number;
   /** Anthropic-style cache token deltas */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** Per-provider-request breakdown, for settlement only; buildSSEEvent never forwards it. */
+  turnUsage?: TurnUsage[];
   /**
    * Credit usage information
    */
@@ -161,12 +166,14 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   if (
     info?.inputTokens !== undefined ||
     info?.outputTokens !== undefined ||
+    info?.reasoningTokens !== undefined ||
     info?.cacheReadInputTokens !== undefined ||
     info?.cacheCreationInputTokens !== undefined
   ) {
     event.usage = {
       inputTokens: info.inputTokens,
       outputTokens: info.outputTokens,
+      ...(info.reasoningTokens !== undefined ? { reasoningTokens: info.reasoningTokens } : {}),
       cacheReadInputTokens: info.cacheReadInputTokens,
       cacheCreationInputTokens: info.cacheCreationInputTokens,
     };
@@ -255,6 +262,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
   const safeInfo: CompletionInfo = {
     inputTokens: info.inputTokens,
     outputTokens: info.outputTokens,
+    reasoningTokens: info.reasoningTokens,
     cacheReadInputTokens: info.cacheReadInputTokens,
     cacheCreationInputTokens: info.cacheCreationInputTokens,
     creditsUsed: info.creditsUsed,
@@ -269,7 +277,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
  * @param code - Machine-readable classifier to attach, when the caller resolved one
  * @returns SSE error event
  */
-export function formatSSEError(error: unknown, requestId?: string, code?: QuestErrorCode): SSEErrorEvent {
+export function formatSSEError(error: unknown, requestId?: string, code?: CompletionSseErrorCode): SSEErrorEvent {
   const message = error instanceof Error ? error.message : 'Internal server error';
   return {
     type: 'error',

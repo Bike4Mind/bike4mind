@@ -1,77 +1,59 @@
-import { Box, Button, Divider, IconButton, Typography, useTheme } from '@mui/joy';
-import { keyframes } from '@mui/system';
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
-import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
+import { Box, Button, Typography } from '@mui/joy';
+import type { ReactNode } from 'react';
 import { CreditOfferActions } from './CreditOfferActions';
+import { ComposerNote } from './ComposerNote';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-`;
+const NO_MODELS_COPY = {
+  denied: {
+    title: "You don't have access to any AI models.",
+    description: 'Please contact your administrator to request the appropriate permissions.',
+  },
+  loadError: {
+    title: "Couldn't load AI models.",
+    description: 'Check your connection and try again.',
+  },
+};
 
-interface NoModelsWarningProps {
-  show: boolean;
-  /** The model list failed to load - a transient fault, not a permissions problem. */
-  loadError?: boolean;
-  onRetry?: () => void;
+/** The no-models notice as one sentence, for the editor's aria-placeholder. */
+export function noModelsPlaceholder(loadError: boolean): string {
+  const copy = loadError ? NO_MODELS_COPY.loadError : NO_MODELS_COPY.denied;
+  return `${copy.title} ${copy.description}`;
 }
 
-export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWarningProps) {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-
-  if (!show) return null;
-
+/**
+ * What the composer shows in place of its placeholder when there is no model to send with: a red
+ * line and a description under it, inside the box rather than a banner over it. A failed load
+ * gets Retry beside the text.
+ */
+export function NoModelsPlaceholder({ loadError, onRetry }: { loadError: boolean; onRetry?: () => void }) {
+  const copy = loadError ? NO_MODELS_COPY.loadError : NO_MODELS_COPY.denied;
   return (
-    <Box
-      data-testid="session-no-models-warning"
-      sx={{
-        top: '15px',
-        left: '0',
-        fontSize: '12px',
-        position: 'absolute',
-        width: '100%',
-        height: '100%',
-        backgroundColor: theme.palette.background.surface2,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        zIndex: 1000,
-        px: 1.5,
-        animation: `${fadeIn} 0.25s ease-in`,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <BlockRoundedIcon
-          sx={{
-            fontSize: '22px',
-            color: isDarkMode ? 'danger.400' : 'danger.500',
-            flexShrink: 0,
-          }}
-        />
-        <Box>
-          <Typography
-            data-testid="no-models-warning-text"
-            fontSize="12px"
-            fontWeight="bold"
-            sx={{ color: isDarkMode ? 'danger.400' : 'danger.500' }}
-          >
-            {loadError ? <>Couldn&apos;t load AI models.</> : <>You don&apos;t have access to any AI models.</>}
-          </Typography>
-          <Typography fontSize="10px" sx={{ color: 'text.secondary' }}>
-            {loadError
-              ? 'Check your connection and try again.'
-              : 'Please contact your administrator to request the appropriate permissions.'}
-          </Typography>
-        </Box>
+    <Box data-testid="session-no-models-placeholder" sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+      <Box>
+        <Typography
+          data-testid="no-models-warning-text"
+          sx={theme => ({
+            fontSize: '13px',
+            fontWeight: 600,
+            lineHeight: 1.4,
+            color: theme.palette.mode === 'dark' ? theme.vars.palette.danger[400] : theme.vars.palette.danger[500],
+          })}
+        >
+          {copy.title}
+        </Typography>
+        <Typography sx={{ fontSize: '12px', lineHeight: 1.4, color: 'text.tertiary' }}>{copy.description}</Typography>
       </Box>
       {loadError && onRetry && (
-        <Button size="sm" variant="soft" color="danger" onClick={onRetry} data-testid="no-models-retry-btn">
+        <Button
+          size="sm"
+          variant="soft"
+          color="danger"
+          onClick={onRetry}
+          data-testid="no-models-retry-btn"
+          // The editor placeholder this sits in ignores the pointer; the button must not.
+          sx={{ pointerEvents: 'auto', flexShrink: 0 }}
+        >
           Retry
         </Button>
       )}
@@ -81,83 +63,61 @@ export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWa
 
 interface CreditsWarningProps {
   show: boolean;
+  /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
+  actions?: ReactNode;
 }
 
 interface LowCreditsWarningProps {
   show: boolean;
   currentCredits: number;
   onDismiss: () => void;
+  /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
+  actions?: ReactNode;
 }
 
 /**
- * Low but not out: an in-flow banner above the message box, so typing is never blocked. Dismissal
- * is the caller's to remember (see creditNudgeDismissal).
+ * Low but not out: a note in the stack above the composer's status line (SessionBottom), so typing
+ * is never blocked and the box does not move. Dismissal is the caller's to remember (see
+ * creditNudgeDismissal).
  */
-export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCreditsWarningProps) {
+export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: LowCreditsWarningProps) {
   if (!show) return null;
 
   return (
-    <Box
+    <ComposerNote
       data-testid="session-low-credits-warning"
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 1.5,
-        flexWrap: 'wrap',
-        backgroundColor: 'background.level1',
-        border: '1px solid',
-        borderColor: 'warning.outlinedBorder',
-        borderRadius: '8px',
-        px: 1.5,
-        py: 1,
-        mb: 1,
-      }}
+      dismissTestId="low-credits-warning-dismiss"
+      dismissLabel="Dismiss low credits notice"
+      onDismiss={onDismiss}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
-        <WarningAmberRoundedIcon
-          data-testid="low-credits-warning-icon"
-          sx={{ fontSize: '22px', color: 'warning.plainColor', flexShrink: 0 }}
-        />
-        <Box>
-          <Typography data-testid="low-credits-warning-text" level="title-sm">
-            Running low on credits
-          </Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-            {currentCredits.toLocaleString()} credits remaining. Your work isn&apos;t interrupted.
-          </Typography>
-        </Box>
+      <Typography
+        data-testid="low-credits-warning-text"
+        sx={{ fontSize: '13px', fontWeight: 600, color: 'text.primary' }}
+      >
+        Running low on credits
+      </Typography>
+      <Typography sx={{ fontSize: '13px', color: 'text.primary' }}>
+        {formatCreditAmount(currentCredits)} credits remaining. Your work isn&apos;t interrupted.
+      </Typography>
+      {/* The actions go under the copy, not beside it. */}
+      <Box data-testid="low-credits-warning-actions" sx={{ mt: '12px' }}>
+        {actions ?? <CreditOfferActions moment="low" />}
       </Box>
-      <Box data-testid="low-credits-warning-actions" display="flex" gap={1.5} alignItems="center">
-        <CreditOfferActions moment="low" />
-        <IconButton
-          data-testid="low-credits-warning-dismiss"
-          aria-label="Dismiss low credits notice"
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={onDismiss}
-        >
-          <CloseRoundedIcon />
-        </IconButton>
-      </Box>
-    </Box>
+    </ComposerNote>
   );
 }
 
 /**
  * Out of credits: takes the place of the message box rather than covering it.
  * There is nothing to type into, so the box is not drawn at all - the block
- * sits above the toolbar, divided from it, and says what happened and what to
+ * sits above the toolbar and says what happened and what to
  * do in the same calm register as the rest of the composer.
  */
-export function CreditsWarning({ show }: CreditsWarningProps) {
+export function CreditsWarning({ show, actions }: CreditsWarningProps) {
   if (!show) return null;
 
   return (
-    // The 10px top padding matches the message row this replaces, which carries the
-    // same padding to clear the grid's negative margin above it.
-    <Box data-testid="session-credits-warning" sx={{ width: '100%', pt: '10px' }}>
+    <Box data-testid="session-credits-warning" sx={{ width: '100%' }}>
       {/* One row on desktop. On a phone the row is too narrow for the copy and two
           buttons side by side, so the copy goes on top and the buttons share a full-width
           row under it, split evenly. */}
@@ -168,7 +128,11 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
           alignItems: { xs: 'stretch', sm: 'center' },
           justifyContent: 'space-between',
           gap: { xs: '12px', sm: 2 },
-          py: '12px',
+          // 4px on top of the box's own 12px puts the heading 16px down, where the message text
+          // it replaces starts (SessionBottom, .lexical-chat-input).
+          pt: '4px',
+          // The same 20px down to the toolbar as the message text (the editor wrapper's bottom padding).
+          pb: '20px',
         }}
       >
         <Box sx={{ minWidth: 0 }}>
@@ -184,10 +148,9 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
           </Typography>
         </Box>
         <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>
-          <CreditOfferActions moment="out" />
+          {actions ?? <CreditOfferActions moment="out" />}
         </Box>
       </Box>
-      <Divider />
     </Box>
   );
 }

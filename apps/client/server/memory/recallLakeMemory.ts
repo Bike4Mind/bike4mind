@@ -1,7 +1,7 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind/database';
 import { embeddingScorer, recall } from '@bike4mind/memory';
 import { MEMENTO_MIN_SIMILARITY, isDocumentSource } from '@bike4mind/common';
-import { createKeyProvider } from './factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
 

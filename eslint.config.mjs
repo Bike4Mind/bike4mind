@@ -4,6 +4,9 @@ import tseslint from 'typescript-eslint';
 import nextPlugin from '@next/eslint-plugin-next';
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -323,19 +326,59 @@ const noUiImportsInWorkers = {
   // gitignore-style `x` matches `x` and every `x/...`, while `x/*` would miss the bare directory.
   patterns: [
     {
+      group: ['@client/app', '@/app', '@pages', '**/client/app', 'react/*', 'react-dom/*', 'next/*', '@mui/*'],
+      message: WORKERS_NO_UI_MESSAGE,
+    },
+  ],
+};
+
+// @bike4mind/server-utils sits below both apps: apps/client and apps/workers import it, so an import
+// back into either (directly or through their @server/@client/@pages/@public/@/@workers aliases)
+// would cycle, and it runs in Lambdas and the self-host worker, so no UI code either.
+const SERVER_UTILS_BOUNDARY_MESSAGE =
+  '@bike4mind/server-utils must not import from apps/client, apps/workers or UI code. Move the ' +
+  'dependency into the package first, or keep the importing code in the app.';
+const SERVER_UTILS_BOUNDARY = {
+  paths: [
+    { name: 'react', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+    { name: 'react-dom', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+    { name: 'next', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+  ],
+  patterns: [
+    {
+      // Bare entries for the same reason as noUiImportsInWorkers: `x` matches `x` and every `x/...`.
       group: [
-        '@client/app',
-        '@/app',
+        '**/apps/**',
+        '@server',
+        '@client',
         '@pages',
-        '**/client/app',
+        '@public',
+        '@/*',
+        '@workers',
+        '@bike4mind/client',
+        '@bike4mind/workers',
         'react/*',
         'react-dom/*',
         'next/*',
         '@mui/*',
       ],
-      message: WORKERS_NO_UI_MESSAGE,
+      message: SERVER_UTILS_BOUNDARY_MESSAGE,
     },
   ],
+};
+
+// Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
+// the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
+const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRulesPlugin = {
+  meta: {
+    name: 'b4m-local-rules',
+    version: createHash('sha256')
+      .update(localRuleSources.map(source => readFileSync(new URL(source, import.meta.url))).join('\n'))
+      .digest('hex')
+      .slice(0, 12),
+  },
+  rules: { 'no-raw-entity-response': noRawEntityResponse },
 };
 
 export default defineConfig([
@@ -349,6 +392,9 @@ export default defineConfig([
     '**/.sst/**',
     '**/sst-env.d.ts',
     'apps/client/public/**',
+    // electron-vite's build output; 'dist'/'build' above do not cover it.
+    'apps/desktop/out/**',
+    'packages/sdk/src/generated/**',
     'apps/client/next.config.js',
     'apps/client/next-i18next.config.js',
     'apps/client/test-csp.js',
@@ -363,13 +409,19 @@ export default defineConfig([
   {
     rules: {
       'no-const-assign': 'off',
-      'no-empty': ['error', {
-        allowEmptyCatch: true,
-      }],
+      'no-empty': [
+        'error',
+        {
+          allowEmptyCatch: true,
+        },
+      ],
       'no-extra-boolean-cast': 'off',
-      'no-fallthrough': ['error', {
-        allowEmptyCase: true,
-      }],
+      'no-fallthrough': [
+        'error',
+        {
+          allowEmptyCase: true,
+        },
+      ],
       'no-prototype-builtins': 'warn',
       'no-useless-escape': 'off',
     },
@@ -421,16 +473,16 @@ export default defineConfig([
     },
   },
 
-  // TypeScript configuration for all .ts/.tsx files, plus apps/client's .mts/.cts, which the
-  // apps/workers boundary block below opts into linting.
-  ...tseslint.configs.recommended.map((config) => ({
+  // TypeScript configuration for all .ts/.tsx files, plus the .mts/.cts of apps/client and
+  // packages/server-utils, which their boundary blocks below opt into linting.
+  ...tseslint.configs.recommended.map(config => ({
     ...config,
-    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
   // TypeScript custom rules
   {
-    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
     rules: {
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
@@ -578,9 +630,7 @@ export default defineConfig([
   // External code should only import from server/overwatch/index.ts barrel
   {
     files: ['apps/client/server/**/*.ts'],
-    ignores: [
-      'apps/client/server/overwatch/**',
-    ],
+    ignores: ['apps/client/server/overwatch/**'],
     rules: {
       // Overwatch barrel restriction + B4Mv3 facade guards + the apps/workers import boundary.
       // This block is last-rule-wins for apps/client/server/**, so it must carry b4mv3 restrictions
@@ -664,13 +714,7 @@ export default defineConfig([
   // Overwatch barrel + UI-import ban.
   {
     files: ['apps/**/*.{ts,tsx}', 'b4m-core/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}'],
-    ignores: [
-      'apps/client/**',
-      'apps/workers/**',
-      'b4m-core/utils/**',
-      'b4m-core/services/**',
-      'b4m-core/common/**',
-    ],
+    ignores: ['apps/client/**', 'apps/workers/**', 'b4m-core/utils/**', 'b4m-core/services/**', 'b4m-core/common/**'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -698,12 +742,28 @@ export default defineConfig([
           patterns: [
             {
               group: ['**/overwatch/services/*', '**/overwatch/types'],
-              message:
-                'Import from @server/overwatch barrel (index.ts) only - do not reach into Overwatch internals.',
+              message: 'Import from @server/overwatch barrel (index.ts) only - do not reach into Overwatch internals.',
             },
             ...b4mv3RestrictedPatterns,
             ...noUiImportsInWorkers.patterns,
           ],
+        },
+      ],
+    },
+  },
+
+  // packages/server-utils - the server code apps/client and apps/workers share. Both apps depend on
+  // it, so it must never reach back into either app (by path or through their tsconfig aliases) or
+  // pull in UI code. Comes after the generic b4m-core/packages block above and so replaces it
+  // (last-rule-wins), which is why it repeats the B4Mv3 restrictions.
+  {
+    files: ['packages/server-utils/**/*.{ts,tsx,mts,cts,js,mjs}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...b4mv3RestrictedPaths, ...SERVER_UTILS_BOUNDARY.paths],
+          patterns: [...b4mv3RestrictedPatterns, ...SERVER_UTILS_BOUNDARY.patterns],
         },
       ],
     },
@@ -732,6 +792,32 @@ export default defineConfig([
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
+    },
+  },
+
+  // RFC #483 Phase 2 - an API route must not send a raw entity document; see
+  // eslint-rules/no-raw-entity-response.mjs. The rule needs type information, so typed linting is
+  // switched on for this glob only (it is the one rule here that pays for a TS program). Call sites
+  // that predate the rule are baselined in eslint-suppressions.json as a per-file count; fixing one
+  // makes the count stale, which fails lint until `pnpm exec eslint --prune-suppressions` is run.
+  // Prune after deleting or renaming a baselined route too - an entry for a missing file never errors.
+  // Results depend on the built core types (`pnpm turbo:core:build`; the rule throws if they are absent
+  // and is only as current as the local dist), and `--cache` keys on the linted file, not the types it
+  // imports, so a cached local run can miss a core-only change. CI lints uncached and is authoritative.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', '**/__tests__/**'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      b4m: localRulesPlugin,
+    },
+    rules: {
+      'b4m/no-raw-entity-response': 'error',
     },
   },
 ]);

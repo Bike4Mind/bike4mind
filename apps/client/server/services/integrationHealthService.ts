@@ -1,20 +1,12 @@
 import { Logger } from '@bike4mind/observability';
-import { isPlaceholderValue } from '@bike4mind/common';
-import { McpServerName } from '@bike4mind/common';
 import {
   integrationHealthCheckRepository,
-  userRepository,
-  mcpServerRepository,
-  orgSlackWorkspaceRepository,
-  slackDevWorkspaceRepository,
   INTEGRATION_HEALTH_INTEGRATIONS,
   INTEGRATION_HEALTH_THRESHOLDS,
 } from '@bike4mind/database';
 import type { IntegrationName, IntegrationHealthStatus, IIntegrationHealthCheckDocument } from '@bike4mind/database';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { AtlassianTokenManager } from '@server/integrations/jira/atlassianTokenManager';
 import { emitMetrics } from '@server/utils/cloudwatch';
-import { decryptToken } from '@server/security/tokenEncryption';
 
 const INTEGRATION_HEALTH_NAMESPACE = 'Lumina5/IntegrationHealth';
 
@@ -26,7 +18,6 @@ interface ProbeResult {
   latencyMs: number;
   statusCode: number | null;
   error: string | null;
-  configMissing?: boolean;
   metadata: {
     rateLimitRemaining?: number;
     rateLimitLimit?: number;
@@ -50,403 +41,92 @@ const PROBE_TIMEOUT_MS = 10_000;
 // --- Probe Functions ---
 
 /**
- * Probe Slack API using auth.test (lightest possible call - validates token).
- * Uses the bot token from a connected Slack workspace (OrgSlackWorkspace or SlackDevWorkspace).
- */
-async function probeSlack(logger: Logger, _ctx: ProbeContext): Promise<ProbeResult> {
-  const start = Date.now();
-  try {
-    const slackBotToken = await getSlackTokenForProbe(logger);
-
-    if (!slackBotToken) {
-      return {
-        integration: 'slack',
-        status: 'unhealthy',
-        latencyMs: Date.now() - start,
-        statusCode: null,
-        error: 'No Slack workspace connected (no org or dev workspace with bot token found)',
-        configMissing: true,
-        metadata: {},
-      };
-    }
-
-    // Use raw fetch to Slack auth.test - avoids importing the full SlackClient
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await fetch('https://slack.com/api/auth.test', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${slackBotToken}`,
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    const latencyMs = Date.now() - start;
-    const data = await response.json();
-
-    if (!response.ok || !data.ok) {
-      return {
-        integration: 'slack',
-        status: 'unhealthy',
-        latencyMs,
-        statusCode: response.status,
-        error: data.error || `HTTP ${response.status}`,
-        metadata: {},
-      };
-    }
-
-    return {
-      integration: 'slack',
-      status: classifyLatency(latencyMs),
-      latencyMs,
-      statusCode: response.status,
-      error: null,
-      metadata: {},
-    };
-  } catch (error) {
-    return {
-      integration: 'slack',
-      status: 'unhealthy',
-      latencyMs: Date.now() - start,
-      statusCode: null,
-      error: error instanceof Error ? error.message : String(error),
-      metadata: {},
-    };
-  }
-}
-
-/**
- * Probe GitHub API using GET /user.
- * Uses a user-level OAuth token from the first user with GitHub MCP server connected.
- * Falls back to the system-level LIVEOPS_GITHUB_TOKEN if no user tokens are available.
- */
-async function probeGitHub(logger: Logger, _ctx: ProbeContext): Promise<ProbeResult> {
-  const start = Date.now();
-  try {
-    const githubToken = await getGitHubTokenForProbe(logger);
-
-    if (!githubToken) {
-      return {
-        integration: 'github',
-        status: 'unhealthy',
-        latencyMs: Date.now() - start,
-        statusCode: null,
-        error: 'No GitHub connection found (no user with GitHub MCP server connected)',
-        configMissing: true,
-        metadata: {},
-      };
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await fetch('https://api.github.com/user', {
-        headers: {
-          Authorization: `Bearer ${githubToken}`,
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': `${process.env.APP_NAME || 'App'}-HealthCheck`,
-        },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    const latencyMs = Date.now() - start;
-
-    const rateLimitRemaining = parseInt(response.headers.get('x-ratelimit-remaining') ?? '', 10) || undefined;
-    const rateLimitLimit = parseInt(response.headers.get('x-ratelimit-limit') ?? '', 10) || undefined;
-    const rateLimitReset = parseInt(response.headers.get('x-ratelimit-reset') ?? '', 10) || undefined;
-
-    if (!response.ok) {
-      return {
-        integration: 'github',
-        status: 'unhealthy',
-        latencyMs,
-        statusCode: response.status,
-        error: `HTTP ${response.status}`,
-        metadata: { rateLimitRemaining, rateLimitLimit, rateLimitReset },
-      };
-    }
-
-    return {
-      integration: 'github',
-      status: classifyLatency(latencyMs),
-      latencyMs,
-      statusCode: response.status,
-      error: null,
-      metadata: { rateLimitRemaining, rateLimitLimit, rateLimitReset },
-    };
-  } catch (error) {
-    return {
-      integration: 'github',
-      status: 'unhealthy',
-      latencyMs: Date.now() - start,
-      statusCode: null,
-      error: error instanceof Error ? error.message : String(error),
-      metadata: {},
-    };
-  }
-}
-
-/**
- * Probe Jira API using GET /myself.
- * Uses the first user with an active Atlassian connection as a proxy.
- */
-async function probeJira(logger: Logger, ctx: ProbeContext): Promise<ProbeResult> {
-  const start = Date.now();
-  try {
-    const tokens = await getAtlassianTokensForProbe(logger, ctx);
-
-    if (!tokens) {
-      return {
-        integration: 'jira',
-        status: 'unhealthy',
-        latencyMs: Date.now() - start,
-        statusCode: null,
-        error: 'No active Atlassian connection found for health probe',
-        configMissing: true,
-        metadata: {},
-      };
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await fetch(`https://api.atlassian.com/ex/jira/${tokens.cloudId}/rest/api/3/myself`, {
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
-          Accept: 'application/json',
-        },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    const latencyMs = Date.now() - start;
-
-    if (!response.ok) {
-      return {
-        integration: 'jira',
-        status: 'unhealthy',
-        latencyMs,
-        statusCode: response.status,
-        error: `HTTP ${response.status}`,
-        metadata: {},
-      };
-    }
-
-    return {
-      integration: 'jira',
-      status: classifyLatency(latencyMs),
-      latencyMs,
-      statusCode: response.status,
-      error: null,
-      metadata: {},
-    };
-  } catch (error) {
-    return {
-      integration: 'jira',
-      status: 'unhealthy',
-      latencyMs: Date.now() - start,
-      statusCode: null,
-      error: error instanceof Error ? error.message : String(error),
-      metadata: {},
-    };
-  }
-}
-
-/**
- * Probe Confluence API using GET /user/current.
- * Uses the same Atlassian tokens as Jira (same OAuth connection).
- */
-async function probeConfluence(logger: Logger, ctx: ProbeContext): Promise<ProbeResult> {
-  const start = Date.now();
-  try {
-    const tokens = await getAtlassianTokensForProbe(logger, ctx);
-
-    if (!tokens) {
-      return {
-        integration: 'confluence',
-        status: 'unhealthy',
-        latencyMs: Date.now() - start,
-        statusCode: null,
-        error: 'No active Atlassian connection found for health probe',
-        configMissing: true,
-        metadata: {},
-      };
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await fetch(
-        `https://api.atlassian.com/ex/confluence/${tokens.cloudId}/wiki/rest/api/user/current?expand=personalSpace`,
-        {
-          headers: {
-            Authorization: `Bearer ${tokens.accessToken}`,
-            Accept: 'application/json',
-          },
-          signal: controller.signal,
-        }
-      );
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    const latencyMs = Date.now() - start;
-
-    if (!response.ok) {
-      return {
-        integration: 'confluence',
-        status: 'unhealthy',
-        latencyMs,
-        statusCode: response.status,
-        error: `HTTP ${response.status}`,
-        metadata: {},
-      };
-    }
-
-    return {
-      integration: 'confluence',
-      status: classifyLatency(latencyMs),
-      latencyMs,
-      statusCode: response.status,
-      error: null,
-      metadata: {},
-    };
-  } catch (error) {
-    return {
-      integration: 'confluence',
-      status: 'unhealthy',
-      latencyMs: Date.now() - start,
-      statusCode: null,
-      error: error instanceof Error ? error.message : String(error),
-      metadata: {},
-    };
-  }
-}
-
-// --- Helpers ---
-
-/**
- * Find a Slack bot token from a connected workspace to use for probing.
- * Checks OrgSlackWorkspace first (org-level install), then SlackDevWorkspace (dev workspace).
- */
-async function getSlackTokenForProbe(logger: Logger): Promise<string | null> {
-  try {
-    // Check org-level Slack workspaces first (production installs)
-    const orgWorkspaces = await orgSlackWorkspaceRepository.find({ enabled: true });
-    for (const ws of orgWorkspaces) {
-      const withToken = await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(ws.organizationId);
-      if (withToken?.slackBotToken) {
-        return decryptToken(withToken.slackBotToken);
-      }
-    }
-
-    // Fallback to dev workspaces
-    const devWorkspaces = await slackDevWorkspaceRepository.findAllActive();
-    for (const ws of devWorkspaces) {
-      const withToken = await slackDevWorkspaceRepository.findByIdWithToken(ws.id);
-      if (withToken?.slackBotToken) {
-        return decryptToken(withToken.slackBotToken);
-      }
-    }
-
-    logger.warn('No Slack workspace with bot token found for health probe');
-    return null;
-  } catch (error) {
-    logger.error('Error getting Slack token for health probe', { error });
-    return null;
-  }
-}
-
-/**
- * Find a user with an active GitHub MCP server to use for probing.
- * Uses user-level OAuth tokens only (no system-level fallback).
- */
-async function getGitHubTokenForProbe(logger: Logger): Promise<string | null> {
-  try {
-    // Find a user with GitHub MCP server enabled
-    const githubServer = await mcpServerRepository.findOne({
-      name: McpServerName.Github,
-      enabled: true,
-    });
-
-    if (githubServer) {
-      const tokenVar = githubServer.envVariables?.find(env => env.key === 'GITHUB_ACCESS_TOKEN');
-      if (tokenVar?.value && !isPlaceholderValue(tokenVar.value)) {
-        return decryptToken(tokenVar.value);
-      }
-    }
-
-    logger.warn('No GitHub token found (no user with GitHub MCP server connected)');
-    return null;
-  } catch (error) {
-    logger.error('Error getting GitHub token for health probe', { error });
-    return null;
-  }
-}
-
-/**
- * Per-invocation cache for Atlassian tokens.
+ * Probes check that each provider's API answers at all, without any credential.
  *
- * Jira and Confluence share the same OAuth connection, so we avoid fetching
- * tokens twice when both probes run in the same invocation. The cache is
- * scoped to a `ProbeContext` object created fresh for each `runAllProbes` /
- * `runProbe` call, avoiding stale state across Lambda warm starts.
+ * Their results drive the platform-wide availability circuit (integrationCircuitBreaker), so they
+ * must not borrow a tenant's token: a token that is revoked, expired or rate-limited is that
+ * tenant's problem, and treating it as an outage would block the integration for every tenant.
+ * Per-tenant failures are tracked by the per-tenant breakers in mcpCircuitBreakers instead, which
+ * probe results never feed. Any HTTP response below 500 - including 401/403/404/429 for the
+ * missing credential - proves the provider is reachable. The one exception is Slack's `ok` body,
+ * which is only checked on a 2xx.
  */
-interface ProbeContext {
-  atlassianTokens?: { accessToken: string; cloudId: string } | null;
-}
+type ProbeTarget = {
+  url: string;
+  method: 'GET' | 'POST';
+  /** Slack reports its own failures as HTTP 200 with `ok: false`; api.test answers `ok: true` unauthenticated. */
+  requiresOkBody?: boolean;
+};
 
-async function getAtlassianTokensForProbe(
-  logger: Logger,
-  ctx: ProbeContext
-): Promise<{ accessToken: string; cloudId: string } | null> {
-  if (ctx.atlassianTokens !== undefined) {
-    return ctx.atlassianTokens;
-  }
+const PROBE_TARGETS: Record<IntegrationName, ProbeTarget> = {
+  slack: { url: 'https://slack.com/api/api.test', method: 'POST', requiresOkBody: true },
+  github: { url: 'https://api.github.com/', method: 'GET' },
+  // The Atlassian gateway answers 404 itself, so these detect gateway reachability, not Jira/Confluence
+  // backend health: a product outage behind the gateway still reads healthy.
+  jira: { url: 'https://api.atlassian.com/ex/jira', method: 'GET' },
+  confluence: { url: 'https://api.atlassian.com/ex/confluence', method: 'GET' },
+};
+
+const SERVER_ERROR_STATUS = 500;
+
+async function probeReachability(integration: IntegrationName): Promise<ProbeResult> {
+  const { url, method, requiresOkBody } = PROBE_TARGETS[integration];
+  const start = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    // Find a user with active Atlassian connection
-    const user = await userRepository.findOne({
-      'atlassianConnect.status': 'connected',
-      'atlassianConnect.accessToken': { $exists: true },
+    const response = await fetch(url, {
+      method,
+      headers: { 'User-Agent': `${process.env.APP_NAME || 'App'}-HealthCheck` },
+      signal: controller.signal,
     });
+    const latencyMs = Date.now() - start;
 
-    if (!user) {
-      logger.warn('No user with active Atlassian connection found for health probe');
-      ctx.atlassianTokens = null;
-      return null;
+    if (response.status >= SERVER_ERROR_STATUS) {
+      return {
+        integration,
+        status: 'unhealthy',
+        latencyMs,
+        statusCode: response.status,
+        error: `HTTP ${response.status}`,
+        metadata: {},
+      };
     }
 
-    const tokens = await AtlassianTokenManager.getValidTokens(user.id);
-    if (!tokens) {
-      logger.warn('Failed to get valid Atlassian tokens for health probe');
-      ctx.atlassianTokens = null;
-      return null;
+    if (requiresOkBody && response.ok) {
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!body.ok) {
+        return {
+          integration,
+          status: 'unhealthy',
+          latencyMs,
+          statusCode: response.status,
+          error: body.error || 'ok: false',
+          metadata: {},
+        };
+      }
     }
 
-    ctx.atlassianTokens = {
-      accessToken: tokens.accessToken,
-      cloudId: tokens.cloudId,
+    return {
+      integration,
+      status: classifyLatency(latencyMs),
+      latencyMs,
+      statusCode: response.status,
+      error: null,
+      metadata: {},
     };
-    return ctx.atlassianTokens;
   } catch (error) {
-    logger.error('Error getting Atlassian tokens for health probe', { error });
-    ctx.atlassianTokens = null;
-    return null;
+    return {
+      integration,
+      status: 'unhealthy',
+      latencyMs: Date.now() - start,
+      statusCode: null,
+      error: error instanceof Error ? error.message : String(error),
+      metadata: {},
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -458,26 +138,14 @@ function classifyLatency(latencyMs: number): IntegrationHealthStatus {
 
 // --- Public API ---
 
-const PROBE_MAP: Record<IntegrationName, (logger: Logger, ctx: ProbeContext) => Promise<ProbeResult>> = {
-  slack: probeSlack,
-  github: probeGitHub,
-  jira: probeJira,
-  confluence: probeConfluence,
-};
-
 /**
  * Run health probes for all integrations concurrently.
  * Each probe is isolated - one failure won't block others.
  */
 export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCheckDocument[]> {
-  // Fresh context per invocation - Jira and Confluence share Atlassian tokens
-  // within this call, but nothing leaks across Lambda warm starts.
-  const ctx: ProbeContext = {};
-
   const results = await Promise.allSettled(
     INTEGRATION_HEALTH_INTEGRATIONS.map(async integration => {
-      const probe = PROBE_MAP[integration];
-      const result = await probe(logger, ctx);
+      const result = await probeReachability(integration);
       return integrationHealthCheckRepository.recordCheck(result);
     })
   );
@@ -502,10 +170,8 @@ export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCh
 /**
  * Run a health probe for a single integration.
  */
-export async function runProbe(integration: IntegrationName, logger: Logger): Promise<IIntegrationHealthCheckDocument> {
-  const ctx: ProbeContext = {};
-  const probe = PROBE_MAP[integration];
-  const result = await probe(logger, ctx);
+export async function runProbe(integration: IntegrationName): Promise<IIntegrationHealthCheckDocument> {
+  const result = await probeReachability(integration);
   return integrationHealthCheckRepository.recordCheck(result);
 }
 

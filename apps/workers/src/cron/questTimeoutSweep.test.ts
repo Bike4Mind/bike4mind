@@ -8,6 +8,7 @@ const mockFindUndispatchedCallbacks = vi.fn();
 const mockFindStaleDispatchedCallbacks = vi.fn();
 const mockDispatchQuestCallback = vi.fn();
 const mockRedispatchStaleQuestCallback = vi.fn();
+const mockFailExhaustedCallbacks = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
     settleIfUnfinished: (...args: unknown[]) => mockSettleIfUnfinished(...args),
     findUndispatchedCallbacks: (...args: unknown[]) => mockFindUndispatchedCallbacks(...args),
     findStaleDispatchedCallbacks: (...args: unknown[]) => mockFindStaleDispatchedCallbacks(...args),
+    failExhaustedCallbacks: (...args: unknown[]) => mockFailExhaustedCallbacks(...args),
   },
 }));
 
@@ -59,7 +61,7 @@ import {
   QUEST_TIMEOUT_THRESHOLD_MS,
   STUCK_QUEST_RECOVERED_LOG,
   UNFINISHED_REPLY_NOTICE,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
   id: 'q-1',
@@ -84,6 +86,7 @@ describe('questTimeoutSweep cron', () => {
     mockFindStaleDispatchedCallbacks.mockResolvedValue([]);
     mockDispatchQuestCallback.mockResolvedValue(undefined);
     mockRedispatchStaleQuestCallback.mockResolvedValue(true);
+    mockFailExhaustedCallbacks.mockResolvedValue({ redispatchLimitReached: 0, horizonPassed: 0 });
   });
 
   it('returns zero recovered when no stuck quests exist', async () => {
@@ -344,5 +347,41 @@ describe('questTimeoutSweep cron', () => {
     expect(result).toEqual({ status: 'OK', recovered: 0 });
     expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-missed', expect.anything());
     expect(mockRedispatchStaleQuestCallback).not.toHaveBeenCalled();
+  });
+
+  it('fails exhausted callbacks after the stale re-send, with the same window and horizon', async () => {
+    mockFindStaleDispatchedCallbacks.mockResolvedValue(['q-stuck']);
+    mockFailExhaustedCallbacks.mockResolvedValue({ redispatchLimitReached: 2, horizonPassed: 1 });
+
+    await handler();
+
+    expect(mockFailExhaustedCallbacks).toHaveBeenCalledTimes(1);
+    // Ordered after the re-send so a callback reclaimed this tick carries a fresh dispatchedAt.
+    expect(mockRedispatchStaleQuestCallback.mock.invocationCallOrder[0]).toBeLessThan(
+      mockFailExhaustedCallbacks.mock.invocationCallOrder[0]
+    );
+    const [opts] = mockFailExhaustedCallbacks.mock.calls[0];
+    const [staleOpts] = mockFindStaleDispatchedCallbacks.mock.calls[0];
+    expect(opts).toEqual({
+      staleBefore: staleOpts.dispatchedBefore,
+      horizonBefore: staleOpts.dispatchedAfter,
+      maxRedispatches: 3,
+    });
+    expect(metricValue(QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached)).toBe(2);
+    expect(metricValue(QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed)).toBe(1);
+  });
+
+  it('does not fail the sweep when failing exhausted callbacks throws', async () => {
+    mockFindStaleRunning.mockResolvedValue([staleQuest()]);
+    mockFailExhaustedCallbacks.mockRejectedValue(new Error('cannot reach primary'));
+
+    const result = await handler();
+
+    expect(result).toEqual({ status: 'OK', recovered: 1 });
+    expect(mockLogger.error).toHaveBeenCalledWith('[QuestTimeoutSweep] Exhausted callback failure sweep failed', {
+      err: expect.any(Error),
+    });
+    expect(metricValue(QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached)).toBe(0);
+    expect(metricValue(QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed)).toBe(0);
   });
 });

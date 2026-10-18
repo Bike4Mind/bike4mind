@@ -1,5 +1,33 @@
-import { describe, it, expect } from 'vitest';
-import { formatAnswerCost, formatCreditBalance } from './formatCredits';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  answerCostUnit,
+  formatAnswerCost,
+  formatAnswerCostAmount,
+  formatCreditAmount,
+  formatCreditBalance,
+  purchaseCreditsAriaLabel,
+} from './formatCredits';
+
+describe('purchaseCreditsAriaLabel', () => {
+  it('names the pack by its grouped credit count and dollar price', () => {
+    expect(purchaseCreditsAriaLabel(50_000, 30)).toBe('Purchase 50,000 credits for $30');
+  });
+});
+
+describe('formatCreditAmount', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('groups with en-US separators even when the browser locale would not', () => {
+    // Stand-in for an es-ES browser: a bare toLocaleString() would give "50.000".
+    const native = Number.prototype.toLocaleString;
+    vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (this: number, locales, options) {
+      return native.call(this, locales ?? 'es-ES', options);
+    });
+
+    expect(formatCreditAmount(50_000)).toBe('50,000');
+    expect(formatCreditBalance(9_951)).toBe('9,951 credits');
+  });
+});
 
 describe('formatCreditBalance', () => {
   it('labels the number and rounds fractional balances down', () => {
@@ -8,18 +36,21 @@ describe('formatCreditBalance', () => {
     expect(formatCreditBalance(0)).toBe('0 credits');
     expect(formatCreditBalance(-12)).toBe('0 credits');
   });
+});
 
-  it('keeps every digit when compact below 100,000, so a small spend stays visible', () => {
-    expect(formatCreditBalance(9_903, true)).toBe('9,903 credits');
-    expect(formatCreditBalance(12_400, true)).toBe('12,400 credits');
-    expect(formatCreditBalance(99_999.9, true)).toBe('99,999 credits');
-    expect(formatCreditBalance(950, true)).toBe('950 credits');
+describe('formatAnswerCostAmount', () => {
+  it('is the bare number, with "<1" for a fractional cost', () => {
+    expect(formatAnswerCostAmount(1234.4)).toBe('1,234');
+    expect(formatAnswerCostAmount(0.04)).toBe('<1');
+    expect(formatAnswerCostAmount(0)).toBe('0');
+    expect(formatAnswerCostAmount(-3)).toBe('0');
   });
 
-  it('abbreviates when compact from 100,000 up', () => {
-    expect(formatCreditBalance(100_000, true)).toBe('100K credits');
-    expect(formatCreditBalance(124_500, true)).toBe('124.5K credits');
-    expect(formatCreditBalance(2_300_000, true)).toBe('2.3M credits');
+  it('pairs with a singular unit for "<1" and 1', () => {
+    expect(answerCostUnit(0.4)).toBe('credit');
+    expect(answerCostUnit(1.2)).toBe('credit');
+    expect(answerCostUnit(2)).toBe('credits');
+    expect(answerCostUnit(0)).toBe('credits');
   });
 });
 

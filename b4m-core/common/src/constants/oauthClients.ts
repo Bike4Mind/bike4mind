@@ -33,3 +33,62 @@ const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
 export function oauthClientDisplayName(clientId: string): string {
   return DISPLAY_NAMES[clientId as OAuthDeviceClientId] ?? clientId;
 }
+
+const MAX_SOURCE_SLUG_LENGTH = 64;
+const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Whether a caller-supplied value can be an OAuth client id. Ids are logged on the
+ * attribution path, so anything outside this charset (CR/LF included) is refused outright.
+ */
+export function isOAuthClientIdShape(value: unknown): value is string {
+  return typeof value === 'string' && OAUTH_CLIENT_ID_SHAPE.test(value);
+}
+
+// Attribution only, and self-assertable: any new account can name any active client at signup.
+// So the namespace never grants access: isOAuthSourceTag is refused in admin-configured gates
+// (lake requiredUserTag/requiredEntitlement, model allowedUserTags/allowedEntitlements) and
+// dropped before user tags pass through as entitlement keys (entitlementsForTags, briefcase) or
+// into the lake access context (buildDataLakeAccessContext).
+export const OAUTH_SOURCE_TAG_PREFIX = 'source:';
+
+export function isOAuthSourceTag(tag: string): boolean {
+  return tag.trim().toLowerCase().startsWith(OAUTH_SOURCE_TAG_PREFIX);
+}
+
+/**
+ * The attribution slug for a registered OAuth client, used as the `source:<slug>` user tag.
+ * Recovered from the id minted by generateOAuthClientId
+ * (packages/database/src/models/auth/oauthClientAdmin.ts), whose b4m_<slug>_<8 hex> shape
+ * must stay in sync with the pattern here. Two clients registered under the same name share a slug.
+ */
+export function oauthClientSourceSlug(clientId: string): string {
+  const minted = /^b4m_(.+)_[0-9a-f]{8}$/.exec(clientId);
+  if (minted) return minted[1];
+  return clientId
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .slice(0, MAX_SOURCE_SLUG_LENGTH);
+}
+
+/**
+ * The client_id of an in-app /oauth/authorize return path, or undefined for anything else.
+ * Only a same-origin relative path is accepted, so an absolute or protocol-relative
+ * redirectTo never yields an id.
+ */
+export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | undefined {
+  if (typeof redirectTo !== 'string' || !redirectTo.startsWith('/') || redirectTo.startsWith('//')) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(redirectTo, 'http://local');
+  } catch {
+    return undefined;
+  }
+  if (url.origin !== 'http://local' || url.pathname !== '/oauth/authorize') return undefined;
+  const ids = url.searchParams.getAll('client_id');
+  if (ids.length !== 1) return undefined;
+  const [id] = ids;
+  return isOAuthClientIdShape(id) ? id : undefined;
+}

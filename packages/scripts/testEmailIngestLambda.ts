@@ -347,6 +347,23 @@ function generateTestId(): string {
 }
 
 /**
+ * The parser Lambda rejects mail SES has not authenticated (emailIngestionService/authenticateSender.ts).
+ * This script writes to S3 directly, bypassing SES, so it stamps the header SES would prepend,
+ * one result per folded line as SES writes it. A custom --template is used verbatim, so it can
+ * exercise the rejection path.
+ */
+function sesAuthenticationResultsHeader(from: string): string {
+  const address = /<([^>]+)>/.exec(from)?.[1] ?? from;
+  const fromDomain = address.slice(address.lastIndexOf('@') + 1).trim();
+  return [
+    'Authentication-Results: amazonses.com;',
+    ` dkim=pass header.i=@${fromDomain};`,
+    ` dmarc=pass header.from=${fromDomain};`,
+    '',
+  ].join('\n');
+}
+
+/**
  * Get email content based on CLI flags
  */
 function getEmailContent(from: string, to: string): string {
@@ -385,7 +402,7 @@ function getEmailContent(from: string, to: string): string {
   console.log(`📝 Using template: ${templateName}`);
 
   const template = EMAIL_TEMPLATES[templateKey].content;
-  return template
+  return (sesAuthenticationResultsHeader(from) + template)
     .replace(/{{FROM}}/g, from)
     .replace(/{{TO}}/g, to)
     .replace(/{{TIMESTAMP}}/g, timestamp)

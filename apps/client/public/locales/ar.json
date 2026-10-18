@@ -30,7 +30,8 @@
     "title": "سجل التغييرات"
   },
   "feedback": {
-    "send": "إرسال ملاحظات"
+    "send": "إرسال ملاحظات",
+    "rollupTitle": "ملاحظاتك"
   },
   "terms_policies": "الشروط والسياسات",
   "login": "تسجيل الدخول",
@@ -166,7 +167,8 @@
     "messages": "الرسائل",
     "invites": "الدعوات",
     "sendMessage": "إرسال رسالة",
-    "noMessages": "لا توجد رسائل"
+    "noMessages": "لا توجد رسائل",
+    "title_unread": "صندوق الوارد، توجد عناصر غير مقروءة"
   },
   "addSomething": "إضافة {{ name }}",
   "deleteAllSomething": "حذف جميع {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "تجدد في {{ date }}"
   },
   "billing": {
-    "title": "الفوترة"
+    "title": "الفوترة",
+    "balance": "الرصيد",
+    "credits_heading": "شحن الرصيد",
+    "credits_sub": "حزم لمرة واحدة تُضاف إلى رصيدك. لا حاجة إلى اشتراك.",
+    "credits_sub_with_plan": "حزم لمرة واحدة تُضاف فوق حصتك الشهرية.",
+    "free_plan": "مجاني",
+    "free_plan_detail": "ادفع حسب الاستخدام بحزم الرصيد",
+    "low_org": "يمكن لمسؤول المؤسسة إضافة رصيد إلى هذا الحساب.",
+    "low_with_plan": "اشحن رصيدك لمواصلة العمل حتى تتجدد حصتك.",
+    "low_without_plan": "تضيف الخطة رصيدًا كل شهر؛ وتشحنك الحزمة الآن.",
+    "payment_failed": "فشل الدفع",
+    "plan": "الخطة",
+    "plan_fallback": "اشتراك",
+    "plan_unavailable": "غير متاح",
+    "plan_unavailable_detail": "تعذّر تحميل خطتك.",
+    "plans_change": "خطتك",
+    "plans_change_sub": "أدِر اشتراكك أو غيّره أو ألغِه.",
+    "plans_heading": "الخطط",
+    "plans_heading_sub": "خطط شهرية مع حصة من الرصيد.",
+    "plans_upgrade": "الترقية",
+    "plans_upgrade_sub": "احصل على حصة رصيد شهرية بدلًا من الشحن يدويًا.",
+    "retry": "إعادة المحاولة",
+    "see_plans": "عرض الخطط",
+    "top_up": "شحن"
   },
   "credits": {
     "title": "الرصيد",
@@ -314,7 +339,8 @@
     "usage_pattern": "استنادًا إلى نمط استخدامك من آخر {{days}} يومًا",
     "credits_used": "الرصيد المستخدم",
     "credits_purchased": "الرصيد المشتري",
-    "net_credits": "الرصيد الصافي"
+    "net_credits": "الرصيد الصافي",
+    "unit": "رصيد"
   },
   "time": {
     "last_7_days": "آخر 7 أيام",
@@ -362,7 +388,15 @@
       "completed": "مكتمل",
       "pending": "معلق",
       "failed": "فشل"
-    }
+    },
+    "buy_pack": "اشترِ {{credits}} رصيد مقابل {{price}}",
+    "choose_pack": "اختر حزمة رصيد",
+    "history_usage_hint": "تعرض هذه القائمة المشتريات فقط.",
+    "organization_credits_active": "رصيد المؤسسة مفعّل",
+    "rate_per_thousand": "{{rate}} لكل 1,000 رصيد",
+    "see_usage": "عرض الاستخدام",
+    "shared_rate": "لجميع الحزم السعر نفسه: {{rate}} لكل 1,000 رصيد.",
+    "switch_to_personal": "انتقل إلى حسابك الشخصي لشراء رصيد للاستخدام الشخصي."
   },
   "settings": {
     "title": "الإعدادات",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "الاشتراك",
-    "description": "الوصول إلى كل نموذج رئيسي للذكاء الاصطناعي من خلال واجهة موحدة واحدة. تشغيل نماذج متقدمة مثل Deepseek R1 بشكل خاص.",
+    "description": "الوصول إلى كل نموذج رئيسي للذكاء الاصطناعي من خلال واجهة موحدة واحدة.",
     "no_free_tier": "لا توجد طبقة مجانية - موجهة نحو المحترفين.",
     "credits_rollover": "تتراكم الاعتمادات غير المستخدمة لمدة 3 أشهر.",
     "monthly_billing": "الفوترة الشهرية",
@@ -543,7 +577,9 @@
     "personal": "شخصي",
     "business": "عمل",
     "team": "فريق",
-    "enterprise": "مؤسسة"
+    "enterprise": "مؤسسة",
+    "audience_label": "نوع الخطة",
+    "includes": "يتضمن"
   },
   "agents": {
     "title": "الوكلاء",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "المهارات",
     "command_palette_description": "إدارة قوالب التعليمات القابلة لإعادة الاستخدام"
+  },
+  "apiKeys": {
+    "title": "مفاتيح API"
+  },
+  "connections": {
+    "menuTooltip": "تكاملات مثل Google Drive وSlack، بالإضافة إلى مفاتيح API لشيفرتك الخاصة",
+    "sections": "أقسام الاتصالات",
+    "title": "الاتصالات"
   }
 }

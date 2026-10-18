@@ -7,6 +7,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
 import type { LLMSettings } from '@client/app/components/commands/LLMCommand';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
+import { isToolDenied } from '@client/app/utils/toolMapping';
 
 export interface AssembleSettingsParams {
   /** Whether the send streams chunks (forwarded straight into the payload). */
@@ -35,6 +36,11 @@ export interface ResolveToolsParams {
    * the send (and never auto-recommended) unless this is that workspace (`isToolHiddenBySurface`).
    */
   activeSurface?: string | null;
+  /**
+   * The session's `disabledTools`. Only shapes the "Smart tools" toast, so it never names a tool
+   * the server will withhold. The payload is untouched on purpose: the server denylist is the gate.
+   */
+  deniedTools?: readonly string[];
 }
 
 export interface ResolveToolsResult {
@@ -90,6 +96,7 @@ export function useLLMSettingsAssembly(): {
       toolsOverride,
       skipAutoOffers,
       activeSurface,
+      deniedTools,
     }: ResolveToolsParams): ResolveToolsResult => {
       const visible = (tool: string) => !isToolHiddenBySurface(tool, hiddenSurfaces, activeSurface);
       // Briefcase per-message tools override: a one-click prompt declares exactly
@@ -130,7 +137,7 @@ export function useLLMSettingsAssembly(): {
           return { effectiveTools: tools.filter(visible), refused: false };
         }
         const recommendations = recommendTools(prompt).filter(r => visible(r.tool));
-        const autoSelected = recommendations.filter(r => !tools.includes(r.tool));
+        const autoSelected = recommendations.filter(r => !tools.includes(r.tool) && !isToolDenied(r.tool, deniedTools));
         if (autoSelected.length > 0) {
           const names = autoSelected.map(r => r.reason).join(', ');
           toast.info(`Smart tools: ${names}`);

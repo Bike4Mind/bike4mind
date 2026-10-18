@@ -2,6 +2,7 @@ import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
+  JSONOutputFormat,
   RawMessageStreamEvent,
   Tool,
 } from '@anthropic-ai/sdk/resources/messages';
@@ -15,7 +16,10 @@ import {
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
   REFUSAL_FALLBACK_MODELS,
+  estimateStreamedOutputTokens,
+  supportsForcedToolChoice,
   type ModelInfo,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -37,7 +41,7 @@ import {
   stripAllToolBlocks,
   stripToolDependentMessages,
 } from './toolPairingUtils';
-import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
 import {
@@ -50,24 +54,38 @@ import {
 } from '@bike4mind/common';
 import {
   buildThinkingParams,
+  planReasoningEffort,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
+  type AnthropicEffort,
+  type ReasoningEffortPlan,
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
+import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import {
+  appendSystemText,
+  buildStructuredOutputFormat,
+  buildToolUseInstruction,
+  downgradeForcedToolChoice,
+  hasCitationsEnabled,
+  markToolStrict,
+} from './forcedToolChoice';
+import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
   type DegenerateStreamVerdict,
 } from './degenerateStreamGuard';
 
-type ExtendedMessageCreateParams = MessageCreateParamsBase &
-  Partial<ThinkingConfig> & {
-    output_config?: { effort: 'high' | 'medium' | 'low' };
-  };
+type ExtendedMessageCreateParams = Omit<MessageCreateParamsBase, 'thinking'> & {
+  thinking?: ThinkingConfig['thinking'] | { type: 'disabled' };
+  output_config?: { effort?: AnthropicEffort; format?: JSONOutputFormat };
+};
 
 interface ToolUseEvent {
   type: 'tool_use';
@@ -126,6 +144,29 @@ const totalCacheTokens = (accum: number, turn: number | undefined): number | und
   const total = accum + (turn || 0);
   return total > 0 ? total : undefined;
 };
+
+type AnthropicUsage =
+  | {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    }
+  | undefined;
+
+/**
+ * `prior` plus one API call's usage (see CompletionInfo.turnUsage). Anthropic's input_tokens
+ * already exclude cache reads/writes, so the fields map across without a split.
+ */
+const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => [
+  ...(prior ?? []),
+  {
+    inputTokens: usage?.input_tokens || 0,
+    outputTokens: usage?.output_tokens || 0,
+    ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
+    ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
+  },
+];
 
 /**
  * Associates a failed tool call's elapsed time with the thrown error object, so it survives
@@ -387,7 +428,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 32000,
@@ -413,7 +454,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -435,7 +476,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -464,7 +505,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_SONNET,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -489,7 +530,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -510,7 +551,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -533,7 +574,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -558,7 +599,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Anthropic,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -584,7 +625,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -607,7 +648,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -631,7 +672,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -684,7 +725,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_OPUS,
         type: 'text',
-        name: 'Claude 5 Opus',
+        name: 'Claude Opus 5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -701,8 +742,56 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-07-24',
         description:
-          "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_OPUS,
+        type: 'text',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          // Cache hits are 0.05x input on Opus 5.5, not the default 0.1x; the 5m cache write is the default 1.25x.
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 }, // $4 / 1M Input tokens, $20 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description:
+          "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_HAIKU,
+        type: 'text',
+        name: 'Claude Haiku 5.5',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Priced by prompt length: a request over 100K prompt tokens pays the higher tier. Cache reads (0.1x) and
+        // 5m cache writes (1.25x) match the default multipliers at both tiers.
+        pricing: {
+          100_000: { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 }, // $0.10 / 1M Input tokens, $0.50 / 1M Output tokens
+          1_000_000: { input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 }, // $0.50 / 1M Input tokens, $2.50 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 3,
+        supportsTools: true,
+        releaseDate: '2026-10-07',
+        description:
+          "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
@@ -718,6 +807,29 @@ export class AnthropicBackend implements ICompletionBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Writes a reasoningEffort plan onto the request; true when it leaves thinking on. */
+  private applyReasoningEffortPlan(apiParams: ExtendedMessageCreateParams, plan: ReasoningEffortPlan): boolean {
+    switch (plan.kind) {
+      case 'default':
+        return false;
+      case 'off':
+        // The pinned SDK types predate `between_tools` (Sonnet 5.5's off switch); the API accepts it.
+        apiParams.thinking = plan.thinking as { type: 'disabled' };
+        return false;
+      case 'adaptive':
+        apiParams.thinking = plan.thinking;
+        // Merged, not assigned: output_config may already carry the structured-output format.
+        apiParams.output_config = { ...apiParams.output_config, ...plan.output_config };
+        return true;
+      case 'budget':
+        apiParams.thinking = plan.thinking;
+        if (plan.temperature === 'delete') delete apiParams.temperature;
+        else apiParams.temperature = plan.temperature;
+        delete apiParams.top_p;
+        return true;
+    }
   }
 
   /** True when only the catalog knows this model - the adapter table does not list it. */
@@ -764,6 +876,21 @@ export class AnthropicBackend implements ICompletionBackend {
       ...options,
     };
 
+    // Forced tool_choice ('any'/'tool') returns 400 on these models, so a caller's forced choice
+    // becomes auto + strict + an instruction, held fixed for every recursive turn of this request.
+    const forcedToolChoiceSupported = supportsForcedToolChoice(model);
+    const downgradedToolChoice = forcedToolChoiceSupported
+      ? undefined
+      : (options._internal?.downgradedToolChoice ??
+        (options.tools?.length ? downgradeForcedToolChoice(options.tool_choice) : undefined));
+    if (downgradedToolChoice && !options._internal?.downgradedToolChoice) {
+      this.logger.warn('[AnthropicBackend] Forced tool_choice is not supported by this model; sending auto instead', {
+        model,
+        toolName: downgradedToolChoice.toolName,
+      });
+      options = { ...options, _internal: { ...options._internal, downgradedToolChoice } };
+    }
+
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
 
@@ -776,6 +903,14 @@ export class AnthropicBackend implements ICompletionBackend {
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
     const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
+    const accumReasoningTokens = options._internal?.accumReasoningTokens;
+
+    // Running reasoning total plus this turn's count, spread-ready for a CompletionInfo.
+    // Every emit site uses this so the shape can't drift between them. The two tool-loop
+    // handoffs add the turn in directly, since they need the running number itself.
+    const reasoningSoFar = (usage: unknown) =>
+      reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)));
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
@@ -1025,11 +1160,39 @@ export class AnthropicBackend implements ICompletionBackend {
     // Skip if the caller is already using their own tools (let those take
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
-    const usingResponseFormatToolUse = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const wantsJsonSchema = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
+    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
+    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
+    // outputs reject - then the schema goes in the prompt.
+    const citationsBlockFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    const nativeFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+        ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
+        : null;
+    const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
     if (responseFormat) {
       this.logger.info(
-        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, callerTools=${options.tools?.length ?? 0}`
+        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
+    }
+    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+      this.logger.warn(
+        '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
+        {
+          model,
+        }
+      );
+    }
+    if (nativeFormat) {
+      apiParams.output_config = { format: nativeFormat };
+    }
+    const schemaInstruction =
+      usingResponseFormatPrompt && responseFormat ? buildJsonSchemaInstruction(responseFormat) : null;
+    if (schemaInstruction) {
+      apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
       const schemaTool: Tool = {
@@ -1044,8 +1207,14 @@ export class AnthropicBackend implements ICompletionBackend {
     if (options.tools?.length) {
       apiParams.tools = this.formatTools(options.tools);
 
-      // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
-      if (options.tool_choice) {
+      if (downgradedToolChoice) {
+        apiParams.tool_choice = { type: 'auto' };
+        if (downgradedToolChoice.toolName) {
+          apiParams.tools = markToolStrict(apiParams.tools, downgradedToolChoice.toolName);
+        }
+        apiParams.system = appendSystemText(apiParams.system, buildToolUseInstruction(downgradedToolChoice));
+      } else if (options.tool_choice) {
+        // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
         if (options.tool_choice === 'auto') {
           apiParams.tool_choice = { type: 'auto' };
         } else if (options.tool_choice === 'required') {
@@ -1077,21 +1246,28 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking?: { enabled?: boolean; budget_tokens?: number };
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
-      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true;
+      // The forced response_format tool cannot run alongside thinking, so an explicit request falls
+      // through to the reasoningEffort plan below, which only keeps the off switch there.
+      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
 
       if (userThinkingEnabled || isQuestMaster) {
         // Determine budget and effort based on context
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor((options.maxTokens ?? 8192) * 0.25), 4096)
           : (thinkingOptions.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, apiParams.max_tokens ?? 4096, effort);
 
         // Apply thinking config
         apiParams.thinking = result.thinkingConfig.thinking;
         if ('output_config' in result.thinkingConfig && result.thinkingConfig.output_config) {
-          apiParams.output_config = result.thinkingConfig.output_config;
+          // Merged, not assigned: output_config may already carry the structured-output format.
+          apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
         apiParams.max_tokens = result.maxTokens;
 
@@ -1107,6 +1283,24 @@ export class AnthropicBackend implements ICompletionBackend {
 
         this.logger.debug(
           `[AnthropicBackend] ${isQuestMaster ? 'QuestMaster' : 'User'} thinking enabled (${currentModelInfo.thinkingStyle ?? 'legacy'}): max_tokens=${apiParams.max_tokens}, effort=${effort}`
+        );
+      } else if (options.reasoningEffort) {
+        const requested = planReasoningEffort(
+          model,
+          currentModelInfo,
+          options.reasoningEffort,
+          apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
+        );
+        // The synthesized response_format tool is forced via tool_choice, which the API rejects
+        // alongside thinking - so only the off switch survives there. Native structured outputs
+        // (models without forced tool use) carry the format in output_config and keep any level.
+        const plan: ReasoningEffortPlan =
+          usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
+            ? { kind: 'default' }
+            : requested;
+        this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
+        this.logger.debug(
+          `[AnthropicBackend] reasoningEffort=${options.reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
         );
       } else {
         this.isThinkingEnabled = false;
@@ -1133,6 +1327,7 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheTTL: cacheStrategy.cacheTTL,
       });
     }
+    Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));
 
     // The SDK refuses a non-streaming request whose max_tokens implies it could run
     // past its 10-minute ceiling, throwing before any HTTP call is made (see
@@ -1186,6 +1381,16 @@ export class AnthropicBackend implements ICompletionBackend {
             cache_creation_input_tokens?: number;
           }
         | undefined;
+      // Chars this call streamed (text, thinking, tool arguments), read from the catch block too.
+      let streamedOutputChars = 0;
+      // A call stopped or aborted before message_delta (the only event carrying output_tokens) has
+      // no output count, though the provider billed what it streamed. Estimated only on call 2+:
+      // on a first call ChatCompletionProcess falls back to its tokenizer estimate of the whole
+      // reply, and cliCompletions applies the same char estimate itself.
+      const withAbortedOutputEstimate = (usage: AnthropicUsage): AnthropicUsage =>
+        usage?.output_tokens || !accumTurnUsage?.length || streamedOutputChars === 0
+          ? usage
+          : { ...usage, output_tokens: estimateStreamedOutputTokens(streamedOutputChars, model) };
       // This round's answer text, for shouldEndTurnAfterTools.
       let streamedRoundText = '';
       if (options.stream) {
@@ -1431,6 +1636,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_delta') {
                     if ('delta' in event && event.delta.type === 'thinking_delta') {
                       const thinkingText = event.delta.thinking;
+                      streamedOutputChars += thinkingText.length;
                       // Accumulate thinking content in the collected block - kept raw
                       // (unescaped) since this is resent to the API verbatim in tool-use loops.
                       if (collectedContent[event.index]) {
@@ -1445,9 +1651,14 @@ export class AnthropicBackend implements ICompletionBackend {
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
+                      streamedOutputChars += event.delta.text.length;
                       checkDegenerate(event.delta.text);
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, {
+                        toolsUsed: toolsUsed,
+                        ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                      });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
+                      streamedOutputChars += event.delta.partial_json?.length ?? 0;
                       // response_format=json_schema: stream the tool's
                       // input JSON deltas directly to the caller as text. This
                       // is the structured response - the caller can JSON.parse
@@ -1518,13 +1729,28 @@ export class AnthropicBackend implements ICompletionBackend {
                     func[0].name = toolEvent.name;
                     func[0].parameters = JSON.stringify(toolEvent.input);
                     func[0].id = toolEvent.id;
+                  } else if (event.type === 'message_start') {
+                    // Seed the prompt's usage: message_delta is the last event, so a stream cut
+                    // short (Stop, degeneration abort) never sees it, yet the provider still bills
+                    // the prompt. output_tokens is left out because it is a placeholder here; the abort
+                    // emits fill it from streamedOutputChars instead (see withAbortedOutputEstimate).
+                    const startUsage = event.message?.usage;
+                    if (startUsage) {
+                      usageInfo = {
+                        input_tokens: startUsage.input_tokens,
+                        cache_read_input_tokens: startUsage.cache_read_input_tokens ?? undefined,
+                        cache_creation_input_tokens: startUsage.cache_creation_input_tokens ?? undefined,
+                      };
+                      streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
+                    }
                   } else if (event.type === 'message_delta') {
                     // Capture usage information for cache stats and outer-scope
                     // multi-turn accounting (see streamingTurnUsage).
                     if ('usage' in event) {
-                      // MessageDeltaUsage lacks an index signature, so it isn't directly
-                      // assignable to the (pre-existing) Record<string, unknown> local.
-                      usageInfo = event.usage as unknown as Record<string, unknown>;
+                      // Cumulative counts, so they replace message_start's; a null field keeps
+                      // the seeded value rather than erasing it.
+                      const deltaUsage = Object.fromEntries(Object.entries(event.usage).filter(([, v]) => v != null));
+                      usageInfo = { ...usageInfo, ...deltaUsage };
                       streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
                     }
                     // The terminal message_delta carries delta.stop_reason. Keep the
@@ -1552,16 +1778,25 @@ export class AnthropicBackend implements ICompletionBackend {
                   model,
                   charsBeforeAbort: degenerateVerdict.totalChars,
                 });
+                const degenerateUsage = withAbortedOutputEstimate(usageInfo as AnthropicUsage);
                 await cb([], {
                   toolsUsed,
                   stopReason: DEGENERATE_STREAM_STOP_REASON,
                   // Forward the accumulated usage the clean terminal path forwards.
                   // Omitting it drops settlement to the local tokenizer estimate, and a
                   // degenerate turn is the worst case for an estimate: real output is large.
-                  inputTokens:
-                    accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
-                  outputTokens:
-                    accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                  inputTokens: accumInputTokens + (degenerateUsage?.input_tokens ?? 0),
+                  outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens ?? 0),
+                  ...reasoningSoFar(degenerateUsage),
+                  cacheReadInputTokens: totalCacheTokens(
+                    accumCacheReadTokens,
+                    degenerateUsage?.cache_read_input_tokens
+                  ),
+                  cacheCreationInputTokens: totalCacheTokens(
+                    accumCacheWriteTokens,
+                    degenerateUsage?.cache_creation_input_tokens
+                  ),
+                  turnUsage: appendAnthropicTurn(accumTurnUsage, degenerateUsage),
                 });
                 resolve();
                 return;
@@ -1597,13 +1832,19 @@ export class AnthropicBackend implements ICompletionBackend {
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
+                  const abortedUsage = withAbortedOutputEstimate(usageInfo as AnthropicUsage);
                   await cb([], {
                     toolsUsed,
                     stopReason: STREAM_ABORTED_STOP_REASON,
-                    inputTokens:
-                      accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
-                    outputTokens:
-                      accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                    inputTokens: accumInputTokens + (abortedUsage?.input_tokens ?? 0),
+                    outputTokens: accumOutputTokens + (abortedUsage?.output_tokens ?? 0),
+                    ...reasoningSoFar(abortedUsage),
+                    cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, abortedUsage?.cache_read_input_tokens),
+                    cacheCreationInputTokens: totalCacheTokens(
+                      accumCacheWriteTokens,
+                      abortedUsage?.cache_creation_input_tokens
+                    ),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, abortedUsage),
                   });
                   resolve();
                   return;
@@ -1698,7 +1939,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 // accumInputTokens > 0 means this is a continuation turn that
                 // already has prior usage, so missing usage here is expected
                 // for short final turns; only warn on standalone terminal turns.
-                if (!usage && accumInputTokens === 0 && accumOutputTokens === 0) {
+                // output_tokens, not `usage` itself: message_start seeds input before any delta.
+                if (usage?.output_tokens == null && accumInputTokens === 0 && accumOutputTokens === 0) {
                   this.logger.warn(
                     '[AnthropicBackend] Terminal streaming turn ended without usage info from message_delta. ' +
                       'Billing will report 0 tokens for this call. This may indicate an Anthropic API regression.',
@@ -1722,13 +1964,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   cacheStats,
                   inputTokens: accumInputTokens + (usage?.input_tokens || 0),
                   outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+                  ...reasoningSoFar(usage),
                   // Accumulated across tool turns: the provider bills cache per API call.
                   cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCache?.cache_read_input_tokens),
                   cacheCreationInputTokens: totalCacheTokens(
                     accumCacheWriteTokens,
                     usageWithCache?.cache_creation_input_tokens
                   ),
+                  turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCache),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+                  ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                  ...(usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
                   ...(stopReason ? { stopReason } : {}),
                 });
               }
@@ -1776,15 +2022,24 @@ export class AnthropicBackend implements ICompletionBackend {
                     charsBeforeAbort: degenerateVerdict.totalChars,
                     repeats: degenerateVerdict.repeats,
                   });
+                  // `usageInfo` is out of scope in this catch; streamingTurnUsage holds the
+                  // same counts (message_start's prompt usage, since message_delta never came).
+                  const degenerateUsage = withAbortedOutputEstimate(streamingTurnUsage);
                   await cb([], {
                     toolsUsed,
                     stopReason: DEGENERATE_STREAM_STOP_REASON,
-                    // No usage forwarded here: this is the AbortError path, so the
-                    // terminal message_delta that carries provider usage never arrived
-                    // and `usageInfo` is out of scope. The post-loop site above (stream
-                    // ended without throwing) does forward it.
-                    inputTokens: accumInputTokens,
-                    outputTokens: accumOutputTokens,
+                    inputTokens: accumInputTokens + (degenerateUsage?.input_tokens || 0),
+                    outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens || 0),
+                    ...reasoningSoFar(degenerateUsage),
+                    cacheReadInputTokens: totalCacheTokens(
+                      accumCacheReadTokens,
+                      degenerateUsage?.cache_read_input_tokens
+                    ),
+                    cacheCreationInputTokens: totalCacheTokens(
+                      accumCacheWriteTokens,
+                      degenerateUsage?.cache_creation_input_tokens
+                    ),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, degenerateUsage),
                   });
                   resolve();
                 } else if (isIdleTimeout) {
@@ -2074,6 +2329,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 toolsUsed,
                 inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
                 outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                ...reasoningSoFar(streamingTurnUsage),
                 cacheReadInputTokens: totalCacheTokens(
                   accumCacheReadTokens,
                   streamingTurnUsage?.cache_read_input_tokens
@@ -2082,6 +2338,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   accumCacheWriteTokens,
                   streamingTurnUsage?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -2120,6 +2377,11 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
+                  accumTurnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
+                  accumReasoningTokens: addReasoningTokens(
+                    accumReasoningTokens,
+                    reasoningTokensFromUsage(streamingTurnUsage)
+                  ),
                   artifactGuard,
                 },
               },
@@ -2144,11 +2406,13 @@ export class AnthropicBackend implements ICompletionBackend {
               thinking: thinkingBlocks,
               inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+              ...reasoningSoFar(streamingTurnUsage),
               cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, streamingTurnUsage?.cache_read_input_tokens),
               cacheCreationInputTokens: totalCacheTokens(
                 accumCacheWriteTokens,
                 streamingTurnUsage?.cache_creation_input_tokens
               ),
+              turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
             });
           }
           return; // Exit after handling tools
@@ -2274,15 +2538,19 @@ export class AnthropicBackend implements ICompletionBackend {
           toolsUsed: toolsUsed,
           ...(isTerminalTurn
             ? {
+                ...reasoningSoFar(usage),
                 // Accumulated across tool turns: the provider bills cache per API call.
                 cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
                 cacheCreationInputTokens: totalCacheTokens(
                   accumCacheWriteTokens,
                   usageWithCacheNS?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
               }
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
         });
 
         // If there are tool calls, execute them and continue the conversation
@@ -2506,11 +2774,13 @@ export class AnthropicBackend implements ICompletionBackend {
                 toolsUsed,
                 inputTokens: accumInputTokens + (usage?.input_tokens || 0),
                 outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+                ...reasoningSoFar(usage),
                 cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
                 cacheCreationInputTokens: totalCacheTokens(
                   accumCacheWriteTokens,
                   usageWithCacheNS?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -2548,6 +2818,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
+                  accumTurnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
+                  accumReasoningTokens: addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)),
                   artifactGuard,
                 },
               },
@@ -2572,6 +2844,13 @@ export class AnthropicBackend implements ICompletionBackend {
             await cb([null], {
               inputTokens: accumInputTokens + (usage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+              ...reasoningSoFar(usage),
+              cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
+              cacheCreationInputTokens: totalCacheTokens(
+                accumCacheWriteTokens,
+                usageWithCacheNS?.cache_creation_input_tokens
+              ),
+              turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
               toolsUsed,
               thinking: thinkingBlocks,
             });

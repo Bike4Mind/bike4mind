@@ -116,7 +116,6 @@ const GATED_TOOLS: readonly B4MLLMTools[] = [
   'fmp_financial_data',
   'image_generation',
   'edit_image',
-  'music_generation',
   'audio_generation',
   'search_knowledge_base',
 ];
@@ -180,8 +179,8 @@ export async function resolveToolAvailability(
       userId
         ? Promise.all(imageProviders.map(type => getEffectiveApiKey(userId, { type }, dbAdapters)))
         : Promise.resolve<(string | undefined)[]>([]),
-      // music_generation resolves its ElevenLabs key via the same getEffectiveApiKey
-      // path (user key -> admin demo key), so availability must mirror it.
+      // audio_generation sound effects resolve their ElevenLabs key via the same
+      // getEffectiveApiKey path (user key -> admin demo key), so availability must mirror it.
       userId
         ? getEffectiveApiKey(userId, { type: ApiKeyType.elevenlabs }, dbAdapters)
         : Promise.resolve<string | undefined>(undefined),
@@ -251,8 +250,6 @@ export async function resolveToolAvailability(
       image_generation: maybeFailOpen(hasImageKey || isLocalImageBackendAvailable(), taint.imageKeys),
       // No xAI, no local-backend path - see hasEditImageKey's comment above.
       edit_image: maybeFailOpen(hasEditImageKey, taint.imageKeys),
-      // Background-music generation needs an ElevenLabs key (user or admin demo key).
-      music_generation: maybeFailOpen(usable(elevenLabsKey), taint.elevenLabsKey),
       // audio_generation: speech works with OpenAI OR ElevenLabs; sound effects need
       // ElevenLabs. Available when either provider key resolves.
       audio_generation: maybeFailOpen(

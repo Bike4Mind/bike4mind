@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
-import { readJson } from '../http';
+import { readJson } from '../../generationProviders/http';
 import {
   classifyGeminiSubmitFailure,
   fetchGeminiOutput,
@@ -118,11 +118,19 @@ const toPollResult = (operation: Operation): ProviderPollResult => {
   return failed('no_video', operation);
 };
 
+// The fixture recorder gates its writes on this, so a terminal it records as blocked is exactly one this adapter
+// reads as blocked. Keeping the predicate here stops the two from drifting apart.
+export const veoTerminalIsBlocked = (raw: unknown): boolean => {
+  const parsed = OperationSchema.safeParse(raw);
+  return parsed.success && toPollResult(parsed.data).status === 'blocked';
+};
+
 /**
  * Veo 3.1 Fast over the Gemini API long-running-operation path. Every method is one bounded call; the engine
  * owns waiting. No cancel: the docs show no operations cancel for Veo.
  */
 export class VeoVideoProvider implements VideoProvider {
+  readonly mode = 'async' as const;
   readonly id = 'veo' as const;
   readonly models = [MODEL] as const;
 

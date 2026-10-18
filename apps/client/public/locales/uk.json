@@ -30,7 +30,8 @@
     "title": "Změny"
   },
   "feedback": {
-    "send": "Odeslat zpětnou vazbu"
+    "send": "Odeslat zpětnou vazbu",
+    "rollupTitle": "Ваші відгуки"
   },
   "terms_policies": "Podmínky a zásady",
   "login": "Увійти",
@@ -166,7 +167,8 @@
     "messages": "Повідомлення",
     "invites": "Запрошення",
     "sendMessage": "Надіслати повідомлення",
-    "noMessages": "Немає повідомлень"
+    "noMessages": "Немає повідомлень",
+    "title_unread": "Вхідні, є непрочитане"
   },
   "addSomething": "Додати {{ name }}",
   "deleteAllSomething": "Видалити всі {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Renews on {{ date }}"
   },
   "billing": {
-    "title": "Billing"
+    "title": "Оплата",
+    "balance": "Баланс",
+    "credits_heading": "Поповнити кредити",
+    "credits_sub": "Разові пакети, зараховуються на баланс. Підписка не потрібна.",
+    "credits_sub_with_plan": "Разові пакети понад ваш щомісячний ліміт.",
+    "free_plan": "Безкоштовно",
+    "free_plan_detail": "Оплата за використання пакетами кредитів",
+    "low_org": "Адміністратор організації може додати кредити на цей обліковий запис.",
+    "low_with_plan": "Поповніть, щоб працювати до оновлення ліміту.",
+    "low_without_plan": "План додає кредити щомісяця; пакет поповнює одразу.",
+    "payment_failed": "Платіж не пройшов",
+    "plan": "План",
+    "plan_fallback": "Підписка",
+    "plan_unavailable": "Недоступно",
+    "plan_unavailable_detail": "Не вдалося завантажити ваш план.",
+    "plans_change": "Ваш план",
+    "plans_change_sub": "Керуйте підпискою, змінюйте або скасовуйте її.",
+    "plans_heading": "Плани",
+    "plans_heading_sub": "Щомісячні плани з лімітом кредитів.",
+    "plans_upgrade": "Перейти на план",
+    "plans_upgrade_sub": "Отримуйте щомісячний ліміт кредитів замість ручного поповнення.",
+    "retry": "Повторити",
+    "see_plans": "Переглянути плани",
+    "top_up": "Поповнити"
   },
   "credits": {
     "title": "Кредити",
@@ -314,7 +339,8 @@
     "usage_pattern": "Виходячи з вашого шаблону використання за останні {{days}} днів",
     "credits_used": "Використані кредити",
     "credits_purchased": "Кредити придбані",
-    "net_credits": "Чисті кредити"
+    "net_credits": "Чисті кредити",
+    "unit": "кредитів"
   },
   "time": {
     "last_7_days": "Останні 7 днів",
@@ -362,7 +388,15 @@
       "completed": "Завершено",
       "pending": "В ожидании",
       "failed": "Не удалось"
-    }
+    },
+    "buy_pack": "Купити {{credits}} кредитів за {{price}}",
+    "choose_pack": "Виберіть пакет кредитів",
+    "history_usage_hint": "Тут показано лише покупки.",
+    "organization_credits_active": "Кредити організації активні",
+    "rate_per_thousand": "{{rate}} за 1000 кредитів",
+    "see_usage": "Переглянути витрати",
+    "shared_rate": "Усі пакети мають однакову ціну: {{rate}} за 1000 кредитів.",
+    "switch_to_personal": "Перейдіть до особистого облікового запису, щоб купити кредити для особистого використання."
   },
   "settings": {
     "title": "Налаштування",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée. Exécutez des modèles avancés comme Deepseek R1 en toute confidentialité.",
+    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée.",
     "no_free_tier": "AUCUN NIVEAU GRATUIT - CONCENTRÉ SUR LES PROFESSIONNELS.",
     "credits_rollover": "Les crédits non utilisés se reportent pendant 3 mois.",
     "monthly_billing": "Facturation Mensuelle",
@@ -543,7 +577,9 @@
     "personal": "Особистий",
     "business": "Бізнес",
     "team": "Команда",
-    "enterprise": "Підприємство"
+    "enterprise": "Підприємство",
+    "audience_label": "Тип плану",
+    "includes": "Включає"
   },
   "agents": {
     "title": "Агенти",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Навички",
     "command_palette_description": "Керування шаблонами інструкцій для повторного використання"
+  },
+  "apiKeys": {
+    "title": "API-ключі"
+  },
+  "connections": {
+    "menuTooltip": "Інтеграції, як-от Google Drive і Slack, а також API-ключі для вашого коду",
+    "sections": "Розділи підключень",
+    "title": "Підключення"
   }
 }

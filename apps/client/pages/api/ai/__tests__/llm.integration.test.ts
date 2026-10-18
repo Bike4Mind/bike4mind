@@ -400,20 +400,21 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
-  describe('audit attribution of a tool-driven lake write', () => {
-    const invokedApiKeyId = () => (mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId;
+  describe('turn auth handed to the tools', () => {
+    const invoked = () => mockInvoke.mock.calls[0][0] as { authOrigin?: string; apiKeyId?: string };
 
-    it('hands invoke() the authenticating key id', async () => {
+    it('hands invoke() an apiKey origin and the authenticating key id', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
       const { req, res } = fire();
       await handler(req, res);
-      expect(invokedApiKeyId()).toBe('k1');
+      expect(invoked()).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
     });
 
-    it('ignores a client-supplied apiKeyId, so a browser caller cannot forge one', async () => {
-      const { req, res } = fire({ apiKey: null, body: { apiKeyId: 'forged' } });
+    it('ignores a client-supplied apiKeyId or authOrigin, so a browser caller cannot forge either', async () => {
+      const { req, res } = fire({ apiKey: null, body: { apiKeyId: 'forged', authOrigin: 'apiKey' } });
       await handler(req, res);
-      expect(invokedApiKeyId()).toBeUndefined();
+      expect(invoked().authOrigin).toBe('session');
+      expect(invoked().apiKeyId).toBeUndefined();
     });
   });
 

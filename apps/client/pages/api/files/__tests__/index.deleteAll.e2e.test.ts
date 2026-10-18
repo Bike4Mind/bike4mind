@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { KnowledgeType, Permission } from '@bike4mind/common';
@@ -39,8 +40,9 @@ let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
   await import('../index');
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {

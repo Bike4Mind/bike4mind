@@ -13,9 +13,11 @@ import {
   apiSeedLakeArticle,
   apiUpdateDataLake,
   apiSetDataLakeVisibility,
+  apiListResearchConfigs,
   type DataLake,
 } from './helpers/api';
 import { getTestUsers } from './helpers/test-users';
+import type { DataLakePage } from './pages/DataLakePage';
 
 const RUN = Date.now().toString().slice(-6);
 const FIXTURE = path.resolve(__dirname, 'fixtures/uploads/recipe.txt');
@@ -453,6 +455,97 @@ test.describe('Data Lake - settings', () => {
 
     // The seeded spec user has no team org, so promotion to "Organization" is not offered.
     await expect(dataLakePage.orgVisibilityRadioInput).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Research config quick picks (Quick / Standard / Deep, rest behind Advanced)
+// ---------------------------------------------------------------------------
+test.describe('Data Lake - research presets', () => {
+  async function openNewResearchForm(dataLakePage: DataLakePage, lakeId: string) {
+    await dataLakePage.openLakeInManager(lakeId);
+    await dataLakePage.openSettings(lakeId);
+    const modal = dataLakePage.settingsModal;
+    await modal.getByTestId('datalake-settings-tab-research').click();
+    await modal.getByTestId('datalake-research-new-btn').click();
+    await expect(modal.getByTestId('datalake-research-form')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    return modal;
+  }
+
+  test('a new config opens on Quick with Advanced folded, and each pick sets the levers together', async ({
+    request,
+    dataLakePage,
+  }) => {
+    const lake = await seedLake(request, ownerToken(), {
+      name: `E2E Research Presets ${RUN}`,
+      fileTagPrefix: `e2erpre${RUN}:`,
+    });
+    const modal = await openNewResearchForm(dataLakePage, lake.id);
+    const preset = (id: string) => modal.getByTestId(`datalake-research-preset-${id}`);
+    const advanced = modal.getByTestId('datalake-research-advanced');
+    const summary = modal.getByTestId('datalake-research-preset-summary');
+
+    await expect(preset('quick')).toHaveAttribute('aria-pressed', 'true');
+    await expect(advanced).toBeHidden();
+    await expect(summary).toContainText('10 search results and 5 proposals per run');
+    await expect(summary).toContainText('$0.05 ceiling');
+
+    await preset('standard').click();
+    await expect(preset('standard')).toHaveAttribute('aria-pressed', 'true');
+    await expect(summary).toContainText('25 search results and 10 proposals per run');
+    await expect(summary).toContainText('$0.25 ceiling');
+
+    await modal.getByTestId('datalake-research-advanced-toggle').click();
+    await expect(advanced).toBeVisible();
+    await expect(modal.getByTestId('datalake-research-max-results-input')).toHaveValue('25');
+    await expect(modal.getByTestId('datalake-research-max-proposals-input')).toHaveValue('10');
+    await expect(modal.getByTestId('datalake-research-cost-ceiling-input')).toHaveValue('0.25');
+
+    await preset('deep').click();
+    await expect(preset('deep')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByTestId('datalake-research-max-results-input')).toHaveValue('50');
+    await expect(modal.getByTestId('datalake-research-max-proposals-input')).toHaveValue('25');
+    await expect(modal.getByTestId('datalake-research-cost-ceiling-input')).toHaveValue('1');
+    await expect(summary).toContainText('$1.00 ceiling');
+
+    await dataLakePage.fillMuiInput(modal.getByTestId('datalake-research-max-results-input'), '30');
+    // Joy drops aria-pressed entirely (not "false") while the group value is null, so assert
+    // only that no preset reads as pressed.
+    for (const id of ['quick', 'standard', 'deep']) {
+      await expect(preset(id)).not.toHaveAttribute('aria-pressed', 'true');
+    }
+    await expect(summary).toContainText('Custom settings');
+  });
+
+  test('a config saved on Standard persists its levers and reopens on Standard, folded', async ({
+    request,
+    dataLakePage,
+  }) => {
+    const token = ownerToken();
+    const lake = await seedLake(request, token, {
+      name: `E2E Research Save ${RUN}`,
+      fileTagPrefix: `e2ersav${RUN}:`,
+    });
+    const modal = await openNewResearchForm(dataLakePage, lake.id);
+    const name = `E2E Standard ${RUN}`;
+
+    await dataLakePage.fillMuiInput(modal.getByTestId('datalake-research-name-input'), name);
+    await modal.getByTestId('datalake-research-query-input').fill('Recent bread recipes');
+    await modal.getByTestId('datalake-research-preset-standard').click();
+    await modal.getByTestId('datalake-research-save-btn').click();
+
+    const row = modal.getByTestId('datalake-research-config-row').filter({ hasText: name });
+    await expect(row.getByTestId('datalake-research-config-limits')).toContainText('Up to 10 proposals', {
+      timeout: TIMEOUTS.VISIBLE,
+    });
+    await expect(row.getByTestId('datalake-research-config-limits')).toContainText('$0.25 ceiling');
+
+    const saved = (await apiListResearchConfigs(request, token, lake.id)).find(c => c.name === name);
+    expect(saved).toMatchObject({ maxResults: 25, maxProposals: 10, costCeilingMicroUsd: 250_000 });
+
+    await row.getByTestId('datalake-research-edit-btn').click();
+    await expect(modal.getByTestId('datalake-research-preset-standard')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByTestId('datalake-research-advanced')).toBeHidden();
   });
 });
 

@@ -31,6 +31,10 @@ vi.mock('@bike4mind/database', () => ({
   TERMINAL_QUEST_STATUSES: ['done', 'stopped'],
 }));
 
+vi.mock('@server/utils/storage', () => ({
+  getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
+}));
+
 vi.mock('@server/utils/ssrfProtection', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/ssrfProtection')>();
   return {
@@ -40,7 +44,7 @@ vi.mock('@server/utils/ssrfProtection', async importOriginal => {
 });
 
 import { dispatch } from './generationCallback';
-import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { SsrfError } from '@server/utils/ssrfProtection';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() } as never;
@@ -200,8 +204,7 @@ describe('generationCallback dispatch', () => {
     });
   });
 
-  it('carries CDN-qualified files in the body when NEXT_PUBLIC_CDN_URL is set', async () => {
-    vi.stubEnv('NEXT_PUBLIC_CDN_URL', 'https://cdn.example.com');
+  it('carries presigned files in the body', async () => {
     h.findById.mockResolvedValue(makeQuest({ images: ['render.png', 'clip.mp4'] }));
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     stubFetch(fetchMock);
@@ -213,14 +216,14 @@ describe('generationCallback dispatch', () => {
     expect(body.files).toEqual([
       {
         name: 'render.png',
-        url: 'https://cdn.example.com/generated/render.png',
+        url: 'https://signed.example.invalid/render.png',
         isImage: true,
         isAudio: false,
         isVideo: false,
       },
       {
         name: 'clip.mp4',
-        url: 'https://cdn.example.com/generated/clip.mp4',
+        url: 'https://signed.example.invalid/clip.mp4',
         isImage: false,
         isAudio: false,
         isVideo: true,

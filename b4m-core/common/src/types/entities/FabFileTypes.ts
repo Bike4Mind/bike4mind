@@ -2,6 +2,7 @@ import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
+import type { StorageUsageGroup } from '../../storageBreakdown';
 
 // Define a type for the MIME types
 export type MimeType =
@@ -63,9 +64,12 @@ export enum FabFileSourceType {
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
-   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
-   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
-   * is not the top-level `sessionId`.
+   * Produced by a generator: an in-chat tool, a generation route or a generation job. Media saved
+   * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
+   * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
+   * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
 }
@@ -258,7 +262,11 @@ export interface IFabFile {
   mimeType: string;
 
   /**
-   * The organization ID that the file is associated with
+   * The organization that OWNS this file for storage accounting and file-owner scoped settings
+   * (scopeForFileOwner); absent means the uploading user owns it. Stamped at creation from the
+   * org-owned lakes the file is created into (pickOwnerOrganizationId) - never from a
+   * caller-supplied or "currently selected" org, which is a display preference, not ownership.
+   * Later lake membership changes do not re-stamp it.
    */
   organizationId?: string;
 
@@ -467,7 +475,8 @@ export interface IFabFile {
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
    * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
    * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
-   * predate it.
+   * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
+   * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
    */
   storageChargedAt?: Date;
 
@@ -971,6 +980,7 @@ export type DataLakeMembershipScope =
 export interface DataLakeSweptFile {
   id: string;
   userId: string;
+  /** Charged bytes (`chargedBytes`), not the raw `fileSize`: 0 for a row that was never charged. */
   fileSize: number;
 }
 
@@ -1133,6 +1143,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   sumFileSizeByUserId(userId: string): Promise<number>;
 
   /**
+   * The same charged rows `sumFileSizeByUserId` sums, grouped by provenance (see StorageUsageGroup).
+   * `maxTimeMS` bounds the aggregate for users with very large file counts.
+   */
+  summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
+
+  /**
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
+   */
+  findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
+   * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
+   * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
+   * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.
+   */
+  commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter?: Record<string, unknown>
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
    * Find a file by its ID and the user's ID.
    * @param id - The ID of the file.
    * @param userId - The ID of the user.
@@ -1254,6 +1288,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
+      generated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },
@@ -1939,6 +1975,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope,
     embeddingModel: string
   ): Promise<{ id: string; userId: string }[]>;
+  /** Whether any live file on the deployment carries vectors labelled with `embeddingModel`. */
+  hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
@@ -1988,6 +2026,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "rebuild done" from "some files gave up".
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

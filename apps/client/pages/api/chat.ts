@@ -27,6 +27,7 @@ import {
   agentRepository,
   fabFileRepository,
   projectRepository,
+  questRepository,
   sessionRepository,
   User,
   Session,
@@ -35,8 +36,11 @@ import {
   B4MLLMTools,
   chatContract,
   filterKnownTools,
+  GatewayTimeoutError,
+  REQUEST_TIMEOUT_ERROR_CODE,
   questReplyText,
   toToolPayloads,
+  type ChatToolMode,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -48,6 +52,13 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@server/auth/turnAuth';
+import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
+import {
+  TIMED_OUT_RUN,
+  applyRecoveryInMemory,
+  terminalRecoveryFor,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { hiddenSurfaceToolNames } from '@server/utils/hiddenSurfaceTools';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
@@ -63,10 +74,11 @@ const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  const requestStartedAt = Date.now();
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
 
@@ -195,13 +207,14 @@ const handler = nextRouteForContract(chatContract, {
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
+  const turnAuth = requestTurnAuth(req);
   let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
   try {
     quest = await invokeService.invoke({
       body: internalRequest,
       userId: req.user.id,
-      // Attributes a lake write a tool drives this turn to the key rather than its owner.
-      apiKeyId: req.apiKeyInfo?.keyId,
+      // The key (when one authenticated the turn) also attributes a lake write a tool drives.
+      ...turnAuth,
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -229,34 +242,95 @@ const handler = nextRouteForContract(chatContract, {
 
     apiTimer.phase('process');
     const processService = new ChatCompletionProcess(chatCompletionOptions);
-    await processService.process({
-      body: {
-        ...internalRequest,
-        questId: quest.id,
-        userId: req.user.id,
-        // Mirrors the apiKeyId handed to invoke() above: process() reads the tool context's key
-        // from this body only, so without it a key turn reaches tools as a signed-in session.
-        apiKeyId: req.apiKeyInfo?.keyId,
-        embeddingModel: currentEmbeddingModel,
-        queryComplexity: 'simple',
-        // Optional schema fields - declared for QuestStartBodySchema type conformance
-        dashboardParams: undefined,
-        questMaster: undefined,
-        researchMode: undefined,
-        imageConfig: undefined,
-      },
-      logger: req.logger,
-      // Pass quest from invoke to skip redundant DB read
-      prefetchedQuest: quest,
-      // Pass session from invoke to skip redundant DB read
-      prefetchedSession: invokeService.prefetchedSession,
-      // Pass organization from invoke to skip redundant DB read
-      prefetchedOrganization: invokeService.prefetchedOrganization,
-      // Premium overlay tool implementations: a session whose enabledTools
-      // include premium names (set server-side at create) needs the merge or
-      // those tools silently no-op on this synchronous path.
-      externalTools: premiumLlmTools,
-    });
+    const turn = await runWithDeadline(
+      abortSignal =>
+        processService.process({
+          body: {
+            ...internalRequest,
+            questId: quest.id,
+            userId: req.user.id,
+            // Mirrors invoke() above: process() reads the tool context's auth from this body only.
+            ...turnAuth,
+            embeddingModel: currentEmbeddingModel,
+            queryComplexity: 'simple',
+            // Optional schema fields - declared for QuestStartBodySchema type conformance
+            dashboardParams: undefined,
+            questMaster: undefined,
+            researchMode: undefined,
+            imageConfig: undefined,
+          },
+          logger: req.logger,
+          // Pass quest from invoke to skip redundant DB read
+          prefetchedQuest: quest,
+          // Pass session from invoke to skip redundant DB read
+          prefetchedSession: invokeService.prefetchedSession,
+          // Pass organization from invoke to skip redundant DB read
+          prefetchedOrganization: invokeService.prefetchedOrganization,
+          // Premium overlay tool implementations: a session whose enabledTools
+          // include premium names (set server-side at create) needs the merge or
+          // those tools silently no-op on this synchronous path.
+          externalTools: premiumLlmTools,
+          abortSignal,
+        }),
+      { budgetMs: WAIT_TURN_BUDGET_MS - (Date.now() - requestStartedAt), windDownMs: WAIT_TURN_WIND_DOWN_MS }
+    );
+
+    // successStatus() yields 'stopped' once the turn is aborted, so an in-memory 'done' means the
+    // full answer was produced before the abort landed (the fenced final save may have dropped it).
+    const finishedBeforeAbort =
+      turn.outcome === 'aborted' && turn.error === undefined && quest.status === 'done' && quest.type !== 'error';
+    if (finishedBeforeAbort) {
+      const settled = await questRepository.settleIfUnfinished(quest.id, {
+        status: quest.status,
+        reply: quest.reply,
+        replies: quest.replies,
+        fallbackInfo: quest.fallbackInfo,
+      });
+      req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} finished before the deadline abort landed`, {
+        settled,
+      });
+    }
+
+    if (turn.outcome !== 'completed' && !finishedBeforeAbort) {
+      // After the abort, process() no longer writes the quest (its saves are fenced), so the
+      // terminal state is settled here from what streamed. An aborted turn already refunded or
+      // reconciled its own reservation; a stuck one never reached that code, so it is refunded here.
+      if (turn.outcome === 'stuck') await processService.releaseReservedCredits(quest.id, req.logger);
+      // Judge emptiness from the persisted row, not the in-memory quest: once aborted, saves are
+      // fenced, so content a tool added to memory after the last save is never written - judging from
+      // memory would skip the timeout error and leave a `done` row with nothing to render. Falls back
+      // to the in-memory quest when the row cannot be read.
+      //
+      // The text is the exception: the recovery patch writes `reply`/`replies` from whatever it is
+      // given, and the row is only a heartbeat snapshot up to 10s stale, so taking the text from it
+      // would drop the tail that streamed since (or replace a short answer with the timeout error).
+      // Keep the in-memory text and take only the fields the patch cannot write from the row.
+      const persistedQuest = await questRepository.findById(quest.id).catch(() => null);
+      const recovery = terminalRecoveryFor(
+        { ...(persistedQuest ?? quest), reply: quest.reply, replies: quest.replies },
+        TIMED_OUT_RUN
+      );
+      const settled = await questRepository.settleIfUnfinished(quest.id, recovery);
+      req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} ran past its deadline`, {
+        outcome: turn.outcome,
+        settled,
+        ...(turn.outcome === 'aborted' && turn.error !== undefined && { error: turn.error }),
+      });
+      if (settled) {
+        // process()'s own final push on a caller abort sent the still-running quest.
+        applyRecoveryInMemory(quest, recovery);
+        await processService
+          .sendStatusUpdate(quest, null, { skipPayloadOptimization: true })
+          .catch(err => req.logger.warn(`Failed to push settled timeout state for quest ${quest.id}`, { err }));
+      }
+      const timeoutError = new GatewayTimeoutError(
+        'This turn ran past the wait=true deadline and was ended. Send long turns without wait and poll the quest.',
+        { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id, sessionId }
+      );
+      // A deadline we enforce on purpose, not a server fault: errorHandler logs it at warn.
+      timeoutError.expected = true;
+      throw timeoutError;
+    }
 
     // Use the in-memory quest directly - process() mutates it in place with
     // reply, replies, status, promptMeta. No need to re-fetch from DB.
@@ -280,7 +354,7 @@ const handler = nextRouteForContract(chatContract, {
       sessionId,
       message_received: true,
       timestamp: new Date().toISOString(),
-      model: internalRequest.params.model,
+      model: completedQuest.promptMeta?.model?.name ?? internalRequest.params.model,
       response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
@@ -318,7 +392,8 @@ const handler = nextRouteForContract(chatContract, {
     sessionId,
     message_received: true,
     timestamp: new Date().toISOString(),
-    model: internalRequest.params.model,
+    // invoke swaps a retired id for its successor; report the model the turn runs on.
+    model: quest.promptMeta?.model?.name ?? internalRequest.params.model,
     message: 'Message queued for processing. Use the quest ID to check status.',
     ...(toolMeta && { tools: toolMeta }),
     tracking_info: {
@@ -352,7 +427,7 @@ function buildToolMeta({
   autoSelectedTools,
   unrecognizedTools,
 }: {
-  toolMode: 'fast' | 'smart' | undefined;
+  toolMode: ChatToolMode | undefined;
   effectiveTools: B4MLLMTools[] | undefined;
   autoSelectedTools: B4MLLMTools[];
   unrecognizedTools: string[];
@@ -500,6 +575,7 @@ function transformToInternalFormat(
     fabFileIds: [], // Empty by default, clients can use the full API for fab files
     messageFileIds: request.fileIds,
     organizationId, // Include for team-wide system prompts
+    toolMode: request.toolMode,
     params: {
       model: request.model,
       // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.

@@ -15,7 +15,7 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
         estimateTtsCreditCost: vi.fn(),
         assertPreflightCredits: vi.fn(),
         deductTtsCredits: vi.fn(),
-        persistGeneratedAudio: vi.fn(),
+        saveGeneratedAssetToFiles: vi.fn(),
         upload: vi.fn(),
         getSignedUrl: vi.fn(),
       },
@@ -71,8 +71,8 @@ vi.mock('@server/utils/creditPreflight', () => ({
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/persistGeneratedAudio', () => ({
-  persistGeneratedAudio: (...a: unknown[]) => mocks.persistGeneratedAudio(...a),
+vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+  saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
@@ -86,10 +86,7 @@ vi.mock('@server/utils/storage', () => ({
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
 import handler from '../tts';
 
-const run = (
-  body: Record<string, unknown>,
-  user: { id?: string; preferences?: { saveGeneratedAudio?: boolean } } | undefined = { id: 'u1' }
-) => {
+const run = (body: Record<string, unknown>, user: { id?: string } | undefined = { id: 'u1' }) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -119,9 +116,10 @@ beforeEach(() => {
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
-  mocks.persistGeneratedAudio.mockResolvedValue({
+  mocks.saveGeneratedAssetToFiles.mockResolvedValue({
     saved: true,
-    fabFileId: 'fab-1',
+    fileId: 'fab-1',
+    s3Key: 'k/speech-1.mp3',
     fileName: 'speech-1.mp3',
     fileUrl: 'https://s3/get',
   });
@@ -220,7 +218,7 @@ describe('POST /api/ai/tts', () => {
     it('offloads an unsaved binary response and redirects with a 303', async () => {
       const { res, promise } = run({ text: 'hi', preview: true });
       await promise;
-      expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
       expect(mocks.upload).toHaveBeenCalledWith(
         oversizedAudio,
         expect.stringMatching(/^generated-audio-offload\/.+\.mp3$/),
@@ -344,24 +342,59 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
   });
 
-  it('persists the audio by default and surfaces the saved reference in the base64 body', async () => {
+  it('saves the audio by default and surfaces the saved reference in the base64 body', async () => {
     const { res, promise } = run({ text: 'hello', encoding: 'base64' });
     await promise;
-    expect(mocks.persistGeneratedAudio).toHaveBeenCalledTimes(1);
-    expect(mocks.persistGeneratedAudio).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'tts' }));
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      {
+        userId: 'u1',
+        bytes: expect.any(Buffer),
+        contentType: 'audio/mpeg',
+        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+      },
+      expect.anything()
+    );
     expect(res._getJSONData()).toMatchObject({ saved: true, fabFileId: 'fab-1', fileUrl: 'https://s3/get' });
+  });
+
+  it('records the requested voice and language so the settings can be reused', async () => {
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1', languageCode: 'ja' });
+    await promise;
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ voice: 'v-1', languageCode: 'ja' }) }),
+      expect.anything()
+    );
+  });
+
+  it('drops the requested voice when another provider stood in', async () => {
+    okSynthesis('openai', 'elevenlabs');
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1' });
+    await promise;
+    const [{ generation }] = mocks.saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('voice');
+  });
+
+  it('records the vendor that actually produced the audio when a fallback was used', async () => {
+    okSynthesis('elevenlabs', 'openai');
+    const { promise } = run({ text: 'hello' });
+    await promise;
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ provider: 'elevenlabs' }) }),
+      expect.anything()
+    );
   });
 
   it('skips persistence for a throwaway preview (preview: true)', async () => {
     const { res, promise } = run({ text: 'hi', preview: true });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
   });
 
-  it('skips persistence when the user opted out (saveGeneratedAudio: false)', async () => {
-    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } });
+  it('always saves a non-preview call regardless of any stored user preference', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } } as never);
     await promise;
-    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
   });
 });

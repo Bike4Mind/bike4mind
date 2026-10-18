@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
@@ -70,7 +70,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 
-import { cacheRepository } from '@bike4mind/database';
+import { Cache, cacheRepository } from '@bike4mind/database';
 import handler, { DAILY_REPORT_RATE_LIMIT as ROUTE_LIMIT } from '@pages/api/users/report';
 
 // The route's own window, and the ceiling Retry-After has to fall under.
@@ -90,6 +90,10 @@ let dayOfMonth = 0;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // The limiter's fresh-window claim is an upsert that relies on Cache's unique `key` index to reject a
+  // second counter doc. Mongoose builds it in the background after connect, so wait for it or a fast
+  // run inserts a duplicate, reads as allowed, and leaves the index build failed for the retries too.
+  await Cache.init();
 });
 
 afterAll(async () => {
@@ -137,6 +141,10 @@ const fillWindow = async (userId: string, times: number) => {
 };
 
 describe('POST /api/users/report - per-principal rate limit', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   /**
    * Deliberately one test rather than one per claim. The route's window and this file's
    * testTimeout are both 60s, and `testTimeout` is per-test: an exhausted window carried across
@@ -145,7 +153,9 @@ describe('POST /api/users/report - per-principal rate limit', () => {
    * roll before the timeout fires, so a slow run goes red instead of green-for-the-wrong-reason.
    */
   it('serves the last request inside the window, then 429s that principal only', async () => {
-    // Read before the first request, so it is never later than the window the limiter opens.
+    // Only Date is faked (Mongo/network timers stay real): the window is read from Date, so pinning
+    // it stops a contended runner from rolling the 60s window over mid-test.
+    vi.useFakeTimers({ toFake: ['Date'] });
     const windowOpenedAt = Date.now();
     // One short of the limit, so the route's own request is the one that fills it - a limiter
     // that refused early, or an off-by-one, fails here rather than passing quietly.
@@ -157,6 +167,8 @@ describe('POST /api/users/report - per-principal rate limit', () => {
     // the refusal rather than about the stub never being reachable.
     expect(mockRefs.generateDailyReport).toHaveBeenCalledTimes(1);
 
+    // Explicit elapsed time for the Retry-After assertion below.
+    vi.setSystemTime(windowOpenedAt + 10_000);
     mockRefs.generateDailyReport.mockClear();
     const limited = await callAs(EXHAUSTED_USER);
     expect(limited._getStatusCode()).toBe(429);

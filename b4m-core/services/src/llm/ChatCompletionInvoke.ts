@@ -1,4 +1,6 @@
 import {
+  assertAuthOriginMatchesApiKey,
+  type AuthOrigin,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
   isPromptMetaModelType,
@@ -18,12 +20,13 @@ import {
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
 
@@ -78,13 +81,18 @@ export class ChatCompletionInvoke {
   public async invoke({
     body,
     userId,
+    authOrigin,
     apiKeyId,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
+    /** Decided by the door from how it authenticated the request (see ToolContext.authOrigin). */
+    authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
   }) {
+    // Fail at the door, not later in the worker that builds the tools.
+    assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
     const now = new Date();
 
     const {
@@ -103,6 +111,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      disableUserIntegrations,
       skipReplyChoices,
       deniedTools,
       systemPrompt,
@@ -122,6 +131,7 @@ export class ChatCompletionInvoke {
       correctsQuestId,
       allowedAgents,
       enableSlackTools,
+      toolMode,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -179,7 +189,22 @@ export class ChatCompletionInvoke {
     if (!modelInfo) {
       throw new InternalServerError('No available models found');
     }
-    const model = modelInfo.find(m => m.id === params.model);
+    // Resolve before the availability checks: a pinned model that is now hidden or disabled is
+    // absent from (or inert in) the catalog, so ChatCompletionProcess never gets to redirect it.
+    // The warning-free variant, because Process still resolves params.model and owns the
+    // [model-sunset] log and metric; calling the logging one here would count each redirect twice.
+    const resolvedModelId = resolveSuccessorChain(params.model);
+    // API-key callers keep the provider convention: a retired id that is hidden or disabled is
+    // rejected (naming its successor), not rerouted. Access below is still checked on the id that runs.
+    if (authOrigin === 'apiKey' && resolvedModelId !== params.model) {
+      const requested = modelInfo.find(m => m.id === params.model);
+      if (!requested || requested.disabled) {
+        throw new BadRequestError(
+          `Invalid model: "${params.model}" is not available; it is replaced by "${resolvedModelId}"`
+        );
+      }
+    }
+    const model = modelInfo.find(m => m.id === resolvedModelId);
     if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
@@ -191,22 +216,20 @@ export class ChatCompletionInvoke {
       );
     }
 
-    // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
-    // cast. A completion legitimately resolves to text, image or video - the media backends run
-    // through this same path - and speech-to-text is the one catalog type it cannot: that is served
-    // by the transcription route, and dispatching it here would fail at the provider with a raw
-    // error, so reject it up front like a disabled model. An ABSENT type is a separate case and
-    // must not fail the turn: the field is declared required but assembled from discovery feeds and
-    // cached catalog rows, so it degrades to unrecorded and resolveQuestModelType falls back.
-    const modelType = isPromptMetaModelType(model.type) ? model.type : undefined;
-    if (model.type && !modelType) {
+    // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text,
+    // image or video - the media backends run through this same path - and speech-to-text is the
+    // one catalog type it cannot: that is served by the transcription route, and dispatching it
+    // here would fail at the provider with a raw error, so reject it up front like a disabled model.
+    // An ABSENT type is a separate case and must not fail the turn: the field is declared required
+    // but assembled from discovery feeds and cached catalog rows, so it degrades to unrecorded and
+    // resolveQuestModelType falls back.
+    if (model.type && !isPromptMetaModelType(model.type)) {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
     }
 
     // Start sessions.update early (will await later in parallel with admin settings)
     const sessionUpdatePromise = this.db.sessions.update({
       id: sessionId,
-      lastUsedModel: model.id,
       lastUpdated: now,
       updatedAt: now,
     });
@@ -214,18 +237,7 @@ export class ChatCompletionInvoke {
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
-        name: model.id,
-        type: modelType,
-        backend: model?.backend,
-        contextWindow: model?.contextWindow,
-        maxTokens: model?.max_tokens,
-        canStream: model?.can_stream,
-        canThink: model?.can_think,
-        supportsVision: model?.supportsVision,
-        supportsTools: model?.supportsTools,
-        supportsImageVariation: model?.supportsImageVariation,
-        supportsSafetyTolerance: model?.supportsSafetyTolerance,
-        trainingCutoff: model?.trainingCutoff,
+        ...buildPromptMetaModel(model),
         parameters: {
           temperature: params.temperature,
           topP: params.top_p,
@@ -285,6 +297,9 @@ export class ChatCompletionInvoke {
           : []),
         { status: 'Received by backend', timestamp: now },
       ],
+      ...(toolMode ? { toolMode } : {}),
+      // Drives the "is unavailable; answering with" status line in ChatCompletionProcess.
+      ...(model.id !== params.model ? { redirectedFrom: params.model } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is
@@ -404,7 +419,7 @@ export class ChatCompletionInvoke {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
-      const originalModel = params?.model;
+      const originalModel = model.id;
 
       // Check if primary model is accessible
       const modelToUse = originalModel;
@@ -464,8 +479,10 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        disableUserIntegrations,
         skipReplyChoices,
         deniedTools,
+        authOrigin,
         apiKeyId,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
@@ -492,6 +509,12 @@ export class ChatCompletionInvoke {
       if (this.invokeLambda && this.questStartParams) {
         this.logger.info('🌍 [SERVER] invokeLambda start:', new Date().toISOString());
         await this.invokeLambda(this.questStartParams);
+        // Pinned only after the access check and dispatch: a model that cannot run must not stick to the session.
+        if (session.lastUsedModel !== model.id) {
+          await this.db.sessions
+            .update({ id: sessionId, lastUsedModel: model.id })
+            .catch(error => this.logger.warn(`Failed to pin ${model.id} to session ${sessionId}`, error));
+        }
       } else {
         throw new InternalServerError('No invokeLambda function provided');
       }
@@ -509,11 +532,13 @@ export class ChatCompletionInvoke {
       };
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       await this.db.quests.update({
         id: quest.id,
         promptMeta: quest.promptMeta,
         type: quest.type,
+        status: quest.status,
         reply: quest.reply,
       });
     }

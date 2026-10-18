@@ -39,8 +39,8 @@ import {
   postSreRateLimitedMessage,
   postSreAnalysisFailureMessage,
 } from '@server/integrations/slack/sreSlackApproval';
-import { escalateRecurrence } from '@server/integrations/sre/escalation';
-import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@server/integrations/sre/wontFixComment';
+import { escalateRecurrence } from '@workers/integrations/sre/escalation';
+import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
 
 /**
  * Core analysis logic (Diagnostician), decoupled from the Lambda entrypoint so

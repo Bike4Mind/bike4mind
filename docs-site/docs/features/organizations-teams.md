@@ -1,304 +1,73 @@
 ---
-title: "Organizations & Team Management"
-description: "Comprehensive guide to Bike4Mind's enterprise collaboration features including organizations, team management, billing, and permissions"
+title: "Teams"
+description: "How Teams work in Bike4Mind: creating a team, what it costs, how many people and credits it includes, who pays for usage, and how to manage members and roles"
 sidebar_position: 7
-tags: [organizations, teams, collaboration, enterprise]
+tags: [organizations, teams, collaboration]
 ---
 
-# Organizations & Team Management 🏢
+# Teams
 
-Bike4Mind provides sophisticated **enterprise-grade organization and team management** capabilities that enable seamless collaboration, role-based access control, and scalable billing for teams of any size.
+A Team is a shared workspace for a group of people. Everyone on a Team draws from one shared pool of credits, and the Team owner manages the subscription, the seats and the members.
 
-## 🎯 **Overview**
+## Open the Teams page
 
-Organizations in Bike4Mind are **collaborative workspaces** that allow teams to:
-- **Share knowledge and projects** across team members
-- **Manage permissions** with granular role-based access control
-- **Collaborate on AI sessions** and file processing
-- **Track team usage** and billing through integrated subscription management
-- **Scale seamlessly** from small teams to large enterprises
+Open the account menu in the sidebar and choose **Teams**. The page lists every Team you belong to. Each card shows the Team name, whether it is a personal or shared team, the number of seats, the number of members, the credits, and the subscription status (Active Subscription, No Subscription or Payment Issue). Use **View Details** to open a Team, or the search box to filter the list.
 
----
+## Create a Team
 
-## 🚀 **Getting Started with Organizations**
+1. On the Teams page, click **Create Team**.
+2. In the **Create New Team** dialog, type a **Team Name**.
+3. Under **People on the plan**, type a number or use the minus and plus buttons to pick how many people the plan covers. It starts at 4, the number of people one flat price covers, so a team of two or three leaves it at 4 and pays the same. Raise it only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change. If you type a number outside the range, the field shows a "Must be between" error and **Create Team** stays disabled until you fix it. A decimal such as 7.4 is rounded to the nearest whole number. If you need a PO, invoice or other custom billing, use the **Contact us** link in the dialog, which opens the Bike4Mind support page in a new tab.
+4. Read the **Total Price** line, which shows the monthly total for the number you picked.
+5. Click **Create Team**. You are sent to a secure checkout to pay for the subscription.
 
-### **Creating Your First Organization**
+If the dialog says that Team pricing is unavailable, the price could not be loaded. Nothing is charged; try again later.
 
-1. **Navigate to Organizations**
-   - Go to `/organizations` or click the Organizations link in your navigation
-   - Click **"Create Team"** to start a new organization
+### What the plan includes
 
-2. **Choose Your Plan**
-   - **Personal Organization** - For individual use with basic sharing
-   - **Team Organization** - For collaborative teams with full features
+- **Price:** the price per seat is loaded live from the payment provider, so it is not written here. The dialog shows the monthly total for your chosen number of seats, and the Billing tab shows the price per seat per month.
+- **People included:** the flat price covers up to 4 people, and you don't have to fill them: a pair or a trio pays the same. Each seat is room for one person, and the owner counts as one. A Team of 4 seats has the owner plus up to 3 other people; add seats to make room for more.
+- **Credit pool:** each seat adds a set amount of credits to the Team's shared pool when you subscribe and at each renewal. When you add seats in the middle of a billing period, the new seats add a prorated share of that amount. The standard amount is 50,000 credits per seat, but it is a Bike4Mind setting and can change. The Team's card on the Teams page shows the credits currently in the pool.
+- **Who pays for the plan:** the Team owner, through the subscription.
 
-3. **Set Up Your Team**
-   - **Organization Name** - Choose a descriptive name for your team
-   - **Team Size** - Select the number of seats (minimum 4 seats)
-   - **Billing Information** - Configure payment and billing contact
+## Who pays for usage
 
-### **Organization Types**
+Usage is charged to whichever account you have selected in the account menu, not to the person who owns the notebook or project.
 
-**Personal Organizations:**
-- Created automatically for each user
-- Basic sharing capabilities
-- Individual billing and credit management
-- Perfect for personal projects with occasional collaboration
+- With a Team selected, your messages are paid from that Team's credits.
+- With your personal account selected, your messages are paid from your own balance.
+- In a notebook that someone else owns, a small note above the message box tells you which one applies, for example "Paid from your balance, not the owner's" or "Paid from (Team name) credits, not the owner's".
 
-**Team Organizations:**
-- Full collaborative features
-- Seat-based billing starting at 4 seats
-- Advanced permission management
-- Enterprise-grade features and controls
+## Add and manage members
 
----
+Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and the Team manager. The **Billing** tab is visible to the owner only. A Team manager who is not a member still finds the Team in the Teams list, marked with a **Manager** badge, and can open it from there.
 
-## 👥 **Team Member Management**
+On the **Members** tab:
 
-### **Adding Team Members**
+- The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
+- The Team owner and appointed Team admins can invite people and cancel pending invites. The Team owner, the Team manager and platform admins can remove people. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
+- If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
+- Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
+- The Team owner and appointed Team admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
 
-1. **Invite by Email**
-   - Navigate to your organization's Members tab
-   - Click **"Add Members"** 
-   - Enter email addresses of team members to invite
-   - Set initial permissions (Read, Write, or Share)
+## Roles
 
-2. **Permission Levels**
-   - **Read** - View shared content and participate in discussions
-   - **Write** - Create and edit content, participate fully
-   - **Share** - Manage sharing settings and invite others
+Each member shows a role label on the Members tab.
 
-3. **Seat Management**
-   - Monitor seat usage in the Members tab
-   - See current usage: "5 / 10 seats used"
-   - Add more seats through billing settings when needed
-
-### **Managing Member Permissions**
-
-**Role-Based Access Control:**
-```typescript
-// Permission hierarchy
-Permission.read    // View content and participate
-Permission.update  // Create and edit content  
-Permission.share   // Manage sharing and invitations
-```
-
-**Organization Roles:**
-- **Owner** - Full administrative access, billing management
-- **Admin** - User management, content administration
-- **Member** - Standard team access based on assigned permissions
-- **Guest** - Limited read-only access to specific resources
+- **Owner:** created the Team and holds the subscription.
+- **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. These labels do not decide who manages the roster: inviting is limited to the Team owner and appointed Team admins, and removing members to the Team owner, the Team manager and platform admins.
 
-### **Member Activity Tracking**
+## Billing tab (owner only)
 
-Monitor team productivity through:
-- **Credit usage per member** - Track AI usage and costs
-- **Activity feeds** - See what team members are working on
-- **Recent activities** - Notebook creation, file uploads, collaborations
-- **Usage analytics** - Understand team engagement and productivity
+The Billing tab shows **Billing & Subscription**:
 
----
+- Plan status: **Team Plan** with Active, Canceled or Payment issue, and the renewal or end date.
+- **Subscribe Now** if the Team has no subscription yet.
+- **Team Seats Usage**, for example "5 / 10 seats used", with the number of seats still available.
+- **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**; type the number of seats or use the minus and plus buttons, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size (the lowest number the dialog accepts is the larger of the two, and typing a number outside the range shows an error). People you have invited who have not yet accepted also count toward the minimum when you save: the dialog does not include them in its limit, so if you enter fewer seats than your members plus pending invites, the update is rejected with a message naming the minimum, and you can cancel invites or enter a higher number. The changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
+- **Billing Portal** to update your payment method, view invoices and manage or cancel the subscription.
 
-## 💳 **Billing & Subscription Management**
-
-### **Team Subscription Plans**
-
-**Pricing Structure:**
-- **$X per seat/month** (pricing loaded dynamically from Stripe)
-- **Minimum 4 seats** required for team plans
-- **50,000 credits per seat** included monthly
-- **Scalable billing** - add/remove seats as needed
-
-### **Managing Subscriptions**
-
-1. **Subscribe to Team Plan**
-   - Navigate to Organization → Billing tab
-   - Click **"Subscribe Now"**
-   - Select number of seats needed
-   - Complete Stripe checkout process
-
-2. **Modify Seat Count**
-   - Go to Billing → **"Manage Seats"**
-   - Increase/decrease seats using the +/- controls
-   - Changes reflected in next billing cycle
-   - Minimum seats = current team size
-
-3. **Billing Portal Access**
-   - **"Manage Billing"** opens Stripe customer portal
-   - Download invoices and payment history
-   - Update payment methods and billing information
-   - Cancel or modify subscriptions
-
-### **Credit Management**
-
-**Organization Credits:**
-- **50,000 credits per seat** allocated monthly
-- **Shared credit pool** across all team members
-- **Usage tracking** per member for cost allocation
-- **Automatic renewal** with subscription billing
-
-**Credit Allocation:**
-```typescript
-// Credit calculation
-const monthlyCredits = seats * 50000;
-const totalCredits = monthlyCredits * subscriptionMonths;
-```
-
----
-
-## 🔐 **Security & Access Control**
-
-### **Permission System**
-
-**Granular Permissions:**
-- **Resource-level control** - Notebooks, files, projects
-- **Action-based permissions** - Read, write, share, delete
-- **Inheritance rules** - Organization → Project → Resource
-- **Override capabilities** - Specific sharing permissions
-
-### **Access Control Examples**
-
-```typescript
-// Organization member permissions
-{
-  userId: "user123",
-  permissions: [Permission.read, Permission.write],
-  role: "member"
-}
-
-// Resource sharing
-{
-  resourceId: "notebook456", 
-  sharedWith: [
-    { userId: "user789", permissions: [Permission.read] }
-  ],
-  isGlobalRead: false
-}
-```
-
-### **Security Features**
-
-- **Invitation-only access** - Members must be explicitly invited
-- **Email verification** - Confirmed email addresses required
-- **Permission validation** - Server-side permission checking
-- **Audit trails** - Track all permission changes and access
-
----
-
-## 📊 **Analytics & Reporting**
-
-### **Organization Dashboard**
-
-**Key Metrics:**
-- **Seat utilization** - Active vs. total seats
-- **Credit consumption** - Usage patterns and trends
-- **Member activity** - Engagement and productivity metrics
-- **Billing status** - Subscription health and payment status
-
-### **Usage Analytics**
-
-**Team Performance Insights:**
-- **Most active members** - Credit usage and activity levels
-- **Popular content** - Most shared notebooks and files
-- **Collaboration patterns** - Cross-team sharing and engagement
-- **Cost optimization** - Seat utilization and credit efficiency
-
-### **Reporting Features**
-
-- **Usage reports** - Monthly team activity summaries
-- **Billing reports** - Cost breakdowns and forecasting
-- **Activity feeds** - Real-time team collaboration updates
-- **Export capabilities** - Data export for external analysis
-
----
-
-## 🔄 **Integration & Workflow**
-
-### **Team Collaboration Workflows**
-
-**1. Project-Based Collaboration:**
-```
-Create Organization → Invite Team → Create Shared Projects → 
-Collaborate on Notebooks → Share Results → Track Progress
-```
-
-**2. Knowledge Sharing:**
-```
-Upload Team Files → Process with AI → Share Insights → 
-Build Knowledge Base → Enable Team Discovery
-```
-
-**3. Resource Management:**
-```
-Monitor Usage → Optimize Seat Allocation → Manage Credits → 
-Scale as Needed → Track ROI
-```
-
-### **API Integration**
-
-Organizations integrate seamlessly with:
-- **Authentication system** - SSO and user management
-- **Billing platform** - Stripe subscription management
-- **Activity tracking** - Real-time collaboration updates
-- **Permission engine** - Granular access control
-
----
-
-## 🎯 **Best Practices**
-
-### **Organization Setup**
-
-1. **Plan Your Structure**
-   - Define clear team roles and responsibilities
-   - Set up logical project hierarchies
-   - Establish sharing and collaboration guidelines
-
-2. **Optimize Seat Usage**
-   - Start with minimum required seats
-   - Monitor utilization regularly
-   - Scale up/down based on actual usage
-
-3. **Manage Permissions Carefully**
-   - Use least-privilege principle
-   - Regular permission audits
-   - Clear escalation paths for access requests
-
-### **Cost Optimization**
-
-1. **Monitor Credit Usage**
-   - Track per-member consumption
-   - Identify high-usage patterns
-   - Optimize AI model selection for cost
-
-2. **Seat Management**
-   - Regular seat utilization reviews
-   - Remove inactive members promptly
-   - Plan seasonal scaling needs
-
-3. **Billing Optimization**
-   - Annual vs. monthly billing considerations
-   - Usage forecasting for budget planning
-   - Cost allocation across departments
-
----
-
-## 🔧 **Advanced Features**
-
-### **Enterprise Capabilities**
-
-- **Custom branding** - Organization logos and themes
-- **Advanced analytics** - Detailed usage and performance metrics
-- **API access** - Programmatic organization management
-- **Bulk operations** - Mass user management and content operations
-
-### **Integration Options**
-
-- **SSO integration** - Enterprise authentication systems
-- **Billing integration** - Custom billing and invoicing
-- **Analytics integration** - Export to business intelligence tools
-- **Compliance features** - Audit logs and data governance
-
----
+If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card.
 
 ## Related Features
 
@@ -306,7 +75,3 @@ Organizations integrate seamlessly with:
 - [Profile & Settings](./profile-settings.md) - Account and security settings
 - [Notebooks](./notebooks.md) - Shared team conversations
 - [Knowledge Management](./knowledge-management.md) - Team knowledge bases
-
----
-
-*Organizations & Team Management enables Bike4Mind to scale from individual productivity to enterprise collaboration, providing the structure and controls needed for teams to work together effectively while maintaining security and cost control.* 

@@ -24,6 +24,7 @@ const mockRevokeAllForUser = vi.fn();
 const mockFindById = vi.fn();
 const mockRemovePasskeys = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: { findById: (...a: any[]) => mockFindById(...a) },
   adminSettingsRepository: { findBySettingName: vi.fn(() => Promise.resolve(null)) },
   authSessionRepository: {},
@@ -43,7 +44,13 @@ vi.mock('@bike4mind/services', () => ({
   userService: { revokeUserSessions: vi.fn(() => Promise.resolve()) },
 }));
 
-vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+const mockReadEnforceMfa = vi.fn(() => Promise.resolve(false));
+vi.mock('@server/auth/signInSecondFactor', () => ({ readEnforceMfa: () => mockReadEnforceMfa() }));
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
 
 import disableHandler from '@pages/api/auth/mfa/disable';
 import forceResetHandler from '@pages/api/auth/mfa/force-reset';

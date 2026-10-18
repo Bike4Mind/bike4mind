@@ -118,6 +118,11 @@ describe('buildPublicSSEEvent', () => {
     expect(serializeSSEEvent(e)).not.toContain('usdCost');
   });
 
+  it('allowlists reasoningTokens for public callers', () => {
+    const e = buildPublicSSEEvent([''], { inputTokens: 10, outputTokens: 800, reasoningTokens: 780 });
+    expect(e.usage).toMatchObject({ outputTokens: 800, reasoningTokens: 780 });
+  });
+
   it('emits no credits block when usdCost is the only credit field', () => {
     const e = buildPublicSSEEvent(['the answer'], { usdCost: 0.0123 });
     expect(e.credits).toBeUndefined();
@@ -151,6 +156,22 @@ describe('buildSSEEvent', () => {
   it('keeps the text of untagged and tool-artifact frames', () => {
     expect(buildSSEEvent(['', 'the answer']).text).toBe('the answer');
     expect(buildSSEEvent(['artifact'], { channel: 'tool-artifact' }).text).toBe('artifact');
+  });
+
+  it('carries reasoningTokens inside usage', () => {
+    const e = buildSSEEvent([''], { outputTokens: 800, reasoningTokens: 780 });
+    expect(e.usage).toMatchObject({ outputTokens: 800, reasoningTokens: 780 });
+  });
+
+  it('carries reasoningTokens even when no other token field is present', () => {
+    const e = buildSSEEvent([''], { reasoningTokens: 5 });
+    expect(e.usage).toMatchObject({ reasoningTokens: 5 });
+  });
+
+  it('leaves reasoningTokens off the wire when unreported', () => {
+    const e = buildSSEEvent([''], { inputTokens: 10, outputTokens: 5 });
+    expect(e.usage).not.toHaveProperty('reasoningTokens');
+    expect(serializeSSEEvent(e)).not.toContain('reasoningTokens');
   });
 
   it('still forwards usdCost to authenticated first-party surfaces', () => {
@@ -222,6 +243,17 @@ describe('formatSSEError', () => {
       message: 'capped',
       requestId: 'req-1',
       code: 'spend_cap_exceeded',
+    });
+  });
+
+  it('attaches a provider classifier', () => {
+    expect(
+      formatSSEError(new Error('Model provider returned an error (upstream 404)'), 'req-2', 'provider_error')
+    ).toEqual({
+      type: 'error',
+      message: 'Model provider returned an error (upstream 404)',
+      requestId: 'req-2',
+      code: 'provider_error',
     });
   });
 

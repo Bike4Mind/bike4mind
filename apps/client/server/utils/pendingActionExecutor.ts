@@ -1,9 +1,13 @@
 import { Logger } from '@bike4mind/observability';
-import { IUserDocument, isImageServeable } from '@bike4mind/common';
-import { Quest } from '@bike4mind/database';
+import { IUserDocument } from '@bike4mind/common';
+import { Quest, Session } from '@bike4mind/database';
+import { isValidObjectId } from '@server/utils/objectId';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
-import { GitHubResource, JiraResource, ConfluenceResource, TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
+import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 export { TOKEN_EXPIRATION_MS };
@@ -23,24 +27,51 @@ export async function claimPendingAction(questId: string, pendingActionTs: numbe
   return claimed !== null;
 }
 
+/**
+ * Whether `userId` is the person whose request produced the quest's pending action. A Confirm/Cancel
+ * button posted in a shared Slack channel is clickable by anyone there, so the click handler must
+ * check this before acting. The requester is the turn's actor (promptMeta.session.userId), which can
+ * differ from the session owner when a turn is routed into someone else's shared notebook; a quest
+ * written before promptMeta existed falls back to the session owner. The web executor
+ * (pages/api/mcp/confirm.ts) always checks the session owner, so the two surfaces differ for a turn
+ * routed into a shared notebook.
+ */
+export async function isPendingActionRequester(questId: string, userId: string): Promise<boolean> {
+  if (!isValidObjectId(questId)) return false;
+  const quest = await Quest.findById(questId).select('sessionId promptMeta.session.userId');
+  if (!quest) return false;
+  const requesterId = quest.promptMeta?.session?.userId;
+  if (requesterId) return requesterId === userId;
+  if (!isValidObjectId(quest.sessionId)) return false;
+  const session = await Session.findById(quest.sessionId).select('userId');
+  return session?.userId?.toString() === userId;
+}
+
 export interface PendingActionResult {
   success: boolean;
   message: string;
 }
 
+export const MCP_DISABLED_MESSAGE = 'MCP integrations are turned off by your administrator.';
+
 /**
  * Execute a pending action stored on a Quest.
  * Called only from the Slack Confirm button handler (interactive.ts); model output must never
  * reach this, since executing is what the human click authorizes.
- * `expectedTs` is the `ts` of the action the button displayed; undefined only for a button rendered
- * before it carried one. Keep in sync with the web executor (pages/api/mcp/confirm.ts).
+ * `expectedTs` is the `ts` of the action the button displayed, so the click executes exactly that
+ * action and never a newer one. Keep in sync with the web executor (pages/api/mcp/confirm.ts).
  */
 export async function executePendingAction(
   questId: string,
   dbUser: IUserDocument,
   logger: Logger,
-  expectedTs?: number
+  expectedTs: number
 ): Promise<PendingActionResult> {
+  // The flag gates tool loading, but an action created before an admin turned it off is still on the quest.
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { success: false, message: MCP_DISABLED_MESSAGE };
+  }
+
   const questWithPending = await Quest.findById(questId);
 
   if (!questWithPending?.pendingAction) {
@@ -49,7 +80,7 @@ export async function executePendingAction(
 
   const pendingAction = questWithPending.pendingAction;
 
-  if (expectedTs !== undefined && expectedTs !== pendingAction.ts) {
+  if (expectedTs !== pendingAction.ts) {
     logger.warn('[PendingActionExecutor] Pending action replaced since it was displayed', { questId });
     return { success: false, message: 'This action was replaced by a newer one. Please review it again.' };
   }
@@ -71,20 +102,18 @@ export async function executePendingAction(
     paramsKeys: Object.keys(pendingAction.params || {}),
   });
 
+  const target = resolvePendingActionTarget(pendingAction.tool, dbUser, logger);
+  if (!target) {
+    logger.warn('[PendingActionExecutor] Refusing a pending action for a non-confirmable tool', {
+      questId,
+      tool: pendingAction.tool,
+    });
+    return { success: false, message: 'This action cannot be confirmed.' };
+  }
+  const { mcpName, resource } = target;
+
   try {
-    let resource: GitHubResource | JiraResource | ConfluenceResource;
-    if (pendingAction.tool.startsWith('jira_')) {
-      resource = new JiraResource(dbUser, logger);
-    } else if (pendingAction.tool.startsWith('confluence_')) {
-      resource = new ConfluenceResource(dbUser, logger);
-    } else {
-      resource = new GitHubResource(dbUser, logger);
-    }
-
     const envVariables = await resource.getMcpEnvVariables();
-
-    const mcpName =
-      pendingAction.tool.startsWith('jira_') || pendingAction.tool.startsWith('confluence_') ? 'atlassian' : 'github';
 
     const selectedRepositories = await getSelectedRepositoriesForMcp(dbUser.id, mcpName);
 
@@ -106,38 +135,15 @@ export async function executePendingAction(
       fabFileId &&
       !hasContent
     ) {
-      logger.info('[PendingActionExecutor] Fetching FAB file from S3', { fabFileId, filename: toolParams.filename });
-
-      try {
-        const { FabFile } = await import('@bike4mind/database');
-        const { getFilesStorage } = await import('@server/utils/storage');
-
-        const fabFile = await FabFile.findById(fabFileId);
-        // Explicit skip before attempting the download, not a throw relying on the
-        // surrounding try/catch: a thrown error here would be swallowed and fall through
-        // to the slackFileUrl fallback, conflating "blocked image" with "download failed".
-        if (fabFile && !isImageServeable(fabFile)) {
-          logger.warn('[PendingActionExecutor] Skipping FAB file attachment: image not serveable', { fabFileId });
-        } else if (fabFile?.filePath) {
-          const fileBuffer = await getFilesStorage().download(fabFile.filePath);
-          toolParams.content = fileBuffer.toString('base64');
-          if (!toolParams.mimeType && fabFile.mimeType) {
-            toolParams.mimeType = fabFile.mimeType;
-          }
-          logger.info('[PendingActionExecutor] Downloaded FAB file from S3', {
-            fabFileId,
-            filename: toolParams.filename,
-            sizeBytes: fileBuffer.length,
-            mimeType: toolParams.mimeType,
-          });
-        } else {
-          logger.warn('[PendingActionExecutor] FAB file not found or has no filePath', { fabFileId });
+      const attachment = await loadFabFileAttachment(fabFileId, dbUser, logger);
+      if (attachment.status === 'forbidden') {
+        return { success: false, message: 'The file to attach was not found or you do not have access to it.' };
+      }
+      if (attachment.status === 'loaded') {
+        toolParams.content = attachment.content;
+        if (!toolParams.mimeType && attachment.mimeType) {
+          toolParams.mimeType = attachment.mimeType;
         }
-      } catch (fabError) {
-        logger.error('[PendingActionExecutor] Failed to download FAB file from S3', {
-          fabFileId,
-          error: fabError instanceof Error ? fabError.message : String(fabError),
-        });
       }
     }
 
@@ -155,12 +161,7 @@ export async function executePendingAction(
       });
 
       try {
-        const response = await fetch(slackFileUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
+        const fileBuffer = await downloadAttachmentUrl(slackFileUrl);
         toolParams.content = fileBuffer.toString('base64');
         logger.info('[PendingActionExecutor] Downloaded file from URL', {
           filename: toolParams.filename,
@@ -172,7 +173,9 @@ export async function executePendingAction(
         });
         return {
           success: false,
-          message: `Failed to download file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
+          // Generic on purpose: the guard's detail (e.g. what a hostname resolved to) is logged above,
+          // not echoed into Slack.
+          message: 'Failed to download file',
         };
       }
     }
@@ -196,6 +199,7 @@ export async function executePendingAction(
       toolArgs: { ...toolParams, _executeFromButton: true },
       action: 'callTool',
       selectedRepositories,
+      userId: dbUser.id,
     });
 
     let resultData: Record<string, unknown> = {};
@@ -368,6 +372,11 @@ function buildSuccessMessage(
     msg += `📎 Attachment uploaded to page ${pageId}`;
     if (filename) msg += `\n"${filename}"`;
     if (sizeFormatted) msg += ` (${sizeFormatted})`;
+  } else if (pendingAction.tool === 'jira_bulk_create_issues') {
+    const created = Number(resultData?.created) || 0;
+    const failed = Number(resultData?.failed) || 0;
+    msg += `Created ${created} of ${created + failed} Jira issues`;
+    if (failed > 0) msg += `; ${failed} failed`;
   } else {
     msg += 'Action completed';
     if (title) msg += `\n"${title}"`;

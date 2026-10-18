@@ -31,7 +31,7 @@ import {
   resolveQuestTimeoutRecovery,
   QUEST_TIMEOUT_THRESHOLD_MS,
   STUCK_QUEST_RECOVERED_LOG,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import {
   dispatchQuestCallback,
   GENERATION_CALLBACK_MAX_REDISPATCHES,
@@ -136,18 +136,24 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
   const callbacksRedispatched = await redispatchMissedCallbacks(nowMs);
   const staleCallbacksReenqueued = await redispatchStaleCallbacks(nowMs);
+  const { redispatchLimitReached, horizonPassed } = await failExhaustedCallbacks(nowMs);
 
   logger.info('[QuestTimeoutSweep] Sweep complete', {
     candidates: staleQuests.length,
     recovered,
     callbacksRedispatched,
     staleCallbacksReenqueued,
+    callbacksFailedLimitReached: redispatchLimitReached,
+    callbacksFailedHorizonPassed: horizonPassed,
   });
   await metric(QUEST_METRICS.TimeoutSweepRecovered, recovered);
   await metric(QUEST_METRICS.TimeoutSweepCallbacksRedispatched, callbacksRedispatched);
   // Its own metric: a message lost after its claim is a different failure from a claim never made,
   // and its rate is the one worth alerting on.
   await metric(QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued, staleCallbacksReenqueued);
+  // Separate counts so an alert can distinguish exhausted-retry from too-old.
+  await metric(QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached, redispatchLimitReached);
+  await metric(QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed, horizonPassed);
 
   return { status: 'OK', recovered };
 }
@@ -195,5 +201,37 @@ async function redispatchStaleCallbacks(nowMs: number): Promise<number> {
   } catch (err) {
     logger.error('[QuestTimeoutSweep] Stale generation callback backstop failed', { err });
     return 0;
+  }
+}
+
+/**
+ * Fail dispatched callbacks that the sweep will never retry: those that have exhausted their
+ * redispatch allowance or aged past the redispatch horizon. Moves them to `failed` so the
+ * callbackState_dispatchedAt partial index stays clean. Not terminal: recordCallbackAttempt still
+ * accepts `failed`, so a late delivery or DLQ replay can settle it afterwards.
+ */
+async function failExhaustedCallbacks(
+  nowMs: number
+): Promise<{ redispatchLimitReached: number; horizonPassed: number }> {
+  try {
+    const result = await questRepository.failExhaustedCallbacks({
+      staleBefore: new Date(nowMs - GENERATION_CALLBACK_STALE_DISPATCH_MS),
+      horizonBefore: new Date(nowMs - GENERATION_CALLBACK_REDISPATCH_HORIZON_MS),
+      maxRedispatches: GENERATION_CALLBACK_MAX_REDISPATCHES,
+    });
+    if (result.redispatchLimitReached > 0) {
+      logger.warn('[QuestTimeoutSweep] Failed callbacks that exhausted redispatch limit', {
+        count: result.redispatchLimitReached,
+      });
+    }
+    if (result.horizonPassed > 0) {
+      logger.warn('[QuestTimeoutSweep] Failed callbacks past the redispatch horizon', {
+        count: result.horizonPassed,
+      });
+    }
+    return result;
+  } catch (err) {
+    logger.error('[QuestTimeoutSweep] Exhausted callback failure sweep failed', { err });
+    return { redispatchLimitReached: 0, horizonPassed: 0 };
   }
 }

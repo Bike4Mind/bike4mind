@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FAB_FILE_CONTENT_REWRITE_PATCH, IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { updateFabFile } from './update';
 
 describe('updateFabFile (upload moderation gate)', () => {
@@ -346,7 +347,10 @@ describe('updateFabFile (narrowed write pins)', () => {
         findById: Mock;
         pullTagsByFabFileId: Mock;
         computeDataLakeStats: Mock;
+        commitContentRewrite: Mock;
+        findChargeState: Mock;
       };
+      users: { findById: Mock; incrementCurrentStorage: Mock };
       dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock; activateIfDraft: Mock };
     };
     storage: { upload: Mock; generateSignedUrl: Mock; getMetadata?: Mock };
@@ -380,7 +384,12 @@ describe('updateFabFile (narrowed write pins)', () => {
           findById: vi.fn().mockResolvedValue(null),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
           computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+          commitContentRewrite: vi
+            .fn()
+            .mockResolvedValue({ userId: 'user-123', fileSize: 3, storageChargedAt: new Date('2025-12-01T00:00:00Z') }),
+          findChargeState: vi.fn(() => findUpdateAccessById()),
         },
+        users: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
         dataLakes: {
           findByDatalakeTag: vi.fn().mockResolvedValue(null),
           find: vi.fn().mockResolvedValue([]),
@@ -478,8 +487,11 @@ describe('updateFabFile (narrowed write pins)', () => {
     findUpdateAccessById.mockResolvedValue(textFile());
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
 
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
@@ -494,18 +506,20 @@ describe('updateFabFile (narrowed write pins)', () => {
     ]);
   });
 
-  it('writes the stored size alongside the rewrite patch when storage reports metadata', async () => {
+  it('keeps fileSize out of the trailing write when storage reports metadata', async () => {
     mockAdapters.storage.getMetadata = vi.fn().mockResolvedValue({ size: 8 });
     findUpdateAccessById.mockResolvedValue(textFile());
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
 
+    // The size is persisted only by commitContentRewrite, so the trailing write cannot clobber it.
+    expect(result.fileSize).toBe(8);
+    expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
     expect(dbUpdate).toHaveBeenCalledTimes(1);
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        fileSize: 8,
         fileUrl: 'https://s3.example.com/new-signed-url',
         fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
@@ -527,5 +541,64 @@ describe('updateFabFile (narrowed write pins)', () => {
       { id: 'file-1', fileName: 'renamed.txt', systemPriority: undefined, updatedAt: NOW },
       { unset: ['fileUrl', 'fileUrlExpireAt'] },
     ]);
+  });
+
+  describe('storage accounting', () => {
+    const run = (user: IUserDocument = mockUser) =>
+      updateFabFile(user, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    it('stamps the rewrite and charges the owner only the growth', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+      expect(mockAdapters.db.users.incrementCurrentStorage).toHaveBeenCalledWith('user-123', 5);
+    });
+
+    it('falls back to the content length when the stored size cannot be read', async () => {
+      mockAdapters.storage.getMetadata = vi.fn().mockRejectedValue(new Error('head failed'));
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(dbUpdate.mock.calls[0][0]).not.toHaveProperty('fileSize');
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+    });
+
+    it('warns and charges nothing when the row is gone by the time the rewrite commits', async () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+      mockAdapters.db.fabFiles.commitContentRewrite.mockResolvedValue(null);
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(mockAdapters.db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('matched no live row'));
+      warn.mockRestore();
+    });
+
+    it('persists a newly minted filePath on the first content write', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ filePath: undefined }));
+
+      await run();
+
+      const { filePath } = dbUpdate.mock.calls[0][0];
+      expect(filePath).toMatch(/\.txt$/);
+      expect(mockAdapters.storage.upload).toHaveBeenCalledWith(filePath, 'new body', expect.anything());
+    });
+
+    it('charges the owner, not an update-share editor, and refuses growth past the owner quota', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 0 });
+      const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
+
+      await expect(run(editor)).rejects.toThrow('File size exceeds storage limit');
+
+      expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('user-123');
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+      expect(mockAdapters.db.fabFiles.commitContentRewrite).not.toHaveBeenCalled();
+      expect(dbUpdate).not.toHaveBeenCalled();
+    });
   });
 });

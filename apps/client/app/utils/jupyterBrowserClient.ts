@@ -353,6 +353,8 @@ export class JupyterBrowserClient {
 // -- Jupyter config persistence (localStorage) --
 
 const JUPYTER_CONFIG_KEY = 'b4m-jupyter-config';
+// The browser's `storage` event only reaches other tabs, so a change made here announces itself.
+const JUPYTER_CONFIG_CHANGED_EVENT = 'b4m-jupyter-config-changed';
 
 export interface StoredJupyterConfig {
   serverUrl: string;
@@ -375,9 +377,26 @@ export function getStoredJupyterConfig(): StoredJupyterConfig | null {
 export function setStoredJupyterConfig(config: StoredJupyterConfig): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(JUPYTER_CONFIG_KEY, JSON.stringify(config));
+  window.dispatchEvent(new Event(JUPYTER_CONFIG_CHANGED_EVENT));
 }
 
 export function clearStoredJupyterConfig(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(JUPYTER_CONFIG_KEY);
+  window.dispatchEvent(new Event(JUPYTER_CONFIG_CHANGED_EVENT));
+}
+
+/** Calls `onChange` whenever the stored config changes, here or in another tab; returns the unsubscribe. */
+export function subscribeStoredJupyterConfig(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const onStorage = (event: StorageEvent) => {
+    // A null key means the whole store was cleared.
+    if (event.key === null || event.key === JUPYTER_CONFIG_KEY) onChange();
+  };
+  window.addEventListener('storage', onStorage);
+  window.addEventListener(JUPYTER_CONFIG_CHANGED_EVENT, onChange);
+  return () => {
+    window.removeEventListener('storage', onStorage);
+    window.removeEventListener(JUPYTER_CONFIG_CHANGED_EVENT, onChange);
+  };
 }

@@ -6,7 +6,7 @@ import { Annotation } from './AnnotationModel';
 import { PublishedArtifact, shareTokenFilter } from './PublishedArtifactModel';
 import { PublishedArtifactReport } from './PublishedArtifactReportModel';
 import { PublishedArtifactViewAuditModel } from './PublishedArtifactViewAuditModel';
-import { purgeOwnerPublishedArtifacts } from './purgeOwnerPublishedArtifacts';
+import { purgeOwnerPublishedArtifacts, purgeOwnerPublishedArtifactsBySource } from './purgeOwnerPublishedArtifacts';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -191,5 +191,66 @@ describe('purgeOwnerPublishedArtifacts - org pages', () => {
 
     expect(result.transferred).toEqual([]);
     expect(result.artifacts.map(x => x.publicId)).toEqual([a.publicId]);
+  });
+});
+
+describe('purgeOwnerPublishedArtifactsBySource', () => {
+  it("takes down only the owner's artifacts from the given notebooks, with their children", async () => {
+    const hit = await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's1', messageId: 'm' } });
+    await seedChildren(hit.publicId);
+    const otherOwner = await makeArtifact('owner2', { source: { kind: 'reply', sessionId: 's1', messageId: 'm' } });
+    const otherNotebook = await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's2', messageId: 'm' } });
+    const sameIdOtherKind = await makeArtifact('owner1', { source: { kind: 'fabfile', fabFileId: 's1' } });
+
+    const result = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'reply', sessionIds: ['s1'] },
+      { deletedBy: 'owner1' }
+    );
+
+    expect(result).toMatchObject({ annotations: 1, reports: 1, viewAudits: 1 });
+    expect(result.artifacts.map(a => a.publicId)).toEqual([hit.publicId]);
+    const live = await PublishedArtifact.find({ deletedAt: null }).lean();
+    expect(live.map(a => a.publicId).sort()).toEqual(
+      [otherOwner.publicId, otherNotebook.publicId, sameIdOtherKind.publicId].sort()
+    );
+  });
+
+  it('matches published files by file id', async () => {
+    const hit = await makeArtifact('owner1', { source: { kind: 'fabfile', fabFileId: 'f1' } });
+    await makeArtifact('owner1', { source: { kind: 'fabfile', fabFileId: 'f2' } });
+
+    const result = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'fabfile', fabFileIds: ['f1'] },
+      { deletedBy: 'owner1' }
+    );
+
+    expect(result.artifacts.map(a => a.publicId)).toEqual([hit.publicId]);
+    expect(await PublishedArtifact.countDocuments({ deletedAt: null })).toBe(1);
+  });
+
+  it('is a no-op for an empty id list and on a re-run', async () => {
+    await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's1', messageId: 'm' } });
+
+    const empty = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'reply', sessionIds: [] },
+      { deletedBy: 'owner1' }
+    );
+    expect(empty.artifacts).toEqual([]);
+    expect(await PublishedArtifact.countDocuments({ deletedAt: null })).toBe(1);
+
+    await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'reply', sessionIds: ['s1'] },
+      { deletedBy: 'owner1' }
+    );
+    const rerun = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'reply', sessionIds: ['s1'] },
+      { deletedBy: 'owner1' }
+    );
+    expect(rerun).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
   });
 });

@@ -149,6 +149,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  /** Active subscriptions of any of `ownerIds`, in one `$in` read on the {ownerType, ownerId, status} index. */
+  findActiveSubscriptionsByOwners(
+    ownerType: SubscriptionOwnerType,
+    ownerIds: readonly string[]
+  ): Promise<(ISubscription & IMongoDocument)[]> {
+    if (ownerIds.length === 0) return Promise.resolve([]);
+    return this.model
+      .find({
+        ownerType,
+        ownerId: { $in: [...ownerIds] },
+        status: 'active',
+      })
+      .lean({ virtuals: true });
+  }
+
   /**
    * Same read as findActiveSubscriptionsByOwner minus the active-only predicate: a
    * deny-list on the terminal states, so a `past_due` owner still sees the subscription

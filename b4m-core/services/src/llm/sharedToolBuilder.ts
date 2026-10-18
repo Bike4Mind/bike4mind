@@ -22,7 +22,11 @@ import {
 } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ServerAgentStore } from './agents/ServerAgentStore';
-import type { ServerSubagentTracker, SubagentHandoffSignal } from './agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  SubagentHandoffSignal,
+  SubagentToolPermissions,
+} from './agents/ServerSubagentOrchestrator';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
@@ -31,10 +35,12 @@ import { createCoordinateTaskTool } from './tools/implementation/coordinateTask'
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { isVideoToolConfig } from './tools/implementation/videoGeneration';
+import { isMusicToolConfig } from './tools/implementation/musicGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
+import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +56,8 @@ export interface ToolBuilderDeps {
   entitlementKeys?: string[];
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
+  /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
+  authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
@@ -155,6 +163,14 @@ export interface ToolBuilderDeps {
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * The run's tool-permission lists, set only by the agent executor (whose parent gate
+   * uses the same lists). Forwarded to `delegate_to_agent` and `coordinate_task` so a
+   * child's tool calls are classified like the parent's; see
+   * `ServerOrchestratorDeps.toolPermissions`. Omitted by ungated callers.
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -277,6 +293,12 @@ export interface BuildSharedToolsOptions {
   toolAvailability?: ToolAvailability;
 }
 
+/** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
+const ATTACHMENT_LIST_SOURCE_BY_TOOL: ReadonlyMap<string, 'jira' | 'confluence'> = new Map([
+  [`atlassian__${JIRA_LIST_ATTACHMENTS}`, 'jira'],
+  [`atlassian__${CONFLUENCE_LIST_ATTACHMENTS}`, 'confluence'],
+]);
+
 // Sentinel types for wrapping. A tool may emit one of these generic
 // optimization-console side-effects; the type must be allowlisted here so its
 // payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
@@ -343,6 +365,7 @@ export function buildSharedTools(
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    authOrigin,
     apiKeyId,
   } = deps;
 
@@ -367,6 +390,7 @@ export function buildSharedTools(
       sessionIncludeLibraryFiles,
       sessionPreauthorizedLakeIds,
       organizationId,
+      authOrigin,
       apiKeyId,
       questId: callbacks.questId,
       getAbortSignal,
@@ -384,6 +408,7 @@ export function buildSharedTools(
       audio_generation: config.audio_generation,
       web_search: config.web_search,
       video_generation: config.video_generation,
+      music_generation: config.music_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -400,6 +425,7 @@ export function buildSharedTools(
   const effectiveAvailability: ToolAvailability = {
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
+    music_generation: isMusicToolConfig(config.music_generation),
   };
 
   // Filter to enabled tools only
@@ -576,6 +602,7 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    toolPermissions: deps.toolPermissions,
   });
   tools.push(delegateTool);
 
@@ -604,6 +631,7 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      toolPermissions: deps.toolPermissions,
     });
     tools.push(coordinateTool);
   }
@@ -812,14 +840,17 @@ function createMcpToolWrapper(
       try {
         if (typeof result === 'string' && result.includes('_attachmentList')) {
           const parsed = JSON.parse(result);
-          if (parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
+          // Only the Atlassian list tools may mint a list the delete buttons act on; the source comes
+          // from which tool ran, never from the (tool-controlled) payload.
+          const attachmentListSource = ATTACHMENT_LIST_SOURCE_BY_TOOL.get(name);
+          if (attachmentListSource && parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
             logger.debug(`[MCP] Extracted attachment list from tool ${name}`, {
-              source: parsed.source,
+              source: attachmentListSource,
               count: parsed.attachments.length,
             });
 
             const attachmentList = {
-              source: parsed.source,
+              source: attachmentListSource,
               issueKey: parsed.issueKey,
               pageId: parsed.pageId,
               pageTitle: parsed.pageTitle,
@@ -845,7 +876,7 @@ function createMcpToolWrapper(
             }
 
             // Default: return simplified result for AI
-            const sourceLabel = parsed.source === 'jira' ? 'Jira issue' : 'Confluence page';
+            const sourceLabel = attachmentListSource === 'jira' ? 'Jira issue' : 'Confluence page';
             const identifier = parsed.issueKey || parsed.pageId || '';
             return JSON.stringify(
               {

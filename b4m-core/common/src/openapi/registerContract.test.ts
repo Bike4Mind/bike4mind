@@ -4,6 +4,7 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { registerContract } from './registerContract';
 import type { EndpointContract } from '../api-contract';
+import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 
 // Own module graph per vitest test file, so this fixture registration is the only
 // thing on `registry` here - it never touches the real spec built in document.test.ts.
@@ -169,5 +170,100 @@ describe('registerContract - queryParams', () => {
 
   it('documents a public contract with an explicit empty security list', () => {
     expect(operation.security).toEqual([]);
+  });
+});
+
+describe('registerContract - streaming contracts', () => {
+  // A stream validates and authenticates before it opens, so these are real HTTP statuses.
+  it('documents the pre-stream 401, scope 403 and validation 422 on an authenticated streaming contract', () => {
+    const streaming: EndpointContract = {
+      method: 'post',
+      path: '/api/v1/fixture-stream',
+      operationId: 'createFixtureStream',
+      summary: 'Streaming fixture',
+      auth: 'apiKeyOrJwt',
+      scopes: [ApiKeyScope.AI_CHAT],
+      request: z.object({ prompt: z.string() }),
+      streaming: true,
+      responses: {
+        200: { description: 'SSE stream.', contentType: 'text/event-stream', schema: z.object({ text: z.string() }) },
+      },
+    };
+    registerContract(streaming);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+    const op = getOperation(generated, '/api/v1/fixture-stream', 'post');
+
+    const errorResponse = {
+      content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+    };
+    expect(op.responses?.['401']).toMatchObject(errorResponse);
+    expect(op.responses?.['403']).toMatchObject({
+      content: { 'application/json': { schema: { $ref: '#/components/schemas/ScopeForbiddenResponse' } } },
+    });
+    expect(op.responses?.['422']).toMatchObject(errorResponse);
+  });
+});
+
+describe('registerContract - deprecated contracts', () => {
+  const deprecatedContract: EndpointContract = {
+    ...contract,
+    method: 'post',
+    operationId: 'createFixtureDeprecated',
+    path: '/api/v1/fixture-deprecated',
+    pathParams: undefined,
+    queryParams: undefined,
+    description: 'Original description.',
+    deprecated: { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixture-successor' },
+  };
+  registerContract(deprecatedContract);
+  const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+    openapi: '3.1.0',
+    info: { title: 'fixture', version: '0.0.0' },
+  });
+  const deprecatedOperation = getOperation(generated, deprecatedContract.path, 'post') as FixtureOperation & {
+    deprecated?: boolean;
+    description?: string;
+  };
+
+  it('flags the operation and leads its description with the sunset and successor', () => {
+    expect(deprecatedOperation.deprecated).toBe(true);
+    expect(deprecatedOperation.description).toBe(
+      '**Deprecated, sunset 2027-01-15.** Use `/api/v1/fixture-successor` instead. Original description.'
+    );
+  });
+
+  it("documents the deprecation headers on the contract's own statuses only", () => {
+    const responses = deprecatedOperation.responses as Record<string, { headers?: Record<string, unknown> }>;
+    expect(Object.keys(responses['200'].headers ?? {})).toEqual(['Deprecation', 'Sunset', 'Link']);
+    expect(responses['405'].headers).not.toHaveProperty('Sunset');
+  });
+
+  it('documents the deprecation headers on the validation response it injects', () => {
+    const deprecatedWithBody: EndpointContract = {
+      ...deprecatedContract,
+      path: '/api/v1/fixture-deprecated-body',
+      operationId: 'createFixtureDeprecatedBody',
+      request: z.object({ value: z.string() }),
+    };
+    registerContract(deprecatedWithBody);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+    const responses = getOperation(generated, deprecatedWithBody.path, 'post').responses as Record<
+      string,
+      { headers?: Record<string, unknown> }
+    >;
+
+    // The adapter sets them ahead of validation, so a 422 it injects for a contract that
+    // declares none of its own is documented exactly like a declared 422.
+    expect(Object.keys(responses['422']?.headers ?? {}).sort()).toEqual(['Deprecation', 'Link', 'Sunset']);
+  });
+
+  it('leaves a non-deprecated operation unflagged', () => {
+    expect(operation).not.toHaveProperty('deprecated');
   });
 });

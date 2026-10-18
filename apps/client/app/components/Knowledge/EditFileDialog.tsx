@@ -20,6 +20,7 @@ import {
 } from '@mui/joy';
 import { Edit3, AlertCircle } from 'lucide-react';
 import { IFabFileDocument } from '@bike4mind/common';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 
 interface EditFileDialogProps {
   open: boolean;
@@ -74,7 +75,7 @@ const EditFileDialog: React.FC<EditFileDialogProps> = ({ open, onClose, file, on
       await onSubmit(instruction, options);
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate edit');
+      setError(serverStorageLimitMessage(err) ?? (err instanceof Error ? err.message : 'Failed to generate edit'));
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);

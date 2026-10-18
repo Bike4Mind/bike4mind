@@ -1,3 +1,4 @@
+import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -114,19 +115,35 @@ export interface PremiumNavDescriptor {
 }
 
 /**
- * A premium package's full-surface notebook sidenav - a component that REPLACES
- * the default notebook sidenav body on its workspace's own route, and on any app-shell
- * route that declares `hostsWorkspace` (see `hostedWorkspaceAt`). Contributed via
- * `b4mContributions.notebookSidenavExport` (a module default-exporting the component)
- * and consumed by the Notebook layout's `Sidenav` through the generated
- * `premiumNotebookSidenav.generated.ts`.
+ * A premium package's full-surface notebook sidenav - a component that REPLACES the default
+ * notebook sidenav body on the route the package claims. The route is the overlay's knowledge,
+ * not core's, so it rides in the contribution:
  *
- * `null` is the absent (open-core fork) form: the same annotate-both-forms rule as
- * routes/nav keeps the consumer's type stable whether or not an overlay is installed,
- * and - critically - the generated glue is the ONLY place the premium package specifier
- * appears, so core never statically imports an absent package (the fork build stays green).
+ *     "notebookSidenavExport": { "path": "/<surface>", "exportFrom": "<pkg>/client/sidenav" }
+ *
+ * Contributed via `b4mContributions.notebookSidenavExport` (a module default-exporting the
+ * component) and consumed by the Notebook layout's `Sidenav` through the generated
+ * `premiumNotebookSidenavs.generated.ts`. `path` is matched against `location.pathname` exactly;
+ * the exact route wins, otherwise - for a workspace core registers in `WORKSPACE_SURFACES` - the
+ * entry whose `path` is its `routePrefix` on any app-shell route that declares `hostsWorkspace`
+ * (see `hostedWorkspaceAt`). No match means the default sidenav.
+ *
+ * Exact, not prefix, deliberately: an overlay's sub-routes get the default sidenav, as they did
+ * before the slot became per-route, and prefix-matching would be a visible change to an overlay's
+ * own UX - that overlay's call to ask for. Whoever takes it: match on segment boundaries (`/x`
+ * must not claim `/xyz`) and prefer the longest match.
+ *
+ * The empty array is the absent (open-core fork) form: the same annotate-both-forms rule as
+ * routes/nav keeps the consumer's type stable whether or not an overlay is installed, and the
+ * generated glue is the ONLY place the premium package specifier appears, so core never statically
+ * imports an absent package (the fork build stays green).
  */
-export type PremiumNotebookSidenav = ComponentType | null;
+export interface PremiumNotebookSidenavEntry {
+  /** The appShell route this sidenav owns, matched against `pathname` exactly. */
+  path: string;
+  /** The sidenav body, rendered in place of the default notebook list. */
+  component: ComponentType;
+}
 
 /**
  * A premium overlay's crawler policy for the routes it contributes, consumed by
@@ -232,6 +249,15 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
  */
 export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Tools denied, per workspace id, to every session whose current `surface` matches. Contributed as
+ * literal data in `b4mContributions.workspaceDeniedTools` (`{ "<surface id>": ["<tool name>"] }`) and
+ * unioned with the session's own `disabledTools` at read time, on the server and in the client alike.
+ * Nothing is written onto the session, so a copy or move takes on its destination's denials.
+ * Entries from several overlays are merged.
+ */
+export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
 
 /**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one

@@ -1,6 +1,7 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
+import { generateUploadConstraintFor } from '@server/files/generateUploadMarker';
 import type { moderateUploadedFile as ModerateUploadedFile } from '@server/s3/moderateUploadedFile';
 
 /**
@@ -10,6 +11,7 @@ interface ClaimedFabFile {
   _id: unknown;
   id: string;
   mimeType?: string;
+  sourceMetadata?: unknown;
   /**
    * The exact `moderationClaimedAt` this claim was acquired with. Threaded back into `persist`,
    * `release` and `retireMissingObject` so each is guarded on the claim it owns rather than on
@@ -80,6 +82,11 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * guard matched, so a superseded retire is not counted as a resolved file.
    */
   retireMissingObject(_id: unknown, claimedAt: Date): Promise<boolean>;
+  /**
+   * Stored object size in bytes. Needed only for an ai:generate-only upload; when absent such a file
+   * is treated as oversized and blocked, never cleared unmeasured.
+   */
+  measureSize?(filePath: string): Promise<number>;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
 }
@@ -103,7 +110,7 @@ function isMissingObjectError(err: unknown): boolean {
  * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The self-host object-created
  * webhook also runs this for a single freshly landed upload. The import stamps every file `pending`
  * (the schema default) and returns here once its transaction has committed - the
- * natural S3 ObjectCreated scan (see server/s3/objectCreated.ts) fires at upload time, before the
+ * natural S3 ObjectCreated scan (see apps/workers/src/s3/objectCreated.ts) fires at upload time, before the
  * row exists inside the still-open import transaction, so it always bails; without this pass an
  * imported image would sit `pending` forever (unservable) which is why the import used to
  * mis-stamp it `clean` and bypass moderation entirely. The declared mimeType is attacker-supplied,
@@ -134,6 +141,7 @@ export async function moderateImportedKnowledgeFiles(
     release,
     terminalOnMissingObject,
     retireMissingObject,
+    measureSize,
     downloadBytes,
     downloadPartialBytes,
   } = args;
@@ -152,6 +160,9 @@ export async function moderateImportedKnowledgeFiles(
         enabled,
         service,
         incidents,
+        generateUpload: generateUploadConstraintFor(claimed.sourceMetadata, async () =>
+          measureSize ? measureSize(filePath) : Number.POSITIVE_INFINITY
+        ),
         downloadBytes: () => downloadBytes(filePath),
         downloadPartialBytes: length => downloadPartialBytes(filePath, length),
         moderateImageOrThrow,

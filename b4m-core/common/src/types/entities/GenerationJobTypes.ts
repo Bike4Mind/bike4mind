@@ -1,10 +1,31 @@
-import type { ProviderJobHandle, ProviderOutput, VideoGenerationRequest, VideoProviderId } from '../../video';
+import type { ProviderOutput } from '../../generation';
+import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video'] as const;
+export const GENERATION_JOB_KINDS = ['video', 'music'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
+
+/** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
+export type GenerationJobRef = { id: string; kind: GenerationJobKind };
+
+/**
+ * The jobs a quest started, oldest first. Quests written before `generationJobs` existed only carry
+ * `videoJobIds`, so those read as video jobs (no backfill).
+ */
+export const questGenerationJobs = (quest: {
+  generationJobs?: readonly GenerationJobRef[];
+  videoJobIds?: readonly string[];
+}): GenerationJobRef[] => {
+  const legacy = (quest.videoJobIds ?? []).map((id): GenerationJobRef => ({ id, kind: 'video' }));
+  const byId = new Map<string, GenerationJobRef>();
+  for (const ref of [...legacy, ...(quest.generationJobs ?? [])]) {
+    if (!byId.has(ref.id)) byId.set(ref.id, { id: ref.id, kind: ref.kind });
+  }
+  return [...byId.values()];
+};
 
 export const GENERATION_JOB_STATES = [
   'pending',
@@ -65,15 +86,42 @@ export type VideoJobPayload = {
   billedBlock?: boolean;
 };
 
-export interface IGenerationJob {
-  /** One kind today; becomes a union of { kind, payload } pairs when a second kind lands. */
-  kind: GenerationJobKind;
+/** The validated request as persisted: defaults resolved, without the in-memory validation brand. */
+export type StoredMusicRequest = MusicGenerationRequest & { durationSeconds: number; instrumental: boolean };
+
+/** Same storage fields as VideoJobOutput, so kind-agnostic readers (job updates, signed URLs) serve both. */
+export type MusicJobOutput = VideoJobOutput & {
+  /** What the provider sang, as plain lines; absent for instrumental output. */
+  lyrics?: string;
+};
+
+/**
+ * Music providers return the finished song from one blocking call, so the output is stored in the submit step:
+ * provider bytes never reach this payload.
+ */
+export type MusicJobPayload = {
+  request: StoredMusicRequest;
+  providerId: MusicProviderId;
+  /** The notebook the song was made in, for in-chat producers. */
+  sessionId?: string;
+  reportedDurationSeconds?: number;
+  output?: MusicJobOutput;
+  /** As VideoJobPayload.billedBlock. */
+  billedBlock?: boolean;
+};
+
+/** Each kind's payload; the job type is a union discriminated on `kind`. */
+export type GenerationJobPayloads = {
+  video: VideoJobPayload;
+  music: MusicJobPayload;
+};
+
+type GenerationJobFields = {
   ownerType: CreditHolderType.User | CreditHolderType.Organization;
   ownerId: string;
   requestedBy: string;
   source: GenerationJobSource;
   state: GenerationJobState;
-  payload: VideoJobPayload;
   progress?: number;
   pollCount: number;
   attempts: number;
@@ -92,9 +140,25 @@ export interface IGenerationJob {
   questId?: string;
   createdAt?: Date;
   updatedAt?: Date;
-}
+};
+
+type GenerationJobByKind = {
+  [K in GenerationJobKind]: GenerationJobFields & { kind: K; payload: GenerationJobPayloads[K] };
+};
+
+export type IGenerationJob = GenerationJobByKind[GenerationJobKind];
+
+/** The job of one kind (or of a union of kinds). */
+export type IGenerationJobOf<K extends GenerationJobKind> = Extract<IGenerationJob, { kind: K }>;
 
 export type IGenerationJobDocument = IGenerationJob & IMongoDocument;
+
+export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGenerationJobDocument, { kind: K }>;
+
+export const isGenerationJobOfKind = <K extends GenerationJobKind>(
+  job: IGenerationJobDocument,
+  kind: K
+): job is IGenerationJobDocumentOf<K> => job.kind === kind;
 
 export type GenerationJobCommit = Partial<
   Pick<
@@ -124,7 +188,9 @@ export type GenerationJobCommitGuard = { kind: 'lease'; leaseToken: Date } | { k
 // A lowercase 24-hex ObjectId string; exact, so the stored id equals the supplied one.
 export const GENERATION_JOB_ID_PATTERN = /^[0-9a-f]{24}$/;
 
-export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updatedAt'> & {
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type GenerationJobCreateInput = DistributiveOmit<IGenerationJob, 'createdAt' | 'updatedAt'> & {
   /**
    * Caller-generated id, so a create whose outcome is unknown (an error after the insert may have landed)
    * can be resolved by looking the job up. Must match GENERATION_JOB_ID_PATTERN; anything else throws.
@@ -156,15 +222,23 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
    * the previous one has expired, so a newer lease always carries a later token than the one it replaced.
    */
   acquireLease(id: string, now: Date, leaseUntil: Date): Promise<IGenerationJobDocument | null>;
-  markSubmitAttempted(id: string, at: Date): Promise<void>;
+  /**
+   * Records that a submit is about to reach the provider, and with `markRunning` (a sync kind, whose submit is the
+   * whole provider call) moves the job to running. Null when a cancel was requested first: the provider must not
+   * be called. Pairs with requestCancel's `beforeSubmitOnly` so a racing cancel and submit cannot both win.
+   */
+  markSubmitAttempted(id: string, at: Date, options: { markRunning: boolean }): Promise<IGenerationJobDocument | null>;
   /** Applies the update and releases the lease. Null when the guard no longer holds (or the job is gone). */
   commit(
     id: string,
     update: GenerationJobCommit,
     guard: GenerationJobCommitGuard
   ): Promise<IGenerationJobDocument | null>;
-  /** Only a pending or running job can be cancelled; storing output is already paid for. */
-  requestCancel(id: string): Promise<IGenerationJobDocument | null>;
+  /**
+   * Only a pending or running job can be cancelled; storing output is already paid for. With `beforeSubmitOnly`
+   * (a sync kind, billed from the moment its provider call starts) only a pending job not yet submitted can be.
+   */
+  requestCancel(id: string, options: { beforeSubmitOnly: boolean }): Promise<IGenerationJobDocument | null>;
   claimTerminalHandling(id: string, at: Date): Promise<boolean>;
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;

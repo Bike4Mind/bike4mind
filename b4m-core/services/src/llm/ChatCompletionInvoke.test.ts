@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } from '@bike4mind/llm-adapters';
 
 // getAvailableModels resolves to an empty array in every case below - never reached
 // for the rejected-caller test, and used as a downstream sentinel (the "no model
@@ -64,7 +64,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
   it('rejects a caller who is neither the owner nor a sharee, before touching models or quests', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: ATTACKER_ID })).rejects.toThrow(/access/i);
+    await expect(invoke.invoke({ body, userId: ATTACKER_ID, authOrigin: 'session' })).rejects.toThrow(/access/i);
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -75,12 +75,12 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     const invoke = makeInvoke();
     // getAvailableModels resolves [] -> "Invalid model" is the downstream sentinel that
     // proves this request cleared the access check (a rejected caller never gets here).
-    await expect(invoke.invoke({ body, userId: OWNER_ID })).rejects.toThrow(/Invalid model/);
+    await expect(invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session' })).rejects.toThrow(/Invalid model/);
   });
 
   it('rejects a read-only sharee, who must not drive a completion that writes to the notebook', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: SHAREE_ID })).rejects.toThrow(/access/i);
+    await expect(invoke.invoke({ body, userId: SHAREE_ID, authOrigin: 'session' })).rejects.toThrow(/access/i);
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
   it('lets a sharee holding update past the access check', async () => {
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body, userId: EDITOR_ID })).rejects.toThrow(/Invalid model/);
+    await expect(invoke.invoke({ body, userId: EDITOR_ID, authOrigin: 'session' })).rejects.toThrow(/Invalid model/);
   });
 
   // questStartParams - NOT the parsed request - is what dispatchQuest ships to the async worker, so
@@ -108,11 +108,30 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     await invoke.invoke({
       body: { ...body, skipAutoOffers: true, promptMode: 'raw' as const },
       userId: OWNER_ID,
+      authOrigin: 'session',
     });
 
     expect((invoke as any).questStartParams).toEqual(
       expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
     );
+  });
+  // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
+  // async path, handing a prompt the user did not write their MCP servers, agents and skills.
+  it('carries disableUserIntegrations onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({
+      body: { ...body, disableUserIntegrations: true },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ disableUserIntegrations: true }));
   });
   // Same boundary: a route's server-set deniedTools (e.g. an API key's missing datalake:write)
   // would silently stop being enforced on the async path if the literal dropped it.
@@ -124,7 +143,11 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: { ...body, deniedTools: ['create_data_lake'] }, userId: OWNER_ID });
+    await invoke.invoke({
+      body: { ...body, deniedTools: ['create_data_lake'] },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
 
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ deniedTools: ['create_data_lake'] }));
   });
@@ -137,9 +160,316 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body, userId: OWNER_ID, apiKeyId: 'key1' });
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1' });
 
-    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ apiKeyId: 'key1' }));
+    expect((invoke as any).questStartParams).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
+    );
+  });
+  // The positive signal a session-only tool checks; dropped here, the async worker would see none.
+  it('carries the server-set authOrigin onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'internal' });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ authOrigin: 'internal' }));
+    expect((invoke as any).questStartParams.apiKeyId).toBeUndefined();
+  });
+  it.each([
+    ['a key turn without its key id', { authOrigin: 'apiKey' as const }],
+    ['a key id on a session turn', { authOrigin: 'session' as const, apiKeyId: 'key1' }],
+    ['a key id on an internal turn', { authOrigin: 'internal' as const, apiKeyId: 'key1' }],
+  ])('rejects %s before creating the quest', async (_label, auth) => {
+    const invoke = makeInvoke();
+    await expect(invoke.invoke({ body, userId: OWNER_ID, ...auth })).rejects.toThrow(/authOrigin/);
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+  });
+});
+
+// A session pinned to a retired model must reach its DEPRECATED_MODEL_MAP successor. The catalog
+// hides or disables such a model, so the redirect has to run before the availability checks.
+describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
+  const OWNER_ID = 'owner-1';
+  const HIDDEN_ID = 'claude-3-haiku-20240307';
+  const SUCCESSOR_ID = 'claude-haiku-5-5';
+  const successor = { id: SUCCESSOR_ID, type: 'text', name: 'Claude Haiku 5.5', max_tokens: 100, contextWindow: 1000 };
+  let mockDb: any;
+  let logger: { log: Mock; info: Mock; warn: Mock; error: Mock };
+  let invokeLambda: Mock;
+
+  const makeInvoke = (overrides: Record<string, unknown> = {}) =>
+    new ChatCompletionInvoke({
+      db: mockDb,
+      logger: logger as any,
+      user: { id: OWNER_ID, tags: [] } as any,
+      invokeLambda,
+      ...overrides,
+    } as any);
+
+  const bodyFor = (model: string) => ({
+    sessionId: 'session-1',
+    historyCount: 1,
+    fabFileIds: [],
+    message: 'hello',
+    messageFileIds: [],
+    params: { model },
+    queryComplexity: 'simple',
+    promptMeta: {},
+  });
+
+  beforeEach(() => {
+    mockedGetAvailableModels.mockReset();
+    logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    invokeLambda = vi.fn();
+    mockDb = {
+      sessions: {
+        findById: vi.fn().mockResolvedValue({ id: 'session-1', userId: OWNER_ID, users: [], agentIds: [] }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+      organizations: { findById: vi.fn() },
+      quests: {
+        findById: vi.fn(),
+        create: vi.fn().mockResolvedValue({ id: 'quest-1', promptMeta: {} }),
+        update: vi.fn(),
+      },
+      adminSettings: {
+        getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+        findOne: vi.fn().mockResolvedValue(null),
+      },
+    };
+  });
+
+  afterEach(() => resetReplacedByOverlay());
+
+  const modelConfigs = (configs: unknown[]) =>
+    mockDb.adminSettings.findOne.mockResolvedValue({ settingName: 'llmModelConfigurations', settingValue: configs });
+
+  it('redirects a hidden deprecated model to its successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+    expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
+  });
+
+  it('redirects a disabled deprecated model to its successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: HIDDEN_ID, type: 'text', name: 'Claude 3 Haiku', disabled: true, disabledReason: 'retired' },
+      successor,
+    ] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+    expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
+  });
+
+  it('checks the successor, not the retired id, against model access configuration', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    modelConfigs([
+      { id: HIDDEN_ID, enabled: true, allowedUserTags: [] },
+      { id: SUCCESSOR_ID, enabled: true, allowedUserTags: ['premium'] },
+    ]);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).toBeNull();
+    expect(mockDb.quests.update).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', reply: expect.stringContaining(`"${SUCCESSOR_ID}" is not accessible`) })
+    );
+  });
+
+  const pinnedModels = () =>
+    mockDb.sessions.update.mock.calls.map((c: any[]) => c[0]).filter((u: any) => 'lastUsedModel' in u);
+
+  const expectErrorWithoutPin = (reply: string) => {
+    expect(pinnedModels()).toHaveLength(0);
+    expect(mockDb.quests.update).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', status: 'done', reply: expect.stringContaining(reply) })
+    );
+  };
+
+  it.each([
+    ['a model the access check rejects', SUCCESSOR_ID],
+    ['a redirect successor the user cannot access', HIDDEN_ID],
+  ])('does not pin the session to %s', async (_label, requestedId) => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    modelConfigs([{ id: SUCCESSOR_ID, enabled: false, allowedUserTags: [] }]);
+
+    await makeInvoke().invoke({ body: bodyFor(requestedId), userId: OWNER_ID, authOrigin: 'session' });
+
+    expectErrorWithoutPin('is not accessible');
+    expect(mockDb.sessions.update).toHaveBeenCalledWith({
+      id: 'session-1',
+      lastUpdated: expect.any(Date),
+      updatedAt: expect.any(Date),
+    });
+  });
+
+  it('pins the session to the resolved model once the access check passes', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    modelConfigs([{ id: SUCCESSOR_ID, enabled: true, allowedUserTags: ['premium'] }]);
+    mockDb.sessions.findById.mockResolvedValue({
+      id: 'session-1',
+      userId: OWNER_ID,
+      users: [],
+      agentIds: [],
+      lastUsedModel: 'some-other-model',
+    });
+
+    await makeInvoke({ user: { id: OWNER_ID, tags: ['premium'] } }).invoke({
+      body: bodyFor(HIDDEN_ID),
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    expect(pinnedModels()).toEqual([{ id: 'session-1', lastUsedModel: SUCCESSOR_ID }]);
+  });
+
+  it('skips the pin write when the session is already on the resolved model', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    mockDb.sessions.findById.mockResolvedValue({
+      id: 'session-1',
+      userId: OWNER_ID,
+      users: [],
+      agentIds: [],
+      lastUsedModel: SUCCESSOR_ID,
+    });
+
+    await makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(invokeLambda).toHaveBeenCalledTimes(1);
+    expect(pinnedModels()).toHaveLength(0);
+  });
+
+  it('keeps the quest running and warns when only the pin write fails', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    mockDb.sessions.update.mockImplementation((u: any) =>
+      'lastUsedModel' in u ? Promise.reject(new Error('db down')) : Promise.resolve()
+    );
+
+    const quest = await makeInvoke().invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(invokeLambda).toHaveBeenCalledTimes(1);
+    expect(quest).toBeDefined();
+    expect(mockDb.quests.update).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(SUCCESSOR_ID), expect.any(Error));
+  });
+
+  it.each([
+    [
+      'dispatch fails',
+      () => makeInvoke({ invokeLambda: vi.fn().mockRejectedValue(new Error('lambda down')) }),
+      'lambda down',
+    ],
+    [
+      'no default embedding model is configured',
+      () => {
+        mockDb.adminSettings.getSettingsValue.mockResolvedValue(null);
+        return makeInvoke();
+      },
+      'Default embedding model not found',
+    ],
+    ['no invokeLambda is provided', () => makeInvoke({ invokeLambda: undefined }), 'No invokeLambda function provided'],
+  ])('does not pin and marks the quest done when %s', async (_label, build, reply) => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await build().invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expectErrorWithoutPin(reply);
+  });
+
+  it('rejects the redirect when the successor is itself disabled', async () => {
+    mockedGetAvailableModels.mockResolvedValue([{ ...successor, disabled: true, disabledReason: 'paused' }] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(`Model "${SUCCESSOR_ID}" is currently unavailable: paused`);
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+  });
+
+  it('follows a successor chain to its live end and admits only that model', async () => {
+    updateReplacedByOverlay({ [HIDDEN_ID]: 'mid-model', 'mid-model': SUCCESSOR_ID });
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+    expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
+  });
+
+  it('terminates on a successor cycle and rejects when no hop is in the catalog', async () => {
+    updateReplacedByOverlay({ [HIDDEN_ID]: 'loop-a', 'loop-a': HIDDEN_ID });
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(/Invalid model/);
+  });
+
+  it('does not reroute a retired hidden id for an API-key caller, and names the successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    ).rejects.toThrow(`Invalid model: "${HIDDEN_ID}" is not available; it is replaced by "${SUCCESSOR_ID}"`);
+    expect(mockDb.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('does not reroute a retired disabled id for an API-key caller', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: HIDDEN_ID, type: 'text', name: 'Claude 3 Haiku', disabled: true },
+      successor,
+    ] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    ).rejects.toThrow(/is replaced by/);
+  });
+
+  it('records the retired id in promptMeta.redirectedFrom and labels the reply with the successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(mockDb.quests.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMeta: expect.objectContaining({
+          redirectedFrom: HIDDEN_ID,
+          model: expect.objectContaining({ name: SUCCESSOR_ID, contextWindow: 1000 }),
+        }),
+      })
+    );
+  });
+
+  it('records no redirect for a current model', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    const { promptMeta } = mockDb.quests.create.mock.calls[0][0];
+    expect(promptMeta).not.toHaveProperty('redirectedFrom');
+    expect(promptMeta.model.name).toBe(SUCCESSOR_ID);
+  });
+
+  it('still rejects an unmapped model that is not in the catalog', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor('no-such-model'), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(/Invalid model/);
   });
 });
 
@@ -176,7 +506,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset();
     mockDb = {
-      sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn() },
+      sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn().mockResolvedValue(undefined) },
       organizations: { findById: vi.fn() },
       // Echo the created document back so questStartParams carries the promptMeta actually written,
       // rather than a fixed stub - the point of the assertions below.
@@ -201,9 +531,9 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([modelInfo('whisper-1', 'speech-to-text')] as any);
 
     const invoke = makeInvoke();
-    await expect(invoke.invoke({ body: bodyFor('whisper-1'), userId: OWNER_ID })).rejects.toThrow(
-      /cannot run a chat completion/
-    );
+    await expect(
+      invoke.invoke({ body: bodyFor('whisper-1'), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(/cannot run a chat completion/);
 
     expect(mockDb.sessions.update).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
@@ -216,7 +546,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([modelInfo('some-model', type)] as any);
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: bodyFor('some-model'), userId: OWNER_ID });
+    await invoke.invoke({ body: bodyFor('some-model'), userId: OWNER_ID, authOrigin: 'session' });
 
     expect(mockDb.quests.create).toHaveBeenCalledWith(
       expect.objectContaining({ promptMeta: expect.objectContaining({ model: expect.objectContaining({ type }) }) })
@@ -232,9 +562,26 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     mockedGetAvailableModels.mockResolvedValue([typeless] as any);
 
     const invoke = makeInvoke();
-    await invoke.invoke({ body: bodyFor('mystery-model'), userId: OWNER_ID });
+    await invoke.invoke({ body: bodyFor('mystery-model'), userId: OWNER_ID, authOrigin: 'session' });
 
     expect(mockDb.quests.create).toHaveBeenCalled();
     expect((invoke as any).questStartParams?.promptMeta?.model?.type).toBeUndefined();
+  });
+
+  // The tool-calling scorecard (evals/toolCalling) splits stored turns by this field.
+  it('records the public API toolMode on promptMeta, and nothing when the request named none', async () => {
+    mockedGetAvailableModels.mockResolvedValue([modelInfo('some-model', 'text')] as any);
+
+    const withMode = makeInvoke();
+    await withMode.invoke({
+      body: { ...bodyFor('some-model'), toolMode: 'smart' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect((withMode as any).questStartParams?.promptMeta?.toolMode).toBe('smart');
+
+    const withoutMode = makeInvoke();
+    await withoutMode.invoke({ body: bodyFor('some-model'), userId: OWNER_ID, authOrigin: 'session' });
+    expect((withoutMode as any).questStartParams?.promptMeta).not.toHaveProperty('toolMode');
   });
 });

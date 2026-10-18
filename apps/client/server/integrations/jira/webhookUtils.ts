@@ -189,8 +189,7 @@ export const JIRA_REPLAY_TOLERANCE_MS = 5 * 60 * 1000;
 
 /** Internal reason - MUST NOT be exposed in HTTP responses. */
 export type JiraTimestampValidationResult =
-  | { valid: true }
-  | { valid: false; reason: 'invalid_timestamp' | 'timestamp_expired' };
+  { valid: true } | { valid: false; reason: 'invalid_timestamp' | 'timestamp_expired' };
 
 /**
  * Validate the `timestamp` field from a parsed Jira webhook payload.
@@ -220,4 +219,12 @@ export function validateJiraPayloadTimestamp(
   }
 
   return { valid: true };
+}
+
+/**
+ * Whether the user may reveal the secret of, update, or delete a webhook config:
+ * the creator or an admin. Keep in sync with the client form's canManageConfig.
+ */
+export function canManageConfig(config: { createdBy: string }, user: { id: string; isAdmin?: boolean }): boolean {
+  return config.createdBy === user.id || !!user.isAdmin;
 }

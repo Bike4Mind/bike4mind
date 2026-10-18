@@ -11,7 +11,7 @@ vi.mock('@server/services/githubService', () => ({
   },
 }));
 
-vi.mock('@server/services/secopsTriageService', () => ({
+vi.mock('@workers/services/secopsTriageService', () => ({
   createSecopsTriageService: () => ({
     run: (...args: unknown[]) => mockServiceRun(...args),
   }),

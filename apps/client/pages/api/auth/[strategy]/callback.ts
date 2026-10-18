@@ -5,7 +5,8 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository, IUserObject } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
+import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { BadRequestError } from '@server/utils/errors';
@@ -20,6 +21,8 @@ import { recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@server/utils/ip';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -37,7 +40,7 @@ const handler = baseApi({ auth: false })
     // Okta state is handled via the JWT-based OktaJwtStateStore in auth.ts; the
     // state is self-contained in the JWT, so no session workaround is needed.
 
-    const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+    const ip = getClientIp(req);
     const userAgent = req.headers['user-agent'] || 'unknown';
 
     // In dev, derive callback URL from the actual request host so the token
@@ -115,6 +118,23 @@ const handler = baseApi({ auth: false })
           return res.redirect('/login?error=account_suspended');
         }
 
+        // Resume the originally requested path, round-tripped via the signed
+        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
+        // applies sanitizeRedirectTo before navigating, so pass it through as an
+        // opaque, URL-encoded query value (kept out of the token fragment).
+        //
+        // The state store already verified this token (CSRF) inside
+        // passport.authenticate above; we re-decode here only to read the
+        // embedded redirectTo and clientId. The extra HS256 verify is cheap and avoids
+        // threading the payload out through passport-oauth2's internals.
+        const stateResult =
+          typeof req.query.state === 'string'
+            ? verifyStateToken<BaseStatePayload & { redirectTo?: string; clientId?: string }>(req.query.state, {
+                audience: `${strategy}-oauth-state`,
+              })
+            : undefined;
+        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
+
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
@@ -132,6 +152,7 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
+          await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
@@ -160,6 +181,32 @@ const handler = baseApi({ auth: false })
           }
         }
 
+        const successQuery = authSuccessRedirectQuery(redirectTo);
+
+        // isNewUser/signupMethod ride the redirect fragment: /auth/success reads and
+        // clears it exactly once, firing the signup ad conversion for new accounts.
+        const signupFragment =
+          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+
+        // Only a genuine new provider binding (flagged by verifyCallback) is an account-link.
+        // Audited before the second-factor gate: verifyCallback has already persisted it.
+        if ((user as { isNewOAuthLink?: boolean }).isNewOAuthLink) {
+          await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
+        }
+
+        // Consumer social sign-in proves the provider account, not the user's own second
+        // factor, so an enrolled factor is always challenged (and enforceMFA enrollment owed).
+        const secondFactor = await resolveSecondFactor(req, user, { origin: { strategy, createdVia: 'oauth' } });
+        if (secondFactor.kind !== 'satisfied') {
+          const handoff = mfaHandoffFragment({
+            mfaToken: secondFactor.mfaToken,
+            userId: user.id,
+            mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
+            passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+          });
+          return res.redirect(`/auth/success${successQuery}${handoff}${signupFragment}`);
+        }
+
         const { accessToken } = await issueBrowserSession(req, res, user.id, {
           createdVia: 'oauth',
           tokenVersion: user.tokenVersion ?? 0,
@@ -176,38 +223,11 @@ const handler = baseApi({ auth: false })
           console.error('Failed to log OAuth login:', logError);
         }
 
-        // Every OAuth callback is a successful authentication; only a genuine
-        // new provider binding (flagged by verifyCallback) is an account-link.
-        await logAuthAudit(req, { userId: user.id, event: 'login_success', strategy });
-        if ((user as { isNewOAuthLink?: boolean }).isNewOAuthLink) {
-          await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
-        }
+        await logSignInSuccess(req, { userId: user.id, strategy, trustedDevice: secondFactor.trustedDevice });
 
-        // Resume the originally requested path, round-tripped via the signed
-        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
-        // applies sanitizeRedirectTo before navigating, so pass it through as an
-        // opaque, URL-encoded query value (kept out of the token fragment).
-        //
-        // The state store already verified this token (CSRF) inside
-        // passport.authenticate above; we re-decode here only to read the
-        // embedded redirectTo. The extra HS256 verify is cheap and avoids
-        // threading the payload out through passport-oauth2's internals.
-        const stateResult =
-          typeof req.query.state === 'string'
-            ? verifyStateToken<BaseStatePayload & { redirectTo?: string }>(req.query.state, {
-                audience: `${strategy}-oauth-state`,
-              })
-            : undefined;
-        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
-        const successQuery = authSuccessRedirectQuery(redirectTo);
-
-        // Redirect with tokens in URL fragment (not query string)
-        // Using fragments prevents tokens from being logged in server access logs,
-        // sent in Referer headers, or stored in browser history as query params.
-        // isNewUser/signupMethod ride the same fragment: /auth/success reads and
-        // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment =
-          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        // Redirect with tokens in URL fragment (not query string): a fragment is never sent to
+        // the server, so the access token stays out of access logs, Referer headers and browser
+        // history.
         const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {

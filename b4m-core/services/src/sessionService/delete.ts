@@ -1,4 +1,5 @@
 import {
+  chargedBytes,
   IFabFileRepository,
   IProjectRepository,
   ISessionRepository,
@@ -53,19 +54,20 @@ export const deleteSession = async (
   // owned-vs-shared-in split in DELETE /api/files; anything else just loses the grants this session
   // minted on it.
   // Tool-generated files link to their notebook through provenance, not `sessionId` (see
-  // persistGeneratedFileAsFabFile), so they need their own lookup to go with the notebook.
-  const fabFiles = [
-    ...(await db.fabFiles.find({ sessionId: session.id })),
-    ...(await db.fabFiles.findToolGeneratedBySessionId(session.id)),
-  ];
-  const ownedFiles = fabFiles.filter(file => file.userId === userId);
+  // persistGeneratedFileAsFabFile). They are the user's library and outlive the notebook (deleted
+  // from Files instead), so they are not in the delete set, but they still lose this session's grants.
+  const sessionFiles = await db.fabFiles.find({ sessionId: session.id });
+  const generatedFiles = await db.fabFiles.findToolGeneratedBySessionId(session.id);
+  const ownedFiles = sessionFiles.filter(file => file.userId === userId);
 
   // Both sets, because a grant this session minted and a file this session holds are not the same
   // thing: accept.ts propagates onto `knowledgeIds`, which can name files uploaded elsewhere, while
   // `sessionId` names files uploaded here that may never have been attached as knowledge.
-  const grantedFiles = [...fabFiles, ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? []))].filter(
-    (file, index, all) => all.findIndex(other => other.id === file.id) === index
-  );
+  const grantedFiles = [
+    ...sessionFiles,
+    ...generatedFiles,
+    ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
+  ].filter((file, index, all) => all.findIndex(other => other.id === file.id) === index);
 
   // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and
   // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
@@ -106,7 +108,14 @@ export const deleteSession = async (
 
   // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
   // so the grouping collapses to one write today.
-  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(ownedFiles, -1), logger);
+  await bestEffortAdjustOwnerStorage(
+    db.users,
+    groupStorageDeltaByOwner(
+      ownedFiles.map(f => ({ id: f.id, userId: f.userId, fileSize: chargedBytes(f) })),
+      -1
+    ),
+    logger
+  );
 
   // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
   // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a

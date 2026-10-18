@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { auth as googleAuth, drive as driveApi, drive_v3 } from '@googleapis/drive';
+import { BadRequestError } from '@server/utils/errors';
 
 export type DriveFile = {
   id: string;
@@ -151,19 +152,89 @@ export function isDriveInvalidCursorError(e: unknown): boolean {
 }
 
 /**
+ * The HTTP statuses an error could carry, from the three shapes googleapis surfaces them, as a
+ * numeric string where one was supplied. Shared by the classifiers below so they cannot disagree
+ * about what counts as a 403/404.
+ */
+function driveErrorStatuses(e: unknown): unknown[] {
+  if (typeof e !== 'object' || e === null) return [];
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  return [err.code, err.status, response?.status].map(raw => (typeof raw === 'string' ? Number(raw) : raw));
+}
+
+/** Does the error carry one of these `errors[].reason` values, at either shape Drive surfaces them? */
+function hasDriveErrorReason(e: unknown, reasons: Set<string>): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  const data = response?.data as { error?: { errors?: unknown } } | undefined;
+  return [err.errors, data?.error?.errors].some(
+    list =>
+      Array.isArray(list) &&
+      list.some(detail => {
+        const reason = (detail as { reason?: unknown } | null)?.reason;
+        return typeof reason === 'string' && reasons.has(reason);
+      })
+  );
+}
+
+/**
  * Is this error Drive confirming a file is genuinely gone (a plain 404), as opposed to a transient
  * failure (rate limit, 5xx, network blip)? getFileParents uses this to decide whether an ancestry
  * lookup failure means "this ancestor no longer exists" (safe to fold into null/no-chain) versus
  * "we couldn't tell right now" (must NOT be read the same way - see getFileParents).
  */
 export function isDriveNotFoundError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null) return false;
-  const err = e as Record<string, unknown>;
-  const response = err.response as Record<string, unknown> | undefined;
-  for (const raw of [err.code, err.status, response?.status]) {
-    if ((typeof raw === 'string' ? Number(raw) : raw) === 404) return true;
+  return driveErrorStatuses(e).includes(404);
+}
+
+// The 403 reasons Drive gives for a credential that may not touch one specific file. Allow-listed
+// rather than "any non-throttle 403": project-wide 403s (dailyLimitExceeded, accessNotConfigured,
+// domainPolicy) are not about the folder, and reading them as "un-shared" would park every
+// connection that polls during a platform outage.
+const DRIVE_FILE_ACCESS_DENIED_REASONS = new Set(['insufficientFilePermissions', 'appNotAuthorizedToFile']);
+
+/** Is this error Drive refusing this credential access to one specific file (a per-file 403)? */
+export function isDriveFileAccessDeniedError(e: unknown): boolean {
+  return driveErrorStatuses(e).includes(403) && hasDriveErrorReason(e, DRIVE_FILE_ACCESS_DENIED_REASONS);
+}
+
+// The 403 reasons Drive gives when the credential itself is no good (scopes revoked), as opposed to
+// a per-file denial (DRIVE_FILE_ACCESS_DENIED_REASONS) or a throttle.
+const DRIVE_AUTH_403_REASONS = new Set(['authError', 'insufficientPermissions']);
+
+/**
+ * Is this error Drive rejecting the access token itself (a 401, or a 403 for a revoked scope)? That is
+ * a verdict on the CREDENTIAL, not on any file: a grant revoked at Google invalidates the token while
+ * our stored expiresAt still reads it as valid, so callers must route this to a refresh/reconnect
+ * rather than "folder gone". The one classifier for getFolderAccess, probeConnectedFolder's callers
+ * and withDriveReconnectOnAuthError.
+ */
+export function isDriveAuthError(e: unknown): boolean {
+  const statuses = driveErrorStatuses(e);
+  if (statuses.includes(401)) return true;
+  return statuses.includes(403) && hasDriveErrorReason(e, DRIVE_AUTH_403_REASONS);
+}
+
+/**
+ * What a revoked/expired Drive grant reads as everywhere it is surfaced. Shared with common.ts's
+ * token-refresh path (a revoked grant can surface either way) so the two cannot drift.
+ */
+export const DRIVE_RECONNECT_REQUIRED_MESSAGE = 'Google Drive access was revoked - reconnect required';
+
+/**
+ * Run a user-facing Drive call, turning a token Drive rejects into a reconnect 400. Left raw, the
+ * gaxios error's numeric `status` 401 passes through errorHandler as an HTTP 401, which ApiContext
+ * reads as the APP session expiring and signs the user out.
+ */
+export async function withDriveReconnectOnAuthError<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (isDriveAuthError(e)) throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
+    throw e;
   }
-  return false;
 }
 
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
@@ -178,7 +249,7 @@ export function isValidDriveFolderId(id: unknown): id is string {
 // Page cap: bounds outbound Drive calls against a pathological/looping pageToken. Exceeding it
 // THROWS in listFolderChildren rather than truncating - a partial listing under a "the folder's
 // children" contract would silently drop files. 100 x pageSize(1000) = 100k children.
-const MAX_LIST_PAGES = 100;
+export const MAX_LIST_PAGES = 100;
 
 /**
  * Build a per-call Drive v3 client from an OAuth access token.
@@ -202,21 +273,23 @@ export function createDriveClient(accessToken: string): drive_v3.Drive {
 }
 
 /**
- * `ok: false` means Drive never gave an access ANSWER - it throttled us. Modelled as its own arm
- * rather than a flag on the success shape so a caller cannot read `exists: false` off a throttle
- * and tell the user they lost access to their own folder (#2395).
+ * `ok: false` means Drive never gave an access ANSWER - it throttled us, or rejected the access token
+ * itself. Modelled as its own arm rather than a flag on the success shape so a caller cannot read
+ * `exists: false` off either and tell the user they lost access to their own folder (#2395).
  */
 export type FolderAccess =
   | { ok: true; exists: boolean; isFolder: boolean; canRead: boolean }
-  | { ok: false; reason: 'rate_limited'; detail?: string };
+  | { ok: false; reason: 'rate_limited'; detail?: string }
+  | { ok: false; reason: 'unauthorized'; detail?: string };
 
 /**
  * Read-access probe for a single folder, using the CALLER's own Drive credential. Drive returns 404
  * (not 403) for a file the caller can't see, so a successful `files.get` is itself proof the caller
  * can read the folder - that is the signal drive-sync uses to gate the global folder claim (a user
  * must be able to read a folder before they can claim it for a lake). Never throws: a permanent
- * error (no access, bad id) resolves to `exists: false` so the caller fails closed, and a throttle
- * that outlives the retry budget comes back as `ok: false` so the caller can say so instead.
+ * error (no access, bad id) resolves to `exists: false` so the caller fails closed, while a throttle
+ * that outlives the retry budget or a rejected access token comes back as `ok: false` so the caller
+ * can say so instead.
  */
 export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): Promise<FolderAccess> {
   if (!isValidDriveFolderId(folderId)) return { ok: true, exists: false, isFolder: false, canRead: false };
@@ -237,10 +310,71 @@ export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): 
       canRead: file.capabilities?.canDownload !== false,
     };
   } catch (e) {
-    if (isDriveRateLimitError(e)) {
-      return { ok: false, reason: 'rate_limited', detail: e instanceof Error ? e.message : String(e) };
-    }
+    const detail = e instanceof Error ? e.message : String(e);
+    if (isDriveRateLimitError(e)) return { ok: false, reason: 'rate_limited', detail };
+    if (isDriveAuthError(e)) return { ok: false, reason: 'unauthorized', detail };
     return { ok: true, exists: false, isFolder: false, canRead: false };
+  }
+}
+
+// The lastError for a token Drive still refuses right after a refresh: only fresh consent fixes that.
+export const REJECTED_DRIVE_TOKEN_MESSAGE =
+  'Google Drive rejected the access your account granted Bike4Mind. Reconnect Google Drive, then re-sync.';
+
+export type UnreachableFolderReason = 'not_found' | 'forbidden' | 'trashed';
+
+export type ConnectedFolderReachability = { reachable: true } | { reachable: false; reason: UnreachableFolderReason };
+
+// The lastError shown on the "Needs reconnect" chip. Drive answers 404 (not 403) for a folder the
+// credential can no longer see, so not_found covers "un-shared" as well as "deleted". A deleted folder
+// cannot be re-picked: the lake is bound to that folder id, so the way out is disconnect + reconnect.
+export const UNREACHABLE_FOLDER_MESSAGES: Record<UnreachableFolderReason, string> = {
+  not_found:
+    'The connected Google Drive folder was not found. If it is no longer shared with the account that connected it, re-share it and re-sync. If it was deleted, disconnect it and connect another folder.',
+  forbidden:
+    'Google Drive denied access to the connected folder. It is no longer shared with the account that connected it. Re-share it, then re-sync.',
+  trashed: 'The connected Google Drive folder is in the trash. Restore it in Google Drive, then re-sync.',
+};
+
+/**
+ * Is a connection's root folder still there for the connection's own credential? Unlike
+ * getFolderAccess this THROWS on anything that is not a definite answer (a throttle, a 5xx, a network
+ * blip), because a `reachable: false` here parks the connection in needs_reconnect and stops it
+ * polling - a transient failure must never be read as "the folder is gone". A rejected token
+ * (isDriveAuthError) also throws: it is a credential verdict, which the caller settles by
+ * refreshing the token, not a folder one.
+ *
+ * A trashed folder still answers files.get for its owner, and listing its children excludes trashed
+ * items silently, so `trashed` is read explicitly rather than inferred from an empty walk.
+ */
+export async function probeConnectedFolder(
+  drive: drive_v3.Drive,
+  folderId: string
+): Promise<ConnectedFolderReachability> {
+  if (!isValidDriveFolderId(folderId)) throw new Error(`Invalid Drive folder id: ${folderId}`);
+  try {
+    const res = await withDriveRetry('files.get(connected folder)', () =>
+      drive.files.get({ fileId: folderId, fields: 'id, trashed', supportsAllDrives: true })
+    );
+    return res.data.trashed ? { reachable: false, reason: 'trashed' } : { reachable: true };
+  } catch (e) {
+    if (isDriveNotFoundError(e)) return { reachable: false, reason: 'not_found' };
+    if (isDriveFileAccessDeniedError(e)) return { reachable: false, reason: 'forbidden' };
+    throw e;
+  }
+}
+
+/**
+ * Thrown by listFolderChildren when it stops before the last page: `page_cap` when the folder has
+ * more than MAX_LIST_PAGES pages, `deadline` when the caller's `deadlineMs` passed between pages.
+ */
+export class DriveListingIncompleteError extends Error {
+  constructor(
+    readonly reason: 'page_cap' | 'deadline',
+    message: string
+  ) {
+    super(message);
+    this.name = 'DriveListingIncompleteError';
   }
 }
 
@@ -251,8 +385,15 @@ export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): 
  * are returned - omitting them silently drops shared-drive items (a bug that passes unit tests
  * and fails in prod). The recursive tree-walk and content download/export are layered on in the
  * ingest job (issue C); this is the read primitive the smoke test and ingest both build on.
+ *
+ * `onPage` receives each page's files as it lands (before any page-cap or deadline throw) and may
+ * return `false` to stop paginating early.
  */
-export async function listFolderChildren(drive: drive_v3.Drive, folderId: string): Promise<DriveFile[]> {
+export async function listFolderChildren(
+  drive: drive_v3.Drive,
+  folderId: string,
+  { deadlineMs, onPage }: { deadlineMs?: number; onPage?: (page: DriveFile[]) => boolean | void } = {}
+): Promise<DriveFile[]> {
   // Defense-in-depth: never interpolate an unvalidated id into the query (callers should also
   // validate at their trust boundary).
   if (!isValidDriveFolderId(folderId)) {
@@ -275,6 +416,7 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
       })
     );
 
+    const pageFiles: DriveFile[] = [];
     for (const f of res.data.files ?? []) {
       // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate. Logged
       // rather than dropped quietly: all three are in the requested `fields`, so this should never
@@ -294,8 +436,12 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
       if (f.createdTime) file.createdTime = f.createdTime;
       if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
       if (f.size != null) file.size = Number(f.size);
-      files.push(file);
+      pageFiles.push(file);
     }
+    files.push(...pageFiles);
+    // Delivered before the cap/deadline throws below so a caller keeps the pages already listed.
+    // Returning false stops pagination.
+    if (onPage?.(pageFiles) === false) return files;
 
     pageToken = res.data.nextPageToken ?? undefined;
     pages++;
@@ -303,7 +449,13 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     // would let ingest drop files while reporting success. Throwing forces the incremental design
     // at the point it belongs (issue C).
     if (pageToken && pages >= MAX_LIST_PAGES) {
-      throw new Error(`Drive folder ${folderId} exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`);
+      throw new DriveListingIncompleteError(
+        'page_cap',
+        `Drive folder ${folderId} exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`
+      );
+    }
+    if (pageToken && deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      throw new DriveListingIncompleteError('deadline', `Drive folder ${folderId} listing ran past its deadline`);
     }
   } while (pageToken);
 

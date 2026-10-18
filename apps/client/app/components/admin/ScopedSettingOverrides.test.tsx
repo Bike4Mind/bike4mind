@@ -10,8 +10,11 @@ const clearMutate = vi.fn();
 // mutation into its rejected state.
 let overrides: IScopedSetting[] = [];
 let setError: unknown;
+// Stands in for the hook's server-provided defaultEmbeddingModel; undefined leaves the field silent.
+let floorWarning: string | undefined;
 
 vi.mock('@client/app/hooks/data/settings', () => ({
+  useFloorAboveMeasuredWarning: (key: string) => (key === 'forcedRetrievalMinSimilarityPct' ? floorWarning : undefined),
   useScopedSettingOverrides: () => ({ data: overrides }),
   useSetScopedSettingOverride: () => ({ mutate: setMutate, isPending: false, error: setError }),
   useClearScopedSettingOverride: () => ({ mutate: clearMutate, isPending: false, error: undefined }),
@@ -161,6 +164,33 @@ describe('ScopedSettingOverrides number values', () => {
       scopeId: 'org-1',
       value: 7,
     });
+  });
+
+  it('shows the above-measured minimum warning and confirms it on Set', () => {
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderSection(settingsMap.forcedRetrievalMinSimilarityPct);
+      fireEvent.change(screen.getByTestId('scoped-override-forcedRetrievalMinSimilarityPct-scope-id-input'), {
+        target: { value: 'org-1' },
+      });
+      fireEvent.change(screen.getByTestId('scoped-override-forcedRetrievalMinSimilarityPct-value-input'), {
+        target: { value: '75' },
+      });
+
+      expect(screen.getByTestId('scoped-override-forcedRetrievalMinSimilarityPct-helper')).toHaveTextContent(
+        floorWarning
+      );
+      fireEvent.click(screen.getByTestId('scoped-override-forcedRetrievalMinSimilarityPct-set-btn'));
+      expect(setMutate).toHaveBeenCalledWith({
+        settingName: 'forcedRetrievalMinSimilarityPct',
+        scopeLevel: 'organization',
+        scopeId: 'org-1',
+        value: 75,
+        confirmAboveMeasuredFloor: true,
+      });
+    } finally {
+      floorWarning = undefined;
+    }
   });
 
   it('blocks Set on an out-of-range number and says why', () => {

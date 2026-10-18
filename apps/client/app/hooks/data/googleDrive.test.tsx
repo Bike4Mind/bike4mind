@@ -8,6 +8,7 @@ import {
   useLakeDriveConnection,
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
+  useConnectDriveFolderToLake,
   driveConnectionPollInterval,
   startGoogleDriveConnect,
   DRIVE_CONNECTION_ACTIVE_POLL_MS,
@@ -104,6 +105,27 @@ describe('useLakeDriveConnection', () => {
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
+  });
+
+  it('refreshes the not-ingested list once a sync finishes', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 3 } } });
+    const { result } = renderHook(() => useLakeDriveConnection('lake_1'), { wrapper });
+    await waitFor(() => expect(result.current.data).toMatchObject({ status: 'syncing' }));
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'connected', fileCount: 3 } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
   });
 });
 
@@ -200,6 +222,27 @@ describe('useDisconnectLakeDrive', () => {
   });
 });
 
+// A refused Re-sync can park the connection server-side (credential_error, needs_reconnect); the card
+// only offers Reconnect if the failure refetches the status too.
+describe('useConnectDriveFolderToLake', () => {
+  it('refetches the connection status when the connect fails', async () => {
+    post.mockRejectedValue(axiosError(400));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useConnectDriveFolderToLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake_1', driveFolderId: 'folder_1' }).catch(() => undefined);
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.driveConnection('lake_1'));
+  });
+});
+
 // A fresh connect writes status:'connected' immediately, before the queued ingest job claims it
 // into 'syncing' - a poll that only ran while 'syncing' would never re-fetch past that pre-claim
 // gap and could cache fileCount: 0 forever.
@@ -214,6 +257,8 @@ describe('driveConnectionPollInterval', () => {
     lastError: null,
     lastUsedAt: null,
     connectedAt: null,
+    lastPolledAt: null,
+    syncSchedule: { mode: 'manual' },
     fileCount: 0,
     disconnecting: false,
     disconnectStalled: false,

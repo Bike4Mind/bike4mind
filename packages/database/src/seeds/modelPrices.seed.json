@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-07T10:30:58.683Z",
+  "generatedAt": "2026-10-15T09:12:49.531Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -82,6 +82,20 @@
       }
     },
     {
+      "modelId": "claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
+        }
+      }
+    },
+    {
       "modelId": "claude-opus-4-1-20250805",
       "unit": "per_token",
       "pricing": {
@@ -148,6 +162,17 @@
         "1000000": {
           "input": 0.000005,
           "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000004,
+          "output": 0.00002,
+          "cache_read": 2.0000000000000002e-7
         }
       }
     },
@@ -268,8 +293,9 @@
       "unit": "per_token",
       "pricing": {
         "1048576": {
-          "input": 7.5e-8,
-          "output": 6e-7
+          "input": 3e-7,
+          "output": 0.0000025,
+          "cache_read": 3e-8
         }
       }
     },
@@ -278,8 +304,9 @@
       "unit": "per_token",
       "pricing": {
         "1048576": {
-          "input": 3.75e-8,
-          "output": 3e-7
+          "input": 1.0000000000000001e-7,
+          "output": 4.0000000000000003e-7,
+          "cache_read": 1e-8
         }
       }
     },
@@ -299,7 +326,8 @@
       "pricing": {
         "2097152": {
           "input": 0.00000125,
-          "output": 0.00001
+          "output": 0.00001,
+          "cache_read": 1.25e-7
         }
       }
     },
@@ -318,8 +346,9 @@
       "unit": "per_token",
       "pricing": {
         "2097152": {
-          "input": 0.000002,
-          "output": 0.000001
+          "input": 5e-7,
+          "output": 0.000003,
+          "cache_read": 5.0000000000000004e-8
         }
       }
     },
@@ -339,7 +368,8 @@
       "pricing": {
         "1048576": {
           "input": 2.5e-7,
-          "output": 0.0000015
+          "output": 0.0000015,
+          "cache_read": 2.5000000000000002e-8
         }
       }
     },
@@ -349,7 +379,8 @@
       "pricing": {
         "2097152": {
           "input": 0.000002,
-          "output": 0.000018
+          "output": 0.000018,
+          "cache_read": 2.0000000000000002e-7
         }
       }
     },
@@ -359,7 +390,8 @@
       "pricing": {
         "1048576": {
           "input": 0.0000015,
-          "output": 0.000009
+          "output": 0.000009,
+          "cache_read": 1.5e-7
         }
       }
     },
@@ -379,7 +411,22 @@
       "pricing": {
         "1000000": {
           "input": 0.00001,
-          "output": 0.00005
+          "output": 0.00005,
+          "cache_read": 2.5e-7
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
         }
       }
     },
@@ -438,8 +485,9 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000005,
-          "output": 0.000025
+          "input": 0.000004,
+          "output": 0.00002,
+          "cache_read": 2.0000000000000002e-7
         }
       }
     },
@@ -468,8 +516,9 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000003,
-          "output": 0.000015
+          "input": 0.000002,
+          "output": 0.00001,
+          "cache_read": 1.0000000000000001e-7
         }
       }
     },
@@ -683,12 +732,12 @@
       "unit": "per_token",
       "pricing": {
         "272000": {
-          "input": 0.000001,
-          "output": 0.000006
+          "input": 2.0000000000000002e-7,
+          "output": 0.0000012
         },
         "1050000": {
-          "input": 0.000002,
-          "output": 0.000009
+          "input": 4.0000000000000003e-7,
+          "output": 0.0000018000000000000001
         }
       }
     },
@@ -711,12 +760,12 @@
       "unit": "per_token",
       "pricing": {
         "272000": {
-          "input": 0.0000025,
-          "output": 0.000015
+          "input": 0.000002,
+          "output": 0.000012
         },
         "1050000": {
-          "input": 0.000005,
-          "output": 0.0000225
+          "input": 0.000004,
+          "output": 0.000018
         }
       }
     },
@@ -811,12 +860,12 @@
         "200000": {
           "input": 0.000002,
           "output": 0.000006,
-          "cache_read": 5e-7
+          "cache_read": 3e-7
         },
         "500000": {
           "input": 0.000004,
           "output": 0.000012,
-          "cache_read": 0.000001
+          "cache_read": 6e-7
         }
       }
     },
@@ -941,7 +990,8 @@
       "pricing": {
         "200000": {
           "input": 0.000015,
-          "output": 0.00006
+          "output": 0.00006,
+          "cache_read": 0.0000075
         }
       }
     },
@@ -982,7 +1032,8 @@
       "pricing": {
         "200000": {
           "input": 0.0000011,
-          "output": 0.0000044
+          "output": 0.0000044,
+          "cache_read": 5.5e-7
         }
       }
     },

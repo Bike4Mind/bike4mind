@@ -1,4 +1,4 @@
-import { Connection, questRepository, userRepository } from '@bike4mind/database';
+import { Connection, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { ApiKeyScope, Permission, VoiceSessionSendTranscriptAction } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
@@ -41,7 +41,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // Write access, not read access. Read-accessibility admits a sharee holding only [read, share],
   // and this handler inserts and overwrites turns in the notebook - the same `Permission.update`
-  // predicate every HTTP session-write path applies (sessionCrud.ts, sessionOperations.ts).
+  // predicate every HTTP session-write path applies (sessionCrud.ts,
+  // packages/server-utils/src/utils/sessionOperations.ts).
   const writableSession = await SessionModel.findOne({
     _id: sessionId,
     ...accessibleBy(ability(user), Permission.update).ofType(SessionModel),
@@ -60,6 +61,18 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     ...turn,
     ...(timestamp ? { timestamp } : {}),
   });
+
+  // A transcript frame is the server's own sighting of a live realtime call: the stale hold sweep
+  // floors an unsettled realtime hold by the time up to its last one. Only the hold owner's frame
+  // counts (a write-sharee must not run up the owner's bill), only on a realtime hold (an
+  // ElevenLabs hold is billed from proxy turns), and a failed write never fails the frame.
+  if (String(writableSession.userId) === userId && writableSession.voiceBilledCredits != null) {
+    await sessionRepository
+      .recordVoiceActivity(sessionId, new Date(), null, { realtimeOnly: true })
+      .catch((err: unknown) => {
+        logger.error('voiceSessionSendTranscript: failed to record voice activity', { err, sessionId });
+      });
+  }
 
   return { statusCode: 200 };
 });

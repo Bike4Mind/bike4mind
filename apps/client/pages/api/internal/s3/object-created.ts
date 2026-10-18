@@ -1,9 +1,11 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@server/utils/storage';
+import { chargeUploadedObject } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
@@ -16,11 +18,12 @@ import crypto from 'crypto';
 /**
  * Self-host S3 ObjectCreated webhook.
  *
- * In AWS, an S3 ObjectCreated event invokes objectCreated.ts (server/s3) to mark the
+ * In AWS, an S3 ObjectCreated event invokes apps/workers/src/s3/objectCreated.ts to mark the
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the
- * objectCreated path - mark complete, enqueue chunking, run the upload-time moderation scan.
+ * objectCreated path - mark complete, charge the uploader's storage, enqueue chunking, run the
+ * upload-time moderation scan.
  * A file is unservable until that scan resolves it, so skipping it here held every self-host
  * file for the rescue sweep's 30-minute floor. On self-host the scan is the type sniff only:
  * the image check returns early without Rekognition (see imageModerationGate.ts). A scheduler
@@ -31,7 +34,8 @@ import crypto from 'crypto';
  */
 
 interface MinioS3Record {
-  s3?: { bucket?: { name?: string }; object?: { key?: string } };
+  eventTime?: string;
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number } };
 }
 
 /**
@@ -136,9 +140,39 @@ const handler = baseApi({ auth: false }).post(
         continue;
       }
 
+      const statusBeforeUpload = metadata.status;
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
+
+      // Charged from the stored object's size, never the row's client-claimed fileSize. The
+      // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
+      // complete and a redelivery would enqueue chunking twice.
+      try {
+        const payloadSize = record.s3?.object?.size;
+        const size =
+          typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
+            ? payloadSize
+            : (await getFilesStorage().getMetadata(objectKey)).size;
+        if (size === undefined) {
+          req.logger.warn(`No object size for ${objectKey}; storage not charged`);
+        } else {
+          const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
+          const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
+          await withTransaction(async session => {
+            const user = await User.findById(metadata.userId).session(session);
+            // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+            if (
+              user &&
+              (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))
+            ) {
+              await user.save({ session });
+            }
+          });
+        }
+      } catch (error) {
+        req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
+      }
 
       // Mirrors the hosted event: the bytes have landed, so the lakes this file joined can be
       // counted - and, if one is still a draft, activated.

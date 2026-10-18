@@ -2,6 +2,7 @@ import { Box, Button, Chip, CircularProgress, Stack, Tooltip, Typography } from 
 import CloudIcon from '@mui/icons-material/Cloud';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
+import LinkIcon from '@mui/icons-material/Link';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -9,7 +10,8 @@ import {
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
 } from '@client/app/hooks/data/googleDrive';
-import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
+import { describeDriveConnection, describeDriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
+import { describeDriveLastSync } from '@client/app/hooks/data/lakeSyncDisplay';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
@@ -18,6 +20,9 @@ import DriveAccessDisclosure from './DriveAccessDisclosure';
  * Connect a Google Drive FOLDER to an EXISTING data lake: pick a folder and the connection is
  * created straight away, since the lake already has an id to bind to. Create mode has no id yet
  * and so uses DrivePendingConnectAction, which parks the selection until commit (#1916).
+ *
+ * Once bound, Re-sync reuses the stored folder rather than the picker. Re-picking cannot change the
+ * folder (drive-sync 409s a lake already bound to another one), so changing it is Disconnect + Connect.
  */
 export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
@@ -25,9 +30,12 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const { data: connection, isLoading, isError } = useLakeDriveConnection(lake.id);
   const canManage = useLakeDriveCanManage(lake.id).data === true;
   const disconnect = useDisconnectLakeDrive();
-  const { openFolderPicker, isPicking, isConnecting } = useLakeDriveFolderConnect(lake.id);
+  const { openFolderPicker, resync, reconnect, isPicking, isCheckingGrant, isConnecting } = useLakeDriveFolderConnect(
+    lake.id
+  );
 
   const lakeId = lake.id;
+  const canResync = canManage && !!connection && !connection.disconnecting;
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="drive-connection-loading" />;
@@ -59,6 +67,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
     // Not DRIVE_STATUS_BADGE directly: a 'connected' connection carrying a lastError is a sync that
     // stopped short with files missing, and only describeDriveConnection reads it that way.
     const { label, color } = describeDriveConnection(connection);
+    const schedule = describeDriveSyncSchedule(connection.syncSchedule);
     return (
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="drive-connection-status">
         <CloudIcon color="primary" />
@@ -69,19 +78,43 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
           {label}
         </Chip>
         {/* drive-sync refuses a folder whose disconnect purge is still queued. */}
-        {canManage && !connection.disconnecting && (
-          <Button
-            data-testid="drive-resync-btn"
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<SyncIcon />}
-            loading={isConnecting || isPicking}
-            onClick={openFolderPicker}
-          >
-            Re-sync
-          </Button>
-        )}
+        {canResync &&
+          (connection.status === 'credential_error' ? (
+            <Button
+              data-testid="drive-reconnect-btn"
+              size="sm"
+              variant="outlined"
+              color="warning"
+              startDecorator={<LinkIcon />}
+              loading={isCheckingGrant || isConnecting}
+              onClick={reconnect}
+            >
+              Reconnect Google Drive
+            </Button>
+          ) : (
+            <Button
+              data-testid="drive-resync-btn"
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<SyncIcon />}
+              loading={isCheckingGrant || isConnecting}
+              onClick={() =>
+                resync({ driveFolderId: connection.driveFolderId, folderName: connection.folderName ?? undefined })
+              }
+            >
+              Re-sync
+            </Button>
+          ))}
+        <Typography
+          level="body-xs"
+          sx={{ color: 'text.tertiary', flexBasis: '100%' }}
+          data-testid="drive-connection-last-synced"
+        >
+          {describeDriveLastSync(connection)}
+          {/* A disconnect disables the connection, so its schedule would read "paused" for no reason. */}
+          {schedule && !connection.disconnecting && ` \u00b7 ${schedule}`}
+        </Typography>
         {connection.disconnecting && (
           <Typography level="body-xs" data-testid="drive-disconnecting-note" sx={{ flexBasis: '100%' }}>
             {connection.fileCount === 0

@@ -71,6 +71,7 @@ import {
   IDLE_BATCHES_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeSkippedFiles,
   useDataLakeResearchRuns,
   useDataLakeSpend,
   useDuplicatePrefixLake,
@@ -253,6 +254,55 @@ it('sends selected lake ids with a leaf article request', async () => {
   expect(apiGet).toHaveBeenCalledWith(
     '/api/data-lakes/articles?tags=docs%3Aalpha&lakeId=lake-a&lakeId=lake-b&limit=50'
   );
+});
+
+describe('useDataLakeSkippedFiles', () => {
+  const skippedPage = (count: number, total: number, offset = 0) => ({
+    data: {
+      data: Array.from({ length: count }, (_, i) => ({
+        id: `s${offset + i}`,
+        name: `f${offset + i}`,
+        reason: 'error',
+      })),
+      total,
+      hasMore: offset + count < total,
+    },
+  });
+  const mountSkipped = (enabled: boolean) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useDataLakeSkippedFiles('lake_1', enabled), { wrapper });
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+  });
+
+  it('sends no request while disabled (non-managers)', async () => {
+    const { result } = mountSkipped(false);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(result.current.total).toBe(0);
+  });
+
+  it('pages by row offset and keeps the first page total', async () => {
+    apiGet.mockResolvedValueOnce(skippedPage(25, 60)).mockResolvedValueOnce(skippedPage(25, 60, 25));
+    const { result } = mountSkipped(true);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake_1/skipped-files', { params: { limit: 25, offset: 0 } });
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(apiGet).toHaveBeenLastCalledWith('/api/data-lakes/lake_1/skipped-files', {
+      params: { limit: 25, offset: 25 },
+    });
+    await waitFor(() => expect(result.current.files).toHaveLength(50));
+    expect(result.current.total).toBe(60);
+    expect(result.current.hasMore).toBe(true);
+  });
 });
 
 describe('useBrowsePublicDataLakes', () => {
@@ -1071,6 +1121,11 @@ describe('rebuildBacklog', () => {
     expect(rebuildBacklog({ underChunkedCount: 2, staleEmbeddingSpaceCount: null })).toBe(2);
   });
 
+  it('counts files still rebuilding, so the chip is refetched once their rebuild commits', () => {
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: 0, rebuildingCount: 4 })).toBe(4);
+    expect(rebuildBacklog({ underChunkedCount: 1, staleEmbeddingSpaceCount: null, rebuildingCount: 4 })).toBe(5);
+  });
+
   it('is zero before the status has loaded', () => {
     expect(rebuildBacklog(undefined)).toBe(0);
   });
@@ -1089,6 +1144,24 @@ describe('nextRebuildPoll', () => {
     expect(nextRebuildPoll(1, start).interval).toBe(5_000);
     expect(nextRebuildPoll(51, start).interval).toBe(15_000);
     expect(nextRebuildPoll(201, start).interval).toBe(30_000);
+  });
+
+  it('does not poll at the fast cadence on a backlog that is only rebuilds in flight', () => {
+    // A file whose queue send was rejected keeps a fresh stamp and no error for the full 2h stale
+    // window, so it is in the backlog and the badge has to keep polling - but nothing about it needs
+    // watching every 5s, and each tick is a full lake rescan. Repairable work still sets the pace
+    // when there is any, in flight or not.
+    expect(nextRebuildPoll(1, start, 1).interval).toBe(30_000);
+    expect(nextRebuildPoll(60, start, 60).interval).toBe(30_000);
+    expect(nextRebuildPoll(1, start, 0).interval).toBe(5_000);
+    expect(nextRebuildPoll(2, start, 1).interval).toBe(5_000);
+    expect(nextRebuildPoll(60, start, 1).interval).toBe(15_000);
+  });
+
+  it('keeps a small repairable remainder beside a large wave at the slow cadence', () => {
+    // Keying the size tiers off the remainder would drop these to a faster lane.
+    expect(nextRebuildPoll(1001, start, 1000).interval).toBe(30_000);
+    expect(nextRebuildPoll(60, start, 55).interval).toBe(15_000);
   });
 
   it('stops immediately when there was never a backlog to drain', () => {
@@ -1623,6 +1696,54 @@ describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.embeddingSpaceResolved).toBeNull();
+  });
+
+  it('carries the mid-rebuild count, and reads an older server that omits it as 0', async () => {
+    apiGet.mockResolvedValueOnce({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 2, staleEmbeddingSpaceCount: 0 },
+    });
+    const first = mount();
+    await waitFor(() => expect(first.result.current.data).toBeDefined());
+    expect(first.result.current.data?.rebuildingCount).toBe(2);
+
+    apiGet.mockResolvedValueOnce({ data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0 } });
+    const second = mount();
+    await waitFor(() => expect(second.result.current.data).toBeDefined());
+    expect(second.result.current.data?.rebuildingCount).toBe(0);
+  });
+});
+
+// Executes the hook's refetchInterval closure: a backlog of only in-flight rebuilds (what one
+// rejected queue send leaves behind) must stay on the slow lane for the whole stale window.
+describe('useUnderChunkedCount poll cadence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUnderChunkedCount('lake1'), { wrapper });
+  };
+
+  it('refetches an in-flight-only backlog on the slow lane, not the 5s one', async () => {
+    apiGet.mockResolvedValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    mount();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apiGet).toHaveBeenCalledTimes(1);
+
+    // Dropping the third argument (its default is 0) puts this on the 5s lane and refetches here.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(apiGet).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(apiGet).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -7,25 +7,6 @@ import { sanitizeToolOutput } from '../utils/toolOutputSanitizer';
 /** Optional WebSocket executor for server-side tools (bypasses CloudFront timeout) */
 let wsToolExecutor: WebSocketToolExecutor | null = null;
 
-/** Dynamically registered tool names from feature modules (treated as local tools) */
-const featureModuleTools = new Set<string>();
-
-/** Register tool names from feature modules so the router treats them as local tools */
-export function registerFeatureModuleTools(toolNames: string[]): void {
-  for (const name of toolNames) {
-    featureModuleTools.add(name);
-  }
-}
-
-/** Clear all registered feature module tools (used during hot-reload) */
-export function clearFeatureModuleTools(): void {
-  featureModuleTools.clear();
-}
-
-function isFeatureModuleTool(toolName: string): boolean {
-  return featureModuleTools.has(toolName);
-}
-
 /** Set the WebSocket tool executor for server-side tool routing */
 export function setWebSocketToolExecutor(executor: WebSocketToolExecutor | null): void {
   wsToolExecutor = executor;
@@ -35,47 +16,15 @@ export function setWebSocketToolExecutor(executor: WebSocketToolExecutor | null)
  * Tool categories for routing decisions
  */
 const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch'] as const;
-const LOCAL_TOOLS = [
-  'file_read',
-  'create_file',
-  'edit_local_file',
-  'glob_files',
-  'grep_search',
-  'delete_file',
-  'dice_roll',
-  'math_evaluate',
-  'current_datetime',
-  'bash_execute',
-  'check_shell_output',
-  'write_shell_stdin',
-  'list_background_shells',
-  'kill_background_shell',
-  'recent_changes',
-  'ask_user_question',
-] as const;
 
 type ServerToolName = (typeof SERVER_TOOLS)[number];
-type LocalToolName = (typeof LOCAL_TOOLS)[number];
 
 /**
- * Determines whether a tool should execute server-side or locally
- *
- * Server-side tools (weather, web_search):
- * - Use B4M's company API keys
- * - Execute via Lambda
- * - No local API key configuration needed
- *
- * Local tools (file operations):
- * - Execute in CLI process
- * - Require local file system access
- * - Fast, no network latency
+ * Server-side tools (weather, web_search, web_fetch) run on B4M's API with company keys; every
+ * other tool runs locally through the implementation its caller passes in.
  */
 export function isServerTool(toolName: string): toolName is ServerToolName {
   return SERVER_TOOLS.includes(toolName as ServerToolName);
-}
-
-export function isLocalTool(toolName: string): toolName is LocalToolName {
-  return LOCAL_TOOLS.includes(toolName as LocalToolName);
 }
 
 /**
@@ -134,17 +83,13 @@ async function routeTool(
     logger.debug(`[ToolRouter] Routing ${toolName} to server via HTTP`);
     const executor = new ServerToolExecutor(apiClient);
     return await executor.executeTool(toolName, input);
-  } else if (isLocalTool(toolName) || isFeatureModuleTool(toolName)) {
-    // Execute locally
-    logger.debug(`[ToolRouter] Executing ${toolName} locally`);
-    if (!localToolFn) {
-      throw new Error(`Local tool ${toolName} has no implementation`);
-    }
-    const result = await localToolFn(input);
-    return typeof result === 'string' ? result : JSON.stringify(result);
-  } else {
-    throw new Error(`Unknown tool: ${toolName}`);
   }
+  // Anything else runs locally. No name list here: MCP, skill, plugin and other tools are named
+  // at runtime, and a fixed list made every one of them fail as "Unknown tool".
+  if (!localToolFn) throw new Error(`Unknown tool: ${toolName}`);
+  logger.debug(`[ToolRouter] Executing ${toolName} locally`);
+  const result = await localToolFn(input);
+  return typeof result === 'string' ? result : JSON.stringify(result);
 }
 
 /**
@@ -152,11 +97,4 @@ async function routeTool(
  */
 export function getServerTools(): readonly ServerToolName[] {
   return SERVER_TOOLS;
-}
-
-/**
- * Get list of local tools for tool schema generation
- */
-export function getLocalTools(): readonly LocalToolName[] {
-  return LOCAL_TOOLS;
 }

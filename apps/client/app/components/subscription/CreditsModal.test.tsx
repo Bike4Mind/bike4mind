@@ -1,39 +1,46 @@
-import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
-
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : _key) }),
+  useTranslation: () => ({ t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key) }),
 }));
-vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 100 }));
-vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
+vi.mock('@client/app/hooks/data/subscriptions', () => ({
+  useGetSubscriptions: () => ({ data: [], isPending: false }),
+}));
+vi.mock('@client/app/hooks/data/stripe', () => ({ useGetSubscriptionPlans: () => ({ isLoading: false }) }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 10 }));
-vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useSelectedAccount: () => ({ selectedAccount: null }),
-}));
-vi.mock('../Credits/PaymentButton', () => ({ default: () => null }));
+vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 100 }));
+vi.mock('./CreditsSection', () => ({ CreditsSection: () => null }));
+vi.mock('./PlansSection', () => ({ PlansSection: () => null, PlansSectionSkeleton: () => null }));
 
 import CreditsModal from './CreditsModal';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+const TestWrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
 
-describe('CreditsModal usage link', () => {
-  beforeEach(() => navigate.mockClear());
-
-  it('closes the modal and opens the profile usage tab', () => {
-    const onClose = vi.fn();
+describe('CreditsModal', () => {
+  it('opens the unified Billing view at the credits section', () => {
     render(
-      <CssVarsProvider theme={appTheme}>
-        <CreditsModal open onClose={onClose} />
-      </CssVarsProvider>
+      <TestWrapper>
+        <CreditsModal open onClose={vi.fn()} />
+      </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('credits-modal-see-usage-link'));
-    expect(onClose).toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' } });
+    expect(screen.getByTestId('billing-section-plans')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-section-credits-heading')).toHaveFocus();
+  });
+
+  it('renders nothing while closed', () => {
+    render(
+      <TestWrapper>
+        <CreditsModal open={false} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('billing-modal')).not.toBeInTheDocument();
   });
 });

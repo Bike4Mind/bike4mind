@@ -230,17 +230,54 @@ export function shouldShowSignupGate(
   return effectiveVisibility === 'public' && !viewer?.id;
 }
 
+// The panel opening tag in every gate version published (the pre-#3283 gate had a
+// `<div id="b4m-gate-ol">` overlay between the checkbox and the panel; it is tolerated below).
+const SIGNUP_GATE_PANEL_OPEN = '<div id="b4m-gate-panel"';
+const SIGNUP_GATE_PREAMBLE =
+  /^<input type="checkbox" id="b4m-gate-dismiss"[^>]*>\s*(?:<div id="b4m-gate-ol"[^>]*><\/div>\s*)?$/;
+
+// Index just past the `</div>` that closes the div opening at `openAt`, or -1 if unbalanced.
+function matchingDivCloseEnd(html: string, openAt: number): number {
+  const tags = /<div\b|<\/div>/gi;
+  tags.lastIndex = openAt;
+  let depth = 0;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[0][1] === '/' ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
 /**
- * Remove a sign-up gate baked into stored artifact bytes (renderArtifactIndexHtml emits it
- * as the last element before `</body>`). The gate's CSS is left in place: every rule keys
- * off the removed elements, so it goes inert.
+ * Locate a sign-up gate baked into stored artifact bytes, as [start, end) where `end` is the
+ * page's closing `</body>`. Only the position renderArtifactIndexHtml writes it counts: the
+ * checkbox and one balanced panel div, followed by nothing but the document's final
+ * `</body></html>`. Matching the marker anywhere would let an artifact whose own content
+ * contains the gate markup lose everything after it on serve.
+ *
+ * Known limit: a full-HTML artifact that ends its body with an exact copy of the gate is only
+ * rejected because renderArtifactIndexHtml injects the share footer after it; with no marketing
+ * URL configured nothing follows it and it is treated as baked.
+ */
+function findBakedSignupGate(html: string): { start: number; end: number } | null {
+  const end = html.lastIndexOf('</body>');
+  if (end === -1 || !/^\s*<\/html>\s*$/i.test(html.slice(end + '</body>'.length))) return null;
+  const start = html.lastIndexOf(SIGNUP_GATE_MARKER, end);
+  if (start === -1) return null;
+  const panelAt = html.indexOf(SIGNUP_GATE_PANEL_OPEN, start);
+  if (panelAt === -1 || panelAt > end || !SIGNUP_GATE_PREAMBLE.test(html.slice(start, panelAt))) return null;
+  const panelEnd = matchingDivCloseEnd(html, panelAt);
+  if (panelEnd === -1 || panelEnd > end || html.slice(panelEnd, end).trim() !== '') return null;
+  return { start, end };
+}
+
+/**
+ * Remove a sign-up gate baked into stored artifact bytes (see findBakedSignupGate). The gate's
+ * CSS is left in place: every rule keys off the removed elements, so it goes inert.
  */
 export function stripSignupGateHtml(html: string): string {
-  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
-  if (start === -1) return html;
-  const end = html.indexOf('</body>', start);
-  if (end === -1) return html;
-  return html.slice(0, start) + html.slice(end);
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + html.slice(gate.end) : html;
 }
 
 /**
@@ -249,11 +286,73 @@ export function stripSignupGateHtml(html: string): string {
  * is reused as-is (it does not depend on the number). No-op on a page without a gate.
  */
 export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}): string {
-  const start = html.lastIndexOf(SIGNUP_GATE_MARKER);
-  if (start === -1) return html;
-  const end = html.indexOf('</body>', start);
-  if (end === -1) return html;
-  return html.slice(0, start) + buildSignupGateHtml(opts).html + html.slice(end);
+  const gate = findBakedSignupGate(html);
+  return gate ? html.slice(0, gate.start) + buildSignupGateHtml(opts).html + html.slice(gate.end) : html;
+}
+
+// Exact opening tag of the brand card buildShareFooterHtml emits. Already-published pages carry
+// these bytes, so changing them strands holdShareFooterCtaBeforeGate on old content.
+const SHARE_FOOTER_CARD_OPEN =
+  '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">';
+const SHARE_FOOTER_UTM = 'utm_medium=share-footer';
+
+// Tolerates CRLF or other whitespace a pipeline may have introduced around the card's close.
+function endsWithCardClose(card: string): boolean {
+  const trimmed = card.trimEnd();
+  return trimmed.endsWith('</div>') && trimmed.slice(0, -'</div>'.length).trimEnd().endsWith('</a>');
+}
+
+/** Whether the page carries a baked sign-up gate (see renderArtifactIndexHtml). */
+export function hasSignupGateHtml(html: string): boolean {
+  return findBakedSignupGate(html) !== null;
+}
+
+/**
+ * Whether the page carries the brand footer card buildShareFooterHtml bakes in at publish time:
+ * the exact opening tag whose first child is the share-footer UTM link.
+ */
+export function hasShareFooterCardHtml(html: string): boolean {
+  for (let at = html.indexOf(SHARE_FOOTER_CARD_OPEN); at !== -1; at = html.indexOf(SHARE_FOOTER_CARD_OPEN, at + 1)) {
+    const tagStart = at + SHARE_FOOTER_CARD_OPEN.length;
+    const tagEnd = html.indexOf('>', tagStart);
+    if (tagEnd === -1) return false;
+    const anchorTag = html.slice(tagStart, tagEnd);
+    if (anchorTag.trimStart().startsWith('<a href="') && anchorTag.includes(SHARE_FOOTER_UTM)) return true;
+  }
+  return false;
+}
+
+/**
+ * Id of the hidden holder holdShareFooterCtaBeforeGate wraps the footer card in. The in-frame
+ * signup-gate bridge (server/services/publish/signupGateBridge.ts) reveals it for a viewer the
+ * wrapper reports as signed in.
+ */
+export const SHARE_FOOTER_HELD_ID = 'b4m-footer-held';
+
+/**
+ * Hide the brand footer card that renderArtifactIndexHtml bakes directly in front of the
+ * sign-up gate, so a viewer shown the gate gets one sign-up CTA rather than two (the
+ * reply/fabfile viewer drops it with `hideCta`). The card is wrapped in a `display:none`
+ * holder rather than removed so a signed-in viewer, whom the server cannot recognize on a
+ * cached open-public page, gets it back when the gate bridge hides the gate. Only an exact
+ * card sitting immediately before the gate is held, so it works on pages published before
+ * this existed and never touches the artifact's own content. No-op on a page without that
+ * pairing.
+ */
+export function holdShareFooterCtaBeforeGate(html: string): string {
+  const gateStart = findBakedSignupGate(html)?.start ?? -1;
+  if (gateStart === -1) return html;
+  const cardStart = html.lastIndexOf(SHARE_FOOTER_CARD_OPEN, gateStart);
+  if (cardStart === -1) return html;
+  const card = html.slice(cardStart, gateStart);
+  const isExactCard =
+    endsWithCardClose(card) &&
+    card.indexOf('</div>') === card.lastIndexOf('</div>') &&
+    card.indexOf('</a>') === card.lastIndexOf('</a>') &&
+    card.includes(SHARE_FOOTER_UTM);
+  return isExactCard
+    ? `${html.slice(0, cardStart)}<div id="${SHARE_FOOTER_HELD_ID}" style="display:none">${card.trimEnd()}</div>${html.slice(gateStart)}`
+    : html;
 }
 
 /** Returns the footer as an HTML string ready to inject before `</body>`. */
@@ -284,7 +383,7 @@ export function buildShareFooterHtml(opts: ShareFooterOptions = {}): string {
 
   // Self-contained navy card (inline styles only) so it renders consistently on
   // any host page, light or dark.
-  return `<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">
+  return `${SHARE_FOOTER_CARD_OPEN}
   <a href="${href}" target="_blank" rel="noopener noreferrer"
      style="display:flex;align-items:center;gap:16px;max-width:600px;width:100%;padding:14px 18px;
             border:1px solid rgba(255,255,255,.14);border-radius:14px;text-decoration:none;

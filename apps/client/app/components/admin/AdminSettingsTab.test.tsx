@@ -14,8 +14,8 @@ vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => nul
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
-vi.mock('./AdminVideoModelsSetting', () => ({
-  AdminVideoModelsSetting: () => <div data-testid="admin-video-models-card" />,
+vi.mock('./AdminGenerationModelsSetting', () => ({
+  AdminGenerationModelsSetting: () => <div data-testid="admin-generation-models-card" />,
 }));
 vi.mock('./AdminRecommendedModelsSetting', () => ({
   AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
@@ -48,12 +48,13 @@ beforeEach(() => {
   serverSettings = [];
 });
 
-describe('AdminSettingsTab video generation setting', () => {
-  it('renders the bespoke video models card and no generic videoGeneration card', () => {
+describe('AdminSettingsTab generation models setting', () => {
+  it('renders the bespoke generation models card and no generic video or music card', () => {
     renderAiTab();
 
-    expect(screen.getByTestId('admin-video-models-card')).toBeTruthy();
+    expect(screen.getByTestId('admin-generation-models-card')).toBeTruthy();
     expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
+    expect(screen.queryByTestId('generic-setting-musicGeneration')).toBeNull();
   });
 });
 

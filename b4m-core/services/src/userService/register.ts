@@ -1,6 +1,6 @@
 import {
-  CreditHolderType,
   IAdminSettingsRepository,
+  ICreditLotRepository,
   ICreditTransactionRepository,
   IUserDocument,
   IUserRepository,
@@ -11,9 +11,16 @@ import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { CURRENT_POLICY_VERSION, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
-import { addCredits } from '../creditService';
-import { isDisposableEmail } from './disposableEmail';
+import {
+  CURRENT_POLICY_VERSION,
+  PENDING_FREE_CREDITS_TAG,
+  settingsMap,
+  USERNAME_RULES_MESSAGE,
+  usernameSchema,
+} from '@bike4mind/common';
+import { releasePendingFreeCredits } from './freeCredits';
+import { shouldBlockDisposableEmail } from './disposableEmail';
+import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -24,6 +31,9 @@ const registerUserSchema = z.object({
   email: z.string(),
   name: z.string(),
   inviteCode: z.string().optional(),
+  // client_id of the OAuth client the signup came through; resolved to a source:<slug> tag only
+  // when it names an active registered client.
+  sourceClientId: z.string().optional(),
   password: z.string().optional().default(''),
   // P0-B abuse gate: a new account cannot be created without a versioned AUP/ToS
   // acceptance and an 18+ age attestation. Enforced HERE in the service (not just the UI form) so
@@ -42,7 +52,7 @@ const registerUserSchema = z.object({
       colorDepth: z.number(),
       pixelDepth: z.number(),
       devicePixelRatio: z.number(),
-      ip: z.string().optional().prefault(''),
+      ip: z.string().prefault(''),
       location: z.string().optional(),
     })
     .optional(),
@@ -68,6 +78,8 @@ interface RegisterUserAdapters {
      * to the user
      */
     creditTransactions?: ICreditTransactionRepository;
+    oauthClients?: OAuthSourceClientLookup;
+    creditLots?: ICreditLotRepository;
   };
   logger: Logger;
   /**
@@ -81,7 +93,8 @@ export const registerUser = async (
   params: RegisterUserParameters,
   { db, logger, skipInviteCheck }: RegisterUserAdapters
 ) => {
-  const { username, email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation } = params;
+  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } =
+    params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -93,6 +106,12 @@ export const registerUser = async (
   if (ageAttestation !== true) {
     throw new BadRequestError('You must confirm you are 18 or older to register');
   }
+
+  const parsedUsername = usernameSchema.safeParse(params.username);
+  if (!parsedUsername.success) {
+    throw new BadRequestError(USERNAME_RULES_MESSAGE);
+  }
+  const username = parsedUsername.data;
 
   // shape-check the email before any DB work. Ownership is proven by OTC, so
   // this only rejects junk input - same light regex as /api/otc/send. Normalization is
@@ -109,16 +128,11 @@ export const registerUser = async (
   }
 
   // anti-sybil: refuse throwaway inboxes at the chokepoint every credit-bearing
-  // registration flows through. (OAuth/Okta signup and admin user creation build accounts
-  // elsewhere, but none of those paths grant farmable credits.) Registration-only - OTC
-  // sign-in for existing accounts never reaches this function, so grandfathered users on
-  // such domains are unaffected.
-  const blockDisposableSetting = await db.adminSettings.findBySettingName('blockDisposableEmails');
-  const blockDisposableParsed = settingsMap.blockDisposableEmails.schema.safeParse(
-    blockDisposableSetting?.settingValue
-  );
-  const blockDisposable = blockDisposableParsed.success ? blockDisposableParsed.data : true;
-  if (blockDisposable && isDisposableEmail(normalizedEmail)) {
+  // registration flows through. The self-serve OAuth signup grant (verifyCallback.ts) applies
+  // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
+  // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
+  // function, so grandfathered users on such domains are unaffected.
+  if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
     throw new BadRequestError('Disposable email addresses are not allowed');
   }
 
@@ -136,8 +150,10 @@ export const registerUser = async (
   //   - invite path - validate the code, resolve subscriber/invite/admin credits. The
   //     resolved amount is NOT granted here: it is persisted as
   //     `pendingCreditGrant` + the pending-free-credits tag and released only once email
-  //     ownership is proven (immediately by registerViaOTC - the OTC already proved the
-  //     inbox - or by /api/email/verify for legacy flows).
+  //     ownership is proven. releasePendingFreeCredits (freeCredits.ts) does the release on
+  //     every path: OTC registration (registerViaOTC), email-link verify (/api/email/verify),
+  //     first OTC login (/api/otc/verify), OAuth signup and promote-on-link
+  //     (verifyCallback.ts, okta/callback.ts), and the backfillPendingFreeCredits script.
   //   - open-registration path - gated behind the `allowOpenRegistration` master switch
   //     (default OFF, so existing invite-only behavior is preserved exactly). When enabled,
   //     no code is needed; the `defaultFreeCredits` grant is DEFERRED the same way (tag
@@ -241,6 +257,16 @@ export const registerUser = async (
   // open-registration grant; the amount travels on the user doc.
   if (freeCredits > 0) {
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
+  }
+
+  // Attribution must never block a signup, so a failed lookup only drops the tag.
+  if (sourceClientId && db.oauthClients) {
+    try {
+      const sourceTag = await resolveOAuthSourceTag(sourceClientId, db.oauthClients);
+      if (sourceTag) tags = [...new Set([...tags, sourceTag])];
+    } catch (error) {
+      logger.warn(`Could not resolve OAuth source tag for client ${sourceClientId}: ${error}`);
+    }
   }
 
   const buildUser: Omit<IUserDocument, 'id'> = {
@@ -379,51 +405,40 @@ export const registerViaOTC = async (
   const { db, logger } = adapters;
   const newUser = await registerUser(params, adapters);
 
-  let finalTags = [...new Set([...(newUser.tags ?? []), 'Customer'])];
-  const hasPendingCredits = newUser.tags?.includes(PENDING_FREE_CREDITS_TAG);
+  const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
+  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
+
+  let finalTags = taggedUser.tags;
+  let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
   if (hasPendingCredits && db.creditTransactions) {
-    try {
-      // an invite-resolved amount travels on the user doc and wins; the
-      // defaultFreeCredits setting is the open-registration fallback.
-      let amount = newUser.pendingCreditGrant ?? null;
-      if (amount === null) {
-        const setting = await db.adminSettings.findBySettingName('defaultFreeCredits');
-        const parsed = settingsMap.defaultFreeCredits.schema.safeParse(setting?.settingValue);
-        amount = parsed.success ? parsed.data : 0;
-      }
-      if (amount > 0) {
-        const updatedHolder = await addCredits(
-          {
-            ownerId: newUser.id,
-            ownerType: CreditHolderType.User,
-            credits: amount,
-            type: 'generic_add',
-            transactionId: `otc-register-grant:${newUser.id}`,
-            reason: 'OTC registration (email verified)',
-          },
-          { db: { creditTransactions: db.creditTransactions }, creditHolderMethods: db.users }
-        );
-        newUser.currentCredits = updatedHolder.currentCredits;
-      }
-      // Grant succeeded (or nothing to grant) - safe to drop the pending tag.
-      finalTags = finalTags.filter(t => t !== PENDING_FREE_CREDITS_TAG);
-    } catch (grantError) {
-      // Keep PENDING_FREE_CREDITS_TAG so the grant can be retried; still verify
-      // and let the user in (they've proven email ownership).
-      logger.error(`OTC registration credit grant failed for user ${newUser.id}`, grantError);
+    const release = await releasePendingFreeCredits(taggedUser, {
+      db: {
+        adminSettings: db.adminSettings,
+        creditTransactions: db.creditTransactions,
+        creditLots: db.creditLots,
+        users: db.users,
+      },
+      reason: 'OTC registration (email verified)',
+      logger,
+    });
+    // On failure the patch is empty, so the pending tag and amount survive as the retry
+    // breadcrumb while the user is still verified and let in.
+    if (release.released) {
+      finalTags = release.patch.tags ?? finalTags;
+      pendingCreditGrant = null;
+      if (release.currentCredits !== null) newUser.currentCredits = release.currentCredits;
     }
   } else {
     finalTags = finalTags.filter(t => t !== PENDING_FREE_CREDITS_TAG);
+    pendingCreditGrant = null;
   }
 
   const verification = {
     emailVerified: true,
     emailVerifiedAt: new Date(),
     tags: finalTags,
-    // The pending amount is cleared exactly when the pending tag is dropped (grant
-    // settled or nothing to grant); on grant failure both survive as the retry breadcrumb.
-    pendingCreditGrant: finalTags.includes(PENDING_FREE_CREDITS_TAG) ? (newUser.pendingCreditGrant ?? null) : null,
+    pendingCreditGrant,
   };
   // currentCredits is deliberately not written: addCredits already `$inc`ed it.
   await db.users.update({ id: newUser.id, ...verification });

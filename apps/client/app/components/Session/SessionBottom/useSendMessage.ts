@@ -17,6 +17,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  PROMPT_TEXT_MAX,
   requiresImageInput,
 } from '@bike4mind/common';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
@@ -32,6 +33,7 @@ import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { resolveSystemContext } from './resolveSystemContext';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -61,7 +63,7 @@ import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStor
 import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
 import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
 import { recordReplyChoice } from '@client/app/hooks/data/quests';
-import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
+import { pickOrchestrationAgent } from '@client/lib/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
@@ -69,6 +71,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
 import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
+import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
 import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { generateNewSession, stopChatMessage } from '@client/app/utils/sessionsAPICalls';
@@ -79,6 +82,7 @@ import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
+import { shouldBlurComposerAfterSend } from './composerFocus';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -93,6 +97,13 @@ interface UseSendMessageParams {
 interface SendClickOptions {
   forceEnableQuestMaster?: boolean;
   toolsOverride?: B4MLLMTools[];
+  /**
+   * Extra system context for this one send (a programmatic launch's `systemContext`).
+   * Delivered as a system message on whichever route the send takes; never part of the
+   * prompt, so it is neither shown in the bubble nor persisted on the turn. A host-managed
+   * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
+   */
+  systemContext?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -405,6 +416,21 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
+    // Normalized and capped here, the boundary every caller passes through, and before any
+    // session creation or host hand-off, so an over-cap value never half-sends.
+    // Spread into each route's payload only when set, so a send without it is unchanged.
+    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
+    if (resolvedSystemContext.kind === 'tooLong') {
+      console.error(
+        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      setSubmitting(false);
+      options?.onRefused?.();
+      return;
+    }
+    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
+    const systemContextField = systemContext ? { systemContext } : {};
     if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
       void recordReplyChoice(queryClient, {
         sessionId: currentSession.id,
@@ -721,14 +747,17 @@ export function useSendMessage({
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
       activeSurface: sessionToSend?.surface,
+      deniedTools: effectiveDisabledTools(currentSession),
     });
     if (refused) {
       setSubmitting(false);
       options?.onRefused?.();
       return;
     }
-    // Tool-directed send: see LLMCommandArgs.skipRapidReply.
-    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
+    // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
+    // model sees neither the tools nor the hidden system context, so with either present an
+    // instant ack could contradict what the real reply is told to do.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -818,6 +847,7 @@ export function useSendMessage({
           prompt_upsampling,
           seed,
           output_format,
+          ...systemContextField,
         });
       };
     } else {
@@ -860,6 +890,7 @@ export function useSendMessage({
           // path - but we still surface the source so per-decision logs can
           // attribute the choice.
           agentMode: effectiveAgentMode,
+          ...systemContextField,
         });
       };
     }
@@ -977,16 +1008,20 @@ export function useSendMessage({
         // store would otherwise grow unbounded across a long-lived tab.
         useAgentExecutionStore.getState().clearForSession(dispatchSessionId);
 
+        // Per-message file attachments - dedupe against the session-level set
+        // so the same fabFileId isn't materialized twice into the first
+        // iteration. Mirrors the dedup the `chat_completion` flow does in
+        // `buildDataSources()`.
+        const dispatchSessionFabFileIds = workBenchFiles.map(f => f.id);
+        const dispatchMessageFileIds = sendableMessageFileIds.filter(id => !dispatchSessionFabFileIds.includes(id));
+
         // Render the user's prompt as a message bubble above the iteration
-        // stream. The agent executor doesn't create a Quest server-side
-        // (it's fire-and-forget over WebSocket), so the normal chat-completion
-        // optimistic-quest flow isn't triggered and the bubble would otherwise
-        // never mount - leaving a confusing empty area above the permission
-        // card. Optimistic-only is acceptable for now; refresh persistence
-        // for agent executions is a follow-up.
+        // stream right away. The server creates the prompt Quest at dispatch
+        // (startAgentExecution), and useAgentExecution re-keys this bubble to
+        // that Quest's id once it arrives (swapOptimisticPromptBubbleId).
         // Pass `routingSource` so the AutoRouteBadge renders live on the
         // optimistic bubble instead of waiting for the persisted Quest on reload.
-        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
+        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource, dispatchMessageFileIds);
 
         // Iteration cap comes from the agent doc; unset when agentless or the agent has no
         // default thoroughness, so the executor fills it from admin defaults.
@@ -1000,12 +1035,6 @@ export function useSendMessage({
           effectiveTools,
           dispatchAgent?.allowedTools
         );
-        // Per-message file attachments - dedupe against the session-level set
-        // so the same fabFileId isn't materialized twice into the first
-        // iteration. Mirrors the dedup the `chat_completion` flow does in
-        // `buildDataSources()`.
-        const dispatchSessionFabFileIds = workBenchFiles.map(f => f.id);
-        const dispatchMessageFileIds = sendableMessageFileIds.filter(id => !dispatchSessionFabFileIds.includes(id));
         agentExecution.start({
           sessionId: dispatchSessionId,
           // Server requires `questId`; without an authored quest we tag the
@@ -1076,6 +1105,9 @@ export function useSendMessage({
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,
+          // Per-send system context: the executor folds it into the run's system
+          // message, and it is kept off the stored execution and Quest.
+          ...systemContextField,
         });
         setChatInputValue('');
         clearDraft(dispatchSessionId);
@@ -1229,10 +1261,11 @@ export function useSendMessage({
 
     clearFiles();
 
-    // Hide keyboard after sending message (mobile)
-    setTimeout(() => {
-      lexicalInputRef.current?.blur();
-    }, 100);
+    if (shouldBlurComposerAfterSend()) {
+      setTimeout(() => {
+        lexicalInputRef.current?.blur();
+      }, 100);
+    }
   };
 
   // Latest-ref so the exported `handleSendClick` below can be permanently

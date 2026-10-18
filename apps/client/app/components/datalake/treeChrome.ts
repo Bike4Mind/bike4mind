@@ -1,4 +1,4 @@
-import { humanizeTagSegment } from '@bike4mind/common';
+import { humanizeTagSegment, isGeneratedLakeTagPrefix, type DataLakeOrigin } from '@bike4mind/common';
 import type { SvgIconComponent } from '@mui/icons-material';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
@@ -138,6 +138,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   solver: 'Solvers',
   level: 'Difficulty Level',
   industry: 'Industries',
+};
+
+/**
+ * Wraps a tree label function so a GitHub connector lake's depth-0 `gh-<hex>` node reads as the
+ * lake name. Curated prefixes keep their own label: a multi-segment root is shared with siblings.
+ */
+export const labelLakeRoot = (
+  lake: { name: string; fileTagPrefix: string; origin?: DataLakeOrigin },
+  humanize: (segment: string, depth: number) => string
+) => {
+  const root = lake.name && isGeneratedLakeTagPrefix(lake) ? lake.fileTagPrefix.slice(0, -1) : null;
+  return (segment: string, depth: number): string =>
+    depth === 0 && segment === root ? lake.name : humanize(segment, depth);
 };
 
 export function humanizeSegment(segment: string, depth: number): string {

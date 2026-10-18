@@ -95,6 +95,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   scopedSettingsRepository: {},
   fabFileRepository: { listOwnedBeforeId: mockListOwnedBeforeId },
+  userRepository: {},
   withTransaction: (fn: () => unknown) => fn(),
 }));
 

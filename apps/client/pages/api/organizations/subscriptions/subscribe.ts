@@ -1,3 +1,4 @@
+import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
@@ -24,6 +25,14 @@ const handler = baseApi()
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
+    }
+
+    // enableTeamPlan is the single gate for NEW Team purchases (mirrors the availabilityFlag check in
+    // pages/api/subscriptions/subscribe.ts). This route only ever starts a new checkout; seat changes,
+    // the billing portal, renewals and admin grants use other routes and stay open with the flag off.
+    // `=== true` so a missing or non-boolean value fails closed.
+    if ((await adminSettingsRepository.getSettingsValue('enableTeamPlan')) !== true) {
+      throw new BadRequestError('Team plans are not available right now.');
     }
 
     // Admin-configured paid-plan floor/ceiling (Admin -> Growth & Pricing).
@@ -61,7 +70,7 @@ const handler = baseApi()
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
     // send an uppercase spelling of their own org id, miss the byte-exact `ownerId` match in the
     // duplicate-subscription guard below (rows are written from `org.id`, always lowercase - see
-    // Subscription.ts and lib/userSubscriptions/serverUtils.ts) and open a second checkout
+    // Subscription.ts and apps/workers/src/lib/userSubscriptions/serverUtils.ts) and open a second checkout
     // session: a double charge with only one entitlement. Same reason the Stripe metadata uses it.
     const gatedOrganizationId = organization?.id;
 

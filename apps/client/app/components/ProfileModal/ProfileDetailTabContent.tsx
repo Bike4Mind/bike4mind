@@ -1,9 +1,10 @@
 import ProfileDetailSection from '@client/app/components/profile/ProfileDetailSection';
 import ChangeEmailCard from '@client/app/components/profile/ChangeEmailCard';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
+import StorageBreakdown from '@client/app/components/common/StorageBreakdown';
 import { useUser } from '@client/app/contexts/UserContext';
 import { Box, Typography, IconButton, Tooltip, CircularProgress, Button } from '@mui/joy';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -11,6 +12,7 @@ import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import dynamic from 'next/dynamic';
 import prettyBytes from 'pretty-bytes';
+import { storageLimitToBytes } from '@bike4mind/common';
 import { useMemo, useState, useEffect } from 'react';
 
 const ProfileCollectionSection = dynamic(() => import('@client/app/components/profile/ProfileCollectionSection'));
@@ -73,7 +75,7 @@ const AboutTabContent = () => {
             }}
           >
             <Box className="profile-detail-tab-icon-container" sx={{ flexShrink: 1 }}>
-              <Bike4MindIcon size="38" fill={theme.palette.fileBrowser.fileSizeColor} />
+              <CreditIcon sx={{ fontSize: 38, color: theme.palette.fileBrowser.fileSizeColor }} />
             </Box>
 
             <Box
@@ -112,6 +114,7 @@ const AboutTabContent = () => {
 
             <Tooltip title={t('profile.buy_credits')} placement="top">
               <IconButton
+                aria-label={t('profile.buy_credits')}
                 className="profile-detail-tab-action-button"
                 size="sm"
                 variant="outlined"
@@ -136,14 +139,14 @@ const AboutTabContent = () => {
               display: 'flex',
               alignItems: 'top',
               gap: '15px',
-              height: '144px',
+              minHeight: '144px',
             }}
           >
             <Box sx={{ flexShrink: 1 }}>
               <Storage sx={{ fontSize: '38px', color: theme.palette.fileBrowser.fileSizeColor }} />
             </Box>
 
-            <Box display="flex" flexDirection="column" justifyContent="space-between">
+            <Box display="flex" flexDirection="column" justifyContent="space-between" sx={{ flex: 1, minWidth: 0 }}>
               <Box>
                 <Typography
                   className="profile-detail-tab-subscription-label"
@@ -156,8 +159,9 @@ const AboutTabContent = () => {
                   sx={{ fontWeight: '500', fontSize: '20px', lineHeight: '20px', mb: '20px' }}
                 >
                   {prettyBytes(currentUser?.currentStorageSize ?? 0)} /{' '}
-                  {prettyBytes((currentUser?.storageLimit ?? 0) * 1000000)}
+                  {prettyBytes(storageLimitToBytes(currentUser?.storageLimit ?? 0))}
                 </Typography>
+                <StorageBreakdown />
               </Box>
             </Box>
           </Box>

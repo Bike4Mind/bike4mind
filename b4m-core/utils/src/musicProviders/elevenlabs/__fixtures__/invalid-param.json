@@ -1,0 +1,38 @@
+{
+  "scenario": "invalid-param",
+  "recordedAt": "2026-10-13T12:25:31.079Z",
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/music/detailed?output_format=mp3_44100_128",
+        "body": {
+          "model_id": "music_v2_5",
+          "prompt": "A short jingle",
+          "music_length_ms": 1000,
+          "force_instrumental": true
+        }
+      },
+      "response": {
+        "status": 422,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "detail": [
+            {
+              "type": "greater_than_equal",
+              "loc": ["body", "music_length_ms"],
+              "msg": "Input should be greater than or equal to 3000",
+              "input": 1000,
+              "ctx": {
+                "ge": 3000
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

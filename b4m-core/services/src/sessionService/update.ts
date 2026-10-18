@@ -14,6 +14,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { sessionGroundsOnNoLake } from '../dataLakeService/narrowLakeAccessToSession';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+import { resolveLakeScopeForcedRetrieval } from './resolveLakeScopeForcedRetrieval';
 import {
   filterAccessibleKnowledgeIds,
   type FilterAccessibleKnowledgeIdsAdapters,
@@ -180,6 +181,18 @@ export const updateSession = async (
   if (lakeScopeRequested) {
     update.retrievalTags = lakeScope ?? [];
     update.lakeScopeExplicit = lakeScope !== null;
+    // A pick implies forced retrieval only on a session that never named one, matching create; a
+    // value the session already carries is its owner's own setting - including an explicit opt-out,
+    // which this must not silently reverse - and a value sent in this request always wins (written
+    // just above).
+    if (forceKnowledgeRetrieval === undefined && session.forceKnowledgeRetrieval === undefined) {
+      const forced = resolveLakeScopeForcedRetrieval({
+        forceKnowledgeRetrieval,
+        retrievalTags: update.retrievalTags,
+        lakeScopeExplicit: update.lakeScopeExplicit,
+      });
+      if (forced !== undefined) update.forceKnowledgeRetrieval = forced;
+    }
   }
   update.lastUpdated = new Date();
 
