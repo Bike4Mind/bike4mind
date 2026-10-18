@@ -41,6 +41,7 @@ describe('downloadRelevantLinks', () => {
       researchTasks: {
         findById: vi.fn(),
         update: vi.fn(),
+        addWarning: vi.fn(),
       },
       researchDatas: {
         create: vi.fn(),
@@ -384,8 +385,16 @@ describe('downloadRelevantLinks', () => {
     await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
 
     expect(mockSendStatusUpdate).toHaveBeenCalledWith(
-      'Storage limit reached: kept the previous copy of Important Document 1',
+      '⚠️ Storage limit reached: kept the previous copy of Important Document 1',
       0
+    );
+    expect(mockDb.researchTasks.addWarning).toHaveBeenCalledWith(
+      'test-task-id',
+      'Storage limit reached: kept the previous copy of https://example.com/document1.pdf'
+    );
+    expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+      '\u{1F389} Research task completed with 0 files downloaded, 2 kept their previous copy (storage limit reached)',
+      100
     );
   });
 

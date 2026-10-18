@@ -30,6 +30,7 @@ import FileContent from '../Files/Content';
 import ReactMarkdown from 'react-markdown';
 import ResearchTaskDetailLiveStatus from './Detail/LiveStatus';
 import ResearchTaskDetailInfo from './Detail/Info';
+import ResearchTaskDetailWarnings from './Detail/Warnings';
 import ResearchTaskFileList from './FileList';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { sanitizeHtmlStrict } from '@client/app/utils/htmlSanitizer';
@@ -239,6 +240,8 @@ const ResearchTaskDetail: FC<ResearchTaskDetailProps> = ({ task: propTask, onEdi
             </CardContent>
           </Card>
         )}
+
+        <ResearchTaskDetailWarnings warnings={task.warnings} />
       </Box>
 
       {/* Content tabs */}

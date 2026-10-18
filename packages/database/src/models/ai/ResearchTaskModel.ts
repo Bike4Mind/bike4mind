@@ -16,6 +16,9 @@ const DiscoveredLinkSchema = new mongoose.Schema({
   researchDataId: { type: String },
 });
 
+// A run over many urls on a full account would otherwise grow the document by one line per url.
+const MAX_TASK_WARNINGS = 50;
+
 const ResearchTaskSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true },
@@ -32,6 +35,7 @@ const ResearchTaskSchema = new mongoose.Schema(
     statusFailedMessage: { type: String },
     statusFailedAt: { type: Date },
     statusCompletedAt: { type: Date },
+    warnings: [{ type: String }],
 
     url: { type: String },
     canDiscoverLinks: { type: Boolean },
@@ -157,6 +161,13 @@ class ResearchTaskRepository extends BaseRepository<IResearchTask> implements IR
           updatedAt: new Date(),
         },
       }
+    );
+  }
+
+  async addWarning(id: string, warning: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $push: { warnings: { $each: [warning], $slice: -MAX_TASK_WARNINGS } }, $set: { updatedAt: new Date() } }
     );
   }
 
