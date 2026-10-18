@@ -114,6 +114,7 @@ export const downloadRelevantLinks = async (
   await sendStatusUpdate(`⬇️ Starting download of ${relevantLinks.length} high-value files...`, 3);
 
   let downloadCount = 0;
+  let keptPreviousCount = 0;
   const files: IFabFileDocument[] = [];
   const progressPerDownload = Math.floor(18 / relevantLinks.length); // Reserve 18% for downloads (within 29% range)
 
@@ -163,6 +164,15 @@ export const downloadRelevantLinks = async (
           );
 
           let downloadedFile: IFabFileDocument;
+
+          if (existingDownloadResult?.storageLimitReached) {
+            keptPreviousCount++;
+            await db.researchTasks.addWarning(
+              researchTask.id,
+              `Storage limit reached: kept the previous copy of ${link.url}`
+            );
+            await sendStatusUpdate(`\u26a0\ufe0f Storage limit reached: kept the previous copy of ${link.text}`, 0);
+          }
 
           if (existingDownloadResult?.file) {
             downloadedFile = existingDownloadResult.file;
@@ -244,7 +254,11 @@ export const downloadRelevantLinks = async (
     logger?.info(`🔄 [CHUNKING_QUEUED] All ${files.length} files queued for background processing!`);
   }
 
-  await sendStatusUpdate(`🎉 Research task completed with ${downloadCount} files downloaded`, 100);
+  const keptNote = keptPreviousCount ? `, ${keptPreviousCount} kept their previous copy (storage limit reached)` : '';
+  await sendStatusUpdate(
+    `\u{1F389} Research task completed with ${downloadCount - keptPreviousCount} files downloaded${keptNote}`,
+    100
+  );
 
   await queueRunner.close();
 
