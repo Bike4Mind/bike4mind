@@ -124,7 +124,9 @@ package nobody can install.
 ```bash
 brew install mcp-publisher
 cd mcp-registry
-mcp-publisher login github --token "$(pbpaste)"   # classic PAT, read:org only; Owner role required
+# Classic PAT with only the read:org scope; the interactive device login lacks it
+# and silently grants just your personal namespace. Org Owner role required.
+mcp-publisher login github --token "$(pbpaste)"   # macOS; elsewhere --token "$GITHUB_PAT"
 mcp-publisher publish
 curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Bike4Mind/bike4mind"
 ```
@@ -133,6 +135,9 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Bik
 
 - `mcpName` in `packages/cli/package.json` MUST equal `name` in
   `mcp-registry/server.json`, or the registry rejects the publish.
+- Renaming the entry means changing both together, then publishing only after a CLI
+  release carrying the new `mcpName` is on npm; the registry validates against the
+  published package, not this repo.
 - `server.json`'s `version` and `packages[0].version` MUST equal the package's
   version. No human owns this: `scripts/sync-mcp-registry-version.mjs` runs inside
   `changeset:version` and rewrites both from `packages/cli/package.json`. Never set
