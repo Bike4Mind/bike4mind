@@ -93,6 +93,7 @@ export async function findOrUpdateExistingResearchData(
       try {
         await assertRewriteFits(existingFile, newSize, adapters.db, user);
       } catch (error) {
+        // Relies on isStorageLimitError matching the redacted refusal a non-owner actor gets too.
         if (!isStorageLimitError(error)) throw error;
         // Background path: keep the previous crawl rather than fail (and retry) the whole task, but
         // still refresh its url below.

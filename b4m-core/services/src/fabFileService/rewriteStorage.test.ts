@@ -1,6 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BadRequestError, NotFoundError, STORAGE_CHARGE_STAMP_CUTOFF, type IUserDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+  StorageLimitError,
+  type IUserDocument,
+} from '@bike4mind/common';
+import { checkStorageLimit } from '@bike4mind/utils';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
+
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return { ...actual, checkStorageLimit: vi.fn(actual.checkStorageLimit) };
+});
 
 const MB = 1_000_000;
 const owner = (currentStorageSize: number) =>
@@ -144,12 +156,36 @@ describe('assertRewriteFits', () => {
     await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow(NotFoundError);
   });
 
+  it('redacts any storage refusal for a non-owner actor, whichever pool refused', async () => {
+    const db = makeDb(null, stored);
+    db.users.findById.mockResolvedValue(owner(0.9 * MB));
+    vi.mocked(checkStorageLimit).mockRejectedValueOnce(
+      new StorageLimitError('Organization storage limit exceeded', {
+        errorCode: 'org_storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 5,
+        requested_bytes: 7,
+        owner: 'org',
+      })
+    );
+    const editor = { id: 'editor' } as unknown as IUserDocument;
+
+    const error = await assertRewriteFits(row, 1.2 * MB, db, editor).catch((e: unknown) => e);
+
+    expect((error as StorageLimitError).additionalInfo).toStrictEqual({
+      errorCode: 'org_storage_limit_exceeded',
+      owner: 'org',
+    });
+  });
+
   it('measures against the owner, not an update-share editor', async () => {
     const db = makeDb(null, stored);
     db.users.findById.mockResolvedValue(owner(0.9 * MB));
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow('File size exceeds storage limit');
+    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', owner: 'user' },
+    });
     expect(db.users.findById).toHaveBeenCalledWith('owner');
   });
 });
