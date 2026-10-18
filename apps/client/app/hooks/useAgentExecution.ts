@@ -39,6 +39,7 @@ import {
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import {
   addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
   appendReplyToLatestOptimisticBubble,
   swapOptimisticPromptBubbleId,
 } from '@client/app/utils/llm';
@@ -318,6 +319,9 @@ export function useAgentExecutionSubscriptions(): void {
         const sessionId = store().executions[msg.executionId]?.sessionId;
         if (sessionId && msg.questId && msg.generationJobs?.length) {
           addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
+        }
+        if (sessionId && msg.questId && msg.pendingAction) {
+          setPendingActionOnRunBubble(queryClient, sessionId, msg.questId, msg.pendingAction);
         }
       })
     );
