@@ -20,7 +20,7 @@
  * inline code and fenced examples that mention these tags are left untouched.
  */
 
-import { THINK_CLOSE_TAG, THINK_OPEN_TAG } from './streamVisibility';
+import { THINK_CLOSE_TAG, THINK_OPEN_TAG, visibleReplyText } from './streamVisibility';
 
 export interface NarratedToolCallOptions {
   /** Tools offered on the turn. When set, only blocks naming one of them are stripped. */
@@ -31,6 +31,15 @@ export interface StrippedNarratedToolCalls {
   text: string;
   /** Tool names the stripped blocks named, in order, each once. Empty when nothing was stripped. */
   toolNames: string[];
+  /** True when no visible text follows the last stripped call, so the call was the whole answer. */
+  endsOnCall: boolean;
+}
+
+interface RunState {
+  /** Open code fence marker, carried across runs: a fence can span a `<think>` span between them. */
+  fence: string | null;
+  /** Offset in the run's output where its last call was stripped, or null when none was. */
+  strippedAt: number | null;
 }
 
 /** Shown in place of a stripped block; the call it describes was never run. */
@@ -119,11 +128,10 @@ function startsLikeCall(run: string, bodyStart: number, isMistral: boolean): boo
  * written at the end. Otherwise only a complete block naming an offered tool is stripped: an
  * unclosed one may be followed by the real answer, so it is never cut.
  */
-function stripRun(run: string, offered: ReadonlySet<string> | null, toolNames: string[]): string {
+function stripRun(run: string, offered: ReadonlySet<string> | null, toolNames: string[], state: RunState): string {
   const streaming = !offered;
   let out = '';
   let copiedTo = 0;
-  let fence: string | null = null;
   let lineStart = 0;
   // Next known offset of each close tag, or -1 once it is absent from the rest of the run. Offsets
   // only move forward, so each tag costs one pass over the run in total.
@@ -142,15 +150,16 @@ function stripRun(run: string, offered: ReadonlySet<string> | null, toolNames: s
     const line = run.slice(lineStart, lineEnd).replace(/\r$/, '');
     const nextLine = newline === -1 ? run.length : newline + 1;
 
+    const fence = state.fence;
     if (fence) {
       const close = line.match(FENCE_CLOSE_LINE);
-      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) state.fence = null;
       lineStart = nextLine;
       continue;
     }
     const fenceOpen = line.match(FENCE_OPEN_LINE);
     if (fenceOpen && !(fenceOpen[1][0] === '`' && fenceOpen[2].includes('`'))) {
-      fence = fenceOpen[1];
+      state.fence = fenceOpen[1];
       lineStart = nextLine;
       continue;
     }
@@ -198,6 +207,7 @@ function stripRun(run: string, offered: ReadonlySet<string> | null, toolNames: s
     if (trailing) end += trailing[0].length;
     out += run.slice(copiedTo, lineStart);
     copiedTo = end;
+    if (names) state.strippedAt = out.length;
     for (const name of names ?? []) if (!toolNames.includes(name)) toolNames.push(name);
     lineStart = end;
   }
@@ -210,47 +220,62 @@ function stripRun(run: string, offered: ReadonlySet<string> | null, toolNames: s
  */
 export function stripNarratedToolCalls(text: string, options: NarratedToolCallOptions = {}): StrippedNarratedToolCalls {
   const toolNames: string[] = [];
-  if (!text || (!text.includes('<') && !text.includes(MISTRAL_MARKER))) return { text, toolNames };
+  if (!text || (!text.includes('<') && !text.includes(MISTRAL_MARKER))) return { text, toolNames, endsOnCall: false };
   const offered = options.offeredToolNames ? new Set(options.offeredToolNames) : null;
 
   // Same depth walk as visibleReplyText in ./streamVisibility.ts.
+  const state: RunState = { fence: null, strippedAt: null };
+  let lastStrippedAt: number | null = null;
   let depth = 0;
   let out = '';
   for (const token of text.split(/(<think>|<\/think>)/)) {
     if (token === THINK_OPEN_TAG) depth += 1;
     else if (token === THINK_CLOSE_TAG) depth = Math.max(0, depth - 1);
-    out += depth === 0 && token !== THINK_CLOSE_TAG ? stripRun(token, offered, toolNames) : token;
+    if (depth !== 0 || token === THINK_CLOSE_TAG) {
+      out += token;
+      continue;
+    }
+    state.strippedAt = null;
+    const stripped = stripRun(token, offered, toolNames, state);
+    if (state.strippedAt !== null) lastStrippedAt = out.length + state.strippedAt;
+    out += stripped;
   }
-  return { text: out, toolNames };
+  const endsOnCall = lastStrippedAt !== null && !visibleReplyText(out.slice(lastStrippedAt));
+  return { text: out, toolNames, endsOnCall };
 }
 
 /** {@link stripNarratedToolCalls} over every reply slot, with the named tools collected once each. */
 export function stripNarratedToolCallsFromReplies(
   replies: readonly string[],
   options: NarratedToolCallOptions = {}
-): { replies: string[]; toolNames: string[] } {
+): { replies: string[]; toolNames: string[]; endsOnCall: boolean } {
   const toolNames: string[] = [];
+  let endsOnCall = false;
   const stripped = replies.map(slot => {
     const result = stripNarratedToolCalls(slot, options);
     for (const name of result.toolNames) if (!toolNames.includes(name)) toolNames.push(name);
+    if (result.toolNames.length > 0) endsOnCall = result.endsOnCall;
+    else if (visibleReplyText(result.text)) endsOnCall = false;
     return result.text;
   });
-  return { replies: stripped, toolNames };
+  return { replies: stripped, toolNames, endsOnCall };
 }
 
 /**
  * Finalize step: strips narrated calls naming an offered tool from `replies` and `reply`. Mutates
- * `quest`. Returns the tool names the stripped calls named; empty when nothing was stripped.
+ * `quest`. Returns the tool names the stripped calls named (empty when nothing was stripped) and
+ * whether the reply ended on one, read from the slots when there are any.
  */
 export function applyNarratedToolCallStrip(
   quest: { reply?: string | null; replies?: string[] },
   offeredToolNames: readonly string[]
-): string[] {
+): { toolNames: string[]; endsOnCall: boolean } {
   const fromSlots = stripNarratedToolCallsFromReplies(quest.replies ?? [], { offeredToolNames });
   const fromReply = typeof quest.reply === 'string' ? stripNarratedToolCalls(quest.reply, { offeredToolNames }) : null;
   if (quest.replies) quest.replies = fromSlots.replies;
   if (fromReply) quest.reply = fromReply.text;
   const toolNames = [...fromSlots.toolNames];
   for (const name of fromReply?.toolNames ?? []) if (!toolNames.includes(name)) toolNames.push(name);
-  return toolNames;
+  const endsOnCall = quest.replies?.length ? fromSlots.endsOnCall : (fromReply?.endsOnCall ?? false);
+  return { toolNames, endsOnCall };
 }

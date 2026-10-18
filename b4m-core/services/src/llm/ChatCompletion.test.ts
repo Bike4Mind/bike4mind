@@ -2467,6 +2467,21 @@ describe('ChatCompletionProcess', () => {
         );
       });
 
+      // A stripped call lowers the visible count after the last real tool call, so the generic
+      // notice would fire; the narrated-call notice says why instead, and only one is shown.
+      it('shows the narrated-call notice in place of the incomplete-answer notice', async () => {
+        const buildToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildTools')
+          .mockReturnValue([{ toolSchema: { name: 'web_search', description: 'search', parameters: {} } }] as any);
+        setupTurn(cb => toolLoop(cb, ['<tool_call>{"name":"web_search","arguments":{}}</tool_call>']));
+
+        await runTurn();
+        buildToolsSpy.mockRestore();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${NARRATED_TOOL_CALL_NOTICE}`);
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
       it('adds no notice when the tool loop ends with a real answer', async () => {
         setupTurn(cb => toolLoop(cb, ['<think>ok</think>', 'Here are the figures.']));
 
@@ -6795,7 +6810,7 @@ describe('ChatCompletionProcess', () => {
       disabledTools?: string[],
       extraBody: Record<string, unknown> = {},
       reply = 'Hi!',
-      stoppedByUser = false
+      ending: 'done' | 'stop-resolves' | 'stop-rejects' | 'error' = 'done'
     ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
@@ -6804,8 +6819,13 @@ describe('ChatCompletionProcess', () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, opts: any, cb: any) => {
           await cb([reply]);
-          // A user Stop aborts the turn's controller; the backend then resolves rather than throws.
-          if (stoppedByUser) Object.defineProperty(opts.abortSignal, 'aborted', { value: true });
+          // A user Stop aborts the turn's controller; a backend may then resolve or reject.
+          if (ending === 'stop-resolves') Object.defineProperty(opts.abortSignal, 'aborted', { value: true });
+          if (ending === 'stop-rejects') {
+            mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
+            throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+          }
+          if (ending === 'error') throw new Error('upstream failed');
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -6840,10 +6860,14 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
       const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined, ...extraBody };
-      await service.process({ body, logger: mockLogger });
-
-      buildToolsSpy.mockRestore();
-      buildToolPromptSpy.mockRestore();
+      try {
+        await service.process({ body, logger: mockLogger });
+      } catch (err) {
+        if (ending !== 'error') throw err;
+      } finally {
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+      }
       return mockedBuildAndSortMessages.mock.calls.at(-1);
     };
 
@@ -6952,11 +6976,52 @@ describe('ChatCompletionProcess', () => {
     });
 
     it('strips and flags a tool call written as text on a stopped turn, without a notice', async () => {
-      await runWithTools([webSearchTool], undefined, {}, narratedCall, true);
+      await runWithTools([webSearchTool], undefined, {}, narratedCall, 'stop-resolves');
       expect(mockQuest.status).toBe('stopped');
       expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
       expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
       expect(mockQuest.replies.join('')).not.toContain(NARRATED_TOOL_CALL_NOTICE);
+    });
+
+    it('strips and flags a tool call written as text when a Stop rejects the backend call', async () => {
+      await runWithTools([webSearchTool], undefined, {}, narratedCall, 'stop-rejects');
+      expect(mockQuest.status).toBe('stopped');
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
+      expect(mockQuest.replies.join('')).not.toContain(NARRATED_TOOL_CALL_NOTICE);
+    });
+
+    it('strips and flags a tool call written as text ahead of an error reply', async () => {
+      await runWithTools([webSearchTool], undefined, {}, narratedCall, 'error');
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.reply).not.toContain('<tool_call>');
+      expect(mockQuest.reply).toContain('Let me check.');
+    });
+
+    it('keeps an answer written after a stripped call, with no retry notice', async () => {
+      await runWithTools([webSearchTool], undefined, {}, `${narratedCall}\n\nThe tide is high at noon.`);
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.replies.join('')).toContain('The tide is high at noon.');
+      expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
+      expect(mockQuest.replies.join('')).not.toContain(NARRATED_TOOL_CALL_NOTICE);
+    });
+
+    it('strips a call written after a choices block and still offers the buttons', async () => {
+      const options = [
+        { label: 'One', description: 'Do the first thing.' },
+        { label: 'Two', description: 'Do the second thing.' },
+      ];
+      const choices = 'Pick one.\n\n```choices\n' + JSON.stringify({ options }) + '\n```';
+      await runWithTools(
+        [webSearchTool],
+        undefined,
+        {},
+        `${choices}\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>`
+      );
+      expect(mockQuest.suggestedChoices).toEqual({ options });
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
     });
 
     it('leaves a tool call written as text alone when it names no offered tool', async () => {

@@ -34,9 +34,18 @@ describe('stripNarratedToolCalls', () => {
     expect(stripNarratedToolCalls(`Let me look that up.\n\n${block}`).text.trim()).toBe('Let me look that up.');
   });
 
-  it('keeps prose that follows a closed block', () => {
+  it('keeps prose that follows a closed block, and reports that the reply did not end on the call', () => {
     const reply = 'Checking.\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>\nThe tide is high.';
-    expect(stripNarratedToolCalls(reply, OFFERED).text).toBe('Checking.\nThe tide is high.');
+    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({
+      text: 'Checking.\nThe tide is high.',
+      toolNames: ['web_search'],
+      endsOnCall: false,
+    });
+  });
+
+  it('reports a reply that ends on the stripped call, ignoring reasoning after it', () => {
+    const reply = 'Checking.\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>\n<think>wait</think>';
+    expect(stripNarratedToolCalls(reply, OFFERED).endsOnCall).toBe(true);
   });
 
   it('hides every narrated block in a reply', () => {
@@ -48,7 +57,7 @@ describe('stripNarratedToolCalls', () => {
 
   it('only strips at finalize when the block names a tool offered on the turn', () => {
     const reply = 'Here.\n<tool_call>{"name":"delete_everything","arguments":{}}</tool_call>';
-    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [] });
+    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
   });
 
   it('hides a block that is still streaming', () => {
@@ -69,7 +78,7 @@ describe('stripNarratedToolCalls', () => {
       '[TOOL_CALLS][{"name": "web_search", "arguments": {}}]\nHere is the real answer.',
     ];
     for (const reply of unclosed)
-      expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [] });
+      expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
   });
 
   it('does not hide a partial opener at finalize', () => {
@@ -93,7 +102,8 @@ describe('stripNarratedToolCalls', () => {
     const started = performance.now();
     stripNarratedToolCalls(reply, OFFERED);
     stripNarratedToolCalls(reply);
-    expect(performance.now() - started).toBeLessThan(200);
+    // Generous for a loaded runner; the quadratic scan this guards against took about 3s here.
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   const untouched: Array<[string, string]> = [
@@ -109,13 +119,19 @@ describe('stripNarratedToolCalls', () => {
   ];
 
   it.each(untouched)('leaves %s untouched', (_case, reply) => {
-    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [] });
+    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
     expect(stripNarratedToolCalls(reply).text).toBe(reply);
   });
 
   it('leaves a narrated block inside reasoning alone', () => {
     const reply = '<think>\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>\n</think>The answer.';
-    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [] });
+    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
+  });
+
+  it('leaves a fenced example alone when a reasoning span sits inside the fence', () => {
+    const reply =
+      'Example:\n```\n<think>aside</think>\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>\n```\nDone.';
+    expect(stripNarratedToolCalls(reply, OFFERED)).toEqual({ text: reply, toolNames: [], endsOnCall: false });
   });
 
   it('strips a block in the answer between reasoning spans', () => {
@@ -131,6 +147,8 @@ describe('stripNarratedToolCallsFromReplies', () => {
     const result = stripNarratedToolCallsFromReplies([`A\n${call}`, 'plain', `B\n${call}`], OFFERED);
     expect(result.replies).toEqual(['A\n', 'plain', 'B\n']);
     expect(result.toolNames).toEqual(['web_search']);
+    expect(result.endsOnCall).toBe(true);
+    expect(stripNarratedToolCallsFromReplies([`A\n${call}`, 'An answer.'], OFFERED).endsOnCall).toBe(false);
   });
 });
 
@@ -138,13 +156,13 @@ describe('applyNarratedToolCallStrip', () => {
   it('strips the stored reply and slots and returns the named tools', () => {
     const narrated = 'Checking.\n<tool_call>{"name":"web_search","arguments":{}}</tool_call>';
     const quest = { reply: narrated, replies: [narrated] };
-    expect(applyNarratedToolCallStrip(quest, ['web_search'])).toEqual(['web_search']);
+    expect(applyNarratedToolCallStrip(quest, ['web_search'])).toEqual({ toolNames: ['web_search'], endsOnCall: true });
     expect(quest).toEqual({ reply: 'Checking.\n', replies: ['Checking.\n'] });
   });
 
   it('leaves a quest with no narrated call unchanged', () => {
     const quest = { reply: 'Hi.', replies: ['Hi.'] };
-    expect(applyNarratedToolCallStrip(quest, ['web_search'])).toEqual([]);
+    expect(applyNarratedToolCallStrip(quest, ['web_search'])).toEqual({ toolNames: [], endsOnCall: false });
     expect(quest).toEqual({ reply: 'Hi.', replies: ['Hi.'] });
   });
 });
