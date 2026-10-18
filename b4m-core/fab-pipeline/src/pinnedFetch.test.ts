@@ -322,6 +322,11 @@ describe('buildPrivateAddressAdmission', () => {
       expect(admit(network, family)).toBe(false);
       expect(buildPrivateAddressAdmission({ allowPrivateCidrs: [cidr] })(network, family)).toBe(false);
     }
+    // Interior and hex-mapped addresses, not just each entry's network address.
+    expect(admit('169.254.170.2', 4)).toBe(false);
+    expect(admit('::ffff:7f00:1', 6)).toBe(false);
+    expect(customMcpPrivateCidrProblem('169.254.170.2/32')).not.toBeNull();
+    expect(customMcpPrivateCidrProblem('::ffff:7f00:1/128')).not.toBeNull();
   });
 
   it('rejects a malformed CIDR', () => {
