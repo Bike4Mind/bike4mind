@@ -298,18 +298,25 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
   });
 
   describe('message attachments handed to getOrCreateSession for pinning', () => {
-    it('forwards messageFileIds and messageOnlyFileIds, and keeps messageOnlyFileIds out of invoke()', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
-      const { req, res } = fire({ body: { messageFileIds: ['f1', 'f2'], messageOnlyFileIds: ['f2'] } });
+    const body = { messageFileIds: ['f1', 'f2'], messageOnlyFileIds: ['f2'] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards them for a session (JWT) caller, and keeps messageOnlyFileIds out of invoke()', async () => {
+      const { req, res } = fire({ apiKey: null, body });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockGetOrCreateSession.mock.calls[0][0]).toMatchObject({
-        messageFileIds: ['f1', 'f2'],
-        messageOnlyFileIds: ['f2'],
-      });
-      const invoked = (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
-      expect(invoked).not.toHaveProperty('messageOnlyFileIds');
-      expect(invoked.messageFileIds).toEqual(['f1', 'f2']);
+      expect(mockGetOrCreateSession.mock.calls[0][0]).toMatchObject(body);
+      expect(invokedBody()).not.toHaveProperty('messageOnlyFileIds');
+      expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
+    });
+
+    it('pins nothing for an API-key caller, whose files still ride the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockGetOrCreateSession.mock.calls[0][0]).not.toHaveProperty('messageFileIds');
+      expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
     });
   });
 

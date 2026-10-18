@@ -20,7 +20,7 @@ import {
   ISession,
   ISessionOrigin,
   IUserDocument,
-  resolveAttachScope,
+  isSessionPinnableAttachment,
   SessionListFilters,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -147,7 +147,7 @@ const lakeAdaptersFor = (user: IUserDocument, logger: Logger) => ({
 
 /**
  * The notebook-scope subset of `ids`, lowercased and deduplicated, in input order. Images stay
- * per-turn: a notebook image is re-sent as base64 every turn (see resolveAttachScope).
+ * per-turn: a notebook image is re-sent as base64 every turn (see isSessionPinnableAttachment).
  * findMetadataByIds includes soft-deleted rows; those must not come back as knowledge.
  */
 const notebookScopedFileIds = async (ids: string[], logger: Logger, sessionId?: string): Promise<string[]> => {
@@ -156,9 +156,7 @@ const notebookScopedFileIds = async (ids: string[], logger: Logger, sessionId?: 
   const { data, hasMore } = await fabFileRepository.findMetadataByIds(unique);
   if (hasMore) logger.warn('fabFileIds exceed the metadata cap; persisting the first page', { sessionId });
   const notebook = new Set(
-    data
-      .filter(file => !file.deletedAt && resolveAttachScope('auto', file.mimeType) === 'notebook')
-      .map(file => String(file.id))
+    data.filter(file => !file.deletedAt && isSessionPinnableAttachment(file.mimeType)).map(file => String(file.id))
   );
   return unique.filter(id => notebook.has(id));
 };
@@ -170,6 +168,10 @@ const notebookScopedFileIds = async (ids: string[], logger: Logger, sessionId?: 
  * projects, since an automatic attach is not consent to share. Best-effort: on failure the
  * session is returned unchanged and the current turn still carries the files itself.
  * Returns the session as written, or the input session when nothing was added.
+ *
+ * There is no cap on pins. Inline token use stays bounded as the list grows: every turn splits one
+ * attachedFileTokenBudget evenly across the inlined files (buildDataSources), so another pin thins
+ * each file's share rather than adding tokens.
  */
 export async function pinFilesToSessionKnowledge(
   session: ISessionDocument,
@@ -200,7 +202,7 @@ export async function pinFilesToSessionKnowledge(
       }
     );
   } catch (error) {
-    logger.warn('Failed to persist fabFileIds to session knowledge', { sessionId: session.id, error });
+    logger.warn('Failed to write the session knowledge pin', { sessionId: session.id, error });
     return session;
   }
 }
@@ -261,7 +263,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
     const seeded = new Set((fabFileIds ?? []).map(id => id.toLowerCase()));
     const messageKnowledgeIds = (
       await notebookScopedFileIds(messagePins, logger).catch(error => {
-        logger.warn('Failed to resolve message files for a new session', { error });
+        logger.warn('Failed to resolve the session knowledge pin for a new session', { error });
         return [];
       })
     ).filter(id => !seeded.has(id));

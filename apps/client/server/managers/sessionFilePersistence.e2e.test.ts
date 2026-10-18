@@ -18,8 +18,21 @@ import { KnowledgeType, Permission, type IUserDocument } from '@bike4mind/common
 import { configureSlackPackage, sendMessageToNotebookAndGetResponse } from '@bike4mind/slack';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getOrCreateSession, addMessageToSession } from '@server/managers/sessionManager';
+import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
 
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
+// The session.created push needs a socket endpoint; nothing here listens.
+vi.mock('@server/managers/sessionSideEffects', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/managers/sessionSideEffects')>()),
+  notifySessionCreated: vi.fn().mockResolvedValue(undefined),
+}));
+// The agent path runs for real up to the executor hand-off, which has no deployment here.
+vi.mock('@server/utils/dispatchAgentExecution', () => ({
+  resolveAgentExecutorTarget: () => ({ kind: 'lambda', functionName: 'agent-executor' }),
+  dispatchAgentExecution: vi.fn().mockResolvedValue(undefined),
+  AgentExecutorRejectedError: class extends Error {},
+}));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -57,7 +70,7 @@ const createUser = async (name: string) => {
     email: `${name}-${s}@example.com`,
   })) as unknown as IUserDocument;
 };
-const createFile = async (userId: string, mimeType: string) =>
+const createFile = async (userId: string, mimeType: string, extra: Record<string, unknown> = {}) =>
   String(
     (
       await FabFile.create({
@@ -66,6 +79,7 @@ const createFile = async (userId: string, mimeType: string) =>
         type: KnowledgeType.FILE,
         filePath: `knowledge/${suffix()}`,
         mimeType,
+        ...extra,
       })
     )._id
   );
@@ -264,6 +278,79 @@ describe('a message attachment is pinned to the session it was sent in', () => {
 
     await send(owner, session.id, [sent], [notSent]);
     expect(await knowledgeIds(session.id)).toEqual([sent]);
+  });
+
+  it('seeds a new session with the message documents, never another user or a deleted file', async () => {
+    const owner = await createUser('owner');
+    const stranger = await createUser('stranger');
+    const csv = await createFile(owner.id, 'text/csv');
+    const png = await createFile(owner.id, 'image/png');
+    const deleted = await createFile(owner.id, 'application/pdf', { deletedAt: new Date() });
+    const foreign = await createFile(stranger.id, 'application/pdf');
+
+    const created = await getOrCreateSession({
+      sessionName: 'first message',
+      messageFileIds: [csv, png, deleted, foreign],
+      user: owner,
+      ability: defineAbilitiesFor(owner),
+      logger,
+    });
+
+    expect(created.wasCreated).toBe(true);
+    expect(await knowledgeIds(created.sessionId)).toEqual([csv]);
+  });
+
+  it('does not pin a deleted file on an existing session', async () => {
+    const owner = await createUser('owner');
+    const session = await createSession({ userId: owner.id, name: 'nb' });
+    const deleted = await createFile(owner.id, 'application/pdf', { deletedAt: new Date() });
+
+    await send(owner, session.id, [deleted]);
+    expect(await knowledgeIds(session.id)).toEqual([]);
+  });
+
+  it('leaves knowledgeIds unchanged on a view-only share and on another user session', async () => {
+    const owner = await createUser('owner');
+    const viewer = await createUser('viewer');
+    const shared = await createSession({
+      userId: owner.id,
+      name: 'shared',
+      users: [{ userId: viewer.id, permissions: [Permission.read] }],
+    });
+    const notShared = await createSession({ userId: owner.id, name: 'private' });
+    const pdf = await createFile(viewer.id, 'application/pdf');
+
+    await expect(send(viewer, shared.id, [pdf])).rejects.toThrow('Session not found');
+    await expect(send(viewer, notShared.id, [pdf])).rejects.toThrow('Session not found');
+    expect(await knowledgeIds(shared.id)).toEqual([]);
+    expect(await knowledgeIds(notShared.id)).toEqual([]);
+  });
+
+  it('pins an agent-mode message attachment through the in-app door, and the REST door leaves it per-run', async () => {
+    const owner = await createUser('owner');
+    const session = await createSession({ userId: owner.id, name: 'nb' });
+    const csv = await createFile(owner.id, 'text/csv');
+    const png = await createFile(owner.id, 'image/png');
+    const start = (pinMessageFiles: boolean) =>
+      startAgentExecution(
+        {
+          userId: owner.id,
+          sessionId: session.id,
+          questId: session.id,
+          query: 'summarize',
+          model: 'claude-opus-5',
+          connectionId: HEADLESS_CONNECTION_ID,
+          apiKeyInfo: undefined,
+          messageFileIds: [csv, png],
+          pinMessageFiles,
+        },
+        logger
+      );
+
+    expect((await start(false)).ok).toBe(true);
+    expect(await knowledgeIds(session.id)).toEqual([]);
+    expect((await start(true)).ok).toBe(true);
+    expect(await knowledgeIds(session.id)).toEqual([csv]);
   });
 
   it('pins a message attachment once, however often it is sent', async () => {

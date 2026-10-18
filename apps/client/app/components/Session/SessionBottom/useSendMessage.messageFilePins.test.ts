@@ -28,8 +28,13 @@ describe('useSendMessage - message attachments pinned to the session', () => {
     );
   });
 
-  it('mirrors the pin on both paths once the send lands', () => {
-    expect(source).toMatch(/mirrorPins\(dispatchSessionId\);/);
-    expect(source).toMatch(/dispatchedRef\.current = true;[\s\S]{0,200}mirrorPins\(data\?\.session\?\.id\)/);
+  it('mirrors the pin before each dispatch, and rolls the chat mirror back when the send fails', () => {
+    expect(source).toMatch(
+      /holdMirroredPinsUntilAgentStart\(dispatchSessionId, mirrorPins\(dispatchSessionId\)\);\s*agentExecution\.start\(\{/
+    );
+    expect(source).toMatch(
+      /const mirroredPins = mirrorPins\(pinnedSessionId\);\s*let data;\s*try \{\s*data = await handler/
+    );
+    expect(source).toMatch(/rollbackMirroredPins\(pinnedSessionId, mirroredPins, setCurrentSessionRaw\)/);
   });
 });

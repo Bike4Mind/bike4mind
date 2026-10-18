@@ -333,14 +333,22 @@ export async function startAgentExecution(
 
   const executionId = execution.id;
 
-  // After the run is accepted, so a refused start pins nothing. This run carries the files itself.
+  // After the run is accepted, so a refused start pins nothing; this run carries the files itself.
+  // Runs alongside the prompt Quest persist below and is awaited before dispatch, so it adds no
+  // latency of its own. pinFilesToSessionKnowledge never throws.
   const messagePins = input.pinMessageFiles
     ? pinnableMessageFileIds(input.messageFileIds, input.messageOnlyFileIds)
     : [];
-  if (messagePins.length > 0) {
-    const user = await userRepository.findById(userId).catch(() => null);
-    if (user) await pinFilesToSessionKnowledge(session, messagePins, { user, logger });
-  }
+  const pinning =
+    messagePins.length > 0
+      ? userRepository
+          .findById(userId)
+          .catch(error => {
+            logger.warn('[Start] Could not load the user for the session knowledge pin', { userId, error });
+            return null;
+          })
+          .then(user => (user ? pinFilesToSessionKnowledge(session, messagePins, { user, logger }) : undefined))
+      : Promise.resolve();
 
   // Persist the user's prompt as a Quest immediately so the bubble survives a mid-run
   // reload, and so a REST caller has a chat-history record of what it asked. The
@@ -388,6 +396,7 @@ export async function startAgentExecution(
     });
   }
 
+  await pinning;
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is

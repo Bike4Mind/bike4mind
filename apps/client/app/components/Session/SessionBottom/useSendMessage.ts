@@ -28,7 +28,12 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
-import { messageOnlyFileIds, mirrorPinnedMessageFiles } from './messageFilePins';
+import {
+  holdMirroredPinsUntilAgentStart,
+  messageOnlyFileIds,
+  mirrorPinnedMessageFiles,
+  rollbackMirroredPins,
+} from '@client/app/utils/messageFilePins';
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
@@ -1041,6 +1046,8 @@ export function useSendMessage({
           effectiveTools,
           dispatchAgent?.allowedTools
         );
+        // Mirrored before the dispatch, settled on the socket's start outcome (useAgentExecution).
+        holdMirroredPinsUntilAgentStart(dispatchSessionId, mirrorPins(dispatchSessionId));
         agentExecution.start({
           sessionId: dispatchSessionId,
           // Server requires `questId`; without an authored quest we tag the
@@ -1116,7 +1123,6 @@ export function useSendMessage({
           // message, and it is kept off the stored execution and Quest.
           ...systemContextField,
         });
-        mirrorPins(dispatchSessionId);
         setChatInputValue('');
         clearDraft(dispatchSessionId);
         // A first send from a new notebook drafted under the new-notebook key
@@ -1193,6 +1199,10 @@ export function useSendMessage({
       }));
     }
 
+    // Mirrored before the send so a workbench write racing it carries the pin. A new session is
+    // seeded server-side at create, and session.created carries the list.
+    const pinnedSessionId = isNewSession ? null : sessionToSend?.id;
+    const mirroredPins = mirrorPins(pinnedSessionId);
     let data;
     try {
       data = await handler(sessionToSend);
@@ -1216,6 +1226,7 @@ export function useSendMessage({
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
       // A held Stop is dropped first so the placeholder reads as unreplaced again.
+      if (pinnedSessionId) rollbackMirroredPins(pinnedSessionId, mirroredPins, setCurrentSessionRaw);
       deferredStop.cancel();
       setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);
@@ -1226,8 +1237,6 @@ export function useSendMessage({
     // The message is posted from here on; a later throw (quest adoption, cache migration,
     // cleanup) is cleanup failing, not a refusal, so the outer catch must not report it as one.
     dispatchedRef.current = true;
-    // A new session was seeded with them at create, and session.created carries the list.
-    if (!isNewSession) mirrorPins(data?.session?.id);
 
     setWorkBenchAgents([]);
     setSubmitting(false);

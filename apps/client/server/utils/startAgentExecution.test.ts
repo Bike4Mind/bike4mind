@@ -155,6 +155,22 @@ describe('startAgentExecution', () => {
     });
   });
 
+  it('still dispatches, and warns, when the user lookup for the pin fails', async () => {
+    mockUserFindById.mockRejectedValueOnce(new Error('db'));
+    const result = await startAgentExecution(
+      input({ userId: 'pin-user-fails', messageFileIds: ['file-csv'], pinMessageFiles: true }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockPinFiles).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('session knowledge pin'),
+      expect.objectContaining({ userId: 'pin-user-fails' })
+    );
+  });
+
   it('leaves a run message attachments unpinned when the door does not ask for it', async () => {
     await startAgentExecution(input({ userId: 'no-pins', messageFileIds: ['file-csv'] }), logger);
     expect(mockPinFiles).not.toHaveBeenCalled();

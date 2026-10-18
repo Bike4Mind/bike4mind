@@ -41,7 +41,7 @@ vi.mock('@client/app/contexts/SessionsContext', async () => {
 });
 
 import { useNotebookContextFiles } from './useNotebookContextFiles';
-import { mirrorPinnedMessageFiles } from '@client/app/components/Session/SessionBottom/messageFilePins';
+import { mirrorPinnedMessageFiles } from '@client/app/utils/messageFilePins';
 import { useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 
 const SID = 'session-1';

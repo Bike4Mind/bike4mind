@@ -90,8 +90,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       sessionName,
       projectId: body.projectId,
       fabFileIds: body.fabFileIds,
-      messageFileIds: body.messageFileIds,
-      messageOnlyFileIds,
+      // In-app sends only: an API-key turn keeps its files per-run, as the v1 agent route does.
+      ...(req.apiKeyInfo ? {} : { messageFileIds: body.messageFileIds, messageOnlyFileIds }),
       agentIds,
       origin: resolveSessionOrigin(req),
       user: req.user,
