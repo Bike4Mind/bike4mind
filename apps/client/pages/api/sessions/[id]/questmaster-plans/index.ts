@@ -1,4 +1,6 @@
 import { questMasterPlanRepository, sessionRepository } from '@bike4mind/database';
+import { questMasterPlansResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import { toObjectIdString } from '@server/utils/objectId';
@@ -29,7 +31,7 @@ const handler = baseApi().get<Request<unknown, unknown, unknown, { id: string }>
   }
 
   const questMasterPlans = await questMasterPlanRepository.findByNotebookId(sessionId);
-  return res.json(questMasterPlans);
+  return respond(res, questMasterPlansResponseSchema, questMasterPlans);
 });
 
 export default handler;

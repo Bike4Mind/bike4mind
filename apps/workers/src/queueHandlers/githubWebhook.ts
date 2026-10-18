@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/database';
 import { WebhookDeliveryStatus, WebhookAuditStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { createHandlerRegistry, getHandler } from '@server/integrations/github/handlers';
+import { createHandlerRegistry, getHandler } from '@workers/integrations/github/handlers';
 import { isValidGitHubEventType, GitHubWebhookPayload, GitHubHandlerContext } from '@server/integrations/github/types';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';

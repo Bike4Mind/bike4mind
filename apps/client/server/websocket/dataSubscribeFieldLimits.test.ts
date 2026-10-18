@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
 import { findWithheldFilterPaths, resolveFieldLimits, type FieldLimitOptions } from './dataSubscribeFieldLimits';
 
 const opts = (overrides: Partial<FieldLimitOptions> = {}): FieldLimitOptions => ({
@@ -17,6 +17,8 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
       callback: false,
+      embedding: false,
+      slackNotification: false,
     });
   });
 
@@ -32,7 +34,7 @@ describe('resolveFieldLimits', () => {
     // The policy lives in @bike4mind/common; this branch must not grow a hand-maintained copy that
     // can drift from what the REST redaction enforces.
     expect(Object.keys(resolveFieldLimits('quests', opts()) ?? {}).sort()).toEqual(
-      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, 'callback'].sort()
+      [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...CHAT_MESSAGE_WITHHELD_FIELDS].sort()
     );
   });
 
@@ -41,7 +43,15 @@ describe('resolveFieldLimits', () => {
   });
 
   it('excludes the completion callback for the session owner too, since a collaborator key may have armed it', () => {
-    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toEqual({ callback: false });
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toMatchObject({ callback: false });
+  });
+
+  it('withholds the same server-only quest fields as the REST chat routes, for owner and sharee', () => {
+    // The REST side strips CHAT_MESSAGE_WITHHELD_FIELDS via chatMessageResponseSchema; a socket
+    // event must not hand back what the HTTP response withheld.
+    const serverOnly = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
+    expect(resolveFieldLimits('quests', opts({ isQuestOwner: true }))).toEqual(serverOnly);
+    expect(resolveFieldLimits('quests', opts())).toMatchObject(serverOnly);
   });
 
   it('excludes password/stripeCustomerId/resetPasswordToken for the users collection', () => {
@@ -74,6 +84,8 @@ describe('resolveFieldLimits', () => {
       'promptMeta.functionCalls.error': false,
       'promptMeta.citables.metadata.fullContext': false,
       callback: false,
+      embedding: false,
+      slackNotification: false,
     });
   });
 

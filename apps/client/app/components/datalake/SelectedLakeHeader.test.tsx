@@ -76,6 +76,14 @@ beforeEach(() => {
 });
 
 describe('SelectedLakeHeader', () => {
+  it("shows a typed prefix but hides a GitHub connector lake's generated one", () => {
+    const { unmount } = renderHeader();
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('ops:');
+    unmount();
+    renderHeader({ origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' });
+    expect(screen.queryByTestId('datalake-selected-lake-prefix')).not.toBeInTheDocument();
+  });
+
   it('opens the append wizard targeting the scoped lake', () => {
     renderHeader();
 

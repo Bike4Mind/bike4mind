@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -75,7 +75,7 @@ export interface paths {
     get: operations['getSession'];
     /**
      * Update a session
-     * @description Updates a session (called a "notebook" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.
+     * @description Updates a session (called a "notebook" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes, and a non-empty list also turns forced retrieval on for a session that has never set it; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content even when every lake is in scope (files attached to the session still reach the model and its knowledge-base tools), and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.
      */
     put: operations['updateSession'];
     post?: never;
@@ -221,7 +221,7 @@ export interface paths {
     };
     /**
      * Get the authenticated caller
-     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != "free"` for "is this caller paying" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
+     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
      */
     get: operations['getMe'];
     put?: never;
@@ -1269,6 +1269,19 @@ export interface components {
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
     };
+    sendChatMessageResponse504: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'request_timeout';
+      quest_id: string;
+      sessionId?: string;
+    };
     /**
      * @example {
      *       "message": "How do I reset my password?",
@@ -1443,7 +1456,7 @@ export interface components {
       /** @description Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it. */
       lastUsedModel?: string | null;
       forceKnowledgeRetrieval?: boolean;
-      /** @description The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake. */
+      /** @description The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake. */
       lakeScope?: string[] | null;
       /** @description Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on. */
       includeLibraryFiles?: boolean;
@@ -1564,6 +1577,8 @@ export interface components {
           usage?: {
             inputTokens?: number;
             outputTokens?: number;
+            /** @description Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count. */
+            reasoningTokens?: number;
             cacheReadInputTokens?: number;
             cacheCreationInputTokens?: number;
           };
@@ -5234,6 +5249,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A `wait: true` turn ran past the request deadline. The turn is already ended: its quest (`quest_id`) is settled as timed out with any partial reply kept, and unused reserved credits are refunded. Retry in async mode for a long turn. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['sendChatMessageResponse504'];
         };
       };
     };

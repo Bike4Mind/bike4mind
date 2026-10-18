@@ -370,8 +370,11 @@ describe('ApiClient.fetch (the transport handed to @bike4mind/sdk)', () => {
       expiresAt: new Date(Date.now() - 60_000).toISOString(),
       userId: 'user-1',
     };
-    // The request and refresh interceptors read the stale token; the retry reads what the refresh stored.
+    // The request interceptor, the 401 interceptor, the refresh's pre-exchange read and its
+    // compare-and-set re-read all see the stale token; the retry reads what the refresh stored.
     mockGetAuthTokens
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
       .mockResolvedValueOnce(stale)
       .mockResolvedValueOnce(stale)
       .mockResolvedValue({ ...stale, accessToken: 'fresh', expiresAt: new Date(Date.now() + 60_000).toISOString() });

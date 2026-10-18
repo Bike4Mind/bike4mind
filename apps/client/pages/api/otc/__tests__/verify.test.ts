@@ -39,6 +39,10 @@ vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, 
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'a', refreshToken: 'r' }) },
 }));
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 
 // The one-time code is already proven by the time we reach registration; stub the
@@ -60,6 +64,7 @@ const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
+const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
@@ -88,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
+    addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -354,7 +360,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
     mockAddCredits.mockResolvedValue({ currentCredits: 1000 + EXPECTED_DOMAIN_CREDITS });
-    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
   });
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
@@ -643,6 +649,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       matched: true,
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 150_000,
+      tags: ['Partner'],
     });
     const { req, res } = makeReqRes('person@newpartner.com');
 
@@ -652,6 +659,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(domainGrantCall()?.[0]).toEqual(
       expect.objectContaining({ credits: 150_000, transactionId: 'domain-grant-credits:user-1' })
     );
+    expect(mockAddTagsToUser).toHaveBeenCalledWith('user-1', ['Partner']);
   });
 
   it('honors a DB rule that grants access with 0 bonus credits (no env fallback)', async () => {
@@ -661,6 +669,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       matched: true,
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 0,
+      tags: [],
     });
     const { req, res } = makeReqRes(DOMAIN_EMAIL);
 
@@ -695,7 +704,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     mockValidateNonce.mockResolvedValue(true);
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserUpdate.mockResolvedValue(undefined);
-    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
     mockAddCredits.mockResolvedValue({ currentCredits: 15_000 });
     mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
   });
@@ -706,6 +715,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       entitlements: new Set(['partner:pro']),
       signupCredits: 15_000,
       organizationId: 'org-partner',
+      tags: ['Partner'],
     });
 
   it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
@@ -781,6 +791,8 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     // Reflected onto the doc the response serializes, so the client sees the grant without a refetch.
     expect(user).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
     expect(res._getJSONData()).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
+    expect(mockAddTagsToUser).toHaveBeenCalledWith('u-existing', ['Partner']);
+    expect(res._getJSONData().tags).toEqual(['Customer', PENDING_FREE_CREDITS_TAG, 'Partner']);
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'u-existing',

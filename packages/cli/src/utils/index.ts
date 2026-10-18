@@ -2,7 +2,9 @@ export {
   generateCliTools,
   wrapTools,
   wrapToolWithPermission,
+  buildCliToolList,
   type AgentContext,
+  type CliToolListInput,
   type WrapToolDeps,
   type PermissionPromptKind,
 } from './toolsAdapter';

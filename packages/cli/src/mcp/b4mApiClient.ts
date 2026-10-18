@@ -5,6 +5,7 @@ import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
+  type ArtifactResource,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
   type IBriefcasePrompt,
@@ -12,14 +13,21 @@ import {
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
+  SLUG_OWNED_BY_OTHER,
   type ChatHistoryItemType,
+  type CommentPolicy,
   type GeneratedFile,
   type GenerateImageResponse,
   type ImagePromptResolution,
   type PromptBatchQueryType,
+  type PublishResult,
+  type PublishScopeTier,
+  type PublishVisibility,
   type QuestErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
+  type UploadUrlRequest,
+  type UploadUrlResponse,
 } from '@bike4mind/common';
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
@@ -177,6 +185,37 @@ interface ArtifactListEnvelope {
 export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
+}
+
+export interface CreateArtifactArgs {
+  type: ArtifactResource['type'];
+  title: string;
+  content: string;
+  description?: string;
+  notebookId?: string;
+  projectId?: string;
+  tags?: string[];
+}
+
+export interface CreatedArtifact {
+  id: string;
+  type: ArtifactResource['type'];
+  title: string;
+  version: number;
+  notebookId?: string;
+  projectId?: string;
+  createdAt: string;
+}
+
+/** Where an artifact is already published, from GET /api/publish/artifacts?sourceArtifactId. */
+export interface ExistingPublication {
+  publicId: string;
+  tier: PublishScopeTier;
+  scopeId: string;
+  slug: string;
+  visibility: PublishVisibility;
+  description?: string;
+  commentPolicy?: CommentPolicy;
 }
 
 /**
@@ -446,6 +485,65 @@ export class B4mApiClient {
     });
   }
 
+  /** POST /api/v1/artifacts: creates a private artifact at version 1. */
+  async createArtifact(args: CreateArtifactArgs): Promise<CreatedArtifact> {
+    const artifact = await this.sdk.call('createArtifact', {
+      body: {
+        type: args.type,
+        title: args.title,
+        content: args.content,
+        ...(args.description !== undefined ? { description: args.description } : {}),
+        ...(args.notebookId ? { session_id: args.notebookId } : {}),
+        ...(args.projectId ? { project_id: args.projectId } : {}),
+        ...(args.tags?.length ? { tags: args.tags } : {}),
+      },
+    });
+    return {
+      id: artifact.id,
+      type: artifact.type,
+      title: artifact.title,
+      version: artifact.version,
+      notebookId: artifact.session_id ?? undefined,
+      projectId: artifact.project_id ?? undefined,
+      createdAt: artifact.created_at,
+    };
+  }
+
+  /**
+   * The caller's own most recent publication of an artifact, or null. The route is
+   * owner-scoped for `sourceArtifactId`, so another user's page never matches.
+   */
+  async findPublishedArtifact(artifactId: string): Promise<ExistingPublication | null> {
+    const result = await this.client.get<{ artifacts?: ExistingPublication[] }>('/api/publish/artifacts', {
+      params: { sourceArtifactId: artifactId, limit: 1 },
+    });
+    return result.artifacts?.[0] ?? null;
+  }
+
+  /** POST /api/publish/artifact/upload-url: opens a publish draft and mints one upload URL per file. */
+  async requestPublishUpload(request: UploadUrlRequest): Promise<UploadUrlResponse> {
+    return this.client.post<UploadUrlResponse>('/api/publish/artifact/upload-url', request);
+  }
+
+  /**
+   * PUT one draft file to the URL upload-url minted. Plain fetch, never the app
+   * client: that client injects auth headers, which break an S3 presigned
+   * signature. Self-host mints a relative proxy URL, so resolve against baseURL.
+   */
+  async uploadPublishDraftFile(uploadUrl: string, body: string, mimeType: string): Promise<void> {
+    const res = await fetch(new URL(uploadUrl, this.baseURL), {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body,
+    });
+    if (!res.ok) throw new Error(`publish upload failed (${res.status})`);
+  }
+
+  /** POST /api/publish/artifact/finalize: validates the uploaded draft and makes it live. */
+  async finalizePublish(draftId: string): Promise<PublishResult> {
+    return this.client.post<PublishResult>('/api/publish/artifact/finalize', { draftId });
+  }
+
   /**
    * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
    *
@@ -500,13 +598,22 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     if ((data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
       return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
     }
+    // The publish routes answer 403 when the slug belongs to another publisher; no key
+    // scope fixes that.
+    if (apiErrorCode(error) === SLUG_OWNED_BY_OTHER) {
+      return extractServerMessage(data) ?? 'this publish slug belongs to another publisher';
+    }
     // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
     // names the expected origin in the body - the actual fix for a login (JWT) caller,
     // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
-    const csrfMessage = extractServerMessage(data);
-    if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
+    const serverMessage = extractServerMessage(data);
+    if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
+    // Must stay in sync with the ForbiddenError text in
+    // apps/client/server/services/publish/checkScopePermission.ts.
+    if (serverMessage && /own user scope/i.test(serverMessage))
+      return `${serverMessage} (publish_artifact only publishes artifacts you own)`;
     const base = "API key forbidden: check the key's scopes and account access";
     return scope ? `${base} (recommended scope: ${scope})` : base;
   }
@@ -547,6 +654,14 @@ function httpFailure(error: unknown): { status?: number; data?: unknown } | unde
   if (error instanceof B4mApiError) return { status: error.status, data: error.body };
   if (isAxiosError(error)) return { status: error.response?.status, data: error.response?.data };
   return undefined;
+}
+
+/** The machine-readable `code` a route put on its error body, when it set one. */
+export function apiErrorCode(error: unknown): string | undefined {
+  const data = httpFailure(error)?.data;
+  if (!data || typeof data !== 'object') return undefined;
+  const code = (data as Record<string, unknown>).code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** The HTTP status of a failed API call from either transport. */

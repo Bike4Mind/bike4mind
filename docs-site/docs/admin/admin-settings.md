@@ -87,7 +87,7 @@ Located in the AI category, this card has one section per generation modality (V
 
 - A model that is on by default and has no admin override reads "Enabled by default". Once you flip a switch, your choice overrides the model's default in either direction
 - Models marked "Preview" are early-access provider models whose behavior or pricing may still change
-- Turning a model off makes new jobs for it be refused and removes it from the public model listings (`GET /api/v1/video-models`, `GET /api/v1/music-models`); a disabled video model also disappears from Studio
+- Turning a model off makes new jobs for it be refused and removes it from the public model listings (`GET /api/v1/video-models`, `GET /api/v1/music-models`); a disabled video or music model also disappears from Studio
 - The in-chat music generation tool does not honour these switches yet; it always uses its built-in default music model
 - Models whose provider is not configured on the deployment (for example, the non-production test models on production) cannot generate regardless of the switch
 

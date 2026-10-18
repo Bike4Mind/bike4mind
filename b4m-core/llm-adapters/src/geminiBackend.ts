@@ -9,6 +9,7 @@ import {
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -623,6 +624,7 @@ export class GeminiBackend implements ICompletionBackend {
     // default is Anthropic's discount, not a Gemini price. Gated on the catalog-priced record when
     // there is one, since that is the record settlement and the public quote price with.
     const forwardsCacheReads = publishesCacheReadRate(this._dispatch.for(modelName) ?? modelInfo);
+    const accumReasoningTokens = options._internal?.accumReasoningTokens;
 
     // Tool calls minted by an earlier round of THIS SAME completion chain - exempt from the
     // gemini-3 replayed-history drop guard below, since a live call is a different failure mode
@@ -707,6 +709,7 @@ export class GeminiBackend implements ICompletionBackend {
     // complete() call further down.
     let turnInputTokens = 0;
     let turnOutputTokens = 0;
+    let turnReasoningTokens: number | undefined;
     // The cached subset of turnInputTokens (promptTokenCount includes cachedContentTokenCount).
     let turnCacheReadTokens = 0;
     const turnCacheReads = (usage: { cachedContentTokenCount?: number } | undefined) =>
@@ -715,6 +718,7 @@ export class GeminiBackend implements ICompletionBackend {
     const usageSoFar = () => ({
       ...splitCacheInclusiveInput(accumInputTokens + turnInputTokens, accumCacheReadTokens + turnCacheReadTokens),
       outputTokens: accumOutputTokens + turnOutputTokens,
+      ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, turnReasoningTokens)),
       turnUsage: appendCacheInclusiveTurn(accumTurnUsage, turnInputTokens, turnCacheReadTokens, turnOutputTokens),
     });
     // This round's visible answer text (thought parts excluded), for shouldEndTurnAfterTools.
@@ -810,6 +814,7 @@ export class GeminiBackend implements ICompletionBackend {
           turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
           turnOutputTokens = geminiOutputTokens(lastChunk.usageMetadata);
           turnCacheReadTokens = turnCacheReads(lastChunk.usageMetadata);
+          turnReasoningTokens = reasoningTokensFromUsage(lastChunk.usageMetadata);
           const finishReason = normalizeGeminiFinishReason(lastChunk.candidates?.[0]?.finishReason);
           // Emit accum + this turn's tokens. When the call recurses below,
           // the inner call's terminal emit will overwrite this with the full
@@ -1017,6 +1022,7 @@ export class GeminiBackend implements ICompletionBackend {
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
                   accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
                   accumTurnUsage: usageSoFar().turnUsage,
+                  accumReasoningTokens: addReasoningTokens(accumReasoningTokens, turnReasoningTokens),
                   liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
                   artifactGuard,
                 },
@@ -1098,6 +1104,7 @@ export class GeminiBackend implements ICompletionBackend {
         turnInputTokens = r.usageMetadata?.promptTokenCount ?? 0;
         turnOutputTokens = geminiOutputTokens(r.usageMetadata);
         turnCacheReadTokens = turnCacheReads(r.usageMetadata);
+        turnReasoningTokens = reasoningTokensFromUsage(r.usageMetadata);
         const finishReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
         // Emit accum + this turn's tokens. The recursive call below (if any)
         // will overwrite via the same accum+thisTurn shape, ending at the
@@ -1292,6 +1299,7 @@ export class GeminiBackend implements ICompletionBackend {
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
               accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
               accumTurnUsage: usageSoFar().turnUsage,
+              accumReasoningTokens: addReasoningTokens(accumReasoningTokens, turnReasoningTokens),
               liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
               artifactGuard,
             },

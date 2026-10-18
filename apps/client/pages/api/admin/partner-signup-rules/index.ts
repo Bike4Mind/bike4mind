@@ -3,7 +3,11 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { ApiKeyScope, createPartnerSignupRuleSchema } from '@bike4mind/common';
-import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
+import {
+  invalidatePartnerRuleCache,
+  assertKnownEntitlements,
+  assertKnownSubscriptionPlan,
+} from '@server/entitlements/partnerRules';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
 
@@ -46,6 +50,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       assertKnownEntitlements(data.entitlements);
       await assertOrganizationExists(data.organizationId);
+      assertKnownSubscriptionPlan(data.subscription);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the
       // unique domain index is (see the create catch below).

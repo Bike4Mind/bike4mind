@@ -292,29 +292,30 @@ describe('POST /api/internal/s3/object-created', () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
 
       expect(userFindByIdMock).toHaveBeenCalledWith('u1');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), 'pending', {});
       expect(getMetadataMock).not.toHaveBeenCalled();
       expect(userDoc.save).toHaveBeenCalledWith({ session: {} });
     });
 
-    it('records the measured object size on the row, matching what the charge used', async () => {
+    it('judges the charge by the status the row had before this webhook marked it complete', async () => {
+      findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', save: saveMock });
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
 
-      expect(updateOneMock).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 1234 } }, { session: {} });
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), undefined, {});
     });
 
     it('falls back to the stored object size when the payload has none', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('falls back to the stored object size when the payload size is invalid', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: -1 }), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('stamps the current time when the event time does not parse', async () => {
@@ -340,15 +341,12 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(chargeMock).not.toHaveBeenCalled();
     });
 
-    it('does not save the owner or rewrite the row size when a redelivery loses the claim', async () => {
+    it('does not save the owner when a redelivery loses the claim', async () => {
       chargeMock.mockResolvedValue(false);
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 10, eventTime: EVENT_TIME }), makeRes());
 
       expect(chargeMock).toHaveBeenCalledTimes(1);
       expect(userDoc.save).not.toHaveBeenCalled();
-      // The newer write already recorded its own size; rewriting it from this stale event would
-      // make the counter's truth disagree with the bytes charged.
-      expect(updateOneMock).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 10 } }, expect.anything());
     });
 
     it('still answers 200 and enqueues chunking when the charge throws', async () => {

@@ -48,6 +48,8 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+// The sync-time line has its own suite (LakeSyncStatus.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({ default: () => null }));
 // The not-ingested chip has its own suite (LakeSkippedFilesChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));

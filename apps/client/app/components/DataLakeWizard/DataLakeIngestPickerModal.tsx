@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
+import { isGeneratedLakeTagPrefix } from '@bike4mind/common';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -89,9 +90,17 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
                   <Typography level="title-sm" noWrap sx={{ flex: 1 }}>
                     {lake.name}
                   </Typography>
-                  <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                    {lake.fileTagPrefix}
-                  </Chip>
+                  {!isGeneratedLakeTagPrefix(lake) && (
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="neutral"
+                      sx={{ fontSize: '10px' }}
+                      data-testid={`datalake-ingest-prefix-${lake.id}`}
+                    >
+                      {lake.fileTagPrefix}
+                    </Chip>
+                  )}
                 </ListItemButton>
               ))}
             </List>

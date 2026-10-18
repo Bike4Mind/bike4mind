@@ -43,3 +43,36 @@ describe('getToolCategory MCP and skill defaults', () => {
     );
   });
 });
+
+describe('CLI session bookkeeping and delegation categories', () => {
+  // The permission wrapper routes every CLI-built tool, so each one needs an explicit
+  // category: a missing or misspelled name falls back to prompt_default, which prompts
+  // interactive users on every todo/blocker/work-item call and denies the tool outright
+  // in a headless run with a deny-default policy.
+  it.each([
+    'agent_delegate',
+    'check_agent_status',
+    'list_background_agents',
+    'cancel_background_agent',
+    'resume_agent',
+    'create_dynamic_agent',
+    'coordinate_task',
+    'decompose_task',
+    'shared_context_read',
+    'shared_context_write',
+    'write_todos',
+    'read_prior_todos',
+    'log_decision',
+    'track_blocker',
+    'resolve_blocker',
+    'request_review_gate',
+    'work_item_create',
+    'work_item_update',
+    'work_item_close',
+    'work_item_ready',
+    'work_item_graph',
+    'tool_search',
+  ])('auto-approves %s', name => {
+    expect(getToolCategory(name)).toBe('auto_approve');
+  });
+});

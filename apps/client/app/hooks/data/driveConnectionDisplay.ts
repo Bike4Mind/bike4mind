@@ -6,6 +6,7 @@
  */
 
 import type { GoogleDriveConnectionStatus } from '@bike4mind/common';
+import { lastSyncedSuffix } from './lastSyncedSuffix';
 
 /**
  * Derived from the stored enum rather than re-listed. The drive-connection endpoint returns
@@ -41,6 +42,8 @@ export type DescribableDriveConnection = {
   driveFolderId: string;
   disconnecting?: boolean;
   syncStale?: boolean;
+  /** Stamped by failed runs too, but the idle branch that reads it has no lastError, so it is the last sync. */
+  lastPolledAt?: string | Date | null;
 };
 
 /**
@@ -92,7 +95,11 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
           title: `Google Drive folder "${folder}": last sync stopped short - ${connection.lastError}`,
           color: 'warning',
         }
-      : { label: badge.label, title: `Syncing the Google Drive folder "${folder}"`, color: badge.color };
+      : {
+          label: badge.label,
+          title: `Kept in sync with the Google Drive folder "${folder}"${lastSyncedSuffix(connection.lastPolledAt)}`,
+          color: badge.color,
+        };
   }
 
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';

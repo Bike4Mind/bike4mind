@@ -195,15 +195,30 @@ partial manifest. Published assets are not overwritten on retry.
 3. Install a dedicated GitHub App on only that repository with Contents read/write.
    Set source variable `DESKTOP_RELEASE_APP_ID` and secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
    The existing source release App and protected-tag bypass remain unchanged.
-4. Configure the five Apple secrets below and set `DESKTOP_MAC_SIGNING=true`. Missing,
-   empty, or false signing configuration blocks main distribution, not unsigned PR testing.
+4. Choose a macOS signing path. Set `DESKTOP_MAC_SIGNING=true` with the five Apple
+   secrets below for Developer ID signing and notarization. Alternatively, explicitly
+   set `DESKTOP_MAC_ADHOC_BETA=true` for account-free 0.x beta distribution. Unset,
+   false or malformed opt-ins deny publication; Apple signing takes precedence.
+   The ad-hoc path ships DMG/ZIP manual installers, disables macOS in-app updates
+   and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
+   signing provides bundle integrity, not publisher identity or notarization.
+   Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
 5. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
-   `latest-mac.yml` and `latest-linux.yml` downloads redirect successfully. CI logs record
+   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 6. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
+
+To disable account-free publication, unset `DESKTOP_MAC_ADHOC_BETA` before another
+run. To switch to Developer ID, configure its credentials and set
+`DESKTOP_MAC_SIGNING=true`; missing credentials fail rather than falling back to
+ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover with
+a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
+Distribution App setup is still required independently of Apple. These opt-ins do
+not enable Sparkle or prove macOS auto-update compatibility.
 
 #### GitHub App setup (independent of Apple)
 
@@ -335,6 +350,14 @@ and mammoth, and electron-builder ships what is declared. Bundling that one subp
 `@anthropic-ai/sdk` and `@octokit/rest` alongside the MCP SDK that main actually uses, and
 those still ship. Fixing that is a change to `b4m-core/mcp`'s entry points, not to this
 config.
+
+`node-pty` (the terminal panel's pty) is the one native dependency, so it is a `dependency`
+and stays external, while `@xterm/*` is bundled into the renderer and lives in
+`devDependencies`. It is pinned to a 1.2 beta because 1.1.0 publishes its macOS
+`spawn-helper` without the execute bit, and every spawn then fails with `posix_spawnp failed`.
+`electron-builder.yml` unpacks it from the asar (a `.node` file and the helper both have to be
+real files) and turns `npmRebuild` off: the module is N-API with prebuilt binaries for every
+target, so a rebuild would only compile a different binary from the one dev runs.
 
 ## Layout
 
@@ -477,6 +500,10 @@ token.
   `registerAuth()` must be called from inside `whenReady()`. Where
   `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
   memory-only and the UI says so - it never falls back to writing plaintext.
+- **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
+  the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
+  sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
+  starts signed out.
 - **Per-environment tokens.** Switching between Production, Local Dev and a self-hosted URL
   restores the session already cached for that endpoint instead of forcing another device
   flow, matching the CLI.

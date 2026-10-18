@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@server/security/cooldown';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { handler as runWafScan } from '@server/security/wafScan';
 import { ApiKeyScope } from '@bike4mind/common';
 

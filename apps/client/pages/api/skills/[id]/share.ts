@@ -42,6 +42,13 @@ const handler = baseApi().put(async (req, res) => {
 
   const { users, isGlobalRead, isGlobalWrite } = shareSchema.parse(req.body);
 
+  // Instance-wide publishing goes through the Skill Market (scanned and reviewed); only a
+  // super-admin may turn the global flags on directly. Turning them OFF stays open to owners so
+  // a legacy global skill can be retracted.
+  if (!req.user!.isAdmin && (isGlobalRead === true || isGlobalWrite === true)) {
+    throw new ForbiddenError('Publishing a skill to everyone goes through the Skill Market');
+  }
+
   // Enforce the invariant the UI couples but the API otherwise accepts à la carte:
   // global-write implies global-read. A direct caller sending `isGlobalWrite: true`
   // (with read absent or explicitly false) would otherwise persist a state the UI

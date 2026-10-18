@@ -50,6 +50,8 @@ export const func = withContext(async (event, context, logger) => {
     // 'pending' - permanently invisible to content-hash dedup, which excludes 'pending' as a
     // never-landed upload (FabFileModel.findByContentHashes).
     // Serving stays gated by moderationStatus, which this does not touch.
+    // The storage charge below is judged by the status from before this flip (claimStorageCharge).
+    const statusBeforeUpload = metadata.status;
     if (metadata.status !== 'complete') {
       await FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
       metadata.status = 'complete';
@@ -162,15 +164,9 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      // The charge below uses the object's measured size, and the counter's truth (every refund and
-      // the storage reconciliation) is derived from `fileSize`. Record the measured size so the two
-      // agree: leaving the client-declared presign value lets a repair move the counter off the bytes
-      // actually stored. Only when the charge claim is won: a late event for an earlier write of the
-      // same path loses the claim to a newer write, and that newer write already recorded its own
-      // size - overwriting it from this stale event would make the truth disagree with the charge.
-      if (await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session)) {
-        metadata.fileSize = object.size;
-      }
+      // A won claim records the measured size as `fileSize` itself; a late event for an earlier write
+      // of the same path loses the claim and leaves the newer write's size alone.
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, statusBeforeUpload, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

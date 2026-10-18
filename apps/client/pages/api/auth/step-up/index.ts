@@ -92,7 +92,7 @@ async function verifyFactor(req: Request, res: Response, body: Extract<StepUpBod
       }
     }
     await audit(req, user.id, body.method, false);
-    return sendFailedMfaAttempt(res, user.id, { error: 'Verification failed.', code: STEP_UP_FAILED_CODE });
+    return sendFailedMfaAttempt(res, user.id, { error: 'Verification failed.', code: STEP_UP_FAILED_CODE }, error);
   }
 
   return succeed(req, res, body.method, await markStepUp(req.user));

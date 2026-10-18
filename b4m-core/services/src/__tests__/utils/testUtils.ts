@@ -154,10 +154,12 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findFileIdsWithPositiveVectorizedCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
   findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
+  hasVectorizedFileInEmbeddingSpace: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),
+  countRebuildingFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
@@ -176,6 +178,9 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByUserId: vi.fn(),
   listOwnedBeforeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
+  summarizeChargedStorageByUserId: vi.fn(),
+  commitContentRewrite: vi.fn(),
+  findChargeState: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({
@@ -260,6 +265,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
+    addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
@@ -283,6 +289,10 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByIdWithNotionToken: vi.fn(),
     findByIdWithMfaSecrets: vi.fn(),
     atomicRecordMfaFailedAttempt: vi.fn(),
+    atomicReserveMfaAttempt: vi.fn(),
+    atomicClaimTotpStep: vi.fn(),
+    atomicConsumeBackupCode: vi.fn(),
+    atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     setModerationStatus: vi.fn(),
@@ -295,6 +305,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    incrementCurrentStorage: vi.fn(),
     addMemberRaisingSeats: vi.fn(),
     addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
@@ -306,6 +317,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findPlanHolderOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),
   });
 

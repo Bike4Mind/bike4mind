@@ -2,10 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { checkRateLimit } from '@server/cli/auth';
+import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { Connection } from '@bike4mind/database/social';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { ForbiddenError } from '@server/utils/errors';
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -94,7 +95,7 @@ function postAs(headers: Record<string, string>) {
 describe('JWT rate limiting', () => {
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(400);
-    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'cli', { client: 'b4m-desktop/0.1.0' });
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'desktop', { client: 'b4m-desktop/0.1.0' });
   });
 
   it('answers 401 when the limiter rejects', async () => {
@@ -103,7 +104,43 @@ describe('JWT rate limiting', () => {
   });
 });
 
+describe('JWT refusals the caller can act on', () => {
+  it('relays a forbidden refusal as 403 with its message, not a misleading 401', async () => {
+    // An MFA-owing CLI session: retrying or signing in again cannot help, so the
+    // enrollment guidance in the message must reach the user instead of "expired session".
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(
+      new ForbiddenError('MFA enrollment required. Set it up in the web app to continue.')
+    );
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'MFA enrollment required. Set it up in the web app to continue.',
+    });
+  });
+
+  it('relays a suspension refusal the same way, so the account state reaches the caller', async () => {
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(new ForbiddenError('Account suspended.'));
+
+    const response = await postAs({ 'user-agent': 'b4m-cli/1.0.0' });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Account suspended.' });
+  });
+});
+
 describe('completion analytics', () => {
+  it('passes Desktop source to the billing/UsageEvent writer and analytics', async () => {
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'c1' }] as never);
+    expect((await postAs({ 'user-agent': 'b4m-desktop/1.2.3' })).status).toBe(202);
+    await Promise.all(tracked);
+    expect(vi.mocked(executeCompletion)).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'desktop', userId: 'u1' })
+    );
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+  });
+
   it('passes the per-request usage from the final frame, so each request is priced on its own tier', async () => {
     const turnUsage = [
       { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },

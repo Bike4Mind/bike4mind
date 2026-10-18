@@ -52,6 +52,11 @@ const {
   mockQuestCreate: vi.fn(),
 }));
 
+// The enforceMFA enrollment gate (auth/mfaEnforcement.ts) is covered by its own tests; inert here.
+vi.mock('@server/auth/mfaEnforcement', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  isMfaEnrollmentOwed: async () => false,
+}));
 vi.mock('@bike4mind/database', async orig => {
   const actual = await orig<Record<string, unknown>>();
   const RealUser = actual.User as Record<string, unknown>;

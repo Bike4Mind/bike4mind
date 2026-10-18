@@ -61,6 +61,7 @@ import {
   branchExists,
   checkoutBranch,
   currentBranch,
+  defaultBaseBranch,
   isGitDirectory,
   listWorktrees,
   projectDisplayName,
@@ -75,6 +76,7 @@ import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
+import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
@@ -342,6 +344,8 @@ export interface ChatServiceDeps {
    * is known; the approval gate feeds it the other half.
    */
   activity?: SessionActivity;
+  /** The user's sidebar sections, which drop a deleted session. Absent in tests that do not exercise them. */
+  sidebarSections?: Pick<SidebarSectionStore, 'forgetSession'>;
   /**
    * Messages typed during a live turn. Absent in tests that never send one mid-reply, which
    * then get the old behaviour: a send during a reply is refused outright.
@@ -378,6 +382,13 @@ export interface ChatServiceDeps {
    * sidebar in a window that has the conversation closed. Absent in tests.
    */
   summaryChanged?(summary: ChatSessionSummary): void;
+  /**
+   * A session was archived or deleted, by any path - the sidebar, the agent's host tools, or a
+   * spawned child being cleaned up. A notification only: it is how the user's terminals
+   * (main/terminal) end with their session without the service, and so the agent, ever holding
+   * them.
+   */
+  sessionClosed?(sessionId: string): void;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -642,6 +653,7 @@ export class ChatService {
     this.webSearches.forget(sessionId);
     // Its tabs are live renderer processes; nothing is lost, since tabs never outlive the app either.
     void this.deps.browser?.closeSession(sessionId).catch(() => undefined);
+    this.deps.sessionClosed?.(sessionId);
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -658,6 +670,21 @@ export class ChatService {
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
     return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
+  }
+
+  /**
+   * The base a workspace session is cut from: the picked branch, else the repository's default.
+   * Only a repository with nothing to base on is refused.
+   */
+  private async resolveWorkspaceBase(
+    directory: string,
+    branch: string,
+    workspace: boolean
+  ): Promise<{ branch: string } | { error: string }> {
+    if (!workspace || branch) return { branch };
+    const base = await defaultBaseBranch(directory);
+    if (base) return { branch: base };
+    return { error: 'This repository has no commits yet, so there is no branch to start a workspace from.' };
   }
 
   /**
@@ -683,10 +710,10 @@ export class ChatService {
     const directory = resolve(request.directory);
     const unusable = await unusableProjectReason(directory);
     if (unusable) return { ok: false, error: unusable };
-    const branch = (request.branch ?? '').trim();
-
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
-    if (request.workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+    const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -747,8 +774,14 @@ export class ChatService {
     const movedProject = directory !== current?.directory;
     // A branch name means nothing in a repository it does not belong to, so moving the project
     // without naming a branch drops the old one rather than carrying it across.
-    const branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
     const workspace = request.workspace ?? current?.workspace ?? false;
+    const base = await this.resolveWorkspaceBase(
+      directory,
+      (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim(),
+      workspace
+    );
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     // The session's own branch is carried forward only while the base it was cut from is still
     // the one chosen: re-resolving must land in the worktree this session already has, while
@@ -765,7 +798,6 @@ export class ChatService {
       ? (current?.workspaceBranch ?? (alreadyRelocated ? current?.branch : undefined))
       : undefined;
 
-    if (workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
     // No worktree is created here: a session that already has its worktree keeps it, and one
     // that does not gets it on its first turn - see `ensureWorkspace`.
     // A worktree the session stops claiming is left registered and unharmed where it is.
@@ -1143,6 +1175,7 @@ export class ChatService {
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     await this.deps.background?.killSession(sessionId);
+    this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
     // The generated media goes with it: nothing else references those files once the
@@ -1153,6 +1186,11 @@ export class ChatService {
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
+    await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
+      this.deps.logger.warn(
+        `CHAT: could not drop ${sessionId} from the sidebar sections: ${err instanceof Error ? err.message : err}`
+      );
+    });
     this.promoted.delete(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
@@ -1810,7 +1848,14 @@ export class ChatService {
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
     const deadline = turnStartedAt + limits.wallClockMs;
-    this.emit({ type: 'start', sessionId, messageId: replyId });
+    // Where the interrupted run had got to, so a consumer can report the resumed run's totals as
+    // only what they add; see ChatStreamEvent's `start`.
+    this.emit({
+      type: 'start',
+      sessionId,
+      messageId: replyId,
+      ...(resume?.usage ? { baseUsage: resume.usage } : {}),
+    });
 
     // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
     // renderer replaces the message's text with it rather than extending what it already shows.
@@ -2672,12 +2717,7 @@ export class ChatService {
         // A failed call is not a quiet one: an MCP server puts its error in the result body, and
         // `toolResultContent` sends that text to the model like any other, so only a call the
         // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          readsUntrusted(request.name)
-        ) {
+        if (!abandoned && scope.directories && !scope.directories.untrusted && readsUntrusted(request.name)) {
           scope.directories.untrusted = request.name;
         }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });

@@ -8,7 +8,7 @@ import {
   type PrincipalKind,
 } from '@bike4mind/memory';
 import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@server/memory/factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 // The kinds this endpoint accepts an append for. A deliberate subset of PrincipalKind: `lake` is
 // persistable but has no write surface until its authz is defined (#1440), so it 400s here.

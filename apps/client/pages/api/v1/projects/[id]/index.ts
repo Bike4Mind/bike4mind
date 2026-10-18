@@ -22,7 +22,7 @@ import { toPublicProject } from '@server/projects/toPublicProject';
 
 // Named so every project id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
 
 const getAccessibleProject = (userId: string, id: string) =>
   projectService.get(userId, { id }, { db: { projects: projectRepository, users: userRepository } });

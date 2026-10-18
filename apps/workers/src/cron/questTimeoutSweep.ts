@@ -31,7 +31,7 @@ import {
   resolveQuestTimeoutRecovery,
   QUEST_TIMEOUT_THRESHOLD_MS,
   STUCK_QUEST_RECOVERED_LOG,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import {
   dispatchQuestCallback,
   GENERATION_CALLBACK_MAX_REDISPATCHES,

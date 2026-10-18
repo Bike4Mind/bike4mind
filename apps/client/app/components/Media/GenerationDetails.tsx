@@ -2,6 +2,7 @@ import { GeneratedAssetMetadataSchema, type GeneratedAssetMetadata, type IFabFil
 import { Box, Stack, Typography } from '@mui/joy';
 import React, { FC } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatSecondsClock, stripLyricTimestamps } from './generationFormat';
 
 /**
  * The generation record saveGeneratedAsset stamps on a file, or undefined for any other file. Parsed, not cast:
@@ -12,14 +13,6 @@ export const readGenerationMetadata = (
 ): GeneratedAssetMetadata | undefined => {
   const parsed = GeneratedAssetMetadataSchema.safeParse(file.sourceMetadata?.generation);
   return parsed.success ? parsed.data : undefined;
-};
-
-/** `m:ss` from a length in seconds. */
-export const formatSecondsClock = (totalSeconds: number): string => {
-  const rounded = Math.round(totalSeconds);
-  const minutes = Math.floor(rounded / 60);
-  const seconds = rounded % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
 const DetailRow: FC<{ label: string; testId: string; children: React.ReactNode; multiline?: boolean }> = ({
@@ -68,7 +61,7 @@ export const GenerationDetails: FC<{ file: Pick<IFabFileDocument, 'sourceMetadat
       </DetailRow>
       {generation.lyrics && (
         <DetailRow label={t('generation_details.lyrics')} testId="generation-details-lyrics" multiline>
-          {generation.lyrics}
+          {stripLyricTimestamps(generation.lyrics)}
         </DetailRow>
       )}
     </Stack>

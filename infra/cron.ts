@@ -681,6 +681,29 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
 });
 
 /**
+ * Skill Market Review SLA
+ * Reminds authors and reviewers about Skill Market versions held for human review past the
+ * SkillMarketReviewSlaHours admin setting. Never approves anything.
+ *
+ * Schedule: daily
+ * Enabled: every stage (a no-op when nothing is overdue)
+ * Self-host: apps/workers/src/selfhost/skillMarketReviewSla.ts
+ */
+const skillMarketReviewSlaCron = new sst.aws.Cron('skillMarketReviewSla', {
+  schedule: 'rate(1 day)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/skillMarketReviewSla.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+});
+
+/**
  * Realtime Connection Sweep
  * Revoke paths mark a WebSocket connection ended (subscribers pulled, row kept); this sweep owns
  * the socket close. It ends live connections whose credential no longer holds (token expired past
@@ -1078,6 +1101,7 @@ export {
   modelDiscoveryStalenessCron,
   questTimeoutSweepCron,
   generationJobSweepCron,
+  skillMarketReviewSlaCron,
   realtimeConnectionSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,

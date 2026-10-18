@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SyntheticEvent } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -9,8 +9,10 @@ import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import List from '@mui/joy/List';
+import ListDivider from '@mui/joy/ListDivider';
 import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
+import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
@@ -22,10 +24,21 @@ import {
   type ChatSessionSummary,
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
-import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
+import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
+import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import {
+  ArrowLeftIcon,
+  ArtifactIcon,
+  CheckIcon,
+  ChevronIcon,
+  MoreIcon,
+  PanelLeftIcon,
+  PlusIcon,
+  SearchIcon,
+} from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { ResizeHandle } from './ResizeHandle';
+import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
 import {
@@ -36,6 +49,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   writeSidebarWidth,
 } from './sidebarWidth';
+import type { SidebarSectionActions } from './useSidebarSections';
 
 /**
  * Shared by every session list in the sidebar so the four of them cannot drift apart.
@@ -108,6 +122,12 @@ interface RowActions {
   togglePin: (session: ChatSessionSummary) => void;
   toggleArchived: (session: ChatSessionSummary) => void;
   rename: (session: ChatSessionSummary, title: string) => void;
+  /** Null takes the session out of its section. */
+  moveToSection: (sessionId: string, sectionId: string | null) => void;
+  /** Opens the name dialog for a section the session will be moved into. */
+  requestNewSection: (sessionId: string) => void;
+  /** A row was picked up to drag into, or out of, a section; null when the drag ends. */
+  drag: (sessionId: string | null) => void;
 }
 
 interface RowProps {
@@ -115,7 +135,68 @@ interface RowProps {
   selected: boolean;
   status: ChatSessionStatus;
   pr: PrSummary | undefined;
+  /** Every user section, for the Move to menu. The state's own array, so it is stable between changes. */
+  userSections: readonly SidebarSection[];
+  sectionId: string | undefined;
   actions: RowActions;
+}
+
+/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
+const keepMenuOpen = (event: SyntheticEvent) => {
+  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
+};
+
+/** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
+function MoveToItems({
+  session,
+  userSections,
+  sectionId,
+  actions,
+  onBack,
+}: {
+  session: ChatSessionSummary;
+  userSections: readonly SidebarSection[];
+  sectionId: string | undefined;
+  actions: RowActions;
+  onBack: (event: SyntheticEvent) => void;
+}) {
+  const current = userSections.find(section => section.id === sectionId);
+  return (
+    <>
+      <MenuItem onClick={onBack} data-testid="chat-move-back-btn">
+        <ListItemDecorator>
+          <ArrowLeftIcon />
+        </ListItemDecorator>
+        Move to
+      </MenuItem>
+      <ListDivider />
+      {userSections.map(section => (
+        <MenuItem
+          key={section.id}
+          selected={section.id === sectionId}
+          onClick={() => actions.moveToSection(session.id, section.id)}
+          data-testid="chat-move-to-section-btn"
+          data-section-id={section.id}
+        >
+          <ListItemDecorator>{section.id === sectionId && <CheckIcon />}</ListItemDecorator>
+          {section.name}
+        </MenuItem>
+      ))}
+      {current && (
+        <MenuItem onClick={() => actions.moveToSection(session.id, null)} data-testid="chat-move-remove-btn">
+          <ListItemDecorator />
+          Remove from {current.name}
+        </MenuItem>
+      )}
+      {userSections.length > 0 && <ListDivider />}
+      <MenuItem onClick={() => actions.requestNewSection(session.id)} data-testid="chat-move-new-section-btn">
+        <ListItemDecorator>
+          <PlusIcon />
+        </ListItemDecorator>
+        New section
+      </MenuItem>
+    </>
+  );
 }
 
 /**
@@ -210,8 +291,17 @@ function RenameInput({ title, onDone }: { title: string; onDone: (next: string |
   );
 }
 
-const SessionRow = memo(function SessionRow({ session, selected, status, pr, actions }: RowProps) {
+const SessionRow = memo(function SessionRow({
+  session,
+  selected,
+  status,
+  pr,
+  userSections,
+  sectionId,
+  actions,
+}: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
   const needsAction = status === 'needs-action';
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
@@ -247,7 +337,14 @@ const SessionRow = memo(function SessionRow({ session, selected, status, pr, act
         // which would blur - and so save - the input the Rename item just opened.
         editing ? undefined : (
           <Box sx={{ opacity: 'var(--row-actions-opacity)', transition: 'opacity 120ms' }}>
-            <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+            <Dropdown
+              open={menuOpen}
+              onOpenChange={(_event, open) => {
+                setMenuOpen(open);
+                // Every opening starts on the main items, wherever the last one was left.
+                if (!open) setMenuView('main');
+              }}
+            >
               <MenuButton
                 slots={{ root: IconButton }}
                 slotProps={{
@@ -263,30 +360,57 @@ const SessionRow = memo(function SessionRow({ session, selected, status, pr, act
                 <MoreIcon />
               </MenuButton>
               <Menu size="sm" placement="bottom-end">
-                <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
-                  {session.pinned ? 'Unpin' : 'Pin'}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    // Shut by hand: the Dropdown unmounts before it can report closing, and would
-                    // otherwise come back open when editing ends.
-                    setMenuOpen(false);
-                    setEditing(true);
-                  }}
-                  data-testid="chat-rename-session-btn"
-                >
-                  Rename
-                </MenuItem>
-                <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
-                  {session.archived ? 'Unarchive' : 'Archive'}
-                </MenuItem>
-                <MenuItem
-                  color="danger"
-                  onClick={() => actions.remove(session.id)}
-                  data-testid="chat-delete-session-btn"
-                >
-                  Delete
-                </MenuItem>
+                {menuView === 'move' ? (
+                  <MoveToItems
+                    session={session}
+                    userSections={userSections}
+                    sectionId={sectionId}
+                    actions={actions}
+                    onBack={event => {
+                      keepMenuOpen(event);
+                      setMenuView('main');
+                    }}
+                  />
+                ) : (
+                  <>
+                    <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
+                      {session.pinned ? 'Unpin' : 'Pin'}
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => {
+                        // Shut by hand: the Dropdown unmounts before it can report closing, and would
+                        // otherwise come back open when editing ends.
+                        setMenuOpen(false);
+                        setEditing(true);
+                      }}
+                      data-testid="chat-rename-session-btn"
+                    >
+                      Rename
+                    </MenuItem>
+                    {!session.pinned && !session.archived && (
+                      <MenuItem
+                        onClick={event => {
+                          keepMenuOpen(event);
+                          setMenuView('move');
+                        }}
+                        data-testid="chat-move-session-btn"
+                      >
+                        <Box sx={{ flex: 1 }}>Move to</Box>
+                        <ChevronIcon open={false} />
+                      </MenuItem>
+                    )}
+                    <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
+                      {session.archived ? 'Unarchive' : 'Archive'}
+                    </MenuItem>
+                    <MenuItem
+                      color="danger"
+                      onClick={() => actions.remove(session.id)}
+                      data-testid="chat-delete-session-btn"
+                    >
+                      Delete
+                    </MenuItem>
+                  </>
+                )}
               </Menu>
             </Dropdown>
           </Box>
@@ -296,6 +420,19 @@ const SessionRow = memo(function SessionRow({ session, selected, status, pr, act
       <ListItemButton
         selected={selected}
         onClick={editing ? undefined : () => actions.select(session.id)}
+        // Not while renaming, or selecting text in the input would pick the whole row up.
+        draggable={!editing}
+        onDragStart={event => {
+          // Pinned and archived rows are drawn outside the sections, so a filed one would vanish.
+          if (session.pinned || session.archived) {
+            event.preventDefault();
+            return;
+          }
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData(SESSION_DRAG_TYPE, session.id);
+          actions.drag(session.id);
+        }}
+        onDragEnd={() => actions.drag(null)}
         sx={{
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
@@ -381,6 +518,77 @@ function ProjectHeader({
   );
 }
 
+/** A user section's header: its name, and a menu to rename or delete it that shows on hover like a row's. */
+function CustomSectionHeader({
+  section,
+  onRename,
+  onDelete,
+}: {
+  section: SidebarSection;
+  onRename: (section: SidebarSection) => void;
+  onDelete: (section: SidebarSection) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  return (
+    <Stack
+      direction="row"
+      sx={{
+        alignItems: 'center',
+        gap: 0.25,
+        ...GROUP_HEADER_SX,
+        '--section-actions-opacity': menuOpen ? 1 : 0,
+        '&:hover, &:focus-within': { '--section-actions-opacity': 1 },
+      }}
+      data-testid="sidebar-section-header"
+    >
+      <Typography
+        level="body-xs"
+        noWrap
+        sx={{ flex: 1, minWidth: 0, fontWeight: 'lg' }}
+        data-testid="sidebar-section-name"
+      >
+        {section.name}
+      </Typography>
+      <Box sx={{ opacity: 'var(--section-actions-opacity)', transition: 'opacity 120ms' }}>
+        <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+          <MenuButton
+            slots={{ root: IconButton }}
+            slotProps={{
+              root: {
+                size: 'sm',
+                variant: 'plain',
+                color: 'neutral',
+                'aria-label': `Options for section ${section.name}`,
+                'data-testid': 'sidebar-section-menu-btn',
+              },
+            }}
+          >
+            <MoreIcon />
+          </MenuButton>
+          <Menu size="sm" placement="bottom-end">
+            <MenuItem onClick={() => onRename(section)} data-testid="sidebar-section-rename-btn">
+              Rename
+            </MenuItem>
+            {/* Only the section goes: its sessions fall back to where they were before. */}
+            <MenuItem color="danger" onClick={() => onDelete(section)} data-testid="sidebar-section-delete-btn">
+              Delete section
+            </MenuItem>
+          </Menu>
+        </Dropdown>
+      </Box>
+    </Stack>
+  );
+}
+
+/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
+const SESSION_DRAG_TYPE = 'application/x-b4m-session';
+
+/** Where a dragged row would land: a section by id, or the default groups, out of any section. */
+type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
+
+/** Rows a right-click in them should leave alone; the sidebar's own menu is for empty space. */
+const OWN_CONTEXT_TARGETS = '[data-testid="chat-session-item"], input, textarea, [role="menu"]';
+
 /**
  * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
@@ -410,6 +618,10 @@ export function SessionList({
   onRename,
   renameError,
   onDismissRenameError,
+  sectionError,
+  onDismissSectionError,
+  userSections,
+  sectionActions,
   customize,
   footer,
 }: {
@@ -435,6 +647,11 @@ export function SessionList({
   /** Set when a rename was refused and rolled back; cleared by clicking it. */
   renameError?: string | null;
   onDismissRenameError?: () => void;
+  sectionError?: string | null;
+  onDismissSectionError?: () => void;
+  /** The user's own sections and which sessions sit in them; see useSidebarSections. */
+  userSections: SidebarSectionsState;
+  sectionActions: SidebarSectionActions;
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
   footer?: ReactNode;
@@ -453,9 +670,20 @@ export function SessionList({
 
   const [archivedOpen, setArchivedOpen] = useState(false);
 
-  const sections = useMemo(() => groupSessions(matching, mode), [matching, mode]);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [draggedSession, setDraggedSession] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dragFrame = useRef(0);
+  const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+
+  const sections = useMemo(() => {
+    const grouped = groupSessions(matching, mode, userSections);
+    // An empty section under a search is only noise; with no query it stays so it can be found.
+    return query.trim() ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
+  }, [matching, mode, userSections, query]);
   const empty =
     sections.pinned.length === 0 &&
+    sections.custom.length === 0 &&
     sections.projects.length === 0 &&
     sections.loose.length === 0 &&
     sections.archived.length === 0;
@@ -466,8 +694,26 @@ export function SessionList({
   // keystroke in the search box, which re-orders this list. The row actions read it for the
   // same reason: the shell hands down fresh callbacks on every render, and passing those to
   // the rows would redraw all of them each time.
-  const target = useRef({ ordered, onSelect, onToggleCollapsed, onDelete, onTogglePin, onToggleArchived, onRename });
-  target.current = { ordered, onSelect, onToggleCollapsed, onDelete, onTogglePin, onToggleArchived, onRename };
+  const target = useRef({
+    ordered,
+    onSelect,
+    onToggleCollapsed,
+    onDelete,
+    onTogglePin,
+    onToggleArchived,
+    onRename,
+    sectionActions,
+  });
+  target.current = {
+    ordered,
+    onSelect,
+    onToggleCollapsed,
+    onDelete,
+    onTogglePin,
+    onToggleArchived,
+    onRename,
+    sectionActions,
+  };
 
   const actions = useMemo<RowActions>(
     () => ({
@@ -476,6 +722,19 @@ export function SessionList({
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
+      moveToSection: (sessionId, sectionId) => target.current.sectionActions.move(sessionId, sectionId),
+      requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
+      drag: sessionId => {
+        cancelAnimationFrame(dragFrame.current);
+        if (!sessionId) {
+          setDraggedSession(null);
+          setDropTarget(null);
+          return;
+        }
+        // A frame late: Chromium drops a drag whose dragstart reflows the list under it, and
+        // starting one is what opens the empty sections' drop slots.
+        dragFrame.current = requestAnimationFrame(() => setDraggedSession(sessionId));
+      },
     }),
     []
   );
@@ -519,9 +778,119 @@ export function SessionList({
       selected={session.id === activeId}
       status={statuses.get(session.id) ?? 'done'}
       pr={prSummaries.get(session.id)}
+      userSections={userSections.sections}
+      sectionId={sectionOf(userSections, session.id)}
       actions={actions}
     />
   );
+
+  const draggingSectionId = draggedSession ? sectionOf(userSections, draggedSession) : undefined;
+
+  // dragover rather than dragenter, which flickers across a section's children. Stopped here so
+  // the list around the section never sees it.
+  const dragOverSection = (sectionId: string) => (event: DragEvent<HTMLElement>) => {
+    if (!draggedSession || !event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = sectionId === draggingSectionId ? 'none' : 'move';
+    if (dropTarget?.kind !== 'section' || dropTarget.sectionId !== sectionId) {
+      setDropTarget({ kind: 'section', sectionId });
+    }
+  };
+
+  const dropOnSection = (sectionId: string) => (event: DragEvent<HTMLElement>) => {
+    const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
+    if (!sessionId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    actions.drag(null);
+    if (sectionOf(userSections, sessionId) !== sectionId) sectionActions.move(sessionId, sectionId);
+  };
+
+  // Anywhere in the list outside a section takes a session out of its section; a row in no
+  // section has nowhere new to go there, so it is not offered as a target at all.
+  const dragOverList = (event: DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    if (!draggingSectionId) {
+      // Not prevented, so the list is no target; a section lit up on the way here still goes dark.
+      event.dataTransfer.dropEffect = 'none';
+      if (dropTarget !== null) setDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropTarget?.kind !== 'default') setDropTarget({ kind: 'default' });
+  };
+
+  const dropOnList = (event: DragEvent<HTMLElement>) => {
+    const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
+    if (!sessionId) return;
+    event.preventDefault();
+    actions.drag(null);
+    if (sectionOf(userSections, sessionId) !== undefined) sectionActions.move(sessionId, null);
+  };
+
+  const customGroup = (group: CustomGroup) => (
+    <Box
+      key={group.section.id}
+      onDragOver={dragOverSection(group.section.id)}
+      onDrop={dropOnSection(group.section.id)}
+      sx={{
+        borderRadius: '8px',
+        transition: 'background-color 120ms',
+        ...(dropTarget?.kind === 'section' &&
+          dropTarget.sectionId === group.section.id &&
+          group.section.id !== draggingSectionId && { bgcolor: 'primary.softBg' }),
+      }}
+      data-testid="sidebar-section"
+      data-section-id={group.section.id}
+      data-drop-target={
+        dropTarget?.kind === 'section' && dropTarget.sectionId === group.section.id ? 'true' : undefined
+      }
+    >
+      <CustomSectionHeader
+        section={group.section}
+        onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
+        onDelete={section => sectionActions.remove(section.id)}
+      />
+      {group.sessions.length > 0 ? (
+        <List size="sm" sx={SESSION_LIST_SX}>
+          {group.sessions.map(row)}
+        </List>
+      ) : (
+        // Nothing at rest, where a line of text read as a row; a dashed slot only while a row is in the air.
+        draggedSession && (
+          <Box
+            sx={{
+              mx: 0.5,
+              my: 0.25,
+              height: 28,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '6px',
+              border: '1px dashed',
+              borderColor:
+                dropTarget?.kind === 'section' && dropTarget.sectionId === group.section.id
+                  ? 'primary.outlinedBorder'
+                  : 'neutral.outlinedBorder',
+            }}
+            data-testid="sidebar-section-drop-zone"
+          >
+            <Typography level="body-xs" textColor="text.tertiary">
+              Drop here
+            </Typography>
+          </Box>
+        )
+      )}
+    </Box>
+  );
+
+  const submitSectionName = (name: string) => {
+    if (!nameRequest) return;
+    if (nameRequest.kind === 'create') sectionActions.create(name, nameRequest.sessionId);
+    else sectionActions.rename(nameRequest.sectionId, name);
+  };
 
   if (collapsed) {
     return (
@@ -626,6 +995,18 @@ export function SessionList({
             {renameError}
           </Alert>
         )}
+        {sectionError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ cursor: 'pointer', mx: 0.5 }}
+            onClick={onDismissSectionError}
+            data-testid="chat-section-error"
+          >
+            {sectionError}
+          </Alert>
+        )}
       </Stack>
 
       <Box
@@ -635,7 +1016,26 @@ export function SessionList({
           px: 1,
           pb: 1,
           ...thinScrollbarSx,
+          // Inset so the outline never adds to the width or is clipped by the scroll edge.
+          ...(dropTarget?.kind === 'default' && {
+            boxShadow: 'inset 0 0 0 2px var(--joy-palette-primary-outlinedBorder)',
+          }),
         }}
+        onContextMenu={event => {
+          if (event.target instanceof Element && event.target.closest(OWN_CONTEXT_TARGETS)) return;
+          event.preventDefault();
+          setContextMenu({ x: event.clientX, y: event.clientY });
+        }}
+        onDragOver={dragOverList}
+        onDrop={dropOnList}
+        onDragLeave={event => {
+          // Only when the pointer leaves the list itself, not when it crosses into a child.
+          if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) {
+            setDropTarget(null);
+          }
+        }}
+        data-drop-target={dropTarget?.kind === 'default' ? 'true' : undefined}
+        data-testid="sidebar-session-scroll"
       >
         {loading ? (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1 }}>
@@ -656,6 +1056,8 @@ export function SessionList({
               </Box>
             )}
 
+            {sections.custom.map(customGroup)}
+
             {sections.projects.map(group => (
               <Box key={group.directory} data-testid="project-group">
                 <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
@@ -669,7 +1071,7 @@ export function SessionList({
               <Box>
                 {/* In Code mode these are the sessions with no project yet, and they sit under
                     the project groups - unlabelled they read as belonging to the last one. */}
-                {(sections.pinned.length > 0 || sections.projects.length > 0) && (
+                {(sections.pinned.length > 0 || sections.custom.length > 0 || sections.projects.length > 0) && (
                   <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
                 )}
                 <List size="sm" sx={SESSION_LIST_SX}>
@@ -704,6 +1106,39 @@ export function SessionList({
           </>
         )}
       </Box>
+
+      {/* Anchored to a zero-size point at the cursor, since a Joy Menu has to hang off a button. */}
+      <Dropdown open={contextMenu !== null} onOpenChange={(_event, open) => !open && setContextMenu(null)}>
+        <MenuButton
+          slots={{ root: 'span' }}
+          slotProps={{
+            root: {
+              'aria-hidden': true,
+              tabIndex: -1,
+              style: {
+                position: 'fixed',
+                left: contextMenu?.x ?? 0,
+                top: contextMenu?.y ?? 0,
+                width: 0,
+                height: 0,
+                pointerEvents: 'none',
+              },
+            },
+          }}
+        />
+        <Menu size="sm" placement="bottom-start" data-testid="sidebar-context-menu">
+          <MenuItem onClick={onCreate} data-testid="sidebar-context-new-session-btn">
+            New session
+          </MenuItem>
+          <MenuItem onClick={() => setNameRequest({ kind: 'create' })} data-testid="sidebar-context-new-section-btn">
+            New section
+          </MenuItem>
+        </Menu>
+      </Dropdown>
+
+      {nameRequest && (
+        <SectionNameDialog request={nameRequest} onSubmit={submitSectionName} onClose={() => setNameRequest(null)} />
+      )}
 
       {footer}
     </Stack>

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { ISkill, IUserShare, Permission } from '@bike4mind/common';
+import { ISkill, ISkillMarketStatus, IUserShare, Permission } from '@bike4mind/common';
 
 /** Page size for the skills list. The API caps `limit` at 100; we page through. */
 const SKILLS_PAGE_SIZE = 100;
@@ -13,6 +13,8 @@ const SKILLS_MAX_PAGES = 50;
  * them; the share-management UI needs them, so widen the read types here.
  */
 export type ISkillWithSharing = ISkill & {
+  /** Server-computed for Skill Market imports (update available / delisted / removed). */
+  marketStatus?: ISkillMarketStatus;
   users?: IUserShare[];
   isGlobalRead?: boolean;
   isGlobalWrite?: boolean;
@@ -36,12 +38,12 @@ export type SkillSharingInput = {
 export const useGetSkills = (enabled: boolean = true) => {
   return useQuery({
     queryKey: ['skills'],
-    queryFn: async (): Promise<ISkill[]> => {
+    queryFn: async (): Promise<ISkillWithSharing[]> => {
       // Page through so a user (or admin, once global/org skills exist in
       // volume) past the first page isn't silently truncated in the picker.
-      const all: ISkill[] = [];
+      const all: ISkillWithSharing[] = [];
       for (let page = 1; page <= SKILLS_MAX_PAGES; page++) {
-        const response = await api.get<{ data: ISkill[]; hasMore: boolean; total: number }>(
+        const response = await api.get<{ data: ISkillWithSharing[]; hasMore: boolean; total: number }>(
           `/api/skills?limit=${SKILLS_PAGE_SIZE}&page=${page}`
         );
         all.push(...response.data.data);

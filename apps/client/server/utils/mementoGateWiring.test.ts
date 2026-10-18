@@ -6,13 +6,14 @@
  * with a hardcoded `{ v1: true, v2: true }` at ALL THREE sites left the entire suite green - the whole
  * opt-out could be reverted with CI none the wiser. The composition removed the fabrication
  * opportunity; these tests pin the composition itself (#1337).
+ *
+ * resolveAndPublishMementoCompletion is covered here; resolveAndBuildMementosPreamble is covered in
+ * apps/workers/src/utils/mementoGateWiring.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const resolveExecutionMementoGatesMock = vi.fn();
 const publishMock = vi.fn();
-const recallMementosV2Mock = vi.fn();
-const getRelevantMementosMock = vi.fn();
 
 vi.mock('./resolveExecutionMementoGates', () => ({
   resolveExecutionMementoGates: (...args: unknown[]) => resolveExecutionMementoGatesMock(...args),
@@ -20,15 +21,8 @@ vi.mock('./resolveExecutionMementoGates', () => ({
 vi.mock('@server/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: (...args: unknown[]) => publishMock(...args) } },
 }));
-vi.mock('@server/memory/recallMementosV2', () => ({
-  recallMementosV2: (...args: unknown[]) => recallMementosV2Mock(...args),
-}));
-vi.mock('@bike4mind/services', () => ({
-  mementoService: { getRelevantMementos: (...args: unknown[]) => getRelevantMementosMock(...args) },
-}));
 
 const { resolveAndPublishMementoCompletion } = await import('./publishMementoCompletion');
-const { resolveAndBuildMementosPreamble } = await import('./getFirstIterationMementosPreamble');
 
 const makeLogger = () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), log: vi.fn(), debug: vi.fn() }) as never;
 
@@ -56,8 +50,6 @@ describe('memento gate wiring (composed entry points, #1337)', () => {
   beforeEach(() => {
     resolveExecutionMementoGatesMock.mockReset();
     publishMock.mockReset();
-    recallMementosV2Mock.mockReset();
-    getRelevantMementosMock.mockReset();
   });
 
   describe('resolveAndPublishMementoCompletion', () => {
@@ -92,31 +84,6 @@ describe('memento gate wiring (composed entry points, #1337)', () => {
 
       const payload = publishMock.mock.calls[0][0];
       expect('enableMementosV2' in payload).toBe(false);
-    });
-  });
-
-  describe('resolveAndBuildMementosPreamble', () => {
-    it('an opt-out resolved by the resolver suppresses BOTH recall pipelines', async () => {
-      resolveExecutionMementoGatesMock.mockResolvedValue({ v1: false, v2: false, v2OptInLookupFailed: false });
-
-      const { preamble, mementoIds } = await resolveAndBuildMementosPreamble(EXECUTION, ADAPTERS, makeLogger());
-
-      expect(resolveExecutionMementoGatesMock).toHaveBeenCalledTimes(1);
-      expect(preamble).toBe('');
-      expect(mementoIds).toEqual([]);
-      expect(recallMementosV2Mock).not.toHaveBeenCalled();
-      expect(getRelevantMementosMock).not.toHaveBeenCalled();
-    });
-
-    it('a V2 gate from the resolver reaches the V2 recall path', async () => {
-      // Positive control: proves the suppression above is the gate doing work, not the mocks being inert.
-      resolveExecutionMementoGatesMock.mockResolvedValue({ v1: false, v2: true, v2OptInLookupFailed: false });
-      recallMementosV2Mock.mockResolvedValue([{ fact: 'user prefers dark mode' }]);
-
-      const { preamble } = await resolveAndBuildMementosPreamble(EXECUTION, ADAPTERS, makeLogger());
-
-      expect(recallMementosV2Mock).toHaveBeenCalledTimes(1);
-      expect(preamble).toContain('dark mode');
     });
   });
 });

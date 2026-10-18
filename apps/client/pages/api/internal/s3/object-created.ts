@@ -140,6 +140,7 @@ const handler = baseApi({ auth: false }).post(
         continue;
       }
 
+      const statusBeforeUpload = metadata.status;
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
@@ -160,11 +161,11 @@ const handler = baseApi({ auth: false }).post(
           const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
           await withTransaction(async session => {
             const user = await User.findById(metadata.userId).session(session);
-            if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, session))) {
-              // Match the hosted path: record the measured bytes the charge used, so a later refund
-              // and the counter's truth both agree with the counter.
-              metadata.fileSize = size;
-              await FabFile.updateOne({ _id: metadata._id }, { $set: { fileSize: size } }, { session });
+            // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+            if (
+              user &&
+              (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))
+            ) {
               await user.save({ session });
             }
           });

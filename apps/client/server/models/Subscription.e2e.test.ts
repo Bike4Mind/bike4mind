@@ -425,3 +425,30 @@ describe('markPastDue', () => {
     expect(await subscriptionRepository.markPastDue('sub_missing')).toBeNull();
   });
 });
+
+/** Real-query guard for the org-seat read: every resolver that mocks the repository would stay green without it. */
+describe('findActiveSubscriptionsByOwners', () => {
+  const Org = SubscriptionOwnerType.Organization;
+
+  it('returns only active rows of the given owners of the given owner type', async () => {
+    await Subscription.create([
+      row({ ownerType: Org, ownerId: 'org_a', subscriptionId: 'sub_a' }),
+      row({ ownerType: Org, ownerId: 'org_b', subscriptionId: 'sub_b' }),
+      row({ ownerType: Org, ownerId: 'org_a', subscriptionId: 'sub_a_lapsed', status: 'canceled' }),
+      row({ ownerType: Org, ownerId: 'org_b', subscriptionId: 'sub_b_dunning', status: 'past_due' }),
+      row({ ownerType: Org, ownerId: 'org_other', subscriptionId: 'sub_other' }),
+      // Same id string under the other owner type must not leak in.
+      row({ ownerType: SubscriptionOwnerType.User, ownerId: 'org_a', subscriptionId: 'sub_user' }),
+    ]);
+
+    const rows = await subscriptionRepository.findActiveSubscriptionsByOwners(Org, ['org_a', 'org_b']);
+
+    expect(rows.map(r => r.subscriptionId).sort()).toEqual(['sub_a', 'sub_b']);
+  });
+
+  it('returns nothing for an empty owner list', async () => {
+    await Subscription.create(row({ ownerType: Org, ownerId: 'org_a' }));
+
+    await expect(subscriptionRepository.findActiveSubscriptionsByOwners(Org, [])).resolves.toEqual([]);
+  });
+});

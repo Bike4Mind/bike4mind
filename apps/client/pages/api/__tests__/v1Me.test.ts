@@ -12,10 +12,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, MeResponseSchema } from '@bike4mind/common';
 
-const { mockResolvePlan, mockEntitlements, mockFindActive, baseApiOptions } = vi.hoisted(() => ({
+const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, baseApiOptions } = vi.hoisted(() => ({
   mockResolvePlan: vi.fn(),
   mockEntitlements: vi.fn(),
   mockFindActive: vi.fn(),
+  mockPlanByPriceId: vi.fn(),
   baseApiOptions: [] as unknown[],
 }));
 
@@ -57,9 +58,8 @@ vi.mock('@server/entitlements', () => ({
   }),
 }));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
-vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { findActiveUserSubscriptions: mockFindActive },
-}));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ getRequestActiveSubscriptions: mockFindActive }));
+vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
 
 const { default: handler } = await import('@pages/api/v1/me');
 
@@ -155,7 +155,9 @@ describe('GET /api/v1/me', () => {
 
     await run(req, res);
 
-    expect(mockFindActive).toHaveBeenCalledWith('u1');
+    expect(mockFindActive).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) })
+    );
     expect(mockEntitlements).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), ACTIVE);
     expect(res._getJSONData().id).toBe('u1');
   });
@@ -168,6 +170,43 @@ describe('GET /api/v1/me', () => {
     expect(mockFindActive).toHaveBeenCalledTimes(1);
     expect(mockResolvePlan).toHaveBeenCalledWith(ACTIVE);
     expect(mockEntitlements).toHaveBeenCalledWith(expect.anything(), ACTIVE);
+  });
+
+  it('/me reports the org plan for a seat member', async () => {
+    const { resolveCallerPlan } =
+      await vi.importActual<typeof import('@server/me/resolveCallerPlan')>('@server/me/resolveCallerPlan');
+    mockResolvePlan.mockImplementation(resolveCallerPlan);
+    mockPlanByPriceId.mockImplementation((priceId: string) =>
+      priceId === 'price_team' ? { priceId, name: 'Team', interval: 'monthly', tier: 2 } : undefined
+    );
+    const seatRows = [{ priceId: 'price_team', periodEndsAt: new Date('2026-11-01T00:00:00.000Z') }];
+    mockFindActive.mockResolvedValue(seatRows);
+    const { req, res } = get();
+
+    await run(req, res);
+
+    expect(mockFindActive).toHaveBeenCalledWith(req);
+    expect(mockEntitlements).toHaveBeenCalledWith(expect.anything(), seatRows);
+    const body = res._getJSONData();
+    expect(MeResponseSchema.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({
+      tier: 'pro',
+      subscription: {
+        plan_name: 'Team',
+        price_id: 'price_team',
+        interval: 'monthly',
+        current_period_ends_at: '2026-11-01T00:00:00.000Z',
+      },
+    });
+  });
+
+  // An org-leg failure degrades inside the resolver (activeSubscriptions.test.ts); a failed
+  // user-owned read still surfaces as the 500 envelope via the real `baseApi` `onError`.
+  it('propagates a failed subscription read instead of reporting a tier', async () => {
+    mockFindActive.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = get();
+
+    await expect(run(req, res)).rejects.toThrow('mongo unavailable');
   });
 
   it('gates the route on me:read, so an under-scoped key never reaches the handler', async () => {

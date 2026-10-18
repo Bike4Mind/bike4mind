@@ -136,7 +136,7 @@ export interface AgentDefinition {
   /** Short description */
   description: string;
 
-  /** Model to use (e.g., 'claude-3-5-haiku-20241022') */
+  /** Model to use (e.g., 'claude-haiku-4-5-20251001') */
   model: string;
 
   /** System prompt template (markdown body, may contain $VARIABLES) */

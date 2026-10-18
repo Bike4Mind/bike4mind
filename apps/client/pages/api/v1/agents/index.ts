@@ -20,7 +20,7 @@ import { toV1AgentError, v1FieldLabel } from '@server/agents/v1AgentErrors';
 
 const CURSOR_SCOPE = 'v1.agents';
 const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
 
 const listRoute = nextRouteForContract(listAgentsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/agents'),

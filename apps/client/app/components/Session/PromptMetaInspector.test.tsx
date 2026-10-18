@@ -184,3 +184,43 @@ describe('PromptMetaInspector timestamps', () => {
     expect(screen.getByText(/Updated: 2026-03-10/)).toBeTruthy();
   });
 });
+
+describe('PromptMetaInspector redirect reporting', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  const copiedMarkdown = () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('prompt-meta-copy-md-btn'));
+    return writeText.mock.calls[0][0] as string;
+  };
+
+  it('flags the requested model when a redirect replaced it', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('prompt-meta-redirected-from-chip')).toHaveTextContent('Redirected from gemini-2.5-pro');
+  });
+
+  it('shows no redirected-from chip when the requested model answered', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('prompt-meta-redirected-from-chip')).toBeNull();
+  });
+
+  it('adds a Redirected from line to the markdown report only when the turn was redirected', () => {
+    show({ model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' });
+
+    expect(copiedMarkdown()).toContain('- **Redirected from**: gemini-2.5-pro');
+  });
+
+  it('omits the Redirected from line when the turn was not redirected', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
+
+    expect(copiedMarkdown()).not.toContain('Redirected from');
+  });
+});

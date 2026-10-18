@@ -21,7 +21,7 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { createKeyProvider } from '@server/memory/factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';

@@ -203,9 +203,10 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  * see `ReActAgent.takeIterationConfidence` for why the replay path needs its own call
  * into the same decision instead of falling out of the regular post-iteration check.
  *
- * `confidence: null` means nothing was replayed (or nothing scored) - proceed without
- * touching the DB. A `confidenceGateThreshold` of 0 (an unattended-loop profile override)
- * always proceeds too, since a real confidence score is never negative.
+ * `confidence: null` means nothing was replayed, nothing scored, or every replayed call
+ * failed to run (a human cannot fix those) - proceed without touching the DB. A
+ * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
+ * too, since a real confidence score is never negative.
  */
 export async function gateReplayConfidence(
   params: {

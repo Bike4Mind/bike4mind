@@ -3235,6 +3235,67 @@ describe('semanticDataLakeSearch multi-lake budget fairness', () => {
     expect(result.scan.filesByLake).toEqual({ 'datalake:a': 3, 'datalake:b': 3, 'datalake:c': 1 });
   });
 
+  it('keys a registry lake by its meta-tag, not once per arm', async () => {
+    const regFiles = [
+      { id: 'r1', fileName: 'r1.pdf', tags: [{ name: 'datalake:r' }] },
+      { id: 'r2', fileName: 'r2.pdf', tags: [{ name: 'r:doc' }] },
+      { id: 'r3', fileName: 'r3.pdf', tags: [{ name: 'datalake:r' }] },
+    ];
+    const findVectors = pagingChunkMock([
+      ...allChunks,
+      ...chunkRows('r1', 2),
+      ...chunkRows('r2', 2),
+      ...chunkRows('r3', 2),
+    ]);
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        dataLakeTags: ['datalake:r', 'datalake:a'],
+        dataLakeTagPrefixes: ['r:'],
+        lakes: [
+          { id: 'r', datalakeTag: 'datalake:r', fileTagPrefix: 'r:' },
+          { id: 'a', datalakeTag: 'datalake:a', fileTagPrefix: 'a:' },
+        ],
+        budgets: { fileGroupSize: 6, maxChunks: 100 },
+      },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter([...regFiles, ...corpus.filter(f => f.id.startsWith('a'))]) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    expect(result.scan.filesByLake).toEqual({ 'datalake:r': 3, 'datalake:a': 3 });
+    // r2 (prefix-only) shares the registry bucket, so it waits for round 1. As its own bucket the
+    // registry lake would get a second turn in round 0 (r1 and r2 before a1).
+    expect(findVectors.mock.calls[0][0]).toEqual(['r1', 'a1', 'r2', 'a2', 'r3', 'a3']);
+  });
+
+  it('does not name a paired registry lake empty when only its prefix reaches its files', async () => {
+    const logger = makeLogger();
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        dataLakeTags: ['datalake:r', 'datalake:empty'],
+        dataLakeTagPrefixes: ['r:'],
+        lakes: [{ id: 'r', datalakeTag: 'datalake:r', fileTagPrefix: 'r:' }],
+        logger: logger as never,
+        budgets,
+      },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter([{ id: 'r2', fileName: 'r2.pdf', tags: [{ name: 'r:doc' }] }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('r2', 2)) },
+        },
+      } as never
+    );
+    expect(result.scan.filesByLake).toEqual({ 'datalake:r': 1 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semanticSearch] scoped lakes contributed no files',
+      expect.objectContaining({ emptyLakes: ['datalake:empty'] })
+    );
+  });
+
   it('names a scoped lake that contributed nothing rather than reporting it as searched', async () => {
     const logger = makeLogger();
     await semanticDataLakeSearch(

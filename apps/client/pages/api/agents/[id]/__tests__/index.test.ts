@@ -48,7 +48,7 @@ const refreshAgentAvatarUrls = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls }));
 
 import '@pages/api/agents/[id]/index';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 const AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
@@ -90,6 +90,25 @@ describe('/api/agents/[id] access levels', () => {
       expect(res._getJSONData()).toMatchObject({ id: 'a1' });
     });
 
+    it('does not see the owner-only tavernSessionId', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, tavernSessionId: 's1' });
+      const { res, run } = invoke('GET', 'u1');
+      await run();
+      expect(res._getJSONData()).not.toHaveProperty('tavernSessionId');
+    });
+
+    // Sharing, even with update access, is not ownership: the pointer stays hidden.
+    it('does not see the owner-only tavernSessionId when shared with update access', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({
+        ...AGENT,
+        users: [{ userId: 'u1', permissions: [Permission.update] }],
+        tavernSessionId: 's1',
+      });
+      const { res, run } = invoke('GET', 'u1');
+      await run();
+      expect(res._getJSONData()).not.toHaveProperty('tavernSessionId');
+    });
+
     it.each(['PUT', 'DELETE'] as const)('is refused %s with ForbiddenError and nothing is mutated', async method => {
       await expect(invoke(method, 'u1').run()).rejects.toBeInstanceOf(ForbiddenError);
       expectNoMutation();
@@ -113,6 +132,21 @@ describe('/api/agents/[id] access levels', () => {
       await run();
       expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
+    });
+
+    it('reads its own tavernSessionId', async () => {
+      agentRepositoryMock.findById.mockResolvedValue({ ...AGENT, tavernSessionId: 's1' });
+      const { res, run } = invoke('GET', 'owner');
+      await run();
+      expect(res._getJSONData()).toMatchObject({ tavernSessionId: 's1' });
+    });
+
+    // tavernSessionId must name the owner's own session; only the server-side bridge sets it.
+    it('strips tavernSessionId so a PUT cannot repoint the agent at another session', async () => {
+      agentRepositoryMock.update.mockResolvedValue({ id: 'a1', name: 'renamed' });
+      const { run } = invoke('PUT', 'owner', { body: { name: 'renamed', tavernSessionId: 'victim-session' } });
+      await run();
+      expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
     });
 
     it('strips currentCredits so a PUT cannot set the agent balance', async () => {

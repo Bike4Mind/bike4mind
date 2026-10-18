@@ -38,11 +38,8 @@ export interface CreateLakeFileParams {
   contentType: string;
   contentHash: string;
   tags: Array<{ name: string; strength: number }>;
-  // No organizationId: FabFileSchema does not declare it (nor does the spread
-  // ShareableDocumentSchema), so strict mode drops it on save - the same silent-drop this PR fixes
-  // for sourceType. It could not reach the storage check either, since this path supplies no
-  // db.organizations adapter and checkStorageLimitForFile then falls back to the user limit.
-  // The web data-lake batch door does not set it either. Declaring the field is a repo-wide call.
+  // No organizationId: createFabFile derives the owning org from the lake tags itself and never
+  // persists a caller-supplied one.
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
   /**
    * The orgs the actor administers, forwarded to `createFabFile`'s OWN tag gate - a THIRD manage

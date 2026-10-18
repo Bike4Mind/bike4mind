@@ -15,7 +15,7 @@ import {
   type Principal,
 } from '@bike4mind/memory';
 import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
-import { createKeyProvider } from './factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 /**
  * The Mementos V2 WRITE seam.

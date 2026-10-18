@@ -47,3 +47,18 @@ describe('executeTool choke point', () => {
     expect(result).toContain('[REDACTED]');
   });
 });
+
+describe('executeTool routing', () => {
+  it.each(['mcp__demo__ping', 'skill', 'find_definition', 'get_file_structure', 'some_plugin_tool'])(
+    'runs %s through its local implementation',
+    async toolName => {
+      expect(await executeTool(toolName, { q: 1 }, apiClient, async args => `ran with ${JSON.stringify(args)}`)).toBe(
+        'ran with {"q":1}'
+      );
+    }
+  );
+
+  it('rejects a non-server tool with no implementation', async () => {
+    await expect(executeTool('mcp__demo__ping', {}, apiClient)).rejects.toThrow('Unknown tool: mcp__demo__ping');
+  });
+});

@@ -105,6 +105,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 
 // Dynamic imports for artifact viewers
 const ReactArtifactViewer = dynamic(() => import('./ReactArtifactViewer'), {
@@ -1015,7 +1016,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       }
     } catch (error) {
       console.error('Edit failed:', error);
-      toast.error('Failed to generate edit');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to generate edit');
       throw error; // Re-throw to let EditFileDialog handle it
     }
   };
@@ -1048,7 +1049,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       setFileRefreshKey(prev => prev + 1);
     } catch (error) {
       console.error('Apply edit failed:', error);
-      toast.error('Failed to apply changes');
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to apply changes');
     }
   };
 

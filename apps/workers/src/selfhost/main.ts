@@ -35,14 +35,15 @@ import { registerVoiceHoldSweep } from './voiceHoldSweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
+import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
-import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
-import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@workers/s3/chunkRescueSweep';
+import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
+import { CHUNK_SCAN_BATCH } from '@workers/s3/chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -105,6 +106,7 @@ async function main() {
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
   registerGenerationJobSweep(worker);
+  registerSkillMarketReviewSla(worker);
   registerRealtimeConnectionSweep(worker);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);

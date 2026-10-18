@@ -2090,8 +2090,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                         title="Audio Generation"
                         description={
                           <>
-                            Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
-                            model-callable audio_generation tool in chat.
+                            Defaults for both the Studio Speech and Sound effects tabs and the model-callable
+                            audio_generation tool in chat.
                           </>
                         }
                       />

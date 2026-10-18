@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/fab-pipeline",
-  "version": "2.0.0",
+  "version": "2.1.2",
   "publishConfig": {
     "access": "restricted"
   },
@@ -22,6 +22,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./ssrf": {
+      "import": {
+        "types": "./dist/ssrf.d.mts",
+        "default": "./dist/ssrf.mjs"
+      },
+      "require": {
+        "types": "./dist/ssrf.d.cts",
+        "default": "./dist/ssrf.cjs"
       }
     }
   },
@@ -57,6 +67,7 @@
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
+    "undici": "^7.29.0",
     "unpdf": "^1.6.2",
     "voyageai": "^0.4.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",

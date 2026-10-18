@@ -830,8 +830,7 @@ export function buildAttachmentDownloadButtons(
   const elements: SlackBlockKitElement[] = [];
 
   // Create a section with accessory button for each attachment
-  for (let i = 0; i < displayAttachments.length; i++) {
-    const att = displayAttachments[i];
+  for (const att of displayAttachments) {
     // Build the description line: size + author + date
     const parts = [att.sizeFormatted];
     if (att.author) parts.push(`by ${att.author}`);
@@ -842,8 +841,9 @@ export function buildAttachmentDownloadButtons(
       }
     }
     const description = parts.join(' • ');
-    // Use compact questId:index reference (Slack overflow values limited to 75 chars)
-    const ref = `${questId}:${i}`;
+    // Use a compact questId:attachmentId reference (Slack overflow values are length-limited).
+    // The id, not the list position: the stored list can change while the message is still on screen.
+    const ref = `${questId}:${att.attachmentId}`;
 
     elements.push({
       type: 'section',

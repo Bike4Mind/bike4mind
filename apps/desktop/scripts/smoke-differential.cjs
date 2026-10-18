@@ -47,12 +47,14 @@ async function main() {
     for (const name of await fs.readdir(root)) {
       if (name.startsWith('Bike4Mind-0.2.3-')) await fs.copyFile(path.join(root, name), path.join(assets, name));
     }
+    await fs.copyFile(path.join(__dirname, '..', 'install.sh'), path.join(assets, 'install.sh'));
     execFileSync('python3', [path.join(__dirname, 'distribution.py'), assets], {
       env: {
         ...process.env,
         DESKTOP_VERSION: '0.2.3',
         DESKTOP_RELEASE_REPOSITORY: 'example/dist',
         GITHUB_REPOSITORY: 'example/source',
+        MAC_RELEASE_MODE: 'signed',
       },
     });
     const info = yaml.load(await fs.readFile(path.join(assets, 'latest-linux.yml'), 'utf8')).files[0];

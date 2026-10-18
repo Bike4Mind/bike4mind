@@ -40,7 +40,7 @@ const releasedResult = {
   currentCredits: 100,
   patch: { tags: ['Customer'], pendingCreditGrant: null },
 };
-const NO_DOMAIN_GRANT = { creditsGranted: 0, currentCredits: null, joinedOrganizationId: null };
+const NO_DOMAIN_GRANT = { creditsGranted: 0, currentCredits: null, joinedOrganizationId: null, tagsApplied: [] };
 
 describe('emailVerifiedGrants', () => {
   beforeEach(() => {
@@ -143,6 +143,7 @@ describe('emailVerifiedGrants', () => {
         creditsGranted: 50,
         currentCredits: 150,
         joinedOrganizationId: 'org-partner',
+        tagsApplied: ['Partner'],
       });
 
       await expect(applyEmailVerifiedGrants(params)).resolves.toEqual({
@@ -150,7 +151,19 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 150,
         tags: ['Customer'],
         joinedOrganizationId: 'org-partner',
+        tagsApplied: ['Partner'],
       });
+    });
+
+    it('persists the release tag patch before the partner-tag merge runs', async () => {
+      // The release $sets the whole tags array from a snapshot; run after the merge, it would erase it.
+      mockReleasePending.mockResolvedValue(releasedResult);
+
+      await applyEmailVerifiedGrants(params);
+
+      expect(mockUserUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+        mockApplySignupDomainGrant.mock.invocationCallOrder[0]
+      );
     });
 
     it('falls back to the release balance when the domain grant grants nothing', async () => {
@@ -161,6 +174,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 100,
         tags: ['Customer'],
         joinedOrganizationId: null,
+        tagsApplied: [],
       });
     });
 
@@ -170,6 +184,7 @@ describe('emailVerifiedGrants', () => {
         creditsGranted: 50,
         currentCredits: 50,
         joinedOrganizationId: null,
+        tagsApplied: [],
       });
 
       await expect(applyEmailVerifiedGrants(params)).resolves.toEqual({
@@ -177,6 +192,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 50,
         tags: null,
         joinedOrganizationId: null,
+        tagsApplied: [],
       });
       expect(mockLoggerError).toHaveBeenCalled();
     });
@@ -202,6 +218,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 100,
         tags: ['Customer'],
         joinedOrganizationId: null,
+        tagsApplied: [],
       });
       expect(mockLoggerError).toHaveBeenCalledWith(
         expect.stringContaining('failed for user user-1'),

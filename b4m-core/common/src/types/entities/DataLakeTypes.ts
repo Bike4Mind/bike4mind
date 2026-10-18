@@ -249,6 +249,13 @@ export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngesta
 export const acceptsConnectorContent = (origin?: DataLakeOrigin): boolean => origin === 'connector-fed';
 
 /**
+ * True for the `gh-<hex>:` prefix a GitHub connector lake is created with (minted in
+ * apps/client/pages/api/data-lakes/github-connect.ts): an internal key, so UI chips hide it.
+ */
+export const isGeneratedLakeTagPrefix = (lake: { fileTagPrefix?: string; origin?: DataLakeOrigin }): boolean =>
+  lake.origin === 'connector-fed' && /^gh-[0-9a-f]+:$/.test(lake.fileTagPrefix ?? '');
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
@@ -660,6 +667,7 @@ export interface IDataLake {
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
+  findByIds(ids: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is

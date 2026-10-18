@@ -172,6 +172,12 @@ export function normalizeCompletionRequest<T extends CompletionRequest>(req: T):
 const CompletionUsageSchema = z.object({
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  reasoningTokens: z
+    .number()
+    .optional()
+    .describe(
+      'Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count.'
+    ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
 });

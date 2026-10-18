@@ -47,8 +47,8 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
 }));
 
-vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { findActiveUserSubscriptions: (...a: unknown[]) => mockSubs(...a) },
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: (...a: unknown[]) => mockSubs(...a),
 }));
 
 vi.mock('@server/entitlements/partnerRules', () => ({
@@ -94,6 +94,8 @@ describe('GET /api/admin/users/:userId/entitlements', () => {
     mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: false, email: null, emailVerified: false });
     const { res, promise } = run({ user: ADMIN });
     await promise;
+    // The report resolves the TARGET user's subscriptions, not the admin's own.
+    expect(mockSubs).toHaveBeenCalledWith('u1');
     const body = res._getJSONData();
     const keys = body.entitlements.map((r: { key: string }) => r.key);
     expect(new Set(keys)).toEqual(new Set(allKnownEntitlementKeys()));
