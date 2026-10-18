@@ -401,6 +401,10 @@ const processScrape = async (
         logger
       );
 
+      if (result?.storageLimitReached) {
+        await sendStatusUpdate(`[${index}/${urls.length}] Storage limit reached: kept the previous copy of ${url}`, 0);
+      }
+
       if (result?.file) {
         mainFile = result.file;
       } else {

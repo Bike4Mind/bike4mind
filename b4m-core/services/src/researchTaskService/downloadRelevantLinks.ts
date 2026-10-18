@@ -164,6 +164,10 @@ export const downloadRelevantLinks = async (
 
           let downloadedFile: IFabFileDocument;
 
+          if (existingDownloadResult?.storageLimitReached) {
+            await sendStatusUpdate(`Storage limit reached: kept the previous copy of ${link.text}`, 0);
+          }
+
           if (existingDownloadResult?.file) {
             downloadedFile = existingDownloadResult.file;
             logger?.info(

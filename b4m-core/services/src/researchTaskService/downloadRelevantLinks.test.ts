@@ -369,6 +369,26 @@ describe('downloadRelevantLinks', () => {
     expect(mockJobs.file.chunk).toHaveBeenCalledWith('existing-fab-file-id');
   });
 
+  it('tells the user when a re-downloaded link keeps the previous copy because storage is full', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.users.findById.mockResolvedValue(mockUser);
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+    mockedFileTypeFromBuffer.mockResolvedValue({ mime: 'application/pdf', ext: 'pdf' });
+    mockedFindOrUpdateExistingResearchData.mockResolvedValue({
+      file: { id: 'existing-fab-file-id', fileName: 'existing-file.pdf', mimeType: 'application/pdf' },
+      researchData: { id: 'existing-research-data-id', researchTaskId: 'test-task-id' },
+      storageLimitReached: true,
+    });
+    mockDb.researchDatas.existsByUrlAndResearchTaskId.mockResolvedValue(true);
+
+    await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+      'Storage limit reached: kept the previous copy of Important Document 1',
+      0
+    );
+  });
+
   it('should create research data when existing file is not owned by current task', async () => {
     // Arrange
     const existingFile = {

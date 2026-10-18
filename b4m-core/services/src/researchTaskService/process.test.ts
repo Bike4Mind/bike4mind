@@ -1015,6 +1015,46 @@ describe('researchTaskService - process', () => {
       );
     });
 
+    it('tells the user when a re-crawl keeps the previous copy because storage is full', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: true,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        expect.stringContaining('Storage limit reached: kept the previous copy of https://example.com'),
+        0
+      );
+    });
+
+    it('sends no storage message when a re-crawl fits', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: false,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).not.toHaveBeenCalledWith(
+        expect.stringContaining('Storage limit'),
+        expect.anything()
+      );
+    });
+
     it('should distribute progress evenly across multiple URLs within 0-40% range', async () => {
       // Arrange
       const taskId = 'test-task-id';
