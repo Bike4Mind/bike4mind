@@ -1,5 +1,13 @@
 # @bike4mind/desktop
 
+## 0.1.3
+
+### Patch Changes
+
+- Updated dependencies [[`0afc448`](https://github.com/Bike4Mind/bike4mind/commit/0afc4489cfd31b4dedaceecfbeb4082345917272), [`56e8751`](https://github.com/Bike4Mind/bike4mind/commit/56e875192f26a0af5ff9aa02a5432b3c15ac2e08)]:
+  - @bike4mind/common@15.1.1
+  - @bike4mind/mcp@2.1.2
+
 ## 0.1.2
 
 ### Patch Changes
