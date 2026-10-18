@@ -149,7 +149,7 @@ describe('assertRewriteFits', () => {
     db.users.findById.mockResolvedValue(owner(0.9 * MB));
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow('File size exceeds storage limit');
+    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow("exceed the file owner's storage limit");
     expect(db.users.findById).toHaveBeenCalledWith('owner');
   });
 });

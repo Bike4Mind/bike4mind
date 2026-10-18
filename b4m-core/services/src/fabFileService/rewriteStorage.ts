@@ -1,5 +1,7 @@
 import {
+  BadRequestError,
   chargedBytes,
+  isStorageLimitError,
   NotFoundError,
   type IFabFileRepository,
   type IUserDocument,
@@ -27,7 +29,8 @@ export type RewriteStorageDb = {
  * Throws the standard 400 "File size exceeds storage limit" when the rewrite would grow the
  * OWNER's usage past their quota. A shrinking or same-size rewrite never throws. Measures against the
  * stored row (findChargeState), not `row`, which may be a stale copy. `actor` is
- * reused when it is the owner, else the owner is loaded (an update-share editor is not charged).
+ * reused when it is the owner, else the owner is loaded (an update-share editor is not charged). An
+ * editor's refusal is a plain 400 with no storage detail, since that detail is the owner's usage.
  */
 export async function assertRewriteFits(
   row: { id: string },
@@ -41,7 +44,13 @@ export async function assertRewriteFits(
   if (growth <= 0) return;
   const owner = actor && actor.id === stored.userId ? actor : await db.users.findById(stored.userId);
   if (!owner) throw new NotFoundError('File owner not found');
-  await checkStorageLimit(owner, growth);
+  if (owner === actor) return checkStorageLimit(owner, growth);
+  try {
+    await checkStorageLimit(owner, growth);
+  } catch (error) {
+    if (!isStorageLimitError(error)) throw error;
+    throw new BadRequestError("This change would exceed the file owner's storage limit");
+  }
 }
 
 /**

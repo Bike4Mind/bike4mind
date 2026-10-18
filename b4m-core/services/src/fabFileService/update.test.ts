@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FAB_FILE_CONTENT_REWRITE_PATCH, IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+  IFabFileDocument,
+  IUserDocument,
+  isStorageLimitError,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { updateFabFile } from './update';
 
@@ -593,12 +599,35 @@ describe('updateFabFile (narrowed write pins)', () => {
       mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 0 });
       const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-      await expect(run(editor)).rejects.toThrow('File size exceeds storage limit');
+      await expect(run(editor)).rejects.toThrow("exceed the file owner's storage limit");
 
       expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('user-123');
       expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
       expect(mockAdapters.db.fabFiles.commitContentRewrite).not.toHaveBeenCalled();
       expect(dbUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses an update-share editor without the owner usage numbers', async () => {
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 4321 });
+      const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
+
+      const error = await run(editor).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(isStorageLimitError(error)).toBe(false);
+      expect((error as BadRequestError).additionalInfo).toBeUndefined();
+      expect(JSON.stringify(error)).not.toContain('4321');
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+    });
+
+    it('still gives the owner their own usage numbers on a refusal', async () => {
+      const owner = { id: 'user-123', storageLimit: 0, currentStorageSize: 4321 } as unknown as IUserDocument;
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      const error = await run(owner).catch((e: unknown) => e);
+
+      expect(isStorageLimitError(error) && error.info).toMatchObject({ owner: 'user', used_bytes: 4321 });
     });
   });
 });
