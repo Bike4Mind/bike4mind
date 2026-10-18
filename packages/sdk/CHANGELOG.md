@@ -1,5 +1,11 @@
 # @bike4mind/sdk
 
+## 1.0.1
+
+### Patch Changes
+
+- [#4895](https://github.com/Bike4Mind/bike4mind/pull/4895) [`0b84602`](https://github.com/Bike4Mind/bike4mind/commit/0b846026127703d2925a1891afc73aec4ffaa236) Thanks [@onoya](https://github.com/onoya)! - end wait=true chat turns at a deadline instead of the Lambda timeout
+
 ## 1.0.0
 
 ### Major Changes

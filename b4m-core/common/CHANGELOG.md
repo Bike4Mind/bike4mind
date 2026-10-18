@@ -1,5 +1,21 @@
 # @bike4mind/common
 
+## 15.1.0
+
+### Minor Changes
+
+- [#4760](https://github.com/Bike4Mind/bike4mind/pull/4760) [`63ff370`](https://github.com/Bike4Mind/bike4mind/commit/63ff37067fb8def4f7fb804eb57e7b9ef83c0560) Thanks [@onoya](https://github.com/onoya)! - add Speech and Sound effects tabs; send Files Generate Audio to Studio
+
+- [#4936](https://github.com/Bike4Mind/bike4mind/pull/4936) [`c825dac`](https://github.com/Bike4Mind/bike4mind/commit/c825dac8ff84d66db5b5c15a310e257cea6acdd3) Thanks [@onoya](https://github.com/onoya)! - typed response schemas for org groups, chat messages and plans
+
+### Patch Changes
+
+- [#4895](https://github.com/Bike4Mind/bike4mind/pull/4895) [`0b84602`](https://github.com/Bike4Mind/bike4mind/commit/0b846026127703d2925a1891afc73aec4ffaa236) Thanks [@onoya](https://github.com/onoya)! - end wait=true chat turns at a deadline instead of the Lambda timeout
+
+- [#4947](https://github.com/Bike4Mind/bike4mind/pull/4947) [`bb93dbb`](https://github.com/Bike4Mind/bike4mind/commit/bb93dbb7ae9903bf68904ef3625738cb9c0c129c) Thanks [@erikbethke](https://github.com/erikbethke)! - one Claude model id parser for tool capabilities and token estimates
+
+- [#4949](https://github.com/Bike4Mind/bike4mind/pull/4949) [`9a2aed3`](https://github.com/Bike4Mind/bike4mind/commit/9a2aed3116a4d81b5fd36e3864fd25dc63f8f3a7) Thanks [@erikbethke](https://github.com/erikbethke)! - render agent-mode music and video cards live
+
 ## 15.0.0
 
 ### Major Changes
