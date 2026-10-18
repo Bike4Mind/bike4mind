@@ -128,17 +128,22 @@ const normalizedContent = (skill: ISkill): ISkill => ({
   argumentHint: skill.argumentHint?.trim(),
 });
 
+export type GlobalSkillScan = 'none' | 'name' | 'content';
+
 /**
- * True when an update changes the content of a global skill and the actor is not a super-admin.
- * Instance-wide content goes through the Skill Market's scan, so such a save runs it first
- * (`scanGlobalSkillUpdate`); the name is not part of `skillContentHash` and needs no scan. Keep in
- * sync with share.ts, which gates turning the global flags on.
+ * Which Skill Market scan a non-admin update to a global skill needs before it saves
+ * (`scanGlobalSkillUpdate`): `content` when anything in `skillContentHash` changes, `name` for a
+ * rename alone (the market scans names too), else `none`. Super-admin edits and non-global skills
+ * are never scanned. Keep in sync with share.ts, which gates turning the global flags on.
  */
-export const skillUpdateNeedsMarketScan = (
+export const globalSkillScanFor = (
   skill: ShareableSkill,
   patch: Partial<ISkill>,
   actor: SkillActor
-): boolean => {
-  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return false;
-  return skillContentHash(normalizedContent({ ...skill, ...patch })) !== skillContentHash(normalizedContent(skill));
+): GlobalSkillScan => {
+  if (actor.isAdmin || !(skill.isGlobalRead || skill.isGlobalWrite)) return 'none';
+  if (skillContentHash(normalizedContent({ ...skill, ...patch })) !== skillContentHash(normalizedContent(skill))) {
+    return 'content';
+  }
+  return patch.name !== undefined && patch.name !== skill.name ? 'name' : 'none';
 };

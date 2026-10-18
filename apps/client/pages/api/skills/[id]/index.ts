@@ -17,7 +17,7 @@ import {
   SkillActor,
   canAccessSkill,
   canEditSkill,
-  skillUpdateNeedsMarketScan,
+  globalSkillScanFor,
   canDeleteSkill,
   canManageSkillSharing,
   redactShareRosterForViewer,
@@ -62,14 +62,26 @@ const handler = baseApi()
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
     }
 
-    if (skillUpdateNeedsMarketScan(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin })) {
-      await scanGlobalSkillUpdate({ ...skill, ...patch }, req, res, {
+    const scanMode = globalSkillScanFor(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin });
+    if (scanMode !== 'none') {
+      await scanGlobalSkillUpdate({ ...skill, ...patch }, scanMode, req, res, {
         getClassifier: () => getOperationsClassifierLlm(req.logger, req.user!.id),
+        logger: req.logger,
+        actorId: req.user!.id,
       });
     }
 
+    // A global skill's write is conditioned on the version that was read (and scanned), so two
+    // editors who each passed a scan on different fields can't combine into unscanned content: the
+    // second write throws ConcurrencyConflictError (409).
+    const isGlobal = Boolean(skill.isGlobalRead || skill.isGlobalWrite);
+
     try {
-      const updated = await skillRepository.update(patch, { new: true });
+      const updated = isGlobal
+        ? await skillRepository.updateGuarded({ ...patch, __v: (skill as { __v?: number }).__v } as Partial<ISkill>, {
+            new: true,
+          })
+        : await skillRepository.update(patch, { new: true });
       res.json(updated ?? (await skillRepository.findById(id as string)));
     } catch (error) {
       // Rename-to-existing surfaces as a MongoDB duplicate-key error (code 11000)
