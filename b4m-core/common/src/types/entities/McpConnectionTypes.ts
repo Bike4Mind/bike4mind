@@ -551,7 +551,10 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * overwriting the review choices that discovery merged.
    */
   updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
-  /** `connected` clears any stale `lastError`; `pending_auth` leaves it as the reason to reconnect. */
+  /**
+   * `connected` clears any stale `lastError`, and is null for an OAuth connection with no access token.
+   * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
+   */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
   /** A failure status always records why. */
   setStatus(

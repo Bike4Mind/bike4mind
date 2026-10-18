@@ -549,7 +549,12 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
                 : {}),
             },
           };
-    const result = await this.model.findByIdAndUpdate(id, update, { new: true, runValidators: true });
+    // A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
+    const filter =
+      status === 'connected'
+        ? { _id: id, $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] }
+        : { _id: id };
+    const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
   }
 

@@ -270,18 +270,28 @@ describe('McpConnectionModel', () => {
       expect(withCreds?.auth.oauth?.manualClientIdEnc).toBe('enc:client-id');
     });
 
-    it('clearOAuthTokens leaves the connection pending_auth so listForUser stops offering it', async () => {
-      const connected = await mcpConnectionRepository.create(baseConnection());
-      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.id)).toEqual([connected.id]);
-      const cleared = await mcpConnectionRepository.clearOAuthTokens(connected.id, OWNER);
-      expect(cleared?.status).toBe('pending_auth');
+    it.each(['connected', 'error', 'needs_reconnect'] as const)(
+      'clearOAuthTokens from %s leaves the connection pending_auth with no lastError, listed but not offered',
+      async status => {
+        const created = await mcpConnectionRepository.create(
+          baseConnection({ status, lastError: { code: 'timeout', message: 'slow', at: new Date() } })
+        );
+        const cleared = await mcpConnectionRepository.clearOAuthTokens(created.id, OWNER);
+        expect(cleared?.status).toBe('pending_auth');
+        expect(cleared?.lastError).toBeUndefined();
+        expect(await mcpConnectionRepository.listForUser('user-1')).toEqual([]);
+        expect((await mcpConnectionRepository.listAllForUser('user-1')).map(c => c.id)).toEqual([created.id]);
+      }
+    );
+
+    it('setStatus(connected) does not re-offer an OAuth connection whose tokens were cleared', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.clearOAuthTokens(created.id, OWNER);
+      expect(await mcpConnectionRepository.setStatus(created.id, 'connected')).toBeNull();
       expect(await mcpConnectionRepository.listForUser('user-1')).toEqual([]);
 
-      const failing = await mcpConnectionRepository.create(baseConnection({ slug: 'failing' }));
-      await mcpConnectionRepository.setStatus(failing.id, 'error', { code: 'timeout', message: 'slow' });
-      const reset = await mcpConnectionRepository.clearOAuthTokens(failing.id, OWNER);
-      expect(reset).toMatchObject({ status: 'pending_auth' });
-      expect(reset?.lastError).toBeUndefined();
+      const key = await mcpConnectionRepository.create(apiKeyConnection({ status: 'pending_auth' }));
+      expect(await mcpConnectionRepository.setStatus(key.id, 'connected')).toMatchObject({ status: 'connected' });
     });
 
     it('still requires the URL and API key ciphertext on write', async () => {
