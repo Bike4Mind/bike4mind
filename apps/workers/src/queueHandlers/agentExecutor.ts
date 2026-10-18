@@ -3440,10 +3440,11 @@ async function processSubagentDispatch(
         { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
       ),
     ]);
-    const modelInfo = models.find((m: { id: string }) => m.id === child.model);
+    const childModel = resolveDeprecatedModelId(child.model, 'agentExecutorChild');
+    const modelInfo = models.find((m: { id: string }) => m.id === childModel);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
-    llm.currentModel = child.model;
+    if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
+    llm.currentModel = childModel;
 
     // Resolve agent definition (built-in + user/org-scoped overlays).
     let userAgents: ServerAgentDefinition[] = [];
@@ -3577,7 +3578,7 @@ async function processSubagentDispatch(
       imageGenerateStorage: getGeneratedImageStorage(),
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
-      model: child.model,
+      model: childModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
@@ -3654,7 +3655,7 @@ async function processSubagentDispatch(
       questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
-      model: child.model,
+      model: childModel,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
@@ -3706,7 +3707,7 @@ async function processSubagentDispatch(
       executionId: parentId,
       childExecutionId,
       agentName,
-      model: child.model,
+      model: childModel,
       thoroughness: child.subagentConfig.thoroughness,
       maxIterations: child.subagentConfig.maxIterations,
       isBackground: child.isBackgroundExecution ?? false,
@@ -3867,7 +3868,7 @@ async function processSubagentDispatch(
               // (`execution.questId`), inherited unchanged so these rows group with the
               // parent's own. Not a Quest id: do not "fix" this to `child.linkedQuestId`.
               questId: child.questId,
-              model: child.model,
+              model: childModel,
               inputTokens: 0,
               outputTokens: 0,
             },
@@ -3893,7 +3894,7 @@ async function processSubagentDispatch(
               sessionId: child.sessionId,
               feature: 'agent_execution',
               provider: modelInfo.backend,
-              model: child.model,
+              model: childModel,
               status: 'ok',
               ...event,
             })

@@ -441,7 +441,10 @@ export class ServerSubagentOrchestrator {
     // foreign model id reaches this branch and 404s exactly as before.
     if (!this.deps.resolveBackend) return { llm: parent.llm, model: pinnedModel };
 
-    const candidates = [pinnedModel, ...(agentDef.fallbackModels ?? [])];
+    const candidates = [
+      pinnedModel,
+      ...(agentDef.fallbackModels ?? []).map(m => resolveDeprecatedModelId(m, 'subagentOrchestrator')),
+    ];
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
