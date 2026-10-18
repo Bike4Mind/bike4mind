@@ -7,6 +7,7 @@ import {
   getTurnsCost,
   type ModelInfo,
 } from '@bike4mind/common';
+import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
@@ -428,16 +429,22 @@ export class ServerSubagentOrchestrator {
    */
   private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
     const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
-    if (!agentDef.model || agentDef.model === parent.model) return parent;
+    if (!agentDef.model) return parent;
+    // An agent can stay pinned to a retired id; map it to the successor before any backend lookup.
+    const pinnedModel = resolveDeprecatedModelId(agentDef.model, 'subagentOrchestrator');
+    if (pinnedModel === parent.model) return parent;
 
     // No resolver wired: serviceability can't be tested, so keep the historical
     // same-provider assumption. Every production construction site now passes one
     // (delegateToAgent, coordinateTask, and the dispatched-subagent handler), so
     // this is the harness/test path - if a new caller omits it, an agent on a
     // foreign model id reaches this branch and 404s exactly as before.
-    if (!this.deps.resolveBackend) return { llm: parent.llm, model: agentDef.model };
+    if (!this.deps.resolveBackend) return { llm: parent.llm, model: pinnedModel };
 
-    const candidates = [agentDef.model, ...(agentDef.fallbackModels ?? [])];
+    const candidates = [
+      pinnedModel,
+      ...(agentDef.fallbackModels ?? []).map(m => resolveDeprecatedModelId(m, 'subagentOrchestrator')),
+    ];
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
@@ -455,14 +462,14 @@ export class ServerSubagentOrchestrator {
       }
       if (!backend) continue;
       backend.currentModel = model;
-      if (model === agentDef.model) {
+      if (model === pinnedModel) {
         this.deps.logger.info(
           `🤖🔄 [SubagentOrchestrator] Resolved fresh backend for agent model "${model}" ` +
             `(parent uses "${parent.model}")`
         );
       } else {
         this.deps.logger.warn(
-          `🤖⚠️ [SubagentOrchestrator] "${agentDef.model}" is not serviceable; ` +
+          `🤖⚠️ [SubagentOrchestrator] "${pinnedModel}" is not serviceable; ` +
             `"${agentDef.name}" falling back to "${model}"`
         );
       }
