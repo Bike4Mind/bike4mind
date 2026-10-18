@@ -4,9 +4,11 @@ The MCP server is `b4m mcp serve` (`packages/cli/src/mcp/`), shipped inside the
 `@bike4mind/cli` npm package. The registry hosts **metadata only**: the entry in
 `mcp-registry/server.json` points at the npm package, and clients install that.
 
-Namespace is `io.github.bike4mind/*`, authorized by GitHub auth as a member of the
+Namespace is `io.github.Bike4Mind/*`, authorized by GitHub auth as an Owner of the
 Bike4Mind org - no DNS record or keypair needed, unlike the sibling remote-server
-listings.
+listings. The registry matches the name case-sensitively against the org login
+(`Bike4Mind`), so keep that casing in `server.json` and in the CLI `mcpName`; a
+lowercase name is rejected with 403.
 
 ## Why the package must be installable first
 
@@ -122,9 +124,9 @@ package nobody can install.
 ```bash
 brew install mcp-publisher
 cd mcp-registry
-mcp-publisher login github        # any Bike4Mind org member
+mcp-publisher login github --token "$(pbpaste)"   # classic PAT, read:org only; Owner role required
 mcp-publisher publish
-curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.bike4mind/bike4mind"
+curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Bike4Mind/bike4mind"
 ```
 
 ## Keeping it in step
