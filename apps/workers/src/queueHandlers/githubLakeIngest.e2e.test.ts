@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -132,7 +133,8 @@ const tagNamesByPath = (files: { githubPath?: string | null; tags?: { name: stri
 
 beforeAll(async () => {
   mongo = await createMongoReplSet();
-  await mongoose.connect(mongo.getUri());
+  await mongoose.connect(mongo.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   await OrgGitHubLakeConnection.createIndexes();
 });
 afterAll(async () => {

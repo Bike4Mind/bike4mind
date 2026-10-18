@@ -681,3 +681,30 @@ describe('useAgentExecutionSubscriptions -- generation jobs started mid-run', ()
     expect(cachedJobs(queryClient)).toBeUndefined();
   });
 });
+
+describe('useAgentExecutionSubscriptions -- write preview raised mid-run', () => {
+  const questsKey = ['quests', 'session', 's1'];
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("puts a progress frame's pending action on the run's quest so the Confirm card renders live", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'file an issue', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+    const pendingAction = { tool: 'create_issue', params: { title: 't' }, ts: 1 };
+
+    await handlers['progress']({ action: 'progress', executionId: 'e1', questId: 'q1', pendingAction });
+
+    const cached = queryClient.getQueryData(questsKey) as {
+      pages: Array<{ data: Array<{ pendingAction?: unknown }> }>;
+    };
+    expect(cached.pages[0].data[0].pendingAction).toEqual(pendingAction);
+  });
+});
