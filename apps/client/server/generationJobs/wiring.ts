@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
   ApiKeyType,
+  hasStorageUsage,
   isImageServeable,
   isPlaceholderApiKey,
   isStorageLimitError,
@@ -287,7 +288,8 @@ export const checkStorageFor: CreateMusicJobDeps['checkStorageFor'] = async (use
     await checkStorageLimit(user, bytes);
     return undefined;
   } catch (error) {
-    if (isStorageLimitError(error)) return error.info;
+    // checkStorageLimit on the user's own quota always carries the byte counts.
+    if (isStorageLimitError(error) && hasStorageUsage(error.info)) return error.info;
     throw error;
   }
 };

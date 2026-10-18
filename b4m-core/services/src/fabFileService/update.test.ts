@@ -599,7 +599,7 @@ describe('updateFabFile (narrowed write pins)', () => {
       mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 0 });
       const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-      await expect(run(editor)).rejects.toThrow("exceed the file owner's storage limit");
+      await expect(run(editor)).rejects.toMatchObject({ info: { errorCode: 'storage_limit_exceeded' } });
 
       expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('user-123');
       expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
@@ -607,7 +607,7 @@ describe('updateFabFile (narrowed write pins)', () => {
       expect(dbUpdate).not.toHaveBeenCalled();
     });
 
-    it('refuses an update-share editor without the owner usage numbers', async () => {
+    it('refuses an update-share editor with the storage code but none of the owner usage numbers', async () => {
       findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
       mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', storageLimit: 0, currentStorageSize: 4321 });
       const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
@@ -615,9 +615,11 @@ describe('updateFabFile (narrowed write pins)', () => {
       const error = await run(editor).catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(BadRequestError);
-      expect(isStorageLimitError(error)).toBe(false);
-      expect((error as BadRequestError).additionalInfo).toBeUndefined();
-      expect(JSON.stringify(error)).not.toContain('4321');
+      expect(isStorageLimitError(error)).toBe(true);
+      expect((error as BadRequestError).additionalInfo).toStrictEqual({
+        errorCode: 'storage_limit_exceeded',
+        owner: 'user',
+      });
       expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
     });
 
