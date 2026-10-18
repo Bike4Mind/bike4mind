@@ -121,10 +121,10 @@ export const redactShareRosterForViewer = (
 };
 
 // Whitespace the edit form and validators normalize away, so an unchanged resubmit hashes equal.
-const normalizedContent = (skill: Partial<ISkill>) => ({
+const normalizedContent = (skill: ISkill): ISkill => ({
   ...skill,
-  description: skill.description?.trim(),
-  body: skill.body?.replace(/\r\n/g, '\n'),
+  description: skill.description.trim(),
+  body: skill.body.replace(/\r\n/g, '\n'),
   argumentHint: skill.argumentHint?.trim(),
 });
 
