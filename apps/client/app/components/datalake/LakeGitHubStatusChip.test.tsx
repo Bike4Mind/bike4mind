@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -75,5 +75,25 @@ describe('LakeGitHubStatusChip', () => {
     h.connection.current = null;
     wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
+  });
+
+  it('refreshes the relative last-synced time in the tooltip on every minute tick', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
+    try {
+      h.connection.current = { ...connection, lastSyncedAt: '2026-01-01T11:00:00Z' };
+      wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+      const chip = screen.getByTestId('datalake-github-status-chip-lake1');
+      fireEvent.mouseOver(chip);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByRole('tooltip')).toHaveTextContent('last synced an hour ago');
+      act(() => {
+        vi.advanceTimersByTime(60 * 60_000);
+      });
+      expect(screen.getByRole('tooltip')).toHaveTextContent('last synced 2 hours ago');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
