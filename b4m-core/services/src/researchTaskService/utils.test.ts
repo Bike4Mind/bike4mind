@@ -284,6 +284,7 @@ describe('findExistingResearchData utils', () => {
         expect(mockFabFilesRepo.commitContentRewrite).toHaveBeenCalledWith('file-123', { fileSize: 25 }, undefined);
         expect(mockUsersRepo.incrementCurrentStorage).toHaveBeenCalledWith('test-user-123', 15);
         expect(result!.file.fileSize).toBe(25);
+        expect(result!.storageLimitReached).toBe(false);
       });
 
       it('warns when the rewrite commit matches no live row', async () => {
@@ -321,7 +322,7 @@ describe('findExistingResearchData utils', () => {
           mockLogger
         );
 
-        expect(result).toEqual({ file, researchData: mockResearchData });
+        expect(result).toEqual({ file, researchData: mockResearchData, storageLimitReached: true });
         expect(result!.file.fileSize).toBe(10);
         expect(mockStorage.upload).not.toHaveBeenCalled();
         expect(mockFabFilesRepo.commitContentRewrite).not.toHaveBeenCalled();
