@@ -75,6 +75,30 @@ describe('createOptimisticPromptBubble routingSource (live badge)', () => {
   });
 });
 
+// MessageContent fetches a sent message's attachment chips by quest id, gated on
+// messageData.fabFileIds. The agent bubble must carry the ids from dispatch and keep
+// them through the re-id, or the chip never fetches once the bubble has a real id.
+describe('createOptimisticPromptBubble attachments (chip)', () => {
+  it('stamps the message attachments onto the optimistic bubble', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'summarize this csv', 'complexity', ['file-csv']);
+    expect(readQuests(qc)[0].fabFileIds).toEqual(['file-csv']);
+  });
+
+  it('keeps the attachments when the bubble is re-keyed to the real quest id', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'summarize this csv', 'complexity', ['file-csv']);
+    swapOptimisticPromptBubbleId(qc, sessionId, 'real_quest_id');
+    expect(readQuests(qc)[0]).toMatchObject({ id: 'real_quest_id', fabFileIds: ['file-csv'] });
+  });
+
+  it('omits fabFileIds when the send has no attachments', () => {
+    const qc = seedQueryClient([]);
+    createOptimisticPromptBubble(qc, sessionId, 'hi', undefined, []);
+    expect(readQuests(qc)[0].fabFileIds).toBeUndefined();
+  });
+});
+
 // The credits chip reads messageData.creditsUsed. On agent completion the
 // value must ride the reply-append patch so the chip renders in-session,
 // not only after the change-stream Quest replaces the optimistic bubble.
