@@ -1,6 +1,7 @@
 import { FC, ReactNode } from 'react';
 import { Box, Button, Stack, Tooltip, Typography } from '@mui/joy';
-import { useIsIntentHidden, useNavigationExecutor } from '@client/app/hooks/useNavigationExecutor';
+import { useNavigationExecutor } from '@client/app/hooks/useNavigationExecutor';
+import { useIsIntentHidden } from '@client/app/utils/navigationIntentSurface';
 import { compactButtonSx } from '@client/app/utils/buttonStyles';
 import type { NavigationIntent } from '@bike4mind/common';
 
@@ -23,7 +24,7 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({
 }) => {
   const execute = useNavigationExecutor();
   const isIntentHidden = useIsIntentHidden();
-  // A suggestion into a workspace the user hid gets no button (the executor would no-op it anyway).
+  // A suggestion into a workspace the user hid gets no button.
   const visibleIntents = (navigationIntents ?? []).filter(intent => !isIntentHidden(intent));
 
   if (!leading && visibleIntents.length === 0) return null;

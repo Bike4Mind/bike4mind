@@ -32,7 +32,6 @@ const SideNavHeader = () => {
   const navigate = useNavigate();
   // Entitlement-aware (admin/developer/OptiHashi Pro entitlement): the logo click
   // routes tag-less email-domain grantees to /opti too, not just `Opti`-tagged users.
-  // A user who hid the workspace gets the website target instead.
   const isOptiUser = useOptiVisible();
   const hasUnreadInbox = useInboxHasUnread();
   const setInboxOpen = useInbox(s => s.setOpen);

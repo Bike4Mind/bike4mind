@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { NavigationIntent } from '@bike4mind/common';
-
-vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [{ path: '/opti' }] }));
 
 import { intentSurface, leadsIntoHiddenSurface } from './navigationIntentSurface';
 
@@ -9,10 +7,16 @@ const intent = (navigationType: string, target: string) => ({ navigationType, ta
 const outside = { hiddenSurfaces: ['opti'], pathname: '/notebooks/abc', hostHandlesFamilyInPlace: false };
 
 describe('intentSurface', () => {
-  it('maps workspace routes and family actions to the workspace, everything else to the main app', () => {
+  it('maps workspace routes and known family actions to the workspace', () => {
     expect(intentSurface(intent('route', '/opti?mode=canvas'))).toBe('opti');
+    expect(intentSurface(intent('route', '/opti/session/1'))).toBe('opti');
+    expect(intentSurface(intent('action', 'scheduling'))).toBe('opti');
     expect(intentSurface(intent('action', 'scheduling.solvers'))).toBe('opti');
+  });
+
+  it('maps everything else, including unknown actions, to the main app', () => {
     expect(intentSurface(intent('action', 'file_browser'))).toBeNull();
+    expect(intentSurface(intent('action', 'some_future_action'))).toBeNull();
     expect(intentSurface(intent('route', '/optimize-later'))).toBeNull();
     expect(intentSurface(intent('tab', '3'))).toBeNull();
   });
@@ -24,8 +28,20 @@ describe('leadsIntoHiddenSurface', () => {
     expect(leadsIntoHiddenSurface(intent('action', 'scheduling'), outside)).toBe(true);
   });
 
-  it('does not flag it once the user is already in the workspace', () => {
+  it('never flags an unknown action', () => {
+    expect(leadsIntoHiddenSurface(intent('action', 'some_future_action'), outside)).toBe(false);
+  });
+
+  it('does not flag it anywhere under the workspace route prefix', () => {
     expect(leadsIntoHiddenSurface(intent('action', 'scheduling'), { ...outside, pathname: '/opti' })).toBe(false);
+    expect(leadsIntoHiddenSurface(intent('route', '/opti'), { ...outside, pathname: '/opti/session/1' })).toBe(false);
+  });
+
+  it('does not treat a route that only shares the prefix text as inside the workspace', () => {
+    expect(leadsIntoHiddenSurface(intent('route', '/opti'), { ...outside, pathname: '/optimize-later' })).toBe(true);
+  });
+
+  it('does not flag a family action while a host draws the console in place', () => {
     expect(leadsIntoHiddenSurface(intent('action', 'scheduling'), { ...outside, hostHandlesFamilyInPlace: true })).toBe(
       false
     );

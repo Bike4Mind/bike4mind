@@ -1,28 +1,14 @@
 import { useCallback } from 'react';
-import { useLocation, useNavigate } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import type { NavigationIntent } from '@bike4mind/common';
-import { leadsIntoHiddenSurface } from '@client/app/utils/navigationIntentSurface';
-import { useHiddenSurfaceIds } from './useHiddenSurfaces';
 
 // Builds without the OptiHashi overlay (open core) have no /opti route; an
 // Opti action intent must no-op there instead of navigating to a dead route.
 const optiRouteExists = premiumRoutes.some(route => route.path.startsWith('/opti'));
-
-/** Predicate for a suggested navigation that leads into a workspace the user hid (see leadsIntoHiddenSurface). */
-export function useIsIntentHidden(): (intent: NavigationIntent) => boolean {
-  const hiddenSurfaces = useHiddenSurfaceIds();
-  const pathname = useLocation({ select: location => location.pathname });
-  const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
-  return useCallback(
-    (intent: NavigationIntent) =>
-      leadsIntoHiddenSurface(intent, { hiddenSurfaces, pathname, hostHandlesFamilyInPlace }),
-    [hiddenSurfaces, pathname, hostHandlesFamilyInPlace]
-  );
-}
 
 /**
  * Hook that dispatches navigation based on a NavigationIntent's navigationType.
@@ -36,12 +22,9 @@ export function useNavigationExecutor() {
   const requestFamily = useOptiNavigation(state => state.requestFamily);
   const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
   const setFileBrowserOpen = useFileBrowser(state => state.setOpen);
-  const isIntentHidden = useIsIntentHidden();
 
   const execute = useCallback(
     (intent: NavigationIntent) => {
-      // A suggestion leading into a workspace the user hid is a no-op, unless they are already in it.
-      if (isIntentHidden(intent)) return;
       switch (intent.navigationType) {
         case 'route':
           navigate({ to: intent.target });
@@ -87,7 +70,7 @@ export function useNavigationExecutor() {
         }
       }
     },
-    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace, isIntentHidden]
+    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace]
   );
 
   return execute;

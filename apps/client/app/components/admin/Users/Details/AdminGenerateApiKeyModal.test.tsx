@@ -21,8 +21,7 @@ const h = vi.hoisted(() => ({
   hasOptiAccess: true,
 }));
 
-// useOptiVisible answers false so a regression to the display-filtered gate would fail here.
-vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess, useOptiVisible: () => false }));
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,

@@ -265,6 +265,26 @@ describe('useLLMSettingsAssembly - resolveTools with a hidden workspace', () => 
     expect(result.effectiveTools).toEqual(['web_search']);
   });
 
+  it('keeps a hidden-surface tool a briefcase override names explicitly', () => {
+    const result = render().current.resolveTools({
+      prompt: 'x',
+      supportsTools: true,
+      toolsOverride: [OPTI_TOOL],
+      activeSurface: null,
+    });
+
+    expect(result).toEqual({ effectiveTools: [OPTI_TOOL], refused: false });
+    expect(recommendToolsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pinned hidden-surface tool when auto-offers are off', () => {
+    llmState.tools = [OPTI_TOOL] as B4MLLMTools[];
+
+    const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, skipAutoOffers: true });
+
+    expect(result.effectiveTools).toEqual([OPTI_TOOL]);
+  });
+
   it('keeps the tool for a session inside that surface', () => {
     llmState.tools = [OPTI_TOOL] as B4MLLMTools[];
     recommendToolsMock.mockReturnValue([]);

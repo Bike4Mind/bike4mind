@@ -54,13 +54,9 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
-  optiHidden: false,
 }));
 
-vi.mock('@client/app/hooks/data/opti', () => ({
-  useOptiAccess: () => h.hasOptiAccess,
-  useOptiVisible: () => h.hasOptiAccess && !h.optiHidden,
-}));
+vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
@@ -364,17 +360,7 @@ describe('UserApiKeysTab - premium scopes', () => {
   beforeEach(() => {
     h.keys = [activeKey];
     h.hasOptiAccess = false;
-    h.optiHidden = false;
     h.createMutate.mockClear();
-  });
-
-  it('keeps the premium scopes out of the New-Key modal when the user hid the workspace', () => {
-    h.hasOptiAccess = true;
-    h.optiHidden = true;
-    renderTab();
-    fireEvent.click(screen.getByText('Create API Key'));
-    expect(screen.getByTestId(`api-key-scope-${ApiKeyScope.AI_CHAT}`)).toBeInTheDocument();
-    for (const scope of PREMIUM) expect(screen.queryByTestId(`api-key-scope-${scope}`)).toBeNull();
   });
 
   it('keeps the premium scopes out of the New-Key modal and its Full access preset without Opti access', () => {

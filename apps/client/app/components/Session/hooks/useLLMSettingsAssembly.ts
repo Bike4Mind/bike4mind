@@ -32,8 +32,10 @@ export interface ResolveToolsParams {
    */
   skipAutoOffers?: boolean;
   /**
-   * Surface of the session this send goes to. Tools of a workspace the user hid are dropped from
-   * the send (and never auto-recommended) unless this is that workspace (`isToolHiddenBySurface`).
+   * Surface of the session this send goes to. In Smart mode with auto-offers on, tools of a workspace
+   * the user hid are left out of the recommendations and the merged set unless this is that workspace
+   * (`isToolHiddenBySurface`). The briefcase override, "Only tools I pick" and non-Smart modes are
+   * never filtered.
    */
   activeSurface?: string | null;
   /**
@@ -110,9 +112,7 @@ export function useLLMSettingsAssembly(): {
         // Defense-in-depth: re-strip integration-gated tools at dispatch. The
         // authoring API already rejects them, but a seeded/DB-written system prompt
         // could carry one - never let it ride into a send via the override.
-        const safeOverride = toolsOverride.filter(
-          t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t) && visible(t)
-        );
+        const safeOverride = toolsOverride.filter(t => !(BRIEFCASE_DISALLOWED_TOOLS as readonly string[]).includes(t));
         if (!supportsTools) {
           // Omit the parenthetical when stripping left no runnable tools, so the
           // message never degrades to "requires tools () that the current model can't run".
@@ -134,7 +134,7 @@ export function useLLMSettingsAssembly(): {
         // "Only tools I pick" means only: skip the recommender entirely rather than
         // merge and toast for a tool the user asked not to have auto-added.
         if (skipAutoOffers) {
-          return { effectiveTools: tools.filter(visible), refused: false };
+          return { effectiveTools: tools, refused: false };
         }
         const recommendations = recommendTools(prompt).filter(r => visible(r.tool));
         const autoSelected = recommendations.filter(r => !tools.includes(r.tool) && !isToolDenied(r.tool, deniedTools));
@@ -147,7 +147,7 @@ export function useLLMSettingsAssembly(): {
       if (toolMode === 'fast') {
         return { effectiveTools: [], refused: false };
       }
-      return { effectiveTools: tools.filter(visible), refused: false };
+      return { effectiveTools: tools, refused: false };
     },
     [tools, toolMode, hiddenSurfaces]
   );

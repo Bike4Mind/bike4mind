@@ -13,7 +13,6 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
-import { hiddenSurfaceToolNames } from '@server/utils/hiddenSurfaceTools';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
@@ -127,12 +126,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     });
 
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
-    // scope gaps always win. Tools of a workspace the user hid are denied outside that workspace.
-    const deniedTools = [
-      ...(isStringArray(requestedDenials) ? requestedDenials : []),
-      ...dataLakeToolsDeniedFor(req),
-      ...hiddenSurfaceToolNames(req.user.preferences?.hiddenSurfaces, session?.surface),
-    ];
+    // scope gaps always win.
+    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
 
     const quest = await chatCompletion.invoke({
       body: {

@@ -547,17 +547,3 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
     }
   });
 });
-
-// The picker draws a fixed list of rows; the workspace-contributed optimization tools are not among
-// them, so there is nothing here for the hidden-workspaces preference to remove.
-describe('ToolsSection workspace-contributed tools', () => {
-  it('draws no row for a workspace tool, even with every flag on and the tool pinned', () => {
-    mocks.state.tools = ['optihashi_schedule', 'optihashi_formulate', 'optihashi_edit_problem'];
-    mocks.adminFeatureFlags.value = new Proxy({}, { get: () => true }) as Record<string, boolean>;
-    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-
-    expect(container.querySelector('[class*="tool-item-web-search"]')).toBeTruthy();
-    expect(container.textContent).not.toMatch(/Optimization (Schedule|Formulate|Edit)/);
-    expect(container.querySelector('[class*="optihashi"], [class*="optimization"]')).toBeNull();
-  });
-});

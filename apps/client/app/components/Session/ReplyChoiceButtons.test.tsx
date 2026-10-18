@@ -13,10 +13,8 @@ const mockRecord = vi.fn();
 vi.mock('@client/app/hooks/data/quests', () => ({
   recordReplyChoice: (...args: unknown[]) => mockRecord(...args),
 }));
-vi.mock('@client/app/hooks/useNavigationExecutor', () => ({
-  useNavigationExecutor: () => vi.fn(),
-  useIsIntentHidden: () => () => false,
-}));
+vi.mock('@client/app/hooks/useNavigationExecutor', () => ({ useNavigationExecutor: () => vi.fn() }));
+vi.mock('@client/app/utils/navigationIntentSurface', () => ({ useIsIntentHidden: () => () => false }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const choices: SuggestedChoices = {

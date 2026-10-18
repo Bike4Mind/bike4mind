@@ -48,9 +48,9 @@ export function useOptiAccess(): boolean {
 }
 
 /**
- * Whether Opti launch points (sidenav row, logo target, self-service key scopes) should show: access
- * per `useOptiAccess`, minus the user's own hidden-surfaces display preference. Access checks must
- * keep using `useOptiAccess`; hiding never revokes the route or existing sessions.
+ * Whether Opti launch points (sidenav row, logo target) should show: access per `useOptiAccess`,
+ * minus the user's own hidden-surfaces display preference. Access checks must keep using
+ * `useOptiAccess`; hiding never revokes the route or existing sessions.
  */
 export function useOptiVisible(): boolean {
   const hasAccess = useOptiAccess();

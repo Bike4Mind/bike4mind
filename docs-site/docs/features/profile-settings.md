@@ -77,9 +77,9 @@ Connect with other Bike4Mind users.
 
 ### Workspaces
 
-If your account has access to an additional workspace (for example OptiHashi), the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your own UI: its sidebar entry, the logo shortcut, move and copy targets, automatic tool suggestions, the agent tool picker, and its scopes in the New API Key dialog. Its tools are also left out of chats in your other notebooks.
+If your account has access to an additional workspace (for example OptiHashi), the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your sidebar, the logo link, the move and copy menus, automatic tool suggestions, and suggested navigation.
 
-Hiding is a display preference only. Your access does not change: a direct link to the workspace still opens it, notebooks already in that workspace keep working (including its tools), and turning the switch back on restores everything. The card does not appear if you have no workspace you can hide.
+Hiding is a display preference only. Your access does not change: a direct link to the workspace still opens it, notebooks already in that workspace keep working, and turning the switch back on shows it again. The card does not appear if you have no workspace you can hide.
 
 ### Experimental Features
 
