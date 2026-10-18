@@ -1264,6 +1264,15 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
+   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
+   * Quest matches.
+   */
+  async setPendingAction(questId: string, action: { tool: string; params: Record<string, unknown>; ts: number }) {
+    await this.model.updateOne({ _id: convertId(questId) }, { $set: { pendingAction: action } });
+  }
+
+  /**
    * Append generation jobs to a chat Quest the moment each job is created. `$addToSet` makes a
    * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
    * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can

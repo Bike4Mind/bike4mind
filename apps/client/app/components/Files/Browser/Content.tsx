@@ -716,7 +716,7 @@ const FileBrowserContent = () => {
                 currentStorageInBytes={currentUser?.currentStorageSize ?? 0}
                 storageLimitInBytes={storageLimitToBytes(currentUser?.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB)}
               />
-              <StorageBreakdown overlay />
+              <StorageBreakdown />
             </Box>
           </Stack>
 

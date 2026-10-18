@@ -1343,10 +1343,11 @@ export const AgentProgressAction = z.object({
   status: z.string().optional(),
   creditsUsed: z.number().optional(),
   iteration: z.number().optional(),
-  // Jobs a tool just started, so the client can render their cards on the run's quest mid-run.
-  // questId is only set together with generationJobs.
+  // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
+  // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
   questId: z.string().optional(),
   generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
 export const AgentCompletedAction = z.object({

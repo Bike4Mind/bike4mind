@@ -11,6 +11,7 @@ export * from './models';
 export * from './modelPriceCatalog';
 export * from './modelCatalog';
 export * from './modelIdJoin';
+export * from './claudeModelId';
 export * from './claudeToolCapabilities';
 export * from './successorCostDelta';
 export * from './pricing';

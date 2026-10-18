@@ -66,6 +66,15 @@ export interface LakeOrderScopeSources {
 }
 
 /**
+ * Bucket key of a membership arm. Keyed on the meta-tag so it merges with the dataLakeTags arm; a
+ * membership carrying only a prefix is its own lake and keys on that instead. Shared by
+ * `lakeOrderScopes` and `lakeScopeArms` so the two cannot drift.
+ */
+export function membershipScopeKey(m: LakeOrderScopeSources['lakeMemberships'][number]): string | undefined {
+  return m.datalakeTag || (m.fileTagPrefix ? `prefix:${m.fileTagPrefix}` : undefined);
+}
+
+/**
  * Collapse the caller's three scope arms into one bucket per lake. A lake reachable by both its
  * meta-tag and a membership arm must yield ONE bucket, or its files would be split in two and it
  * would draw a double share of the budget.
@@ -87,9 +96,7 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
   for (const membership of sources.lakeMemberships) {
     const datalakeTag = membership.datalakeTag || undefined;
     const fileTagPrefix = membership.fileTagPrefix || undefined;
-    // Keyed on the meta-tag so it merges with the dataLakeTags arm above; a membership carrying
-    // only a prefix is its own lake and keys on that instead.
-    const key = datalakeTag ?? (fileTagPrefix ? `prefix:${fileTagPrefix}` : undefined);
+    const key = membershipScopeKey(membership);
     if (!key) continue;
     upsert(key, { datalakeTag, fileTagPrefix });
   }
@@ -103,6 +110,32 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
   }
 
   return [...byKey.values()];
+}
+
+/** The slice of the caller's scope arms that reaches ONE lake's files. */
+export interface LakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]> {
+  dataLakeTags: string[];
+  dataLakeTagPrefixes: string[];
+  lakeMemberships: M[];
+}
+
+/**
+ * Split the caller's scope arms back out per lake bucket, so each lake can be listed on its own.
+ * Mirrors the keying in `lakeOrderScopes`: an arm lands in the scope whose `key` it would have
+ * produced, so the per-scope slices partition the full arm set. Arms are filtered, never
+ * rebuilt, so a creator-anchored membership stays exactly as resolved.
+ */
+export function lakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]>(
+  scope: LakeOrderScope,
+  sources: Pick<LakeOrderScopeSources, 'dataLakeTags' | 'dataLakeTagPrefixes'> & { lakeMemberships: M[] }
+): LakeScopeArms<M> {
+  return {
+    dataLakeTags: sources.dataLakeTags.filter(tag => tag === scope.key),
+    dataLakeTagPrefixes: sources.dataLakeTagPrefixes.filter(
+      prefix => prefix === scope.registryPrefix || scope.key === `prefix:${prefix}`
+    ),
+    lakeMemberships: sources.lakeMemberships.filter(m => membershipScopeKey(m) === scope.key),
+  };
 }
 
 /** Bucket key for files attributable to no lake - the caller's own and shared files, which

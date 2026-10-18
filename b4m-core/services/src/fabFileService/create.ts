@@ -223,8 +223,15 @@ export const prepareFabFile = async (
     });
   }
 
-  // Check storage limit - use organization limit if organizationId is provided
-  await checkStorageLimitForFile(user, params.fileSize, limitOrganizationId, db.organizations?.findById);
+  // Check storage limit - use organization limit if organizationId is provided. Wrapped, not passed
+  // as db.organizations.findById: a repository method detached from its instance loses `this`.
+  const organizations = db.organizations;
+  await checkStorageLimitForFile(
+    user,
+    params.fileSize,
+    limitOrganizationId,
+    organizations && (id => organizations.findById(id))
+  );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
