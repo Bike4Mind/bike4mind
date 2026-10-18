@@ -344,8 +344,8 @@ export async function startAgentExecution(
       status: 'pending',
       agentExecutionId: executionId,
       routingSource: input.routingSource,
-      // Message files only, matching the chat path (ChatCompletionInvoke): the sent bubble's
-      // attachment chip and the session's file list both read them off the Quest.
+      // Message files only, matching the chat path (ChatCompletionInvoke): the sent message's
+      // attachment chip reads them off the Quest.
       fabFileIds: input.messageFileIds ?? [],
     });
     const linkedQuestId = quest.id;
