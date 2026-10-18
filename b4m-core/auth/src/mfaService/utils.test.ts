@@ -71,4 +71,9 @@ describe('matchTOTPStep', () => {
   it('returns null for a code 2 steps old', () => {
     expect(matchTOTPStep(secret, codeAt(-60), 1, nowMs)).toBeNull();
   });
+
+  it('fails closed on an empty secret (an undecryptable stored secret reads as empty)', () => {
+    const emptyKeyCode = speakeasy.totp({ secret: '', encoding: 'base32', time: Math.floor(nowMs / 1000) });
+    expect(matchTOTPStep('', emptyKeyCode, 1, nowMs)).toBeNull();
+  });
 });

@@ -285,7 +285,7 @@ describe('POST /api/ai/sound-effects', () => {
       fileUrl: 'https://signed.example/audio.mp3',
     });
 
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
@@ -294,7 +294,13 @@ describe('POST /api/ai/sound-effects', () => {
         userId: expect.any(String),
         bytes: expect.any(Buffer),
         contentType: expect.any(String),
-        generation: { generator: 'sound_effect', provider: expect.any(String), prompt: 'rain', durationSeconds: 3 },
+        generation: {
+          generator: 'sound_effect',
+          provider: expect.any(String),
+          prompt: 'rain',
+          durationSeconds: 3,
+          promptInfluence: 0.6,
+        },
       },
       expect.anything()
     );
@@ -320,6 +326,26 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('false');
     expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBeUndefined();
     expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
+  });
+
+  it('keeps a requested prompt influence of 0', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation.promptInfluence).toBe(0);
+  });
+
+  it('leaves prompt influence off the stored metadata when the request omitted it', async () => {
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+
+    const { promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    const [{ generation }] = saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('promptInfluence');
   });
 
   it('rejects an invalid body (422) without resolving a key', async () => {

@@ -188,27 +188,33 @@ export async function writeReleaseNotes(
   prs: ReleaseNotesJobPr[],
   notes: Map<number, string>,
   complete: CompleteFn,
-  editorialFeedback: string[] = []
+  { editorialFeedback = [], logger }: { editorialFeedback?: string[]; logger?: Pick<Logger, 'warn'> } = {}
 ): Promise<GenerateResult> {
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
   if (notes.size === 0) return { draft: { headline: '', summary: '', items: [] }, usage };
 
   const titles = new Map(prs.map(pr => [pr.number, pr.title]));
   const input = [...notes].map(([number, note]) => ({ number, title: titles.get(number) ?? '', note }));
+  const strays = new Set<number>();
   const draft = await completeValidated(
     complete,
     buildEditorialPrompt(input, editorialFeedback),
     raw => {
       const parsed = ReleaseNoteDraftSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
-      const unknown = parsed.data.items.flatMap(item => item.sourcePrs).filter(n => !notes.has(n));
-      return unknown.length
-        ? { ok: false, errors: [...new Set(unknown)].map(n => `sourcePrs references unknown change ${n}`) }
-        : { ok: true, value: parsed.data };
+      // sourcePrs is provenance only (never served publicly), so a stray cited number (e.g. an issue read
+      // in a PR description) is dropped with a warning rather than failing the release.
+      const items = parsed.data.items.map(item => {
+        const sourcePrs = item.sourcePrs.filter(n => notes.has(n));
+        item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
+        return { ...item, sourcePrs };
+      });
+      return { ok: true, value: { ...parsed.data, items } };
     },
     usage,
     'editorial'
   );
+  if (strays.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...strays].join(', ')}`);
   return { draft, usage };
 }
 
@@ -222,7 +228,7 @@ export async function generateReleaseNotes(
   editorialFeedback: string[] = []
 ): Promise<GenerateResult> {
   const triage = await triageReleaseNotes(prs, complete);
-  const written = await writeReleaseNotes(prs, triage.notes, complete, editorialFeedback);
+  const written = await writeReleaseNotes(prs, triage.notes, complete, { editorialFeedback });
   return {
     draft: written.draft,
     usage: {

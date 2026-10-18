@@ -170,7 +170,7 @@ describe('releaseNotes queue handler', () => {
     h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft());
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
-    expect(h.writeReleaseNotes.mock.calls[1][3]).toEqual([expect.stringContaining('acme')]);
+    expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual([expect.stringContaining('acme')]);
     expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
@@ -190,7 +190,7 @@ describe('releaseNotes queue handler', () => {
       .mockResolvedValueOnce(draft());
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
-    expect(h.writeReleaseNotes.mock.calls[1][3]).toEqual(
+    expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual(
       expect.arrayContaining([expect.stringContaining('Exciting'), expect.stringContaining('most important change')])
     );
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));

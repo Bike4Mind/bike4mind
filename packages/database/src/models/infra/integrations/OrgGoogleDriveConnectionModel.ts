@@ -592,6 +592,8 @@ class OrgGoogleDriveConnectionRepository
       {
         $set: {
           status,
+          // Failed runs stamp this too: the lake Drive chip (driveConnectionDisplay.ts) reads it as the last
+          // successful sync only because a failure always sets lastError.
           lastPolledAt: new Date(),
           // Empty-string-to-null matches updateHealth: a caller whose err.message is blank has nothing
           // to report, and storing '' would read as a present error on the client.

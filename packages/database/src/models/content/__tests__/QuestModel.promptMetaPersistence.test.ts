@@ -203,6 +203,7 @@ const FULL_PROMPT_META = {
   generatedAt: '2026-07-30T00:00:00.000Z',
   finishReason: 'end_turn',
   replyChoices: { offered: true, status: 'invalid', reason: 'too_few' },
+  narratedToolCall: { toolNames: ['web_search'] },
   artifacts: [{ type: 'html', content: '<div />', metadata: { source: 'tool_result' }, timestamp: new Date() }],
   toolHealth: [
     {

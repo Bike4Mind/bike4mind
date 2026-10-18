@@ -1007,16 +1007,20 @@ export function useSendMessage({
         // store would otherwise grow unbounded across a long-lived tab.
         useAgentExecutionStore.getState().clearForSession(dispatchSessionId);
 
+        // Per-message file attachments - dedupe against the session-level set
+        // so the same fabFileId isn't materialized twice into the first
+        // iteration. Mirrors the dedup the `chat_completion` flow does in
+        // `buildDataSources()`.
+        const dispatchSessionFabFileIds = workBenchFiles.map(f => f.id);
+        const dispatchMessageFileIds = sendableMessageFileIds.filter(id => !dispatchSessionFabFileIds.includes(id));
+
         // Render the user's prompt as a message bubble above the iteration
-        // stream. The agent executor doesn't create a Quest server-side
-        // (it's fire-and-forget over WebSocket), so the normal chat-completion
-        // optimistic-quest flow isn't triggered and the bubble would otherwise
-        // never mount - leaving a confusing empty area above the permission
-        // card. Optimistic-only is acceptable for now; refresh persistence
-        // for agent executions is a follow-up.
+        // stream right away. The server creates the prompt Quest at dispatch
+        // (startAgentExecution), and useAgentExecution re-keys this bubble to
+        // that Quest's id once it arrives (swapOptimisticPromptBubbleId).
         // Pass `routingSource` so the AutoRouteBadge renders live on the
         // optimistic bubble instead of waiting for the persisted Quest on reload.
-        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
+        createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource, dispatchMessageFileIds);
 
         // Iteration cap comes from the agent doc; unset when agentless or the agent has no
         // default thoroughness, so the executor fills it from admin defaults.
@@ -1030,12 +1034,6 @@ export function useSendMessage({
           effectiveTools,
           dispatchAgent?.allowedTools
         );
-        // Per-message file attachments - dedupe against the session-level set
-        // so the same fabFileId isn't materialized twice into the first
-        // iteration. Mirrors the dedup the `chat_completion` flow does in
-        // `buildDataSources()`.
-        const dispatchSessionFabFileIds = workBenchFiles.map(f => f.id);
-        const dispatchMessageFileIds = sendableMessageFileIds.filter(id => !dispatchSessionFabFileIds.includes(id));
         agentExecution.start({
           sessionId: dispatchSessionId,
           // Server requires `questId`; without an authored quest we tag the

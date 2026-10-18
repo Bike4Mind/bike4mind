@@ -121,6 +121,7 @@ import {
 } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
+import { evaluateConfidenceGate } from './agentExecutorUtils/confidenceGate';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
@@ -175,7 +176,7 @@ import {
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
-import { attachGenerationJobsToRunQuest } from './agentExecutor.generationJobs';
+import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -205,6 +206,7 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { publishRunPendingAction } from './agentExecutor.pendingAction';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
@@ -1801,7 +1803,14 @@ async function processExecution(
           }
         }
         // In-process subagents share these callbacks, so their clips and songs land here too.
-        await attachGenerationJobsToRunQuest(changes?.generationJobs, runQuestId, questRepository, logger);
+        await publishRunGenerationJobs({
+          jobs: changes?.generationJobs,
+          questId: runQuestId,
+          executionId,
+          questRepository,
+          sendWs,
+          logger,
+        });
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1856,6 +1865,8 @@ async function processExecution(
         pendingSideEffects.push(sideEffect);
         allSideEffects.push(sideEffect);
       },
+      onPendingAction: action =>
+        publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
       sessionId: execution.sessionId,
       questId: runQuestId,
       onSubagentCredits: credits => {
@@ -2994,7 +3005,17 @@ async function processExecution(
       // approval pauses for that more specific signal first, and only
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
-      const gate = readLastIterationConfidence();
+      // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
+      // Per-profile override wins over the global default; a profile threshold of 0
+      // disables the gate entirely (confidence is never < 0) for unattended loops.
+      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
+      const gate = evaluateConfidenceGate({
+        gate: readLastIterationConfidence(),
+        isComplete: iterationResult.isComplete,
+        reachedMaxIterations: iterationResult.reachedMaxIterations,
+        threshold: confidenceGateThreshold,
+        iterationSteps: iterationResult.allSteps,
+      });
       if (gate !== null) {
         // Telemetry (#56 M1.1): record every iteration the gate evaluates -
         // including ones that complete in the same turn (isComplete=true) or
@@ -3003,15 +3024,7 @@ async function processExecution(
         // a real pause. Baseline observability before touching signal quality.
         await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
       }
-      // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
-      if (
-        gate !== null &&
-        !iterationResult.isComplete &&
-        !iterationResult.reachedMaxIterations &&
-        gate.confidence < confidenceGateThreshold
-      ) {
+      if (gate?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3457,10 +3470,11 @@ async function processSubagentDispatch(
         { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
       ),
     ]);
-    const modelInfo = models.find((m: { id: string }) => m.id === child.model);
+    const childModel = resolveDeprecatedModelId(child.model, 'agentExecutorChild');
+    const modelInfo = models.find((m: { id: string }) => m.id === childModel);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
-    if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
-    llm.currentModel = child.model;
+    if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
+    llm.currentModel = childModel;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
     const refusal = await modelAdmission.assert(child.model).then(
@@ -3625,7 +3639,7 @@ async function processSubagentDispatch(
       imageGenerateStorage: getGeneratedImageStorage(),
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
-      model: child.model,
+      model: childModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
@@ -3695,6 +3709,16 @@ async function processSubagentDispatch(
       // `settleMediaCost`).
       onToolStart: async (toolName, data) => foldSubagentMediaUsd('start', toolName, data),
       onToolFinish: async (toolName, data) => foldSubagentMediaUsd('finish', toolName, data),
+      // Same Quest the top-level run writes to: the Confirm card reads it from there.
+      onPendingAction: action =>
+        publishRunPendingAction({
+          executionId: parentId,
+          questId: child.linkedQuestId,
+          action,
+          questRepository,
+          sendWs,
+          logger,
+        }),
       sessionId: child.sessionId,
       // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
       // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
@@ -3703,7 +3727,7 @@ async function processSubagentDispatch(
       questId: child.linkedQuestId,
     };
     const subagentToolConfig = buildSubagentToolConfig({
-      model: child.model,
+      model: childModel,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
@@ -3755,7 +3779,7 @@ async function processSubagentDispatch(
       executionId: parentId,
       childExecutionId,
       agentName,
-      model: child.model,
+      model: childModel,
       thoroughness: child.subagentConfig.thoroughness,
       maxIterations: child.subagentConfig.maxIterations,
       isBackground: child.isBackgroundExecution ?? false,
@@ -3917,7 +3941,7 @@ async function processSubagentDispatch(
               // (`execution.questId`), inherited unchanged so these rows group with the
               // parent's own. Not a Quest id: do not "fix" this to `child.linkedQuestId`.
               questId: child.questId,
-              model: child.model,
+              model: childModel,
               inputTokens: 0,
               outputTokens: 0,
             },
@@ -3943,7 +3967,7 @@ async function processSubagentDispatch(
               sessionId: child.sessionId,
               feature: 'agent_execution',
               provider: modelInfo.backend,
-              model: child.model,
+              model: childModel,
               status: 'ok',
               ...event,
             })

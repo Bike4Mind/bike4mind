@@ -31,6 +31,7 @@ export type { CreateLakeSourceKind } from '@client/app/components/datalake/creat
  * there at all, since appending files needs no source declaration.
  */
 export const GITHUB_CREATE_ORG_ONLY_REASON = GITHUB_ORG_ONLY_REASON;
+export const GITHUB_CREATE_SWITCH_ACCOUNT_REASON = `${GITHUB_CREATE_ORG_ONLY_REASON} Switch to your team account (the profile card at the bottom left), then create it from there.`;
 export const GITHUB_CREATE_ORG_MANAGER_ONLY_REASON = GITHUB_ORG_MANAGER_ONLY_REASON;
 
 /** The account scope a create lands in, which is what decides a source's availability. */
@@ -43,6 +44,8 @@ export type CreateLakeScope = {
    * Meaningless (and false) without an `organizationId`.
    */
   isOrgOwnerOrManager: boolean;
+  /** Whether the caller belongs to any organization, i.e. whether switching accounts can help. */
+  hasOrganizations?: boolean;
 };
 
 export type CreateLakeSource = {
@@ -91,7 +94,9 @@ const github: CreateLakeSource = {
   origin: createLakeOrigin('github'),
   adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: scope => {
-    if (!scope.organizationId) return GITHUB_CREATE_ORG_ONLY_REASON;
+    if (!scope.organizationId) {
+      return scope.hasOrganizations ? GITHUB_CREATE_SWITCH_ACCOUNT_REASON : GITHUB_CREATE_ORG_ONLY_REASON;
+    }
     return scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON;
   },
 };
@@ -130,7 +135,11 @@ export function useCreateLakeScope(): CreateLakeScope {
   const organizationId = orgIdOfAccount(selectedAccount);
   const { data: organizations } = useGetUserOrganizations(currentUser?.id);
   const org = organizationId ? organizations?.find(o => o.id === organizationId) : undefined;
-  return { organizationId, isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org) };
+  return {
+    organizationId,
+    isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org),
+    hasOrganizations: !!organizations?.length,
+  };
 }
 
 /** The sources to offer a create, in display order: every flagged-on source, available or disabled. */

@@ -125,6 +125,48 @@ describe('StorageBreakdown', () => {
     expect(within(screen.getByTestId('storage-breakdown-row-unaccounted')).getByText('5 MB')).toBeTruthy();
   });
 
+  it('closes on click-away and on Escape from inside, leaving Escape from elsewhere to the surrounding dialog', async () => {
+    mockRefs.useGetStorageBreakdown.mockReturnValue({ data: scenario, isLoading: false, isError: false });
+    const onOuterKeyDown = vi.fn();
+    const onOutsideClick = vi.fn();
+    render(
+      <TestWrapper>
+        <div onKeyDown={onOuterKeyDown}>
+          <button data-testid="outside-btn" onClick={onOutsideClick}>
+            outside
+          </button>
+          <StorageBreakdown />
+        </div>
+      </TestWrapper>
+    );
+    const toggle = screen.getByTestId('storage-breakdown-toggle-btn');
+
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByTestId('storage-breakdown-panel'));
+    expect(screen.getByTestId('storage-breakdown-panel')).toBeTruthy();
+
+    // Collapsing the in-flow panel on press would shift the layout under the pointer and lose the click.
+    let panelOpenOnRelease = false;
+    screen.getByTestId('outside-btn').addEventListener('mouseup', () => {
+      panelOpenOnRelease = screen.queryByTestId('storage-breakdown-panel') !== null;
+    });
+    await userEvent.click(screen.getByTestId('outside-btn'));
+    expect(panelOpenOnRelease).toBe(true);
+    expect(onOutsideClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('storage-breakdown-panel')).toBeNull();
+
+    await userEvent.click(toggle);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByTestId('storage-breakdown-panel')).toBeNull();
+    expect(onOuterKeyDown).not.toHaveBeenCalled();
+
+    await userEvent.click(toggle);
+    screen.getByTestId('outside-btn').focus();
+    await userEvent.keyboard('{Escape}');
+    expect(onOuterKeyDown).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('storage-breakdown-panel')).toBeTruthy();
+  });
+
   it('labels a counter below the counted files as such, without a minus sign', async () => {
     mockRefs.useGetStorageBreakdown.mockReturnValue({
       data: { ...scenario, totalBytes: 955 * MB, unaccountedBytes: -5 * MB },

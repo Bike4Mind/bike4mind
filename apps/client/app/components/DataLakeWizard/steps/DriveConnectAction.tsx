@@ -9,22 +9,12 @@ import {
   useLakeDriveConnection,
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
-  type LakeDriveConnection,
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection, describeDriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
+import { describeDriveLastSync } from '@client/app/hooks/data/lakeSyncDisplay';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
-import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
-
-/**
- * A failed run stamps lastPolledAt too (releaseSyncClaim), and only a clean one clears lastError, so
- * with an error on record the time is the last attempt rather than the last sync.
- */
-function describeLastSync({ lastPolledAt, lastError }: Pick<LakeDriveConnection, 'lastPolledAt' | 'lastError'>) {
-  if (!lastPolledAt) return 'Not synced yet';
-  return `${lastError ? 'Last sync attempt' : 'Last synced'} ${relativeTimeFormat(new Date(lastPolledAt))}`;
-}
 
 /**
  * Connect a Google Drive FOLDER to an EXISTING data lake: pick a folder and the connection is
@@ -121,7 +111,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
           sx={{ color: 'text.tertiary', flexBasis: '100%' }}
           data-testid="drive-connection-last-synced"
         >
-          {describeLastSync(connection)}
+          {describeDriveLastSync(connection)}
           {/* A disconnect disables the connection, so its schedule would read "paused" for no reason. */}
           {schedule && !connection.disconnecting && ` \u00b7 ${schedule}`}
         </Typography>

@@ -1,5 +1,49 @@
 # @bike4mind/services
 
+## 17.1.1
+
+### Patch Changes
+
+- [#4957](https://github.com/Bike4Mind/bike4mind/pull/4957) [`56e8751`](https://github.com/Bike4Mind/bike4mind/commit/56e875192f26a0af5ff9aa02a5432b3c15ac2e08) Thanks [@erikbethke](https://github.com/erikbethke)! - hide tool calls a model writes out as text instead of showing them as the answer
+
+- [#4964](https://github.com/Bike4Mind/bike4mind/pull/4964) [`135d47a`](https://github.com/Bike4Mind/bike4mind/commit/135d47aeaa17b6ec4b2782417a0003335e00295e) Thanks [@erikbethke](https://github.com/erikbethke)! - resolve retired pinned models for subagent child executions
+
+- Updated dependencies [[`0afc448`](https://github.com/Bike4Mind/bike4mind/commit/0afc4489cfd31b4dedaceecfbeb4082345917272), [`56e8751`](https://github.com/Bike4Mind/bike4mind/commit/56e875192f26a0af5ff9aa02a5432b3c15ac2e08)]:
+  - @bike4mind/common@15.1.1
+  - @bike4mind/agents@1.2.2
+  - @bike4mind/auth@1.1.2
+  - @bike4mind/db-core@0.8.2
+  - @bike4mind/fab-pipeline@2.1.2
+  - @bike4mind/llm-adapters@1.1.2
+  - @bike4mind/mcp@2.1.2
+  - @bike4mind/utils@7.1.2
+
+## 17.1.0
+
+### Minor Changes
+
+- [#4760](https://github.com/Bike4Mind/bike4mind/pull/4760) [`63ff370`](https://github.com/Bike4Mind/bike4mind/commit/63ff37067fb8def4f7fb804eb57e7b9ef83c0560) Thanks [@onoya](https://github.com/onoya)! - add Speech and Sound effects tabs; send Files Generate Audio to Studio
+
+### Patch Changes
+
+- [#4895](https://github.com/Bike4Mind/bike4mind/pull/4895) [`0b84602`](https://github.com/Bike4Mind/bike4mind/commit/0b846026127703d2925a1891afc73aec4ffaa236) Thanks [@onoya](https://github.com/onoya)! - end wait=true chat turns at a deadline instead of the Lambda timeout
+
+- [#4943](https://github.com/Bike4Mind/bike4mind/pull/4943) [`6e4bc6b`](https://github.com/Bike4Mind/bike4mind/commit/6e4bc6bd447207a95d0df6863188b818e6bd4dc0) Thanks [@erikbethke](https://github.com/erikbethke)! - fix org-owned research tasks failing to save their report
+
+- [#4945](https://github.com/Bike4Mind/bike4mind/pull/4945) [`a029c26`](https://github.com/Bike4Mind/bike4mind/commit/a029c26fa8bd25b6344dfe64525929bd73cb2bb5) Thanks [@erikbethke](https://github.com/erikbethke)! - persist fileSize only through the content-rewrite commit
+
+- [#4948](https://github.com/Bike4Mind/bike4mind/pull/4948) [`3d47de8`](https://github.com/Bike4Mind/bike4mind/commit/3d47de8e4defa3b78dc14162d5da97423090ab8d) Thanks [@erikbethke](https://github.com/erikbethke)! - list forced-retrieval candidates per lake
+
+- Updated dependencies [[`63ff370`](https://github.com/Bike4Mind/bike4mind/commit/63ff37067fb8def4f7fb804eb57e7b9ef83c0560), [`0b84602`](https://github.com/Bike4Mind/bike4mind/commit/0b846026127703d2925a1891afc73aec4ffaa236), [`f18e199`](https://github.com/Bike4Mind/bike4mind/commit/f18e1994dc83bf650b504e604b35f44bb477baff), [`c825dac`](https://github.com/Bike4Mind/bike4mind/commit/c825dac8ff84d66db5b5c15a310e257cea6acdd3), [`58951e2`](https://github.com/Bike4Mind/bike4mind/commit/58951e2cb07b8bf0adaac6133e66f5f41060b033), [`bb93dbb`](https://github.com/Bike4Mind/bike4mind/commit/bb93dbb7ae9903bf68904ef3625738cb9c0c129c), [`9a2aed3`](https://github.com/Bike4Mind/bike4mind/commit/9a2aed3116a4d81b5fd36e3864fd25dc63f8f3a7)]:
+  - @bike4mind/common@15.1.0
+  - @bike4mind/auth@1.1.1
+  - @bike4mind/agents@1.2.1
+  - @bike4mind/db-core@0.8.1
+  - @bike4mind/fab-pipeline@2.1.1
+  - @bike4mind/llm-adapters@1.1.1
+  - @bike4mind/mcp@2.1.1
+  - @bike4mind/utils@7.1.1
+
 ## 17.0.0
 
 ### Major Changes

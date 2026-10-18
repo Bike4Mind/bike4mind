@@ -1,4 +1,5 @@
 import { Chip, Tooltip } from '@mui/joy';
+import { useMinuteTick } from '@client/app/hooks/useMinuteTick';
 import CloudIcon from '@mui/icons-material/Cloud';
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
@@ -29,6 +30,7 @@ export default function LakeDriveStatusChip({
   isCreator: boolean;
 }) {
   const { data: connection } = useLakeDriveConnection(lakeId, !!organizationId || isCreator);
+  useMinuteTick(!!connection);
   if (!connection) return null;
 
   // Wording and severity both come from describeDriveConnection - notably it does NOT read a

@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-918 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
+920 routes: 48 contracted, 9 aliases of another route, 195 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
-| ai | 19 | 4 | 17 | 1 | 0 | 1 | 6 |
+| ai | 20 | 4 | 17 | 2 | 0 | 1 | 6 |
 | analytics | 3 | 0 | 2 | 0 | 0 | 1 | 1 |
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
@@ -134,11 +134,11 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | test | 4 | 0 | 0 | 0 | 0 | 4 | 4 |
 | tools | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | transforms | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
-| usage | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
+| usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
 | users | 31 | 0 | 30 | 1 | 0 | 0 | 4 |
-| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 38 |
+| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 36 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -422,6 +422,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
+| `/api/ai/audio-providers` | GET | jwt | - | no | - | 1: `hooks/data/audioProviders.ts` |
 | `/api/ai/barkeep-chat` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/classify-intent` | POST | jwt+key | - | no | - | 1: `hooks/useIntentClassifier.ts` |
 | `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
@@ -433,12 +434,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/ai/optimize-input` | POST | jwt+key | - | no | - | 1: `components/Session/RephraseButton.tsx` |
 | `/api/ai/rapid-reply` | POST | jwt+key | - | no | - | 1: `components/commands/LLMCommand.tsx` |
 | `/api/ai/refineText` | POST | jwt+key | `ai:generate` | no | - | 1: `hooks/useRefineText.ts` |
-| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/Files/GenerateAudio/useGenerateAudio.ts` |
+| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/AudioStudio/useGenerateAudio.ts` |
 | `/api/ai/tavern-conversation` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/test-realtime-voice` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/transcribe` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
 | `/api/ai/transcribe/init` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
-| `/api/ai/tts` | POST | jwt+key | `ai:generate` | yes | - | 2: `components/Files/GenerateAudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
+| `/api/ai/tts` | POST | jwt+key | `ai:generate` | yes | - | 2: `components/AudioStudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
 | `/api/ai/v1/tools` | POST | jwt | - | yes | - | 0 |
 | `/api/ai/voice-sessions` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
 
@@ -1445,6 +1446,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/usage` | GET | jwt+key | - | no | - | 1: `components/admin/CreditAnalysis/hooks/useOwnerUsage.ts` |
+| `/api/usage/fleet-export` | GET | handler | - | no | - | 0 |
 
 ### user
 
@@ -1528,10 +1530,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/me` | GET | jwt+key | `me:read` | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
-| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |

@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools, ApiKeyTable } from '@bike4mind/llm-adapters';
-import { getLlmByModel } from '@bike4mind/llm-adapters';
+import { getLlmByModel, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ModelAdmission } from '../../modelAdmission';
@@ -327,7 +327,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         // user's session model (which can be a UI shortcut not provisioned
         // in every stage).
         const agentDef = agentStore.getAgent(resolvedAgentName);
-        const agentModel = agentDef?.model ?? deps.llm.currentModel;
+        const agentModel = resolveDeprecatedModelId(agentDef?.model ?? deps.llm.currentModel, 'coordinateTask');
         // Resolve the iteration cap from the agent def so the snapshot stored
         // on the child doc matches what `delegateToAgent` will enforce at run
         // time. Fall back to a safe default if the agent has no profile (the

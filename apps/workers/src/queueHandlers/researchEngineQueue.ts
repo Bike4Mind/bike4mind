@@ -38,6 +38,9 @@ import { getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
 async function meteredOperationsLlm(user: IUserDocument, logger: Logger) {
   await assertOwnerCanAfford(user);
   const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel();
+  if (!llm) {
+    throw new Error('No LLM found');
+  }
   llm.currentModel = modelId;
   return meterCompletionBackend(
     llm,

@@ -40,6 +40,9 @@ const TOTP_STEP_SECONDS = 30;
  * accept a code must also claim the step (see claimTOTPCode) so the code cannot be replayed.
  */
 export function matchTOTPStep(secret: string, token: string, window = 1, nowMs = Date.now()): number | null {
+  // An empty key is public, so anyone could compute its codes. decryptAtRest returns '' when a
+  // stored secret cannot be decrypted, which must fail closed rather than verify.
+  if (!secret) return null;
   const time = Math.floor(nowMs / 1000);
   const match = speakeasy.totp.verifyDelta({
     secret,
