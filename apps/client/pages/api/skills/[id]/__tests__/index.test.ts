@@ -88,7 +88,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
 
   it('allows editing when the skill is globally writable', async () => {
     mockFindById.mockResolvedValue(skillDoc({ isGlobalWrite: true, users: [] }));
-    const { req, res } = makeReqRes('PUT', OUTSIDER, { description: 'new' });
+    const { req, res } = makeReqRes('PUT', OUTSIDER, { name: 'renamed' });
     await handler(req, res);
     expect(mockUpdate).toHaveBeenCalled();
   });
@@ -102,6 +102,65 @@ describe('/api/skills/[id] PUT — edit permission', () => {
   it('rejects an outsider', async () => {
     const { req, res } = makeReqRes('PUT', OUTSIDER, { description: 'new' });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe('/api/skills/[id] PUT - global skill content goes through the Skill Market', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpdate.mockImplementation(async (patch: Record<string, unknown>) => ({ ...skillDoc(), ...patch }));
+  });
+
+  it.each([
+    ['body', { body: 'changed' }],
+    ['description', { description: 'changed' }],
+    ['argumentHint', { argumentHint: '<topic>' }],
+    ['allowedTools', { allowedTools: ['web_fetch'] }],
+    ['disableModelInvocation', { disableModelInvocation: true }],
+  ])('refuses a non-admin change to the %s of a global skill', async (_field, change) => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, change);
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a body change on a globally writable skill from any non-admin editor', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true, isGlobalWrite: true, users: [] }));
+    const { req, res } = makeReqRes('PUT', OUTSIDER, { body: 'changed' });
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts a full-form save of a global skill whose content is unchanged', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, {
+      name: 'renamed',
+      description: 'd',
+      body: 'b',
+      argumentHint: '',
+      allowedTools: [],
+      disableModelInvocation: false,
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalled();
+  });
+
+  it('lets a super-admin change the body of a global skill', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed' });
+    (req as unknown as { user: unknown }).user = { id: 'admin-1', isAdmin: true };
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ body: 'changed' }), { new: true });
+  });
+
+  it('leaves non-global skill updates unchanged', async () => {
+    mockFindById.mockResolvedValue(skillDoc());
+    const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed', allowedTools: ['web_fetch'] });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ body: 'changed', allowedTools: ['web_fetch'] }), {
+      new: true,
+    });
   });
 });
 

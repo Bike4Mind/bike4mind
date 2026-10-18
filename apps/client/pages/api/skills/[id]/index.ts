@@ -23,6 +23,19 @@ import {
 } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
+/** True when the patch alters a field the Skill Market scan covers (mirrors `skillContentHash`, minus the name). */
+function changesSkillContent(skill: ISkill, patch: Partial<ISkill>): boolean {
+  const tools = (t?: string[]) => JSON.stringify(t ?? []);
+  return (
+    (patch.description !== undefined && patch.description !== skill.description) ||
+    (patch.body !== undefined && patch.body !== skill.body) ||
+    ('argumentHint' in patch && (patch.argumentHint ?? '') !== (skill.argumentHint ?? '')) ||
+    ('allowedTools' in patch && tools(patch.allowedTools) !== tools(skill.allowedTools)) ||
+    (patch.disableModelInvocation !== undefined &&
+      patch.disableModelInvocation !== Boolean(skill.disableModelInvocation))
+  );
+}
+
 const handler = baseApi()
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
     const { id } = req.query;
@@ -57,6 +70,15 @@ const handler = baseApi()
     if (body.allowedTools !== undefined) patch.allowedTools = validateSkillAllowedTools(body.allowedTools);
     if (body.disableModelInvocation !== undefined) {
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
+    }
+
+    // A global skill reaches every user, and instance-wide content goes through the Skill Market's
+    // scan and review (see share.ts), so only a super-admin may change what a global skill runs.
+    // The name stays editable, and a full-form save that leaves the content as-is still passes.
+    if ((skill.isGlobalRead || skill.isGlobalWrite) && !req.user!.isAdmin && changesSkillContent(skill, patch)) {
+      throw new ForbiddenError(
+        'This skill is shared with everyone, so its content can only change through the Skill Market. Publish your changes there instead.'
+      );
     }
 
     try {
