@@ -199,6 +199,31 @@ describe('processSubagentDispatch tool deps', () => {
     }
   });
 
+  it('runs a child row saved with a retired model id on its successor', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    const { getAvailableModels, getLlmByModel } = await import('@bike4mind/llm-adapters');
+    const SUCCESSOR_ID = 'global.anthropic.claude-haiku-5-5';
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValue({
+      ...childDoc,
+      model: 'anthropic.claude-3-haiku-20240307-v1:0',
+    } as never);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ id: SUCCESSOR_ID }] as never);
+    const llm = { currentModel: undefined as string | undefined };
+    vi.mocked(getLlmByModel).mockReturnValueOnce(llm as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+
+      expect(getLlmByModel).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ modelInfo: { id: SUCCESSOR_ID } })
+      );
+      expect(llm.currentModel).toBe(SUCCESSOR_ID);
+      expect(deps.model).toBe(SUCCESSOR_ID);
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
   it('passes an empty attachedFileIds when the session has no attached files', async () => {
     const deps = await dispatchWithSession(baseSession);
 
