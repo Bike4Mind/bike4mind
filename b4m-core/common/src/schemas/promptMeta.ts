@@ -935,6 +935,13 @@ export const PromptMetaZodSchema = z.object({
     })
     .optional(),
   /**
+   * Set when finalize stripped a tool call the model wrote into its reply as text instead of
+   * calling it (see ../utils/narratedToolCalls.ts). The call never ran; `toolNames` are the
+   * offered tools it named. Absent when nothing was stripped. Consumers read this rather than
+   * matching the reply text, which no longer carries the call.
+   */
+  narratedToolCall: z.object({ toolNames: z.array(z.string()) }).optional(),
+  /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to
    * `finishReason === 'max_tokens'`: truncation is a hard stop the provider reports, elision
