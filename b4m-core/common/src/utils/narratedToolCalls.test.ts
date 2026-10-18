@@ -251,6 +251,18 @@ describe('stripNarratedToolCalls on a truncated reply', () => {
   it.each([
     ['invoke cut inside its outer close tag', '<function_calls>\n<invoke name="web_search">\n</invoke>\n</function_ca'],
     ['invoke cut after its outer close tag opener', '<function_calls>\n<invoke name="web_search">\n</invoke>\n<'],
+    [
+      'second invoke cut inside a parameter value',
+      '<function_calls>\n<invoke name="web_search">\n</invoke>\n<invoke name="web_search">\n<parameter name="query">partial value',
+    ],
+    [
+      'second function tag cut inside a parameter value',
+      '<tool_call>\n<function=web_search>\n</function>\n<function=web_search>\n<parameter=query>partial value',
+    ],
+    [
+      'second invoke cut inside its close tag',
+      '<function_calls>\n<invoke name="web_search">\n</invoke>\n<invoke name="web_search">\n<parameter name="query">x</parameter>\n</invoke',
+    ],
     ['JSON cut after a blank line before a literal', '<tool_call>\n{"name":"web_search","arguments":{"a":\n\ntrue'],
   ])('removes a cut-off block that is still open: %s', (_form, cut) => {
     expect(stripNarratedToolCalls(`Hi\n${cut}`, TRUNCATED).text).toBe('Hi\n');

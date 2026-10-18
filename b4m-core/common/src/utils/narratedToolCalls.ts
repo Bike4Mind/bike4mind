@@ -70,6 +70,7 @@ const FENCE_MARKER = /`{3}|~{3}/;
 // A blank line, then text that is not a tag: the answer after an invoke/function body.
 const PROSE_AFTER_BLANK_LINE = /\n[ \t]*\r?\n[ \t]*[^<\s]/;
 const INNER_CLOSE = /<\/(?:[\w-]+:)?(?:invoke|function)>/g;
+const INNER_OPEN = /<(?:[\w-]+:)?invoke\s|<function=/;
 const CALL_TAGS = /<\/?(?:[\w-]+:)?(?:function_calls|invoke|parameter|function|tool_call|tool_use)\b[^<>]*>/g;
 const JSON_LITERAL = /(?:true|false|null)\b/y;
 const BLANK_LINE_REST = /[ \t]*(?:\r?\n|$)/y;
@@ -150,10 +151,14 @@ function tagBodyStillOpen(body: string): boolean {
   for (const match of body.matchAll(INNER_CLOSE)) afterClose = match.index + match[0].length;
   if (afterClose !== -1) {
     let rest = body.slice(afterClose);
+    // A later call is still being written from its opener on, so only the text before it counts.
+    const nextCall = rest.search(INNER_OPEN);
+    if (nextCall !== -1) rest = rest.slice(0, nextCall);
     // A tag still being written at the very end is part of the call, not an answer.
     const lastOpen = rest.lastIndexOf('<');
     if (lastOpen !== -1 && !rest.includes('>', lastOpen)) rest = rest.slice(0, lastOpen);
     if (rest.replace(CALL_TAGS, '').trim()) return false;
+    if (nextCall !== -1) return true;
   }
   return !PROSE_AFTER_BLANK_LINE.test(body);
 }
