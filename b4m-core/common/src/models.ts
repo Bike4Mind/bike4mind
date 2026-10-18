@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
@@ -331,12 +332,18 @@ export type ChatModelName = z.infer<typeof supportedChatModels>;
  */
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
+const CLAUDE_ID_PREFIX = new RegExp(`^${BEDROCK_ANTHROPIC_PREFIX}claude-`);
+
 /** Claude ids, direct (`claude-...`) or on Bedrock (`anthropic.claude-...`, optionally region-prefixed). */
-export const isClaudeModelId = (model: string): boolean => /^(?:(?:[a-z-]+\.)?anthropic\.)?claude-/.test(model);
+export const isClaudeModelId = (model: string): boolean => CLAUDE_ID_PREFIX.test(model);
 
 /**
- * Models that support the reasoning_effort parameter.
+ * Models that support OpenAI's `reasoning_effort` request parameter.
  * o1-preview and o1-mini do NOT support reasoning_effort.
+ *
+ * OpenAI only. Anthropic's effort control is a different wire field on a different
+ * API - see `ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS` below, which explains why a Claude
+ * id added here would silently contradict `NO_TEMPERATURE_MODELS`.
  */
 export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.O1,
@@ -354,6 +361,48 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
   ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * Claude models that accept Anthropic's `output_config: { effort }` control, whose
+ * levels are 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
+ *
+ * NOT `REASONING_SUPPORTED_MODELS` above, and the two must never be merged. That set
+ * is OpenAI's `reasoning_effort` REQUEST PARAMETER: a different wire field, on a
+ * different API, with a different vocabulary ('none'/'minimal' exist there and have
+ * no Anthropic meaning; 'max' exists here and is not an OpenAI level). Confusing the
+ * two is what left Claude effort unwired in the first place.
+ *
+ * Adding a Claude id to `REASONING_SUPPORTED_MODELS` instead of here would be actively
+ * wrong, not merely imprecise: `FIXED_TEMPERATURE_MODELS` is built by spreading that
+ * set, so the id would be marked temperature=1 while also sitting in
+ * `NO_TEMPERATURE_MODELS`, which is the stronger and correct claim for these models -
+ * they reject temperature outright with a 400. It would also break the documented
+ * invariant on `REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS` and change what the
+ * gates in `openaiBackend.ts` and `thinkingParams.ts` decide. The two sets are
+ * disjoint by design; `models.effortSets.test.ts` pins that.
+ *
+ * Membership is exactly the adaptive-thinking surface (`thinkingStyle: 'adaptive'`),
+ * which is also what the Claude half of `NO_TEMPERATURE_MODELS` lists - effort and the
+ * absent sampling knobs are two halves of the same API surface.
+ */
+export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_4_7_OPUS,
+  ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+  ChatModels.CLAUDE_4_8_OPUS,
+  ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_SONNET,
+  ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
 ]);
 
 /**
@@ -446,6 +495,10 @@ export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
  *  - chat-latest variants that enforce this constraint
  *  - GPT-5.5, which rejects custom temperature even though it does not expose
  *    reasoning controls
+ *
+ * Derived from `REASONING_SUPPORTED_MODELS`, which is why that set is OpenAI-only:
+ * temperature=1 is the wrong claim for a Claude model, which rejects the parameter
+ * outright (`NO_TEMPERATURE_MODELS`).
  */
 export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ...Array.from(REASONING_SUPPORTED_MODELS),
@@ -503,6 +556,9 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
 
 // Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
 // and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
+// Deliberately a permissive deny-list, not claudeFamilyVersion: an unreviewed spelling of these models (a patch
+// version, a vendor prefix) must still read as unsupported. Keep in sync with TOOL_CHANGES_VERSIONS in
+// claudeToolCapabilities.ts when a new 5.x ships.
 const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
 
 /**
@@ -752,6 +808,16 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
   return cost;
 };
 
+/**
+ * Backends whose adapters forward cache reads only for a model whose priced record publishes
+ * cache_read on every tier (publishesCacheReadRate in pricing.ts), since the 0.1x default is
+ * Anthropic's discount, not theirs. A tier without cache_read on one of these backends bills
+ * forwarded reads at its input rate (costAtTier). The gates in geminiBackend.ts and xaiBackend.ts
+ * (@bike4mind/llm-adapters) apply publishesCacheReadRate to the same priced record settlement uses.
+ * @internal Exported for pricing.ts and cliCompletions.ts; not a stable public API.
+ */
+export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
+
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
@@ -767,7 +833,9 @@ const costAtTier = (
   const tierPricing = tier === null ? undefined : model.pricing[tier];
   if (!tierPricing) return 0;
 
-  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
+  const cacheReadRate =
+    tierPricing.cache_read ??
+    (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) ? tierPricing.input : tierPricing.input * CACHE_READ_MULTIPLIER);
   const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
 
   return (

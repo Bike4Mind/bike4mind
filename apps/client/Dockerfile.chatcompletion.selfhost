@@ -5,12 +5,15 @@
 # quests to it over HTTP (`/process`) exactly like the hosted Fargate ChatCompletion service -
 # same code path in every environment (see apps/client/server/utils/dispatchQuest.ts).
 #
-# Differs from the hosted Dockerfile.chatcompletion in exactly two ways:
+# Differs from the hosted Dockerfile.chatcompletion:
 #   1. ENV B4M_SELF_HOST=true.
 #   2. CMD prepends `--import ./server/chatCompletion/selfhostSstAlias.mjs`, which aliases the
 #      bare `sst` specifier to the env-backed `@bike4mind/resource` shim (the runtime analog of
 #      the app's turbopack build alias) so `config.ts`'s eager `Resource.*` reads resolve from
 #      plain env vars instead of SST links. The hosted image keeps real SST and is untouched.
+#   3. A hydrated premium overlay is linked and installed unfrozen, then re-linked and its glue
+#      regenerated after the source copy (steps 2-3). Without one the install stays frozen and
+#      the rest of the layering matches the hosted image.
 #
 # Build context is the monorepo root. Layer ordering (manifests -> install -> source -> build)
 # mirrors the hosted image so the native-compile install layer stays cached across source edits.
@@ -39,10 +42,23 @@ COPY patches ./patches
 # 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
 #    No --prod. Workers is here because compose.selfhost.yaml's `worker` service reuses this
 #    image and runs apps/workers/src/selfhost/main.ts.
-RUN pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...
+#    A hydrated premium overlay is absent from the tracked lockfile, so it is linked and the
+#    install runs unfrozen (which needs git); without one the install stays frozen.
+COPY scripts/link-premium-overlays.mjs ./scripts/
+RUN if ls packages/premium/*/package.json >/dev/null 2>&1; then \
+      apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+      && B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    else \
+      pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    fi
 
-# 3) Source.
+# 3) Source. The copy restores apps/client/package.json, so declare the overlay again for turbo.
+#    It also brings back the gitignored premium glue, which a build host that only ran a local
+#    install holds in the ABSENT form (the overlay is not linked there), so regenerate it from
+#    the linked state - otherwise the overlay's LLM tools and system prompts silently drop.
 COPY . .
+RUN B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs \
+    && node apps/client/scripts/generate-premium-glue.mjs
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.

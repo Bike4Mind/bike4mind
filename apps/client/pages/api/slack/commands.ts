@@ -14,7 +14,6 @@ import { Config } from '@server/utils/config';
 import { decryptToken } from '@server/security/tokenEncryption';
 import {
   SlackAuditLogger,
-  getClientIp,
   handleB4mCommand,
   SlackClient,
   handleChannelCommand,
@@ -28,6 +27,7 @@ import {
 } from '@bike4mind/slack';
 import { Quest } from '@bike4mind/database/content';
 import { triggerImageGeneration } from '@bike4mind/slack';
+import { getClientIp } from '@server/utils/ip';
 
 // Slack slash command schema
 const SlackCommandSchema = z.object({

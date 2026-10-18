@@ -33,10 +33,18 @@ vi.mock('@server/auth/assertAccountStateUsable', () => ({
 vi.mock('@server/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
+  ForbiddenError: class ForbiddenError extends Error {},
 }));
 
-import { verifyWsAccessToken } from './verifyWsAccessToken';
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
+import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
+import { ForbiddenError } from '@server/utils/errors';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -138,5 +146,81 @@ describe('verifyWsAccessToken', () => {
     } finally {
       configureSecretsAtRest(undefined);
     }
+  });
+});
+
+describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsMfaEnrollmentOwed.mockReset().mockResolvedValue(false);
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access' });
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0 });
+  });
+
+  it('refuses a valid session token once the user owes MFA enrollment', async () => {
+    mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
+    // Forbidden, not Unauthorized: the token is valid, so a client must re-enroll rather than
+    // refresh, exactly as REST answers 403 rather than 401 on this gate.
+    const refusal = await verifyWsAccessToken('token').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ForbiddenError);
+    expect((refusal as Error).message).toBe('MFA enrollment required.');
+  });
+
+  it('accepts the same token while no enrollment is owed', async () => {
+    await expect(verifyWsAccessToken('token')).resolves.toMatchObject({ id: 'user-1' });
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), {
+      impersonatedBy: undefined,
+    });
+  });
+
+  it('passes the impersonation claim through to the enrollment gate', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access', impersonatedBy: 'admin-1' });
+    await verifyWsAccessToken('token');
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+  });
+
+  it('fails closed when the enforcement read fails', async () => {
+    mockIsMfaEnrollmentOwed.mockRejectedValueOnce(new Error('settings read failed'));
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('settings read failed');
+  });
+});
+
+describe('verifyWsAccessTokenClaims', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3 });
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
+  });
+
+  it('returns the session id, tokenVersion and expiry (exp seconds converted to a Date in ms)', async () => {
+    const exp = 1_900_000_000;
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 's1', exp });
+
+    await expect(verifyWsAccessTokenClaims('token-123')).resolves.toEqual({
+      user: { id: 'user-1', tokenVersion: 3 },
+      sid: 's1',
+      tokenVersion: 3,
+      expiresAt: new Date(exp * 1000),
+    });
+  });
+
+  it('treats a non-string sid as absent', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 42, exp: 1_900_000_000 });
+
+    expect((await verifyWsAccessTokenClaims('token-123')).sid).toBeUndefined();
+  });
+
+  it('normalizes a legacy token without version or exp to tokenVersion 0 and no expiry', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', typ: 'access' });
+    mockFindById.mockResolvedValue({ id: 'user-1' });
+
+    const claims = await verifyWsAccessTokenClaims('token-123');
+
+    expect(claims.tokenVersion).toBe(0);
+    expect(claims.expiresAt).toBeUndefined();
   });
 });

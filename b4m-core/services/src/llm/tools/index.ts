@@ -78,6 +78,7 @@ export type {
 } from './implementation/askUserQuestion';
 
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
+export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**

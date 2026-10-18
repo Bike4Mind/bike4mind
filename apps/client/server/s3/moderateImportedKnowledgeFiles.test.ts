@@ -176,3 +176,69 @@ describe('moderateImportedKnowledgeFiles', () => {
     expect(args.persist).not.toHaveBeenCalled();
   });
 });
+
+describe('moderateImportedKnowledgeFiles - ai:generate-only upload constraint', () => {
+  const marked = {
+    _id: 'oid',
+    id: 'f1',
+    mimeType: 'image/png',
+    sourceMetadata: { uploadedVia: 'ai-generate-key-upload' },
+    moderationClaimedAt: CLAIMED_AT,
+  };
+  const generateUploadOf = (moderate: ReturnType<typeof vi.fn>) => moderate.mock.calls[0][0].generateUpload;
+
+  it('passes a marked file a constraint measured through measureSize', async () => {
+    const moderate = vi.fn(async () => ({ moderationStatus: 'clean' as const }));
+    const measureSize = vi.fn(async () => 77);
+    await moderateImportedKnowledgeFiles(
+      buildArgs({
+        moderate: moderate as unknown as ModerateImportedKnowledgeFilesArgs['moderate'],
+        claim: vi.fn(async () => marked),
+        measureSize,
+      })
+    );
+    await expect(generateUploadOf(moderate).measureSize()).resolves.toBe(77);
+    expect(measureSize).toHaveBeenCalledWith('knowledge/u1/a');
+  });
+
+  it('measures a marked file as oversized when the caller supplies no measureSize', async () => {
+    const moderate = vi.fn(async () => ({ moderationStatus: 'clean' as const }));
+    await moderateImportedKnowledgeFiles(
+      buildArgs({
+        moderate: moderate as unknown as ModerateImportedKnowledgeFilesArgs['moderate'],
+        claim: vi.fn(async () => marked),
+      })
+    );
+    await expect(generateUploadOf(moderate).measureSize()).resolves.toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('passes no constraint for an unmarked file', async () => {
+    const moderate = vi.fn(async () => ({ moderationStatus: 'clean' as const }));
+    await moderateImportedKnowledgeFiles(
+      buildArgs({ moderate: moderate as unknown as ModerateImportedKnowledgeFilesArgs['moderate'] })
+    );
+    expect(generateUploadOf(moderate)).toBeUndefined();
+  });
+
+  it('persists blocked for an oversized marked file end to end through the real verdict function', async () => {
+    const { moderateUploadedFile } = await import('./moderateUploadedFile');
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const run = async (claimRow: unknown, size: number) => {
+      const args = buildArgs({
+        moderate: moderateUploadedFile,
+        claim: vi.fn(async () => claimRow as never),
+        measureSize: async () => size,
+        downloadPartialBytes: vi.fn(async () => png),
+      });
+      await moderateImportedKnowledgeFiles(args);
+      return (args.persist as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    };
+    const cap = 10 * 1024 * 1024;
+    expect(await run(marked, cap + 1)).toMatchObject({ moderationStatus: 'blocked' });
+    expect(await run(marked, cap)).toMatchObject({ moderationStatus: 'clean' });
+    expect(await run({ ...marked, sourceMetadata: undefined }, cap + 1)).toMatchObject({ moderationStatus: 'clean' });
+  });
+});

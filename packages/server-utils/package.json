@@ -1,0 +1,27 @@
+{
+  "name": "@bike4mind/server-utils",
+  "version": "0.0.2",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit",
+    "typecheck:fast": "tsgo --noEmit || tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/memory": "workspace:*",
+    "@bike4mind/resource": "workspace:*",
+    "sst": "4.17.1"
+  },
+  "devDependencies": {
+    "@bike4mind/typescript-config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

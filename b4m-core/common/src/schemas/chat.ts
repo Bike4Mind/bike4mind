@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { UNKNOWN_MODEL_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
@@ -329,6 +334,18 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
+ * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll and
+ * `sessionId` is the notebook the turn was recorded in, so a caller that sent no `sessionId` can
+ * continue the conversation it just started (same field name as the ACK and the `wait: true` body).
+ */
+export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
  * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
  * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
  * together, which the endpoint's 400 description states for integrators.
@@ -367,4 +384,12 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .array(z.string())
     .optional()
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
+
+/**
+ * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
+ * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ */
+export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
 });

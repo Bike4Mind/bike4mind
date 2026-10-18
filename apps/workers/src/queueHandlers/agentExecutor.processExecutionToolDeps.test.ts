@@ -61,6 +61,24 @@ vi.mock('./agentExecutor.videoToolConfig', async () => {
   };
 });
 
+vi.mock('./agentExecutor.musicToolConfig', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.musicToolConfig')>(
+    './agentExecutor.musicToolConfig'
+  );
+  return {
+    ...actual,
+    getAgentMusicToolConfigDeps: vi.fn().mockReturnValue({
+      resolveTrackLimit: vi.fn().mockResolvedValue(2),
+      buildBaseConfig: vi.fn().mockResolvedValue({
+        usableModels: ['test-music'],
+        createJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+      }),
+      slots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }),
+  };
+});
+
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
@@ -141,7 +159,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
-  vi.spyOn(actual.questRepository, 'addVideoJobIds').mockResolvedValue(undefined as never);
+  vi.spyOn(actual.questRepository, 'addGenerationJobs').mockResolvedValue(undefined as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue(baseSession as never);
@@ -222,16 +240,56 @@ describe('processExecution tool deps', () => {
       expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].videoConfig).toBeNull();
     });
 
-    it('attaches new video job ids to the run quest from onStatusUpdate', async () => {
+    it('attaches new generation jobs to the run quest from onStatusUpdate', async () => {
       const { questRepository } = await import('@bike4mind/database');
       await runWithExecDoc(videoExecDoc);
 
       const toolCallbacks = buildSharedToolsMock.mock.calls[0][1] as {
         onStatusUpdate: (changes: Record<string, unknown>) => Promise<void>;
       };
-      await toolCallbacks.onStatusUpdate({ videoJobIds: ['job-1'] });
+      await toolCallbacks.onStatusUpdate({ generationJobs: [{ id: 'job-1', kind: 'music' }] });
 
-      expect(questRepository.addVideoJobIds).toHaveBeenCalledWith('q-run', ['job-1']);
+      expect(questRepository.addGenerationJobs).toHaveBeenCalledWith('q-run', [{ id: 'job-1', kind: 'music' }]);
+    });
+  });
+
+  describe('music_generation wiring', () => {
+    const musicExecDoc = {
+      ...execDoc,
+      linkedQuestId: 'q-run',
+      resolvedEnabledTools: ['music_generation'],
+    };
+
+    async function runWithExecDoc(doc: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      await runWithSession(baseSession);
+    }
+
+    it('offers the music tool to a run without an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc(musicExecDoc);
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).not.toBeNull();
+    });
+
+    it('caps songs on the run Quest with the limit resolved for the run org', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
+      await runWithExecDoc({ ...musicExecDoc, organizationId: 'org-1' });
+
+      const deps = vi.mocked(getAgentMusicToolConfigDeps).mock.results[0].value;
+      expect(deps.resolveTrackLimit).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1' });
+      const musicConfig = vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig;
+      await musicConfig!.createJob({ user: { id: 'user-1', organizationId: 'org-1' }, request: {}, source: 'agent' });
+      expect(deps.slots.claim).toHaveBeenCalledWith('q-run', 2);
+    });
+
+    it('withholds the music tool from a run started with an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc({ ...musicExecDoc, apiKeyId: 'key-1' });
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).toBeNull();
     });
   });
 

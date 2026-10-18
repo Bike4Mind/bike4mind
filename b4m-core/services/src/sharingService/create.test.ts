@@ -42,8 +42,8 @@ describe('sharingService - createInvite (group arm authority)', () => {
         findAllByEmailsOrUsernames: vi.fn(async () => [{ email: 'x@y.com', username: 'x' }]),
         findByIds: vi.fn(async () => []),
       },
-      fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
-      sessions: { findByIdAndUserId: vi.fn() },
+      fabFiles: { shareable: { findShareAccessById: vi.fn() } },
+      sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn(async () => group) },
@@ -212,6 +212,88 @@ describe('sharingService - createInvite (project arm authority)', () => {
     findShareAccessById.mockResolvedValue(null);
 
     await expect(create(asUser('outsider-1'))).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Authority tests for the InviteType.Session arm. A notebook shared by link grants its recipients
+ * [read, share], so the lookup is scoped to share access (not ownership), matching the FabFile and
+ * Project arms; the permission cap still bounds what a sharee can hand on.
+ */
+describe('sharingService - createInvite (session arm authority)', () => {
+  const SESSION_ID = 'session-1';
+  const OWNER = 'owner-s';
+  const SHAREE = 'sharee-s';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false, groups: [] }) as unknown as IUserDocument;
+
+  const notebook = {
+    id: SESSION_ID,
+    name: 'Shared Notebook',
+    userId: OWNER,
+    users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }],
+    groups: [],
+  };
+
+  let db: any;
+  let findShareAccessById: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    findShareAccessById = vi.fn();
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-s', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
+      sessions: { shareable: { findShareAccessById } },
+    };
+  });
+
+  const mintLink = (user: IUserDocument, permissions: Permission[] = [Permission.read]) =>
+    createInvite(user, { id: SESSION_ID, type: InviteType.Session, permissions } as any, { db });
+
+  it('lets a non-owner sharee holding [read, share] mint a link that passes share on', async () => {
+    findShareAccessById.mockResolvedValue(notebook);
+    const user = asUser(SHAREE);
+
+    // ShareModal sends [read, share] for a link, so that is the shape that has to clear the cap.
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
+
+    expect(invite.name).toBe('Shared Notebook');
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    // accept.ts re-checks this minter's current access on redemption, keyed on inviterId.
+    expect((invite as any).inviterId).toBe(SHAREE);
+    expect(findShareAccessById).toHaveBeenCalledWith(user, SESSION_ID);
+  });
+
+  it('lets a user holding share through a group mint a link', async () => {
+    findShareAccessById.mockResolvedValue({
+      ...notebook,
+      users: [],
+      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.share] }],
+    });
+    const user = { ...asUser('group-member'), groups: ['group-1'] } as unknown as IUserDocument;
+
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
+
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    expect((invite as any).inviterId).toBe('group-member');
+  });
+
+  it('refuses a caller the share-access lookup does not match, e.g. a read-only sharee', async () => {
+    // findShareAccessById matches owner, users[].share and groups[].share only, so a read-only
+    // sharee comes back null; the mock stands in for that query result.
+    findShareAccessById.mockResolvedValue(null);
+
+    await expect(mintLink(asUser('reader-s'))).rejects.toThrow('Document not found');
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sharee granting update, which they do not hold', async () => {
+    findShareAccessById.mockResolvedValue(notebook);
+
+    await expect(mintLink(asUser(SHAREE), [Permission.read, Permission.update])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('update')
+    );
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 });
@@ -495,8 +577,8 @@ describe('sharingService - createInvite (organization arm authority)', () => {
         findAllByEmailsOrUsernames: vi.fn(async () => []),
         findByIds: vi.fn(async () => [{ id: RECIPIENT_ID, email: 'r@x.com', username: 'r' }]),
       },
-      fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
-      sessions: { findByIdAndUserId: vi.fn() },
+      fabFiles: { shareable: { findShareAccessById: vi.fn() } },
+      sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn() },

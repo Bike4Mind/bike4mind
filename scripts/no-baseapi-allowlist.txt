@@ -47,6 +47,10 @@ apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file fo
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
 apps/client/pages/api/sre/__tests__/workflow-callback.test.ts # Test file for the handler above (script greps by path, not export)
 
+# Fleet usage export: dedicated bearer credential and fixed actor/owner scope
+apps/client/pages/api/usage/fleet-export.ts # Timing-safe server credential check; no session or general API-key auth
+apps/client/pages/api/usage/__tests__/fleet-export.e2e.test.ts # Real Mongo tests for the dedicated handler above
+
 # GitHub webhooks — authenticated via HMAC-SHA256 (GitHub webhook secret)
 apps/client/pages/api/webhooks/github.ts                # GitHub HMAC signature validation
 apps/client/pages/api/webhooks/github/[token].ts        # GitHub HMAC + routing token in URL path

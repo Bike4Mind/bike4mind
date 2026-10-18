@@ -1,10 +1,10 @@
 {
   "name": "@bike4mind/cli",
-  "version": "2.1.0",
+  "version": "3.1.0",
   "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
-  "license": "UNLICENSED",
+  "license": "BUSL-1.1",
   "author": "Bike4Mind",
   "repository": {
     "type": "git",
@@ -79,7 +79,6 @@
     "dayjs": "^1.11.23",
     "diff": "^9.0.0",
     "eventsource-parser": "^3.1.0",
-    "fdir": "^6.5.0",
     "file-type": "^22.1.0",
     "fuse.js": "^7.5.0",
     "fzf": "^0.5.2",
@@ -127,6 +126,7 @@
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
+    "@bike4mind/client-auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",

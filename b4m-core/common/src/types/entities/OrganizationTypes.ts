@@ -49,7 +49,14 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  storageLimit?: number /** Storage limit in MBs */;
+  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_STORAGE_LIMIT_MB. */
+  storageLimit?: number;
+
+  /**
+   * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
+   * as 0. Mirrors IUser.currentStorageSize for personal files.
+   */
+  currentStorageSize?: number;
 
   /**
    * Organization-wide system prompt that applies to all conversations for team members.
@@ -121,6 +128,12 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null>;
 
   /**
+   * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.
+   * Same contract as IUserRepository.incrementCurrentStorage.
+   */
+  incrementCurrentStorage(organizationId: string, bytes: number): Promise<void>;
+
+  /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
    * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add owner-inclusive
    * team size (owner + members, #1423; never a double-raise). The raise is clamped so that size stays
@@ -166,6 +179,14 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * `user.organizationId`, which is a display preference.
    */
   findMembershipOrgIds(userId: string): Promise<string[]>;
+
+  /**
+   * IDs of every organization whose plan applies to the user: everything `findMembershipOrgIds`
+   * returns PLUS orgs where the user is the manager (`managerId`) or an appointed admin
+   * (`adminUserIds`) without a member row. For plan/entitlement resolution ONLY - never feed it
+   * into data access (lake scope, `AccessContext.organizationIds`).
+   */
+  findPlanHolderOrgIds(userId: string): Promise<string[]>;
 
   /**
    * Every user id whose org-stamped content belongs in this org's reports, plus the disagreement

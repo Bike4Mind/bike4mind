@@ -1,4 +1,8 @@
-import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
+import {
+  ApiGatewayManagementApiClient,
+  GoneException,
+  PostToConnectionCommand,
+} from '@aws-sdk/client-apigatewaymanagementapi';
 import { z } from 'zod';
 import { MessageDataToClient } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
@@ -8,7 +12,7 @@ import { Config } from '@server/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';
-import { UnauthorizedError } from '@bike4mind/common';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient
@@ -116,7 +120,9 @@ export async function sendToClient(
       if (r.status === 'rejected') {
         const connection = connections[i];
         Logger.info(`Failed to send message to connection ${connection.connectionId}: ${r.reason.message}`);
-        // Send failure most likely means the connection is stale; delete it.
+        // Only a gone socket is stale. A transient or payload error must not delete a live
+        // connection's row: the row is what keeps its subscriptions alive.
+        if (!(r.reason instanceof GoneException)) return;
         Logger.log(`Deleting connection ${connection.connectionId}`);
         return Connection.deleteOne({ connectionId: connection.connectionId });
       }
@@ -162,7 +168,11 @@ export function withWebSocketContext<T>(
       // BASE class of TokenExpiredError (expired), NotBeforeError (not-yet-valid), and the
       // signature/malformed errors - all of which are token-validity failures that belong in
       // the 401 bucket - so matching the base covers every jwt rejection in one check.
-      const isAuthError = error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+      // ForbiddenError (an authenticated session the server refuses - MFA enrollment owed, a
+      // suspended account) is a refusal too, not a handler failure: without it a subscribe from
+      // such a session answers 200 "Internal server error" and logs at error severity.
+      const isForbidden = error instanceof ForbiddenError;
+      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
 
       // Auth rejections are expected, benign, and high-volume (every stale-token client) -
       // log them at info so they don't flood error logs/alerts. Only genuine (non-auth)
@@ -174,9 +184,9 @@ export function withWebSocketContext<T>(
       }
 
       return {
-        statusCode: isAuthError ? 401 : 200,
+        statusCode: isForbidden ? 403 : isAuthError ? 401 : 200,
         body: JSON.stringify({
-          error: isAuthError ? 'Unauthorized' : 'Internal server error',
+          error: isForbidden ? 'Forbidden' : isAuthError ? 'Unauthorized' : 'Internal server error',
         }),
       };
     }

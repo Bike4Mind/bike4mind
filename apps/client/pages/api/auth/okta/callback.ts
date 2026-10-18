@@ -12,7 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
-import { authFailLogRepository, User, authSessionRepository } from '@bike4mind/database';
+import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -38,14 +38,17 @@ import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
+import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
-import { applyOAuthSignupDomainGrant, releaseOAuthPendingFreeCredits } from '@server/utils/auth/oauthSignupGrants';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@server/utils/ip';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -75,7 +78,7 @@ function sanitizeOAuthError(error: string): string {
 }
 
 const handleOktaCallback = async (req: Request, res: Response) => {
-  const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+  const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || 'unknown';
 
   try {
@@ -417,20 +420,30 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         }
       }
       Object.assign(user, reflect);
-      // Mirrors verifyCallback.ts: promotion is this account's email verification, so release any
-      // deferred flat grant (OTC login and Resend no longer will once emailVerified is set).
+      // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
+      // grants here (OTC login and Resend no longer will once emailVerified is set).
       if (promoteEmailVerified) {
-        await releaseOAuthPendingFreeCredits(
-          { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
-          'Okta account link (email verified)'
-        );
+        await applyEmailVerifiedGrants({
+          user: { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          verifiedEmail: email,
+          trigger: 'oauth-link-verification',
+          releaseReason: 'Okta account link (email verified)',
+          logger: Logger.globalInstance,
+        });
       }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
       // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates
       // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
-        await authSessionRepository.revokeAllByUserId(user.id);
+        await authSessionService.revokeAllUserSessions(
+          user.id,
+          {},
+          {
+            db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
+            logger: req.logger,
+          }
+        );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {

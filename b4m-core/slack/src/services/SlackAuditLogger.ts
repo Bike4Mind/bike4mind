@@ -5,13 +5,7 @@ import { getSlackDb } from '../di/registry';
 export type SlackAuditEventType = 'command' | 'interaction' | 'event' | 'api_call';
 
 export type SlackAuditResourceType =
-  | 'notebook'
-  | 'message'
-  | 'user'
-  | 'workspace'
-  | 'settings'
-  | 'integration'
-  | 'none';
+  'notebook' | 'message' | 'user' | 'workspace' | 'settings' | 'integration' | 'none';
 
 interface ISlackAuditLogDocument {
   id: string;
@@ -206,6 +200,10 @@ export function logSlackAuditFailure(context: SlackAuditContext, errorMessage: s
 /**
  * Extract client IP address from request
  * Handles x-forwarded-for header (common with proxies/load balancers) and falls back to socket address
+ *
+ * @deprecated Trusts the leftmost (client-supplied) x-forwarded-for token, so the result is
+ * spoofable. Apps should use their own deploy-aware resolver; bike4mind's Slack routes use
+ * apps/client/server/utils/ip.ts. Kept only for existing external importers.
  */
 export function getClientIp(req: IncomingMessage): string | undefined {
   const forwardedFor = req.headers['x-forwarded-for'];

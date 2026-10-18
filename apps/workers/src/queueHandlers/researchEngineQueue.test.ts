@@ -10,6 +10,9 @@ const h = vi.hoisted(() => ({
   taskFindById: vi.fn(),
   taskUpdate: vi.fn(),
   getOperationsTextModel: vi.fn(),
+  downloadRelevantLinks: vi.fn(),
+  userRepository: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
+  fabFileRepository: { commitContentRewrite: vi.fn(), findChargeState: vi.fn() },
 }));
 
 // Every export the module reads at import time, declared because this mock replaces the whole module.
@@ -23,13 +26,15 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: {},
   withTransaction: vi.fn(),
   apiKeyRepository: {},
-  userRepository: {},
+  userRepository: h.userRepository,
   User: { findById: h.userFindById },
-  fabFileRepository: {},
+  fabFileRepository: h.fabFileRepository,
   taskScheduleRepository: {},
   fileTagRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ researchTaskService: { process: vi.fn() } }));
+vi.mock('@bike4mind/services', () => ({
+  researchTaskService: { process: vi.fn(), downloadRelevantLinks: h.downloadRelevantLinks },
+}));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
@@ -40,6 +45,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 }));
 
 import { dispatch } from './researchEngineQueue';
+import { commitContentRewrite } from '../../../../b4m-core/services/src/fabFileService/rewriteStorage';
 
 const logger = {
   info: vi.fn(),
@@ -80,5 +86,27 @@ describe('researchEngineQueue process - failure reset', () => {
     await dispatch(makeEvent('process'), {} as never, logger as never);
 
     expect(h.taskUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // A re-crawl rewrite commits through these adapters; a hand-built `users` once lacked
+  // incrementCurrentStorage, so the commit threw after the upload and the counter drifted.
+  it('gives the re-crawl commit a users adapter that can move the storage counter', async () => {
+    h.fabFileRepository.commitContentRewrite.mockResolvedValue({
+      userId: 'u1',
+      fileSize: 100,
+      storageChargedAt: new Date(),
+    });
+    h.downloadRelevantLinks.mockImplementation(async (_params, adapters) => {
+      await commitContentRewrite({ fabFileId: 'f1', newSize: 250 }, adapters.db);
+    });
+
+    await dispatch(makeEvent('downloadRelevantLinks'), {} as never, logger as never);
+
+    expect(h.downloadRelevantLinks).toHaveBeenCalledTimes(1);
+    expect(h.userRepository.incrementCurrentStorage).toHaveBeenCalledWith('u1', 150);
   });
 });

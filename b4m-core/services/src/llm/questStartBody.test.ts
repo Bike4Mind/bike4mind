@@ -32,3 +32,10 @@ describe('QuestStartBodySchema.authOrigin', () => {
     expect(() => QuestStartBodySchema.parse({ ...body, authOrigin: 'admin' })).toThrow();
   });
 });
+
+// Carried through the queue: a field the schema strips would reach the worker as "integrations on".
+describe('QuestStartBodySchema.disableUserIntegrations', () => {
+  it('keeps the flag the caller set', () => {
+    expect(QuestStartBodySchema.parse({ ...body, disableUserIntegrations: true }).disableUserIntegrations).toBe(true);
+  });
+});

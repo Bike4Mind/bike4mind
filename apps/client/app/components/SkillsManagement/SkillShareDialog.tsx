@@ -24,6 +24,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { Permission } from '@bike4mind/common';
 import { ISkillWithSharing, lookupUserByEmail, useUpdateSkillSharing } from '@client/app/hooks/data/skills';
+import { useUser } from '@client/app/contexts/UserContext';
 
 /** Permissions a user can be granted on a skill, in display order. */
 const ASSIGNABLE_PERMISSIONS: Permission[] = [Permission.read, Permission.update, Permission.delete, Permission.share];
@@ -53,6 +54,10 @@ interface SkillShareDialogProps {
 
 const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
   const updateSharing = useUpdateSkillSharing();
+  // Instance-wide sharing is super-admin only (everyone else publishes through the Skill Market).
+  // A non-admin still sees the switches on a legacy global skill, but can only turn them off.
+  const isAdmin = Boolean(useUser().currentUser?.isAdmin);
+  const showGlobalToggles = isAdmin || Boolean(skill.isGlobalRead || skill.isGlobalWrite);
 
   // Seed local editing state from the skill once, at mount. The parent renders
   // this component only while the dialog is open, so reopening remounts with
@@ -126,8 +131,9 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
         // Drop rows with no permissions - the server requires at least one, and
         // an empty row is the user's way of saying "remove this share".
         users: rows.filter(r => r.permissions.length > 0).map(r => ({ userId: r.userId, permissions: r.permissions })),
-        isGlobalRead,
-        isGlobalWrite,
+        // A non-admin may only send the flags as false; leaving a legacy `true` untouched omits it.
+        ...(isAdmin || !isGlobalRead ? { isGlobalRead } : {}),
+        ...(isAdmin || !isGlobalWrite ? { isGlobalWrite } : {}),
       });
       onClose();
     } catch (error) {
@@ -225,7 +231,14 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
 
           <Divider />
 
-          <Stack spacing={1}>
+          {!showGlobalToggles ? (
+            <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-share-market-hint">
+              Want everyone to be able to use it? Publish it to the Skill Market from the skill page - it gets a safety
+              scan first.
+            </Typography>
+          ) : null}
+
+          <Stack spacing={1} sx={{ display: showGlobalToggles ? undefined : 'none' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
                 <Typography level="title-sm">Anyone can view</Typography>
@@ -235,6 +248,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
               </Box>
               <Switch
                 checked={isGlobalRead}
+                disabled={!isAdmin && !isGlobalRead}
                 onChange={e => {
                   const next = e.target.checked;
                   setIsGlobalRead(next);
@@ -252,6 +266,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
               </Box>
               <Switch
                 checked={isGlobalWrite}
+                disabled={!isAdmin && !isGlobalWrite}
                 onChange={e => {
                   const next = e.target.checked;
                   setIsGlobalWrite(next);

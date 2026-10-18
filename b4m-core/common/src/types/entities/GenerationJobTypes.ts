@@ -8,6 +8,25 @@ import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 export const GENERATION_JOB_KINDS = ['video', 'music'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
+/** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
+export type GenerationJobRef = { id: string; kind: GenerationJobKind };
+
+/**
+ * The jobs a quest started, oldest first. Quests written before `generationJobs` existed only carry
+ * `videoJobIds`, so those read as video jobs (no backfill).
+ */
+export const questGenerationJobs = (quest: {
+  generationJobs?: readonly GenerationJobRef[];
+  videoJobIds?: readonly string[];
+}): GenerationJobRef[] => {
+  const legacy = (quest.videoJobIds ?? []).map((id): GenerationJobRef => ({ id, kind: 'video' }));
+  const byId = new Map<string, GenerationJobRef>();
+  for (const ref of [...legacy, ...(quest.generationJobs ?? [])]) {
+    if (!byId.has(ref.id)) byId.set(ref.id, { id: ref.id, kind: ref.kind });
+  }
+  return [...byId.values()];
+};
+
 export const GENERATION_JOB_STATES = [
   'pending',
   'running',
@@ -203,15 +222,23 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
    * the previous one has expired, so a newer lease always carries a later token than the one it replaced.
    */
   acquireLease(id: string, now: Date, leaseUntil: Date): Promise<IGenerationJobDocument | null>;
-  markSubmitAttempted(id: string, at: Date): Promise<void>;
+  /**
+   * Records that a submit is about to reach the provider, and with `markRunning` (a sync kind, whose submit is the
+   * whole provider call) moves the job to running. Null when a cancel was requested first: the provider must not
+   * be called. Pairs with requestCancel's `beforeSubmitOnly` so a racing cancel and submit cannot both win.
+   */
+  markSubmitAttempted(id: string, at: Date, options: { markRunning: boolean }): Promise<IGenerationJobDocument | null>;
   /** Applies the update and releases the lease. Null when the guard no longer holds (or the job is gone). */
   commit(
     id: string,
     update: GenerationJobCommit,
     guard: GenerationJobCommitGuard
   ): Promise<IGenerationJobDocument | null>;
-  /** Only a pending or running job can be cancelled; storing output is already paid for. */
-  requestCancel(id: string): Promise<IGenerationJobDocument | null>;
+  /**
+   * Only a pending or running job can be cancelled; storing output is already paid for. With `beforeSubmitOnly`
+   * (a sync kind, billed from the moment its provider call starts) only a pending job not yet submitted can be.
+   */
+  requestCancel(id: string, options: { beforeSubmitOnly: boolean }): Promise<IGenerationJobDocument | null>;
   claimTerminalHandling(id: string, at: Date): Promise<boolean>;
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;

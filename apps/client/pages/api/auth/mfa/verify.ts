@@ -69,10 +69,8 @@ const handler = baseApi() // Now requires authentication
           user: redactUserSecretsForSelf(result.user),
         };
       } catch (error: unknown) {
-        // Atomically increment the failed-attempt counter - concurrent requests each reading
-        // the same count and all writing count+1 would let an attacker batch many concurrent
-        // requests and defeat the 3-strike lockout. $inc + pipeline update is one atomic op.
-        const updatedUser = await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
+        // A code checked by mfaService was counted before it was compared; anything else is counted now.
+        const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
 
         if (updatedUser && mfaService.isUserLockedOut(updatedUser)) {
           const remainingMinutes = mfaService.getLockoutTimeRemaining(updatedUser);

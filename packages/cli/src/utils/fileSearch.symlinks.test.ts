@@ -87,4 +87,34 @@ describe('searchFiles - symlinked entries in an absolute-path listing', () => {
     expect(find(results, 'skills')?.isDirectory).toBe(true);
     expect(find(results, 'unrelated.txt')).toBeUndefined();
   });
+
+  it('caps a huge absolute directory at 15 entries', async () => {
+    const names = Array.from({ length: 40 }, (_, i) => `file-${String(i).padStart(2, '0')}.txt`);
+    await Promise.all(names.map(name => fsp.writeFile(path.join(dir, name), 'x')));
+
+    const results = await searchFiles(dir);
+
+    expect(results).toHaveLength(15);
+    expect(results.every(r => r.size === 1 && !r.isDirectory)).toBe(true);
+  });
+
+  it('caps a filtered listing after the filter is applied', async () => {
+    await Promise.all(
+      Array.from({ length: 30 }, (_, i) => fsp.writeFile(path.join(dir, `match-${i}.txt`), 'x')).concat(
+        fsp.writeFile(path.join(dir, 'other.txt'), 'x')
+      )
+    );
+
+    const results = await searchFiles(path.join(dir, 'match'));
+
+    expect(results).toHaveLength(15);
+    expect(results.every(r => path.basename(r.path).startsWith('match-'))).toBe(true);
+  });
+
+  it('returns nothing for a missing directory or a file path', async () => {
+    await fsp.writeFile(path.join(dir, 'a.txt'), 'x');
+
+    expect(await searchFiles(path.join(dir, 'missing', 'sub') + path.sep)).toEqual([]);
+    expect(await searchFiles(path.join(dir, 'a.txt', 'nope') + path.sep)).toEqual([]);
+  });
 });

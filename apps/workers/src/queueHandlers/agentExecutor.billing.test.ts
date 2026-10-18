@@ -14,6 +14,7 @@ import {
   takeToolUsage,
   foldGeneratedMediaUsd,
   settleSubagentMediaUsage,
+  type BillingCheckpoint,
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
@@ -56,6 +57,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     sendProgress: ReturnType<typeof vi.fn>;
     logGuardTrip: ReturnType<typeof vi.fn>;
     logNegativeDelta: ReturnType<typeof vi.fn>;
+    logTurnsFallback: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
@@ -65,6 +67,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     sendProgress: vi.fn(async () => {}),
     logGuardTrip: vi.fn(),
     logNegativeDelta: vi.fn(),
+    logTurnsFallback: vi.fn(),
   };
   return {
     spies,
@@ -131,7 +134,7 @@ describe('billIteration (#657 context-window guard)', () => {
       effects,
     });
 
-    expect(spies.logGuardTrip).toHaveBeenCalledWith({ inputTokensDelta: 2000, contextWindow: 1000 });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 2000, contextWindow: 1000 });
     // No ledger deduction and no progress event on trip.
     expect(spies.deductCredits).not.toHaveBeenCalled();
     expect(spies.sendProgress).not.toHaveBeenCalled();
@@ -450,21 +453,42 @@ describe('foldGeneratedMediaUsd', () => {
     expect(pending.costUsd).toBe(0);
   });
 
-  it('does NOT fold image_generation on finish - image reserves at start', () => {
+  // A stubbed positive estimate, so only the phase routing can keep the fold at zero.
+  it.each(['image_generation', 'edit_image'])('folds %s on finish - only a delivered image is billed', toolName => {
     const pending = zeroPending();
-    const data = { model: 'unpriced-so-zero', n: 1, prompt: 'x' };
+    const estimateUsd = vi.fn().mockReturnValue(0.04);
 
     foldGeneratedMediaUsd({
       phase: 'finish',
-      toolName: 'image_generation',
-      data,
+      toolName,
+      data: { model: 'gpt-image-1', n: 1, paths: ['img.png'] },
       models: [],
       pending,
-      estimateUsd: estimateGeneratedMediaUsd,
+      estimateUsd,
     });
 
-    expect(pending.costUsd).toBe(0);
+    expect(pending.costUsd).toBe(0.04);
   });
+
+  it.each(['image_generation', 'edit_image'])(
+    'does NOT fold %s on start - a call that fails after start is never billed',
+    toolName => {
+      const pending = zeroPending();
+      const estimateUsd = vi.fn().mockReturnValue(0.04);
+
+      foldGeneratedMediaUsd({
+        phase: 'start',
+        toolName,
+        data: { model: 'gpt-image-1', n: 1, prompt: 'x' },
+        models: [],
+        pending,
+        estimateUsd,
+      });
+
+      expect(estimateUsd).not.toHaveBeenCalled();
+      expect(pending.costUsd).toBe(0);
+    }
+  );
 
   it('is a no-op for a non-media tool', () => {
     const pending = zeroPending();
@@ -518,6 +542,79 @@ describe('foldGeneratedMediaUsd', () => {
   });
 });
 
+describe('billIteration (context-window guard is per request)', () => {
+  const guard = async (cp: BillingCheckpoint) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters: makeCounters(),
+      modelInfo: makeModelInfo(200_000),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies;
+  };
+
+  it('does not trip on two requests whose sum exceeds the window when each fits', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 0 },
+        { inputTokens: 150_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).not.toHaveBeenCalled();
+    expect(spies.deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('trips on a single request larger than the window', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 50_000, outputTokens: 0 },
+        { inputTokens: 250_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 250_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+  });
+
+  it('checks the largest request, not the last one', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 250_000, outputTokens: 0 },
+        { inputTokens: 50_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 250_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+  });
+
+  it('still trips on corrupt totals that no longer reconcile with the turns', async () => {
+    const spies = await guard({ ...checkpoint(49_000_000), turnUsage: [{ inputTokens: 72_000, outputTokens: 0 }] });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 49_000_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.logTurnsFallback).toHaveBeenCalledWith({
+      turnSum: { inputTokens: 72_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      totals: { inputTokens: 49_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    });
+  });
+
+  it('does not warn when the turns reconcile', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 0 },
+        { inputTokens: 150_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logTurnsFallback).not.toHaveBeenCalled();
+  });
+});
+
 describe('billIteration (negative cost delta)', () => {
   it('a price drop across a resume still bills the next iteration at the new rate', async () => {
     const rateA = makeModelInfo(10_000, 2);
@@ -558,7 +655,8 @@ describe('billIteration (negative cost delta)', () => {
   });
 
   it('negative delta: warns once and charges, records, and persists nothing', async () => {
-    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    // Counters ahead of the checkpoint: the two have diverged.
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 2000 });
     const { effects, spies } = makeEffects();
 
     await billIteration({
@@ -582,11 +680,11 @@ describe('billIteration (negative cost delta)', () => {
     expect(spies.addIterationBilling).not.toHaveBeenCalled();
     expect(spies.recordUsageEvent).not.toHaveBeenCalled();
     expect(spies.sendProgress).not.toHaveBeenCalled();
-    expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 1000 }));
+    expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 2000 }));
   });
 
   it('negative agent delta is warned even when tool spend nets the iteration positive', async () => {
-    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 2000 });
     const { effects, spies } = makeEffects();
 
     await billIteration({
@@ -625,6 +723,170 @@ describe('billIteration (negative cost delta)', () => {
     });
 
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('billIteration (long-context tiers)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  // Two tiers shaped like a 200K long-context ladder.
+  const tiered = {
+    ...makeModelInfo(1_048_576),
+    pricing: {
+      200_000: { input: perM(2), output: perM(12) },
+      1_048_576: { input: perM(4), output: perM(18) },
+    },
+  } as ModelInfo;
+
+  const runIterations = async (
+    totals: Array<{ input: number; output: number; cacheRead?: number }>,
+    counters: BillingCounters = makeCounters(),
+    startIndex = 1
+  ) => {
+    const { effects, spies } = makeEffects();
+    for (const [i, t] of totals.entries()) {
+      await billIteration({
+        iterationIndex: startIndex + i,
+        checkpoint: checkpoint(t.input, { output: t.output, cacheRead: t.cacheRead }),
+        counters,
+        modelInfo: tiered,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+    }
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    const recorded = spies.addIterationBilling.mock.calls.map(([b]) => b);
+    return { counters, charged, recorded };
+  };
+
+  // Cumulative checkpoint totals for three iterations of 150K, 190K and 230K prompts.
+  const growingRun = [
+    { input: 150_000, output: 1_000 },
+    { input: 340_000, output: 2_000 },
+    { input: 570_000, output: 3_000 },
+  ];
+
+  it('bills each iteration on its own tier; only the iteration that crosses it pays the long rate', async () => {
+    const { charged } = await runIterations(growingRun);
+
+    expect(charged[0]).toBeCloseTo(150_000 * perM(2) + 1_000 * perM(12), 10);
+    // Pricing cumulative totals would put iteration 2 (340K cumulative) on the long tier.
+    expect(charged[1]).toBeCloseTo(190_000 * perM(2) + 1_000 * perM(12), 10);
+    expect(charged[2]).toBeCloseTo(230_000 * perM(4) + 1_000 * perM(18), 10);
+  });
+
+  it('tiers an iteration on its whole prompt, cache reads included', async () => {
+    const { charged } = await runIterations([{ input: 20_000, output: 0, cacheRead: 190_000 }]);
+    expect(charged[0]).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(4) * 0.1, 10);
+  });
+
+  it('a resume reseeded from the persisted records bills the rest of the run identically', async () => {
+    const straight = await runIterations(growingRun);
+
+    const firstLeg = await runIterations(growingRun.slice(0, 2));
+    const resumed = reseedCounters(firstLeg.recorded, tiered);
+    expect(resumed.cumulativeCost).toBeCloseTo(firstLeg.counters.cumulativeCost, 10);
+    const secondLeg = await runIterations(growingRun.slice(2), resumed, 3);
+
+    expect([...firstLeg.charged, ...secondLeg.charged]).toEqual(straight.charged);
+    expect(secondLeg.counters.cumulativeCost).toBeCloseTo(straight.counters.cumulativeCost, 10);
+  });
+
+  const billOnce = async (cp: BillingCheckpoint, counters: BillingCounters = makeCounters()) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters,
+      modelInfo: tiered,
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies.recordUsageEvent.mock.calls[0]?.[0].costUsd as number;
+  };
+
+  it('a bill covering two unbilled requests prices each on its own tier, not on their combined prompt', async () => {
+    // e.g. a call aborted at the iteration deadline plus its retry in the continuation Lambda.
+    const charged = await billOnce({
+      ...checkpoint(300_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 1_000 },
+        { inputTokens: 150_000, outputTokens: 1_000 },
+      ],
+    });
+    expect(charged).toBeCloseTo(300_000 * perM(2) + 2_000 * perM(12), 10);
+  });
+
+  it('skips the turns the counters already billed', async () => {
+    const charged = await billOnce(
+      {
+        ...checkpoint(500_000, { output: 3_000 }),
+        turnUsage: [
+          { inputTokens: 250_000, outputTokens: 1_000 },
+          { inputTokens: 150_000, outputTokens: 1_000 },
+          { inputTokens: 100_000, outputTokens: 1_000 },
+        ],
+      },
+      makeCounters({ inputTokens: 250_000, outputTokens: 1_000 })
+    );
+    expect(charged).toBeCloseTo(250_000 * perM(2) + 2_000 * perM(12), 10);
+  });
+
+  it('falls back to the delta as one request when the turns do not reconcile with the totals', async () => {
+    const charged = await billOnce({
+      ...checkpoint(300_000, { output: 2_000 }),
+      turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
+    });
+    expect(charged).toBeCloseTo(300_000 * perM(4) + 2_000 * perM(18), 10);
+  });
+
+  it('falls back to the delta when the counters land inside a turn, not on a boundary', async () => {
+    // A pre-turnUsage checkpoint restores as one synthesized turn equal to the totals; a Lambda lost
+    // between the checkpoint write and the billing record leaves the reseeded counters inside it.
+    const charged = await billOnce(
+      {
+        ...checkpoint(300_000, { output: 2_000 }),
+        turnUsage: [{ inputTokens: 300_000, outputTokens: 2_000 }],
+      },
+      makeCounters({ inputTokens: 200_000, outputTokens: 1_000 })
+    );
+    expect(charged).toBeCloseTo(100_000 * perM(2) + 1_000 * perM(12), 10);
+  });
+});
+
+describe('billIteration (two-tier model, per-iteration pricing)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  // Shaped like a two-tier Gemini Pro: <=200K prompt at $1.25/$10, >200K at $2.50/$15.
+  const twoTier = {
+    ...makeModelInfo(1_048_576),
+    pricing: {
+      200_000: { input: perM(1.25), output: perM(10) },
+      1_048_576: { input: perM(2.5), output: perM(15) },
+    },
+  } as ModelInfo;
+
+  it('bills two iterations whose summed prompts cross 200K at the <=200K rate when each stays under', async () => {
+    const { effects, spies } = makeEffects();
+    const counters = makeCounters();
+    // Cumulative checkpoint totals after iterations of 120K and 110K prompts (230K summed).
+    for (const [i, cp] of [checkpoint(120_000, { output: 2_000 }), checkpoint(230_000, { output: 4_000 })].entries()) {
+      await billIteration({
+        iterationIndex: i + 1,
+        checkpoint: cp,
+        counters,
+        modelInfo: twoTier,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+    }
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    expect(charged).toHaveLength(2);
+    expect(charged[0]).toBeCloseTo(120_000 * perM(1.25) + 2_000 * perM(10), 10);
+    // Pricing the cumulative 230K totals would put this iteration on the >200K rate.
+    expect(charged[1]).toBeCloseTo(110_000 * perM(1.25) + 2_000 * perM(10), 10);
+    expect(counters.cumulativeCost).toBeCloseTo(230_000 * perM(1.25) + 4_000 * perM(10), 10);
   });
 });
 

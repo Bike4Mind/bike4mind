@@ -435,6 +435,22 @@ describe('DataLakeWizardModal - streamlined step order', () => {
     expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
+  it('keeps the upload-path steps in append mode with no files, where Next waits for a file', () => {
+    // Append mode puts the source connect actions beside the upload picker. GitHub's connect leaves
+    // the wizard, so the stepper and footer Next still describe the upload path.
+    seedSource({
+      targetLake: { id: 'lake-1', name: 'Legal Contracts', fileTagPrefix: 'legal:', organizationId: 'org-1' },
+    });
+    useDataLakeWizardStore.setState({ allFiles: [] });
+
+    renderModal();
+
+    expect(screen.getByText('Add Files \u2014 Legal Contracts')).toBeInTheDocument();
+    const labels = screen.getAllByTestId('wizard-step-label').map(el => el.textContent);
+    expect(labels).toEqual(['Select Source', 'Configure', 'Upload']);
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
   it('blocks leaving source until the name yields a server-acceptable slug', () => {
     // Identity is gated here now rather than on Config, so an unusable name is caught
     // before the user commits to anything downstream.

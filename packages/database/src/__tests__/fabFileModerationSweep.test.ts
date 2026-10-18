@@ -4,7 +4,7 @@ import { setupMongoTest } from '../__test__/utils';
 import { KnowledgeType } from '@bike4mind/common';
 
 /**
- * DB half of the moderation rescue sweep (apps/client/server/s3/moderationRescueSweep.ts). The
+ * DB half of the moderation rescue sweep (apps/workers/src/s3/moderationRescueSweep.ts). The
  * sweep runs both of its queries every 60s on the self-host worker, so neither may be a collection
  * scan, and its fairness ordering only works if the index can supply the sort. Everything asserted
  * here is a property of the schema's index, which lives in this package - the sweep's own behaviour

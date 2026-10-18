@@ -16,6 +16,8 @@ export interface SSEContentEvent {
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
+    /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+    reasoningTokens?: number;
     /** Anthropic-style cache token deltas */
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
@@ -98,6 +100,8 @@ export interface CompletionInfo {
   }>;
   inputTokens?: number;
   outputTokens?: number;
+  /** Subset of outputTokens, not additive. Absent when the provider reported none. */
+  reasoningTokens?: number;
   /** Anthropic-style cache token deltas */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -190,12 +194,14 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   if (
     info?.inputTokens !== undefined ||
     info?.outputTokens !== undefined ||
+    info?.reasoningTokens !== undefined ||
     info?.cacheReadInputTokens !== undefined ||
     info?.cacheCreationInputTokens !== undefined
   ) {
     event.usage = {
       inputTokens: info.inputTokens,
       outputTokens: info.outputTokens,
+      ...(info.reasoningTokens !== undefined ? { reasoningTokens: info.reasoningTokens } : {}),
       cacheReadInputTokens: info.cacheReadInputTokens,
       cacheCreationInputTokens: info.cacheCreationInputTokens,
     };
@@ -284,6 +290,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
   const safeInfo: CompletionInfo = {
     inputTokens: info.inputTokens,
     outputTokens: info.outputTokens,
+    reasoningTokens: info.reasoningTokens,
     cacheReadInputTokens: info.cacheReadInputTokens,
     cacheCreationInputTokens: info.cacheCreationInputTokens,
     creditsUsed: info.creditsUsed,

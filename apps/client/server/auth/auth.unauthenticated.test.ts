@@ -5,6 +5,10 @@ import nc from 'next-connect';
 import { ApiErrorSchema } from '@bike4mind/common';
 
 // auth.ts wires every strategy at import time; none of those collaborators are exercised here.
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   User: { findOne: vi.fn(), updateOne: vi.fn(), create: vi.fn() },
   SamlRequestId: { findOne: vi.fn(), updateOne: vi.fn(), findOneAndDelete: vi.fn() },

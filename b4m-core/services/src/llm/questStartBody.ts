@@ -43,6 +43,8 @@ export const QuestStartBodySchema = z
     promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
     /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
     skipAutoOffers: z.boolean().optional(),
+    /** See ChatCompletionInvokeParamsSchema.disableUserIntegrations - must stay in sync with it. */
+    disableUserIntegrations: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.skipReplyChoices - must stay in sync with it. */
     skipReplyChoices: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.deniedTools - must stay in sync with it. */

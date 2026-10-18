@@ -50,6 +50,8 @@ export const func = withContext(async (event, context, logger) => {
     // 'pending' - permanently invisible to content-hash dedup, which excludes 'pending' as a
     // never-landed upload (FabFileModel.findByContentHashes).
     // Serving stays gated by moderationStatus, which this does not touch.
+    // The storage charge below is judged by the status from before this flip (claimStorageCharge).
+    const statusBeforeUpload = metadata.status;
     if (metadata.status !== 'complete') {
       await FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
       metadata.status = 'complete';
@@ -162,7 +164,9 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
+      // A won claim records the measured size as `fileSize` itself; a late event for an earlier write
+      // of the same path loses the claim and leaves the newer write's size alone.
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, statusBeforeUpload, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

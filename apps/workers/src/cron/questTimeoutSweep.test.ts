@@ -61,7 +61,7 @@ import {
   QUEST_TIMEOUT_THRESHOLD_MS,
   STUCK_QUEST_RECOVERED_LOG,
   UNFINISHED_REPLY_NOTICE,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
   id: 'q-1',

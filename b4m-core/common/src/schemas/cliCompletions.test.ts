@@ -488,6 +488,27 @@ describe('CompletionRequestSchema options.reasoningEffort', () => {
   });
 });
 
+describe('CompletionRequestSchema options.thinking', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  // Zod strips unknown keys, so before this field existed the option vanished here and a
+  // Claude turn never reached the adapter branch that applies reasoningEffort.
+  it('keeps thinking on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true } } });
+    expect(parsed.options?.thinking).toEqual({ enabled: true });
+  });
+
+  it('rejects a budget below the API minimum of 1024', () => {
+    expect(() =>
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1023 } } })
+    ).toThrow();
+    expect(
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1024 } } }).options
+        ?.thinking
+    ).toEqual({ enabled: true, budget_tokens: 1024 });
+  });
+});
+
 describe('CompletionSseErrorEventSchema', () => {
   it('accepts the provider classifiers alongside the billing ones', () => {
     for (const code of [

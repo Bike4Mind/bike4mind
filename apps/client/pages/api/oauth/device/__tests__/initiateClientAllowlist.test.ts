@@ -24,6 +24,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@bike4mind/common', () => ({ OAUTH_DEVICE_CLIENT_IDS: ['b4m-cli', 'b4m-desktop'] }));
+// The real resolver pulls in @bike4mind/fab-pipeline, which needs far more of @bike4mind/common.
+vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.10' }));
 vi.mock('@bike4mind/database', () => ({
   // Held well under the live-pending cap: that cap has its own tests in initiate.test.ts, and
   // this file is only about which client_id the route accepts.

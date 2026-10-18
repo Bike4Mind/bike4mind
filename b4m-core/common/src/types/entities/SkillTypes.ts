@@ -1,5 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IShareableDocument, IShareableStaticMethods } from './ShareableDocumentTypes';
+import type { ISkillImportedFrom } from './SkillMarketTypes';
 
 /**
  * A Skill is a reusable instruction template - markdown body authored by a user
@@ -29,6 +30,9 @@ export interface ISkill {
   userId?: string;
   organizationId?: string;
   isSystem?: boolean;
+
+  /** Set when this skill is a Skill Market import; drives the "update available" badge. */
+  importedFrom?: ISkillImportedFrom;
 
   createdAt: Date;
   updatedAt: Date;

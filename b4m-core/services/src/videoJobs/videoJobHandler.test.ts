@@ -657,7 +657,7 @@ describe('video job end to end with the test provider', () => {
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     if (!created.ok) throw new Error('expected creation to succeed');
     await t.engine.step(created.job.id); // submit -> running
-    await t.engine.requestCancel(created.job.id);
+    await t.engine.requestCancel(created.job);
     await t.runToCompletion();
     expect(t.jobOf(created).state).toBe('cancelled');
     expect(cancel).not.toHaveBeenCalled();
@@ -690,7 +690,7 @@ describe('video job end to end with the test provider', () => {
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     if (!created.ok) throw new Error('expected creation to succeed');
     await t.engine.step(created.job.id); // submit -> running
-    await t.engine.requestCancel(created.job.id);
+    await t.engine.requestCancel(created.job);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'cancelled', settledCredits: 0 });
     expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ provider: 'test' }), expect.anything());

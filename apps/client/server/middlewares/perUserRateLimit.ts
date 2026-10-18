@@ -6,4 +6,4 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
  * shares one counter per method instead of one per id.
  */
 export const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });

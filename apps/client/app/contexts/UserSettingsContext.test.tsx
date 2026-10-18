@@ -573,6 +573,63 @@ describe('UserSettingsContext - language write failure', () => {
   });
 });
 
+describe('UserSettingsContext - switching away from a saved server language', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetStores();
+    useUser.setState({ currentUser: { id: 'u1', preferences: { experimentalFeatures: {}, language: 'ja' } } });
+    useLanguage.setState({ language: 'ja' });
+  });
+
+  it('keeps the newly picked language instead of snapping back to the server value', async () => {
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      useLanguage.getState().setLanguage('en');
+    });
+
+    expect(useLanguage.getState().language).toBe('en');
+    expect(updateUserToServer).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateUserToServer).mock.calls[0][1]).toMatchObject({ preferences: { language: 'en' } });
+  });
+
+  // identify is reseeded from the store on reload, so a stale store value reverts the pick.
+  it('writes the new language through to the useUser store', async () => {
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      useLanguage.getState().setLanguage('en');
+    });
+
+    expect(storedPrefs().language).toBe('en');
+  });
+
+  it('restores the store language too when the write fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(500));
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      useLanguage.getState().setLanguage('en');
+    });
+
+    expect(useLanguage.getState().language).toBe('ja');
+    expect(storedPrefs().language).toBe('ja');
+    expect(updateUserToServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('still applies a language pushed from the server later', async () => {
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      useUser.setState({ currentUser: { id: 'u1', preferences: { experimentalFeatures: {}, language: 'fr' } } });
+    });
+
+    expect(useLanguage.getState().language).toBe('fr');
+    expect(updateUserToServer).not.toHaveBeenCalled();
+  });
+});
+
 describe('UserSettingsContext - isHydrated', () => {
   beforeEach(() => {
     vi.clearAllMocks();

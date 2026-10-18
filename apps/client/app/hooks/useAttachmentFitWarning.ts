@@ -4,7 +4,15 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
-import type { AttachmentFitWarning } from '@client/app/components/Session/ContextUsageWarning';
+
+/** A file on this turn that will be cut to fit the model; ContextUsageChip reports it. */
+export interface AttachmentFitWarning {
+  fileName: string;
+  /** Whole percent of the file's text that will reach the model, 0-99. */
+  deliveredPercent: number;
+  measured: 'extracted' | 'fileSize';
+  siblingCount: number;
+}
 
 /**
  * Whether the files attached to the turn about to be sent will actually reach the model.

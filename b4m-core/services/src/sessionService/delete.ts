@@ -1,4 +1,5 @@
 import {
+  chargedBytes,
   IFabFileRepository,
   IProjectRepository,
   ISessionRepository,
@@ -107,7 +108,14 @@ export const deleteSession = async (
 
   // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
   // so the grouping collapses to one write today.
-  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(ownedFiles, -1), logger);
+  await bestEffortAdjustOwnerStorage(
+    db.users,
+    groupStorageDeltaByOwner(
+      ownedFiles.map(f => ({ id: f.id, userId: f.userId, fileSize: chargedBytes(f) })),
+      -1
+    ),
+    logger
+  );
 
   // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
   // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a

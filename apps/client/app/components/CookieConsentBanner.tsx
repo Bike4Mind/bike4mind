@@ -6,9 +6,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
-import { loadMetaPixel } from '@client/app/utils/metaPixel';
-import { loadRedditPixel } from '@client/app/utils/redditPixel';
-import { loadMailerLite } from '@client/app/utils/mailerLite';
+import { CONSENT_VENDORS, loadConsentVendors } from '@client/app/utils/consentVendors';
 import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
@@ -52,13 +50,10 @@ function activateConsent(value: Consent) {
     gtag('consent', 'update', { analytics_storage: value });
     if (value === 'granted') recordPageOnGrant();
   }
-  // The ads pixels have no consent-mode equivalent: granted == load the scripts
-  // (until then they only queue in memory), denied == they never load. Each
-  // no-ops when its own pixel id is unconfigured.
+  // The other vendors have no consent-mode equivalent: granted == load the scripts
+  // (until then the pixels only queue in memory), denied == they never load.
   if (value === 'granted') {
-    loadRedditPixel();
-    loadMetaPixel();
-    loadMailerLite();
+    loadConsentVendors();
     // The campaign this visitor landed on, held unwritten since module load if they were
     // still being asked at the time. No-op once written, or when there was none.
     flushUtmCapture();
@@ -76,6 +71,22 @@ function applyConsent(value: Consent) {
     // ignore storage errors
   }
   activateConsent(value);
+}
+
+function joinList(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0];
+}
+
+/** Names each configured third party by category, e.g. "advertising (Meta, Reddit)". */
+function describeCookieKinds(): string {
+  const namesByCategory = new Map<string, string[]>();
+  for (const vendor of CONSENT_VENDORS) {
+    if (!vendor.isConfigured()) continue;
+    namesByCategory.set(vendor.category, [...(namesByCategory.get(vendor.category) ?? []), vendor.name]);
+  }
+  const kinds = [...namesByCategory].map(([category, names]) => `${category} (${names.join(', ')})`);
+  // First-party, so it has no vendor to name.
+  return joinList([...kinds, 'campaign attribution']);
 }
 
 export function CookieConsentBanner() {
@@ -119,12 +130,7 @@ export function CookieConsentBanner() {
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
   const managing = settingsOpen && current !== 'unset';
-  const kinds = [
-    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics',
-    (process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID) && 'advertising',
-    'campaign attribution',
-  ].filter(Boolean) as string[];
-  const cookieKinds = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
+  const cookieKinds = describeCookieKinds();
 
   const choose = (value: Consent) => {
     applyConsent(value);

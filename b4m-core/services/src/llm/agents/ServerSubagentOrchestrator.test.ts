@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
@@ -464,6 +464,49 @@ describe('ServerSubagentOrchestrator', () => {
       } satisfies AgentResult);
     }
 
+    // Long-context tiers: each request below sits under 200K, the run's totals do not.
+    const tiered: ModelInfo = {
+      id: MODEL_ID,
+      backend: 'bedrock',
+      pricing: {
+        200_000: { input: 0.000003, output: 0.000015 },
+        1_000_000: { input: 0.000006, output: 0.0000225 },
+      },
+    } as unknown as ModelInfo;
+    const turnUsage = [
+      { inputTokens: 150_000, outputTokens: 500 },
+      { inputTokens: 151_000, outputTokens: 700 },
+    ];
+
+    it('computes fallback totalCredits per request when the agent reports per-request usage', async () => {
+      stubAgentRun({
+        totalTokens: 302_200,
+        totalInputTokens: 301_000,
+        totalOutputTokens: 1_200,
+        turnUsage,
+        iterations: 2,
+        toolCalls: 1,
+        reachedMaxIterations: false,
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [tiered],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.completionInfo.totalCredits).toBeCloseTo(usdToCredits(getTurnsCost(tiered, turnUsage)), 10);
+      expect(result.completionInfo.totalCredits!).toBeLessThan(usdToCredits(getTextModelCost(tiered, 301_000, 1_200)));
+    });
+
     it('computes fallback totalCredits on the same cache-aware basis as the recorded cost', async () => {
       const inputTokens = 12_000;
       const outputTokens = 3_000;
@@ -632,6 +675,77 @@ describe('ServerSubagentOrchestrator', () => {
       expect(resolveBackend).toHaveBeenCalledTimes(2);
       expect(result.model).toBe(DIRECT_ID);
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(BEDROCK_ID));
+    });
+
+    it('runs an agent pinned to a retired model id on its successor', async () => {
+      stubAgentRun();
+      const RETIRED_ID = 'anthropic.claude-3-haiku-20240307-v1:0';
+      const SUCCESSOR_ID = 'global.anthropic.claude-haiku-5-5';
+      const resolveBackend = makeResolver([SUCCESSOR_ID]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: RETIRED_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).toHaveBeenCalledWith(SUCCESSOR_ID);
+      expect(resolveBackend).not.toHaveBeenCalledWith(RETIRED_ID);
+      expect(result.model).toBe(SUCCESSOR_ID);
+    });
+
+    it("reuses the parent's backend when a retired pinned id resolves to the parent's model", async () => {
+      stubAgentRun();
+      const parentLlm = makeLlm('global.anthropic.claude-haiku-5-5');
+      const resolveBackend = makeResolver([]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: parentLlm,
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: 'anthropic.claude-3-haiku-20240307-v1:0' }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).not.toHaveBeenCalled();
+      expect(result.model).toBe('global.anthropic.claude-haiku-5-5');
+    });
+
+    it('resolves retired fallback model ids to their successors', async () => {
+      stubAgentRun();
+      const SUCCESSOR_ID = 'global.anthropic.claude-haiku-5-5';
+      const resolveBackend = makeResolver([SUCCESSOR_ID]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: ['anthropic.claude-3-haiku-20240307-v1:0'] }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).not.toHaveBeenCalledWith('anthropic.claude-3-haiku-20240307-v1:0');
+      expect(result.model).toBe(SUCCESSOR_ID);
     });
 
     it("degrades to the parent's model when no candidate is serviceable", async () => {

@@ -2,8 +2,14 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { SupportedFabFileMimeTypes, UNSUPPORTED_FORMAT_BLOCK_REASON } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';
+import {
+  BARE_UPLOAD_MAX_BYTES,
+  BARE_UPLOAD_MIME_TYPE,
+  GENERATE_UPLOAD_BLOCK_REASON,
+  type GenerateUploadConstraint,
+} from '@server/files/generateUploadMarker';
 
 /**
  * Bytes needed for `file-type` to reliably sniff most binary formats from their magic
@@ -71,6 +77,8 @@ export interface ModerateUploadedFileArgs {
     logger: Logger;
   }) => Promise<void>;
   logger: Logger;
+  /** Set for an ai:generate-only upload: it must be a PNG within the size cap to resolve clean. */
+  generateUpload?: GenerateUploadConstraint;
 }
 
 export interface ModerateUploadedFileResult {
@@ -87,7 +95,7 @@ export interface ModerateUploadedFileResult {
    * scanned at all - distinct from a confirmed explicit-content match, for
    * logging/telemetry.
    */
-  blockReason?: 'unsupported_format';
+  blockReason?: typeof UNSUPPORTED_FORMAT_BLOCK_REASON | typeof GENERATE_UPLOAD_BLOCK_REASON;
 }
 
 /**
@@ -123,7 +131,22 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     downloadPartialBytes,
     moderateImageOrThrow,
     logger,
+    generateUpload,
   } = args;
+
+  // Runs before the `enabled` short-circuit: the constraint is not a content judgement, so turning
+  // image moderation off must not let a marked file skip it.
+  if (generateUpload) {
+    const size = await generateUpload.measureSize();
+    const realMime = (await fileTypeFromBuffer(await downloadPartialBytes(SNIFF_BYTES)))?.mime;
+    if (!(size <= BARE_UPLOAD_MAX_BYTES) || realMime !== BARE_UPLOAD_MIME_TYPE) {
+      return {
+        moderationStatus: 'blocked',
+        ...(realMime && realMime !== mimeType ? { correctedMimeType: realMime } : {}),
+        blockReason: GENERATE_UPLOAD_BLOCK_REASON,
+      };
+    }
+  }
 
   if (!enabled) return { moderationStatus: 'clean' };
 
@@ -169,7 +192,7 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
       // forever, leaving the file stuck 'pending' ("Scanning...") indefinitely. UX tradeoff:
       // the uploader must re-upload as JPEG/PNG to get a real scan and be served.
       logger.warn(`[Q2b] uploaded image ${fabFileId} unsupported_format, blocking (fail-closed): ${err.message}`);
-      return { moderationStatus: 'blocked', correctedMimeType, blockReason: 'unsupported_format' };
+      return { moderationStatus: 'blocked', correctedMimeType, blockReason: UNSUPPORTED_FORMAT_BLOCK_REASON };
     }
     // Not a confirmed block or unsupported format (e.g. detector unavailable, throttling,
     // download failure) - rethrow so the caller can retry instead of permanently false-blocking a

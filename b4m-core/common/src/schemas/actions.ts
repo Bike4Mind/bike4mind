@@ -59,6 +59,17 @@ export const HeartbeatAction = z.object({
 });
 export type IHeartbeatAction = z.infer<typeof HeartbeatAction>;
 
+/**
+ * Re-authenticate a live socket with a freshly refreshed access token. The server re-stamps the
+ * connection's auth expiry, drops all of its query subscriptions and answers with
+ * `resubscribe_required`, so every subscription is re-created under the new token.
+ */
+export const ReauthConnectionAction = z.object({
+  action: z.literal('reauth_connection'),
+  accessToken: z.string(),
+});
+export type IReauthConnectionAction = z.infer<typeof ReauthConnectionAction>;
+
 export const VoiceSessionSendTranscriptAction = z.object({
   action: z.literal('voice_session_send_transcript'),
   userId: z.string(),
@@ -159,6 +170,12 @@ export const DataSubscribeErrorAction = z.object({
   error: z.string(),
 });
 export type IDataSubscribeErrorAction = z.infer<typeof DataSubscribeErrorAction>;
+
+/** Server -> Client: the socket was re-authenticated and its subscriptions dropped; re-send them. */
+export const ResubscribeRequiredAction = z.object({
+  action: z.literal('resubscribe_required'),
+});
+export type IResubscribeRequiredAction = z.infer<typeof ResubscribeRequiredAction>;
 
 export const LLMStatusUpdateAction = z.object({
   action: z.literal('llm_status_update'),
@@ -366,6 +383,7 @@ export const StreamedChatCompletionAction = z.object({
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
       videoJobIds: z.array(z.string()).optional(),
+      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -1315,6 +1333,11 @@ export const AgentProgressAction = z.object({
   status: z.string().optional(),
   creditsUsed: z.number().optional(),
   iteration: z.number().optional(),
+  // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
+  // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
+  questId: z.string().optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
 export const AgentCompletedAction = z.object({
@@ -1553,6 +1576,7 @@ export const MessageDataToServer = z.discriminatedUnion('action', [
   DataSubscribeRequestAction,
   DataUnsubscribeRequestAction,
   HeartbeatAction,
+  ReauthConnectionAction,
   VoiceSessionSendTranscriptAction,
   VoiceSessionEndedAction,
   CliCompletionRequestAction,
@@ -1579,6 +1603,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   GenerationJobUpdatedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
+  ResubscribeRequiredAction,
   InboxRefetchAction,
   LLMStatusUpdateAction,
   InvitesRefetchAction,

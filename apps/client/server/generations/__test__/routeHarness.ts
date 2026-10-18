@@ -27,6 +27,7 @@ export const h = {
   providersGet: vi.fn(),
   resolveBillingOrgId: vi.fn(),
   orgFindAccessibleById: vi.fn(),
+  orgFindById: vi.fn(),
 };
 
 export const VALID_KEY = 'sk-test-valid-key';
@@ -89,8 +90,10 @@ export const databaseMock = async (orig: ImportOriginal) => {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => h.userFindById(...a) }),
-    // Only the membership gate the real resolveBillingOrgId reaches for a non-admin caller.
+    // The membership gate the real resolveBillingOrgId reaches for a non-admin caller, and the key-org lookup
+    // resolveMediaBillingOrgId makes for an org-billed API key.
     organizationRepository: Object.assign(Object.create(realOrgs), {
+      findById: (...a: unknown[]) => h.orgFindById(...a),
       shareable: { findAccessibleById: (...a: unknown[]) => h.orgFindAccessibleById(...a) },
     }),
     generationJobRepository: {
@@ -153,13 +156,18 @@ export const fire = ({
   return { req: req as any, res: res as any };
 };
 
-export const validateWithScopes = (scopes: string[], userId = 'user-1') =>
+export const validateWithScopes = (
+  scopes: string[],
+  userId = 'user-1',
+  billing: { billingOwnerType?: CreditHolderType; organizationId?: string } = {}
+) =>
   h.validate.mockResolvedValue({
     isValid: true,
     keyId: 'k1',
     userId,
     scopes,
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...billing,
   });
 
 export const asUser = (id: string, organizationId: string | null = null) =>
@@ -226,6 +234,7 @@ export const resetHarness = () => {
   h.resolveBillingOrgId.mockImplementation(async (req: { user?: { organizationId?: unknown } }) =>
     req.user?.organizationId ? String(req.user.organizationId) : null
   );
+  h.orgFindById.mockImplementation(async (id: string) => ({ id, userId: 'owner', users: [{ userId: 'user-1' }] }));
   h.providersGet.mockReturnValue({ id: 'gemini-omni' });
   h.hasUsableKey.mockResolvedValue(true);
   h.sign.mockImplementation(async (output: { s3Key: string }) => ({

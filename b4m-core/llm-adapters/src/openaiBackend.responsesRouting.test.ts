@@ -334,4 +334,70 @@ describe('OpenAIBackend /v1/responses routing for GPT-5 narrator family + tools'
     expect(responsesCreate).not.toHaveBeenCalled();
     expect(chatCreate).toHaveBeenCalledTimes(1);
   });
+
+  it('reports Responses reasoning tokens, summed with the chat synthesis turn', async () => {
+    const executingTool: ICompletionOptionTools = { ...sampleTool, toolFn: async () => 'FORMULATED_OK' };
+    const { backend } = buildBackend({
+      responses: [
+        {
+          ...functionCallResponse('optihashi_formulate', { description: 'x' }),
+          usage: { input_tokens: 20, output_tokens: 8, output_tokens_details: { reasoning_tokens: 6 } },
+        },
+      ],
+      chat: [
+        {
+          ...terminalChatCompletion(),
+          usage: { prompt_tokens: 5, completion_tokens: 3, completion_tokens_details: { reasoning_tokens: 2 } },
+        },
+      ],
+    });
+
+    const emits = await run(backend, ChatModels.GPT5, { tools: [executingTool], reasoningEffort: 'low' });
+
+    expect((emits.at(-1)!.info as { reasoningTokens?: number }).reasoningTokens).toBe(8);
+  });
+
+  it('omits reasoning tokens when the Responses usage carries no breakdown', async () => {
+    const { backend } = buildBackend({ responses: [terminalResponse('Done')] });
+
+    const emits = await run(backend, ChatModels.GPT5, { tools: [sampleTool], reasoningEffort: 'medium' });
+
+    for (const e of emits) expect(e.info).not.toHaveProperty('reasoningTokens');
+  });
+
+  it('reports reasoning tokens on a plain no-tool Responses reply', async () => {
+    // The headline GPT-5 case: a reasoning reply with no tool call ends at the
+    // functionCalls.length === 0 terminal, not the tool paths the other tests drive.
+    const { backend } = buildBackend({
+      responses: [
+        {
+          ...terminalResponse('Done'),
+          usage: { input_tokens: 10, output_tokens: 40, output_tokens_details: { reasoning_tokens: 40 } },
+        },
+      ],
+    });
+
+    const emits = await run(backend, ChatModels.GPT5, { tools: [sampleTool], reasoningEffort: 'medium' });
+
+    expect((emits.at(-1)!.info as { reasoningTokens?: number }).reasoningTokens).toBe(40);
+  });
+
+  it('reports reasoning tokens when a Responses function call is passed through (executeTools: false)', async () => {
+    const { backend } = buildBackend({
+      responses: [
+        {
+          ...functionCallResponse('optihashi_formulate', { description: 'x' }),
+          usage: { input_tokens: 20, output_tokens: 8, output_tokens_details: { reasoning_tokens: 6 } },
+        },
+      ],
+    });
+
+    const emits = await run(backend, ChatModels.GPT5, {
+      tools: [sampleTool],
+      executeTools: false,
+      reasoningEffort: 'low',
+    });
+
+    expect((emits.at(-1)!.info as { reasoningTokens?: number }).reasoningTokens).toBe(6);
+  });
 });

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
+import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { IAgentDocument, redactSessionForClient } from '@bike4mind/common';
 
@@ -23,9 +23,7 @@ const handler = baseApi()
       // Filter out any null/undefined results (deleted agents)
       const validAgents = agents.filter((agent): agent is IAgentDocument => agent != null);
 
-      const agentsWithRefreshedAvatars = await refreshAgentAvatarUrls(validAgents, req.user!.id);
-
-      res.json({ agents: agentsWithRefreshedAvatars });
+      res.json({ agents: await presentAgentsForViewer(validAgents, req.user!.id) });
     })
   )
   .post(

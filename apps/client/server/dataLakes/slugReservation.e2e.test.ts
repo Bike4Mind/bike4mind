@@ -10,7 +10,8 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 /**
  * The claim the mocked unit suites cannot pin: against real repositories and indexes, a deleted
  * lake keeps reserving its slug (preview and create both move to "-1") while no longer resolving
- * by it, and the deleted lake keeps its original slug for restore.
+ * by it, and the deleted lake keeps its original slug for restore. Likewise a lake moved to another
+ * scope keeps reserving its tag, which only the real unique index on `datalakeTag` enforces.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -74,5 +75,20 @@ describe('deleted lake slug reservation (real mongod)', () => {
     const resolved = await dataLakeService.assertLakeAccess('opti-knowledge', ctx, adapters);
     expect(resolved.id).toBe('opti-knowledge');
     expect(dataLakeService.isFallbackLake(resolved)).toBe(true);
+  });
+});
+
+describe('moved lake tag reservation (real mongod)', () => {
+  it('a lake moved into an org keeps reserving its tag, so a new personal lake with that slug takes "-1"', async () => {
+    const moved = await create('vc:');
+    expect(moved.datalakeTag).toBe('datalake:vendor-contracts');
+    // What setLakeVisibility writes on a move to an org: the scope changes, the tag does not.
+    await dataLakeRepository.update({ id: moved.id, organizationId: '5f9d88b8c1d2a30017a1c444' });
+
+    await expect(dataLakeService.previewDataLakeSlug(adapters.db, 'Vendor Contracts')).resolves.toBe(
+      'vendor-contracts-1'
+    );
+    const second = await create('vc2:');
+    expect(second).toMatchObject({ slug: 'vendor-contracts-1', datalakeTag: 'datalake:vendor-contracts-1' });
   });
 });

@@ -5,6 +5,20 @@ import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import type { ReasoningEffort } from '../types/common';
 import type { ApiErrorCode } from '../apiErrorCodes';
 
+/**
+ * The cross-provider effort vocabulary, deliberately NOT any one provider's.
+ *
+ * It is OpenAI's `reasoning_effort` levels, which the OpenAI path forwards verbatim.
+ * Every other backend translates: Kimi and DeepSeek collapse these six onto their three
+ * (toKimiEffort / toDeepSeekEffort), and Anthropic maps them onto `output_config.effort`
+ * (toAnthropicEffort). Anthropic's five levels are 'low' | 'medium' | 'high' | 'xhigh' |
+ * 'max', so the two vocabularies disagree at both ends: 'none' and 'minimal' have no
+ * Anthropic effort level (on Claude, 'none' turns thinking off where the model allows
+ * it, and otherwise both resolve to 'low', the least effort Anthropic can express), and 'max' is
+ * absent here because adding it would also hand an invalid value to OpenAI's
+ * `reasoning_effort`. Anthropic's 'max' is reached through
+ * `ICompletionOptions.anthropicEffort` instead, which is typed in Anthropic's vocabulary.
+ */
 const REASONING_EFFORT_VALUES = [
   'none',
   'minimal',
@@ -155,8 +169,18 @@ export const CompletionRequestSchema = z.object({
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
       reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
-        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
       ),
+      thinking: z
+        .object({
+          enabled: z.boolean(),
+          // 1024 is the smallest legacy thinking budget the Anthropic API accepts.
+          budget_tokens: z.number().int().min(1024).optional(),
+        })
+        .optional()
+        .describe(
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+        ),
     })
     .optional(),
 });
@@ -202,6 +226,12 @@ export function normalizeCompletionRequest<T extends CompletionRequest>(req: T):
 const CompletionUsageSchema = z.object({
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  reasoningTokens: z
+    .number()
+    .optional()
+    .describe(
+      'Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count.'
+    ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
 });

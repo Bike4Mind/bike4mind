@@ -1,4 +1,4 @@
-import { IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
+import { chargedBytes, IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { DeleteFabFileAdapter } from '../fabFileService';
@@ -45,6 +45,7 @@ export const remove = async (
   // if the file was already soft-deleted by a concurrent request.
   const result = await deleteFabFile(userId, { id: researchData.fabFileId }, adapters);
   if (result.action === 'deleted' && result.fabFile) {
-    await adapters.db.users.incrementCurrentStorage(result.fabFile.userId, -result.fabFile.fileSize);
+    const bytes = chargedBytes(result.fabFile);
+    if (bytes > 0) await adapters.db.users.incrementCurrentStorage(result.fabFile.userId, -bytes);
   }
 };

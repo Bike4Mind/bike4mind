@@ -282,16 +282,35 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(h.beginReconnect).toHaveBeenCalled();
   });
 
-  it('saves the handoff and leaves for the install page from "Install on another account"', () => {
+  it('saves the handoff and leaves for the install page from "Install the GitHub app" on a first install', () => {
     h.data = choices({ installations: [] });
     wrap(<GitHubRepositoryPickerModal />);
 
     const install = screen.getByTestId('github-repo-picker-install-btn');
-    expect(install).toHaveTextContent('Install on another account');
+    expect(install).toHaveTextContent('Install the GitHub app');
     fireEvent.click(install);
 
     expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
     expect(assign).toHaveBeenCalledWith(INSTALL_URL);
+  });
+
+  it('labels the install button "Install on another account" once an installation exists', () => {
+    h.data = choices({
+      installations: [
+        {
+          id: 10,
+          accountLogin: 'acme',
+          accountType: 'Organization',
+          settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
+          violation: null,
+          repositories: [],
+        },
+      ],
+    });
+    wrap(<GitHubRepositoryPickerModal />);
+
+    expect(screen.getByTestId('github-repo-picker-install-btn')).toHaveTextContent('Install on another account');
   });
 
   it('hints that an org repo needs an owner when there is no organization installation', () => {

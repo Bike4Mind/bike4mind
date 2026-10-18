@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, settingsMap } from '@bike4mind/common';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
+import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by
@@ -38,6 +39,8 @@ const PutBodySchema = ScopeAddressSchema.extend({
    * literal, but it parses to one) becomes "Infinity", which passes any setting with no `max`.
    */
   value: z.union([z.boolean(), z.number(), z.string()]),
+  /** Stores a forced-retrieval floor above the measured one; see `refuseFloorAboveMeasured`. */
+  confirmAboveMeasuredFloor: z.boolean().optional(),
 })
   // A number setting's schema is `z.coerce.number()`, so a blank string is a genuine 0 to it - and
   // 0 is in range for the two `min: 0` settings. Without this the overlay would store "" at that
@@ -86,11 +89,27 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .put(async (req: Request, res: Response) => {
     ensureAdmin(req.user?.isAdmin);
-    const { settingName, scopeLevel, scopeId, ownerType, value } = parseOrBadRequest(PutBodySchema, req.body);
+    const { settingName, scopeLevel, scopeId, ownerType, value, confirmAboveMeasuredFloor } = parseOrBadRequest(
+      PutBodySchema,
+      req.body
+    );
 
     // The overlay stores the raw string and the resolver re-parses it through the setting's own
     // schema (pickOverride), so String() is the exact round trip for all three scalar types.
     const settingValue = typeof value === 'string' ? value : String(value);
+
+    // Validate against the setting's own schema BEFORE the floor check, so an out-of-range value
+    // (150, 70.5) reports its range error rather than first being refused as above the floor - the
+    // same order `/api/settings/update` uses. `writeScopedOverride` still owns the rejection below;
+    // this only decides whether the floor check runs at all.
+    const parsedSetting = settingsMap[settingName].schema.safeParse(settingValue);
+    if (
+      settingName === 'forcedRetrievalMinSimilarityPct' &&
+      parsedSetting.success &&
+      confirmAboveMeasuredFloor !== true
+    ) {
+      await refuseFloorAboveMeasured(Number(parsedSetting.data), req.logger);
+    }
 
     await runWrite(() =>
       scopedSettingsService.writeScopedOverride(

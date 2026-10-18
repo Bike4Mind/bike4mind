@@ -8,6 +8,7 @@ const mockFindById = vi.fn();
 const mockUpdateReviewStatus = vi.fn();
 const mockResolveConfirmedCsam = vi.fn();
 const mockSetNcmecReportId = vi.fn();
+const mockRecordManualReport = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
 
@@ -18,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
     updateReviewStatus: (...args: unknown[]) => mockUpdateReviewStatus(...args),
     resolveConfirmedCsam: (...args: unknown[]) => mockResolveConfirmedCsam(...args),
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
+    recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
   },
 }));
 
@@ -101,7 +103,10 @@ const CLAIMED_INCIDENT = {
 
 // ncmecService error classes from the mock -- use them to construct typed errors in tests.
 const NcmecRejectedError = ncmecService.NcmecRejectedError as unknown as new (msg: string) => Error;
-const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as new (msg: string, reportId: string) => Error & { reportId: string };
+const NcmecFinishFailedError = ncmecService.NcmecFinishFailedError as unknown as new (
+  msg: string,
+  reportId: string
+) => Error & { reportId: string };
 
 // ---- Tests ----
 
@@ -115,7 +120,11 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     it('outcome 1 - success: submits to NCMEC and marks incident reported', async () => {
       mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
       mockSubmitNcmecReport.mockResolvedValue({ reportId: 'RPT-001' });
-      mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' });
+      mockUpdateReviewStatus.mockResolvedValue({
+        ...CLAIMED_INCIDENT,
+        reviewStatus: 'reported',
+        ncmecReportId: 'RPT-001',
+      });
 
       const req = makeReq({ verdict: 'confirmed_csam' });
       const res = makeRes();
@@ -123,7 +132,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockClaimForNcmecSubmission).toHaveBeenCalledWith('inc-1');
       expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
-      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'reported', 'RPT-001');
+      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ ok: true, ncmecReportId: 'RPT-001' });
     });
@@ -258,7 +267,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
       expect(mockClaimForNcmecSubmission).not.toHaveBeenCalled();
-      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'false_positive');
+      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'false_positive', undefined, 'admin-1');
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -286,12 +295,20 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
   // ------------------------------------------------------------------ mark_reported (recovery)
   describe('verdict: mark_reported', () => {
     it('moves confirmed_csam to reported with the supplied ncmecReportId', async () => {
-      mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-MANUAL' });
+      mockResolveConfirmedCsam.mockResolvedValue({
+        ...CLAIMED_INCIDENT,
+        reviewStatus: 'reported',
+        ncmecReportId: 'RPT-MANUAL',
+      });
 
       const res = makeRes();
       await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT-MANUAL' }), res);
 
-      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-MANUAL' });
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', {
+        status: 'reported',
+        ncmecReportId: 'RPT-MANUAL',
+        reportedBy: 'admin-1',
+      });
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
       expect(body.ncmecReportId).toBe('RPT-MANUAL');
@@ -304,6 +321,22 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT-MANUAL' }), res);
 
       expect(res.status).toHaveBeenCalledWith(409);
+    });
+
+    it('trims the report id and rejects one with characters outside letters, digits and dashes', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported' });
+      const ok = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: ' RPT-MANUAL ' }), ok);
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
+        'inc-1',
+        expect.objectContaining({ ncmecReportId: 'RPT-MANUAL' })
+      );
+
+      mockResolveConfirmedCsam.mockClear();
+      const bad = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT\nforged' }), bad);
+      expect(bad.status).toHaveBeenCalledWith(400);
+      expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
     });
   });
 
@@ -319,13 +352,15 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('returns 409 when the incident is not in confirmed_csam', async () => {
+    it('returns 409 naming retry_finish when the incident is not in confirmed_csam', async () => {
       mockResolveConfirmedCsam.mockResolvedValue(null);
 
       const res = makeRes();
       await runHandler(makeReq({ verdict: 'requeue' }), res);
 
       expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('retry_finish');
     });
   });
 
@@ -337,12 +372,19 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       mockFinishNcmecReport.mockResolvedValue(undefined);
       mockResolveConfirmedCsam.mockResolvedValue({ ...incident, reviewStatus: 'reported' });
 
+      const req = makeReq({ verdict: 'retry_finish' });
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+      await runHandler(req, res);
 
+      // The acting admin is the audit trail for closing a CSAM report.
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('admin=admin-1'));
       expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
       // staleAfterMs=0 bypasses the stale guard -- outcome is known after /finish succeeds
-      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-STORED' }, 0);
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
+        'inc-1',
+        { status: 'reported', ncmecReportId: 'RPT-STORED', reportedBy: 'admin-1' },
+        0
+      );
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
       expect(body.ncmecReportId).toBe('RPT-STORED');
@@ -369,12 +411,18 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     it('returns 502 when /finish fails', async () => {
-      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' });
+      mockFindById.mockResolvedValue({
+        ...CLAIMED_INCIDENT,
+        reviewStatus: 'confirmed_csam',
+        ncmecReportId: 'RPT-STORED',
+      });
       mockFinishNcmecReport.mockRejectedValue(new Error('NCMEC /finish error 500: Internal Error'));
 
+      const req = makeReq({ verdict: 'retry_finish' });
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+      await runHandler(req, res);
 
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('admin=admin-1'));
       expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(502);
     });
@@ -391,6 +439,122 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
       expect(body.ncmecReportId).toBe('RPT-STORED');
+    });
+  });
+
+  // ------------------------------------------------------------------ record_manual_report
+  describe('verdict: record_manual_report', () => {
+    it('records a web-form filing as reported, attributed to the admin, without calling NCMEC', async () => {
+      mockRecordManualReport.mockResolvedValue({ reviewStatus: 'reported', ncmecReportId: '123456' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: ' 123456 ' }), res);
+
+      expect(mockRecordManualReport).toHaveBeenCalledWith('inc-1', { ncmecReportId: '123456', reportedBy: 'admin-1' });
+      expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
+      expect(mockClaimForNcmecSubmission).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ ok: true, ncmecReportId: '123456' });
+    });
+
+    it('logs when the manual report overrode a false_positive verdict', async () => {
+      mockRecordManualReport.mockResolvedValue({
+        reviewStatus: 'reported',
+        ncmecReportId: '123456',
+        previousReviewStatus: 'false_positive',
+      });
+
+      const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding false_positive)'));
+    });
+
+    it('works when NCMEC API credentials are not configured', async () => {
+      const { Resource } = await import('sst');
+      const r = Resource as unknown as Record<string, { value: string }>;
+      const savedEspId = r.NCMEC_ESP_ID?.value;
+      r.NCMEC_ESP_ID = { value: 'not-configured' };
+      try {
+        mockRecordManualReport.mockResolvedValue({ reviewStatus: 'reported', ncmecReportId: '123456' });
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+        expect(res.status).toHaveBeenCalledWith(200);
+      } finally {
+        r.NCMEC_ESP_ID = { value: savedEspId };
+      }
+    });
+
+    it('returns 404 when the incident does not exist', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue(null);
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('returns 409 pointing at mark_reported or requeue when an API submission holds the claim', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('requeue');
+    });
+
+    it('returns 409 pointing at retry_finish when the API claim holds an unfinished reportId', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('retry_finish');
+      expect(body.error).toContain('after it, file by hand on the web form and use mark_reported');
+    });
+
+    it('logs the admin-supplied reportId when the verdict is refused', async () => {
+      for (const incident of [null, { reviewStatus: 'reported' }]) {
+        mockRecordManualReport.mockResolvedValue(null);
+        mockFindById.mockResolvedValue(incident);
+
+        const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+        await runHandler(req, makeRes());
+
+        expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('reportId=123456'));
+      }
+    });
+
+    it('returns 409 when the incident is already reported', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'reported', ncmecReportId: 'RPT-API' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('reportId=RPT-API');
+      expect(body.error).toContain('your report id was not stored');
+    });
+
+    it('returns 400 when ncmecReportId is missing, blank, too long, or has disallowed characters', async () => {
+      for (const ncmecReportId of [undefined, '   ', 'x'.repeat(65), '123\n456', '123 456', '12/34']) {
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId }), res);
+        expect(res.status).toHaveBeenCalledWith(400);
+      }
+      expect(mockRecordManualReport).not.toHaveBeenCalled();
     });
   });
 

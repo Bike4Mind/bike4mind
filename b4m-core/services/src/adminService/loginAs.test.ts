@@ -7,12 +7,20 @@ import type { IUserDocument } from '@bike4mind/common';
 // Each test sets a secret-sensitive impl so a regression to a non-+select admin loader
 // fails the test rather than passing tautologically.
 const mockVerifyMFA = vi.fn();
-vi.mock('@bike4mind/auth/mfaService', () => ({
-  verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
-  isUserLockedOut: () => false,
-  getLockoutTimeRemaining: () => 0,
-}));
+vi.mock('@bike4mind/auth/mfaService', async () => {
+  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt } =
+    await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
+  return {
+    verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
+    isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } } | null) => !!user?.mfa?.lockedUntil,
+    getLockoutTimeRemaining: () => 0,
+    MfaAttemptRejectedError,
+    isMfaAttemptRejectedError,
+    recordFailedMfaAttempt,
+  };
+});
 
+import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
 import { loginAs } from './loginAs';
 
 const adminJwt = { id: 'admin1', isAdmin: true, mfa: { totpEnabled: true } } as unknown as IUserDocument;
@@ -72,5 +80,42 @@ describe('adminService.loginAs — MFA secret loading', () => {
     await expect(
       loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
     ).rejects.toThrow(/Invalid MFA token/);
+  });
+
+  it('counts a non-rejection verifier failure via atomicRecordMfaFailedAttempt', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockRejectedValue(new Error('db down'));
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    await expect(
+      loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
+    ).rejects.toThrow(/Invalid MFA token/);
+    expect(mocks.atomicRecordMfaFailedAttempt).toHaveBeenCalledWith('admin1');
+  });
+
+  it('does not count a rejected attempt again (already reserved) and reports a plain invalid token', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockRejectedValue(
+      new MfaAttemptRejectedError('Invalid TOTP or backup code.', freshAdminWithSecret())
+    );
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    await expect(
+      loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
+    ).rejects.toThrow(/Invalid MFA token/);
+    expect(mocks.atomicRecordMfaFailedAttempt).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('reports a lockout from the rejection attemptState without counting again', async () => {
+    vi.clearAllMocks();
+    const locked = {
+      ...freshAdminWithSecret(),
+      mfa: { totpEnabled: true, lockedUntil: new Date(Date.now() + 60_000) },
+    } as unknown as IUserDocument;
+    mockVerifyMFA.mockRejectedValue(new MfaAttemptRejectedError('Too many failed attempts.', locked));
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    await expect(
+      loginAs(adminJwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never)
+    ).rejects.toThrow(/MFA locked/);
+    expect(mocks.atomicRecordMfaFailedAttempt).not.toHaveBeenCalled();
   });
 });

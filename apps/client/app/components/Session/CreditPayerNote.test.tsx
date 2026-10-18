@@ -1,9 +1,6 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { renderHook } from '@testing-library/react';
 import type { ISessionDocument } from '@bike4mind/common';
-import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   enforceCredits: true,
@@ -29,16 +26,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: { currentUser: { id: string } }) => unknown) => selector({ currentUser: { id: 'me' } }),
 }));
 
-import { CreditPayerNote, payerNoteText } from './CreditPayerNote';
+import { useCreditPayerNote, payerNoteText } from './CreditPayerNote';
 
-const appTheme = extendTheme({ ...getThemeConfig() });
 const session = (userId: string) => ({ id: 's1', userId }) as ISessionDocument;
-const renderNote = (s: ISessionDocument) =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <CreditPayerNote session={s} />
-    </CssVarsProvider>
-  );
 
 describe('payerNoteText', () => {
   it('says nothing in a notebook the user owns outside any shared project', () => {
@@ -71,7 +61,7 @@ describe('payerNoteText', () => {
   });
 });
 
-describe('CreditPayerNote', () => {
+describe('useCreditPayerNote', () => {
   beforeEach(() => {
     h.enforceCredits = true;
     h.projects = [];
@@ -79,33 +69,25 @@ describe('CreditPayerNote', () => {
     h.organizationId = null;
   });
 
-  it('renders the payer line in a shared notebook', () => {
-    renderNote(session('owner'));
-    expect(screen.getByTestId('session-credit-payer-note')).toHaveTextContent(
-      "Paid from your balance, not the owner's"
-    );
+  const noteFor = (s: ISessionDocument) => renderHook(() => useCreditPayerNote(s)).result.current;
+
+  it('names the user as payer in a shared notebook', () => {
+    expect(noteFor(session('owner'))).toBe("Paid from your balance, not the owner's");
   });
 
-  it('renders nothing while credits are not enforced', () => {
+  it('says nothing while credits are not enforced', () => {
     h.enforceCredits = false;
-    renderNote(session('owner'));
-    expect(screen.queryByTestId('session-credit-payer-note')).not.toBeInTheDocument();
+    expect(noteFor(session('owner'))).toBeNull();
   });
 
   it('names the organization the send bills', () => {
     h.account = { id: 'org-1', name: 'Acme', personal: false };
     h.organizationId = 'org-1';
-    renderNote(session('owner'));
-    expect(screen.getByTestId('session-credit-payer-note')).toHaveTextContent(
-      "Paid from Acme credits, not the owner's"
-    );
+    expect(noteFor(session('owner'))).toBe("Paid from Acme credits, not the owner's");
   });
 
   it('names the user when the menu shows a team but the send carries no organization', () => {
     h.account = { id: 'org-1', name: 'Acme', personal: false };
-    renderNote(session('owner'));
-    expect(screen.getByTestId('session-credit-payer-note')).toHaveTextContent(
-      "Paid from your balance, not the owner's"
-    );
+    expect(noteFor(session('owner'))).toBe("Paid from your balance, not the owner's");
   });
 });

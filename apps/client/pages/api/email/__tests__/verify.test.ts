@@ -42,6 +42,10 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 const mockFindByToken = vi.fn();
 const mockUpdate = vi.fn();
 const mockFindBySettingName = vi.fn();
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findByEmailVerificationToken: (...a: any[]) => mockFindByToken(...a),

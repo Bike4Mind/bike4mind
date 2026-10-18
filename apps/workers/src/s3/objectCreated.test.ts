@@ -31,7 +31,11 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {
     findOne: h.findOne,
     updateOne: h.updateOne,
-    findOneAndUpdate: h.findOneAndUpdate,
+    // A Query: awaitable as-is, or via .lean() as the storage claim reads it.
+    findOneAndUpdate: (...args: unknown[]) => {
+      const result = Promise.resolve(h.findOneAndUpdate(...args));
+      return Object.assign(result, { lean: () => result });
+    },
     findById: h.findById,
   },
   imageModerationIncidentRepository: {},
@@ -39,7 +43,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
-vi.mock('@bike4mind/common', () => ({ isMediaOnlyMimeType: () => false }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  isMediaOnlyMimeType: () => false,
+}));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
@@ -314,25 +321,67 @@ describe('objectCreated - moderation claim identity', () => {
 describe('objectCreated - storage charge', () => {
   const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
 
+  it('charges a legacy no-status row in full, judging it by its status before the flip to complete', async () => {
+    // The claim's pre-image already carries the 'complete' this handler wrote, which on a pre-cutoff
+    // row would read as legacy-charged and undercharge it by its old size.
+    h.findOne.mockResolvedValue(metadata());
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter)
+        ? { fileSize: 4, status: 'complete', createdAt: new Date('2026-01-01T00:00:00.000Z') }
+        : { id: 'ff1' }
+    );
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+  });
+
+  it('leaves the recorded size alone when the storage-charge claim is refused', async () => {
+    // A late event for an earlier write of the same path loses the claim to the newer write, which
+    // already recorded its own size. Overwriting it from this event's stale size would make the
+    // counter's truth disagree with the bytes actually charged.
+    const file = metadata({ fileSize: 1 }) as ReturnType<typeof metadata> & { fileSize?: number };
+    h.findOne.mockResolvedValue(file);
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? null : { id: 'ff1' }
+    );
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(file.fileSize).toBe(1);
+  });
+
   it('charges the owner once it wins the storage-charge claim on the row', async () => {
     h.findOne.mockResolvedValue(metadata());
 
     await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
 
     const eventTime = new Date('2026-01-01T00:00:00.000Z');
-    expect(h.updateOne).toHaveBeenCalledWith(
+    expect(h.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: 'ff1', $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }] },
-      { $set: { storageChargedAt: eventTime } },
-      expect.anything()
+      { $set: { storageChargedAt: eventTime, fileSize: 10 } },
+      expect.objectContaining({ new: false })
     );
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+  });
+
+  it('charges a rewritten object only the difference from the bytes already charged', async () => {
+    h.findOne.mockResolvedValue(metadata());
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? { fileSize: 4, storageChargedAt: new Date('2025-12-31T00:00:00.000Z') } : { id: 'ff1' }
+    );
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 6);
   });
 
   it('does not charge an upload that was already charged', async () => {
     // A redelivered event, or a notebook import's object the import charged in its own transaction.
     h.findOne.mockResolvedValue(metadata());
-    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
-      isStorageClaim(filter) ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? null : { id: 'ff1' }
     );
 
     await run();
@@ -343,13 +392,14 @@ describe('objectCreated - storage charge', () => {
   it('charges a redelivered event once', async () => {
     h.findOne.mockResolvedValue(metadata());
     let stamp: Date | undefined;
-    h.updateOne.mockImplementation(
+    h.findOneAndUpdate.mockImplementation(
       async (filter: Record<string, unknown>, update: { $set: { storageChargedAt?: Date } }) => {
-        if (!isStorageClaim(filter)) return { matchedCount: 1, modifiedCount: 1 };
+        if (!isStorageClaim(filter)) return { id: 'ff1' };
         const next = update.$set.storageChargedAt as Date;
-        if (stamp && stamp >= next) return { matchedCount: 0, modifiedCount: 0 };
+        if (stamp && stamp >= next) return null;
+        const pre = { storageChargedAt: stamp };
         stamp = next;
-        return { matchedCount: 1, modifiedCount: 1 };
+        return pre;
       }
     );
 
@@ -357,5 +407,27 @@ describe('objectCreated - storage charge', () => {
     await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
 
     expect(h.changeStorageSize).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('objectCreated - ai:generate-only uploads', () => {
+  const generateUploadPassed = () => h.moderateUploadedFile.mock.calls[0][0].generateUpload;
+
+  beforeEach(() => {
+    h.findOneAndUpdate.mockResolvedValue({ id: 'ff1', moderationStatus: 'scanning' });
+  });
+
+  it('scans a marked file under the generate-upload constraint', async () => {
+    h.findOne.mockResolvedValue(
+      metadata({ moderationStatus: 'pending', sourceMetadata: { uploadedVia: 'ai-generate-key-upload' } })
+    );
+    await run('k.png');
+    expect(generateUploadPassed()).toBeDefined();
+  });
+
+  it('scans an unmarked file without it', async () => {
+    h.findOne.mockResolvedValue(metadata({ moderationStatus: 'pending' }));
+    await run('k.png');
+    expect(generateUploadPassed()).toBeUndefined();
   });
 });

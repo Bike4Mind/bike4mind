@@ -6,11 +6,17 @@ import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 vi.mock('@bike4mind/database', () => ({
   Quest: { findById: vi.fn(), findOneAndUpdate: vi.fn(), findByIdAndUpdate: vi.fn() },
-  FabFile: { findById: vi.fn() },
   Session: { findById: vi.fn() },
+  fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
+vi.mock('@server/utils/storage', () => {
+  const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
+  return { getFilesStorage: () => storage };
+});
+
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
 
@@ -26,8 +32,10 @@ vi.mock('@bike4mind/slack', () => {
   };
 });
 
-import { Quest, Session } from '@bike4mind/database';
+import { fabFileRepository, Quest, Session } from '@bike4mind/database';
+import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import {
@@ -88,6 +96,7 @@ describe('executePendingAction', () => {
     );
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe(dbUser.id);
     expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
@@ -109,14 +118,34 @@ describe('executePendingAction', () => {
       params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://files.example.test/a.txt' },
       ts,
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, statusText: 'Forbidden' }));
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(new Error('URL blocked for security reasons: private'));
 
     const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
     expect(result.success).toBe(false);
     expect(result.message).toContain('Failed to download file');
+    expect(result.message).not.toContain('blocked');
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('downloads the slack file through the SSRF-guarded helper and passes its bytes as base64 content', async () => {
+    const fileBuffer = Buffer.from('x'.repeat(200));
+    vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(fileBuffer);
+    storePendingAction({
+      tool: JIRA_UPLOAD_ATTACHMENT,
+      params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://h.example.com/a' },
+      ts,
+    });
+
+    await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+    expect(downloadAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://h.example.com/a');
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+      content: fileBuffer.toString('base64'),
+    });
   });
 
   it('rejects a button whose action was replaced, without claiming or invoking', async () => {
@@ -128,18 +157,98 @@ describe('executePendingAction', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
-  it('still executes for a legacy button that carries no expected ts', async () => {
-    const result = await executePendingAction(QUEST_ID, dbUser, logger, undefined);
+  it.each(['image_generation', 'get_issue', 'unknown_tool'])(
+    'refuses a pending action for the non-confirmable tool %s',
+    async tool => {
+      storePendingAction({ tool, params: {}, ts });
 
-    expect(result.success).toBe(true);
-    expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: QUEST_ID, 'pendingAction.ts': ts },
-      { $unset: { pendingAction: 1 } }
-    );
-    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
-    expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
-    );
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(false);
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  describe('attachment upload from a stored file', () => {
+    const FAB_FILE_ID = 'cccccccccccccccccccccccc';
+
+    beforeEach(() => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', fabFileId: FAB_FILE_ID },
+        ts,
+      });
+    });
+
+    it('looks the file up scoped to the confirming user and uploads its bytes', async () => {
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'clean',
+      } as never);
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(true);
+      expect(fabFileRepository.shareable.findAccessibleById).toHaveBeenCalledWith(dbUser, FAB_FILE_ID);
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: Buffer.from('file-bytes').toString('base64'),
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('falls back to the Slack URL, never uploading held bytes, when the stored file is not serveable', async () => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: {
+          issueKey: 'K-1',
+          filename: 'a.txt',
+          fabFileId: FAB_FILE_ID,
+          slackFileUrl: 'https://files.example.test/a.txt',
+        },
+        ts,
+      });
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'pending',
+      } as never);
+      const slackBytes = Buffer.from('slack-bytes');
+      vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(slackBytes);
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(true);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: slackBytes.toString('base64'),
+      });
+    });
+
+    it('refuses a file the confirming user cannot access, even with a Slack URL fallback, without fetching, claiming or invoking', async () => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: {
+          issueKey: 'K-1',
+          filename: 'a.txt',
+          fabFileId: FAB_FILE_ID,
+          slackFileUrl: 'https://files.example.test/a.txt',
+        },
+        ts,
+      });
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
+      vi.stubGlobal('fetch', vi.fn());
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(false);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
   });
 
   it('claims an expired action by its stored ts and does not invoke the tool', async () => {

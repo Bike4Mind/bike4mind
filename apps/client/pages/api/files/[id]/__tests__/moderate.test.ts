@@ -115,6 +115,13 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'clean' });
   });
 
+  it('scans the file row itself, so a marked upload reaches the constraint in scanUploadedObject', async () => {
+    const marked = file({ sourceMetadata: { uploadedVia: 'ai-generate-key-upload' } });
+    h.findById.mockResolvedValue(marked);
+    await handler(makeReq(), makeRes());
+    expect(h.scan).toHaveBeenCalledWith(expect.objectContaining({ fabFile: marked }));
+  });
+
   it('reports a blocked verdict with its reason', async () => {
     h.scan.mockResolvedValue({ moderationStatus: 'blocked', blockReason: 'unsupported_format' });
     const res = makeRes();

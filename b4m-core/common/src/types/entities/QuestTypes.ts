@@ -1,6 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { IChatHistoryItemDocument } from './SessionTypes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 
 export type QuestItem = {
   quest: string; // The description of the quest
@@ -44,8 +45,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
-  // Atomic $addToSet onto `videoJobIds`, so a chat's video card survives the chat process dying.
-  addVideoJobIds: (questId: string, jobIds: string[]) => Promise<void>;
+  // The subset of `keys` referenced as generated media (`images`/`videos`) by a quest in this session.
+  findGeneratedMediaKeysInSession: (sessionId: string, keys: string[]) => Promise<string[]>;
+  // Atomic $addToSet onto `generationJobs`, so a chat's job card survives the chat process dying.
+  addGenerationJobs: (questId: string, jobs: GenerationJobRef[]) => Promise<void>;
 }
 
 /**

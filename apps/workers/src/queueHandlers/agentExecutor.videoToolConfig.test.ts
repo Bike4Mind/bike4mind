@@ -13,8 +13,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/generationJobs/wiring', () => ({ getVideoJobDeps: vi.fn(), getCreateVideoJobDeps: vi.fn() }));
 vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
 
-const { attachVideoJobsToRunQuest, buildAgentVideoToolConfig, limitVideoClipsPerRun } =
-  await import('./agentExecutor.videoToolConfig');
+const { buildAgentVideoToolConfig, limitVideoClipsPerRun } = await import('./agentExecutor.videoToolConfig');
 
 const QUEST_ID = 'quest-1';
 const input: CreateVideoJobInput = { user: { id: 'user-1', organizationId: null }, request: {}, source: 'agent' };
@@ -23,7 +22,7 @@ const createdResult: CreateVideoJobResult = { ok: true, job, created: true };
 
 const makeLogger = () => ({ warn: vi.fn() }) as unknown as Logger & { warn: ReturnType<typeof vi.fn> };
 
-/** In-memory twin of QuestRepository.claimAgentVideoClip / releaseAgentVideoClip. */
+/** In-memory twin of QuestRepository.claimAgentGenerationSlot / releaseAgentGenerationSlot for one kind. */
 const makeSlots = () => {
   let claimed = 0;
   return {
@@ -189,33 +188,5 @@ describe('buildAgentVideoToolConfig', () => {
     deps.resolveClipLimit.mockRejectedValueOnce(new Error('settings read failed'));
     await expect(buildAgentVideoToolConfig(caller, deps)).resolves.toBeNull();
     expect(deps.logger.warn).toHaveBeenCalled();
-  });
-});
-
-describe('attachVideoJobsToRunQuest', () => {
-  const makeQuests = () => ({ addVideoJobIds: vi.fn(async () => undefined) });
-
-  it('writes the new job ids onto the run quest', async () => {
-    const quests = makeQuests();
-    await attachVideoJobsToRunQuest(['job-1'], QUEST_ID, quests, makeLogger());
-    expect(quests.addVideoJobIds).toHaveBeenCalledWith(QUEST_ID, ['job-1']);
-  });
-
-  it('writes nothing without job ids or without a run quest', async () => {
-    const quests = makeQuests();
-    await attachVideoJobsToRunQuest(undefined, QUEST_ID, quests, makeLogger());
-    await attachVideoJobsToRunQuest([], QUEST_ID, quests, makeLogger());
-    await attachVideoJobsToRunQuest(['job-1'], undefined, quests, makeLogger());
-    expect(quests.addVideoJobIds).not.toHaveBeenCalled();
-  });
-
-  it('warns instead of failing the tool call when the write fails', async () => {
-    const quests = { addVideoJobIds: vi.fn(async () => Promise.reject(new Error('db down'))) };
-    const logger = makeLogger();
-    await expect(attachVideoJobsToRunQuest(['job-1'], QUEST_ID, quests, logger)).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('attach'),
-      expect.objectContaining({ questId: QUEST_ID })
-    );
   });
 });

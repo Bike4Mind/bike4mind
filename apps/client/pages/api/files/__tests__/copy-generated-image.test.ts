@@ -3,10 +3,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 const h = vi.hoisted(() => ({
   findSessionIdsByImage: vi.fn(),
-  findAllByIds: vi.fn(),
+  findAllAccessibleByIds: vi.fn(),
   download: vi.fn(),
   getMetadata: vi.fn(),
   createFabFile: vi.fn(),
+  signUrl: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -22,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(async () => 'https://s3.test/get') }),
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
   getGeneratedImageStorage: () => ({ download: h.download, getMetadata: h.getMetadata }),
 }));
 
@@ -38,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
   questRepository: { findSessionIdsByImage: h.findSessionIdsByImage },
-  sessionRepository: { findAllByIds: h.findAllByIds },
+  sessionRepository: { shareable: { findAllAccessibleByIds: h.findAllAccessibleByIds } },
 }));
 
 import handlerImpl from '../copy-generated-image';
@@ -54,7 +55,7 @@ function makeRes() {
 const req = (userId: string, body: Record<string, unknown> = {}) =>
   ({
     method: 'POST',
-    user: { id: userId },
+    user: { id: userId, groups: ['g1'] },
     ability: {},
     body: { imageS3Key: KEY, ...body },
   }) as unknown as NextApiRequest;
@@ -70,7 +71,7 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
 
   it('rejects copying an image that belongs to another user - never downloads it', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'someone-else', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([]);
 
     const { res } = makeRes();
     await expect(handler(req('me'), res)).rejects.toThrow(/access/i);
@@ -80,11 +81,18 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
 
   it('copies an image the caller created', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
 
     const { res, json } = makeRes();
     await handler(req('me'), res);
 
+    expect(h.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'me', groups: ['g1'] }),
+      ['s1'],
+      {
+        includeDeleted: true,
+      }
+    );
     expect(h.download).toHaveBeenCalledWith(KEY);
     expect(h.createFabFile).toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ id: 'file-1' });
@@ -94,7 +102,7 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
   // route hands over. What that precedence then resolves to is covered in utils/file.test.ts.
   it('hands createFabFile the stored contentType and claim-first precedence, keeping the caller name', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
 
     const { res } = makeRes();
     await handler(req('me', { fileName: 'notes.txt' }), res);
@@ -112,7 +120,7 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     'substitutes PNG for a stored contentType of %s',
     async contentType => {
       h.findSessionIdsByImage.mockResolvedValue(['s1']);
-      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
       h.getMetadata.mockResolvedValue({ contentType });
 
       const { res } = makeRes();
@@ -131,7 +139,7 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     'substitutes PNG for a stored contentType of %s (case/parameter tolerant)',
     async contentType => {
       h.findSessionIdsByImage.mockResolvedValue(['s1']);
-      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
       h.getMetadata.mockResolvedValue({ contentType });
 
       const { res } = makeRes();
@@ -147,7 +155,7 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
 
   it('keeps a genuine stored contentType like image/webp', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
-    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
     h.getMetadata.mockResolvedValue({ contentType: 'image/webp' });
 
     const { res } = makeRes();
@@ -162,5 +170,77 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
 
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('copied file signing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
+    h.getMetadata.mockResolvedValue({ contentType: 'image/png' });
+    h.download.mockResolvedValue(Buffer.from('image-bytes'));
+    h.signUrl.mockResolvedValue('https://objects.example.invalid/get');
+  });
+
+  it('signs the clean response for the browser after creation', async () => {
+    h.createFabFile.mockResolvedValue({
+      id: 'f1',
+      filePath: 'owned/image.png',
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+    });
+    const { res } = makeRes();
+    await handler(req('me'), res);
+    expect(h.signUrl).toHaveBeenCalledWith('owned/image.png', 'get', { expiresIn: 3600, audience: 'browser' });
+  });
+
+  it('preserves real hydrated copied-image fields in the signed response', async () => {
+    const { FabFile } = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+    const saved = new FabFile({
+      fileName: 'copy.png',
+      filePath: 'owned/copy.png',
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+    });
+    const original = saved.toJSON();
+    h.createFabFile.mockResolvedValue(saved);
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: original.id,
+        fileName: 'copy.png',
+        filePath: 'owned/copy.png',
+        fileUrl: 'https://objects.example.invalid/get',
+      })
+    );
+    expect(json.mock.calls[0][0]).not.toHaveProperty('_doc');
+    expect(saved.toJSON()).toEqual(original);
+  });
+
+  it('honors both private service signing modes', async () => {
+    h.createFabFile.mockImplementation(async (_user, _params, adapter) => {
+      await adapter.storage.generateSignedUrl('owned/file', 600, 'get');
+      await adapter.storage.generateSignedUrl('owned/file', 600, 'put');
+      return { id: 'f1' };
+    });
+    const { res } = makeRes();
+    await handler(req('me'), res);
+    expect(h.signUrl.mock.calls.map(call => call[1])).toEqual(['get', 'put']);
+    expect(h.signUrl.mock.calls.every(call => call[2].audience === undefined)).toBe(true);
+  });
+
+  it('withholds a pending image without signing', async () => {
+    h.createFabFile.mockResolvedValue({
+      id: 'f1',
+      filePath: 'owned/image.png',
+      mimeType: 'image/png',
+      moderationStatus: 'pending',
+    });
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
+    expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+    expect(h.signUrl).not.toHaveBeenCalled();
   });
 });

@@ -8,7 +8,12 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
+const mockEndConnections = vi.fn();
 
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...args: unknown[]) => mockFindOne(...args),
@@ -16,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
     create: (...args: unknown[]) => mockCreate(...args),
   },
   authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
+  realtimeConnectionRepository: { endConnections: (...args: unknown[]) => mockEndConnections(...args) },
   adminSettingsRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
@@ -27,16 +33,27 @@ const mockReleasePending = vi.fn();
 const mockShouldBlockDisposableEmail = vi.fn();
 const mockAddCredits = vi.fn();
 const mockApplyPartnerRuleMembership = vi.fn();
-vi.mock('@bike4mind/services', () => ({
-  userService: {
-    releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
-    shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
-  },
-  creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
-  organizationService: {
-    applyPartnerRuleMembership: (...args: unknown[]) => mockApplyPartnerRuleMembership(...args),
-  },
-}));
+const mockRevokeAllUserSessions = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  // The real primitive runs against the repository mocks above, so the best-effort end of the
+  // realtime connections is exercised for real; the spy only records the adapters it was given.
+  mockRevokeAllUserSessions.mockImplementation(actual.authSessionService.revokeAllUserSessions);
+  return {
+    authSessionService: {
+      revokeAllUserSessions: (...args: Parameters<typeof actual.authSessionService.revokeAllUserSessions>) =>
+        mockRevokeAllUserSessions(...args),
+    },
+    userService: {
+      releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
+      shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
+    },
+    creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
+    organizationService: {
+      applyPartnerRuleMembership: (...args: unknown[]) => mockApplyPartnerRuleMembership(...args),
+    },
+  };
+});
 
 // The real signupDomainGrant helper runs; only its rule lookup and side-effect leaves are stubbed.
 const mockPartnerGrant = vi.fn();
@@ -60,6 +77,7 @@ vi.mock('./openRegistration', () => ({
   isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
 }));
 
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { verifyCallback } from './verifyCallback';
 
 const runStandard = (
@@ -77,6 +95,9 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockEndConnections.mockReset();
+  mockEndConnections.mockResolvedValue({ connectionIds: [] });
+  mockRevokeAllUserSessions.mockClear();
   mockUserRepositoryUpdate.mockReset();
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
   mockReleasePending.mockReset();
@@ -256,7 +277,28 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(mockFindOne).toHaveBeenCalledTimes(2);
     // The tokenVersion bump must be paired with a session revoke, else an opaque refresh token
     // (never checked against tokenVersion) would rotate past the bump and survive.
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledWith(
+      'u1',
+      {},
+      { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+    );
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1', {});
+    expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u1', sessionsOnly: true });
+  });
+
+  it('still completes the link when ending realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValueOnce(new Error('prune failed'));
+    stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, authProviders: [] });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      emails: [{ value: 'user@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1', {});
+    expect(mockEndConnections).toHaveBeenCalledTimes(1);
   });
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {
@@ -1212,6 +1254,61 @@ describe('verifyCallback - pending free credits on account link', () => {
 
     expect(err).toBeNull();
     expect(mockReleasePending).not.toHaveBeenCalled();
+  });
+
+  it('applies the verified domain grant when the link promotes emailVerified on a partner domain', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      organizationId: 'org-1',
+    });
+    stage2Hit({
+      _id: 'u-pending',
+      email: 'dee@partner.example',
+      emailVerified: false,
+      hasUsablePassword: false,
+      tags: ['Customer'],
+      authProviders: [],
+    });
+
+    const { err } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-partner',
+      emails: [{ value: 'dee@partner.example', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(mockPartnerGrant).toHaveBeenCalledWith('dee@partner.example', true);
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: 'u-pending',
+        credits: 1000,
+        transactionId: 'domain-grant-credits:u-pending',
+      }),
+      expect.anything()
+    );
+    expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+      { userId: 'u-pending', organizationId: 'org-1' },
+      expect.anything()
+    );
+    // Membership re-reads emailVerified, so the grant must follow the write that persists it.
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(mockAddCredits.mock.invocationCallOrder[0]);
+  });
+
+  it('does not apply the domain grant on a plain link of an already-verified account', async () => {
+    stage2Hit({
+      _id: 'u-verified',
+      email: 'owner@example.com',
+      emailVerified: true,
+      hasUsablePassword: true,
+      authProviders: [],
+    });
+
+    const { err } = await runStandard(AuthStrategy.Google, linkProfile);
+
+    expect(err).toBeNull();
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
   it('completes the link when the release throws', async () => {

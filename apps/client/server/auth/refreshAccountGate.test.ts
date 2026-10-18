@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const { mockRevokeSession } = vi.hoisted(() => ({ mockRevokeSession: vi.fn() }));
 
-vi.mock('@bike4mind/database', () => ({ authSessionRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ authSessionRepository: {}, realtimeConnectionRepository: {} }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {

@@ -19,6 +19,7 @@ import {
   type ProviderBlock,
   type TurnUsage,
 } from '@bike4mind/common';
+import type { AnthropicEffort } from './thinkingParams';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
 import type { DowngradedToolChoice } from './forcedToolChoice';
@@ -147,6 +148,12 @@ export interface ICompletionOptions {
   logprobs?: number;
   echo?: boolean;
   stream?: boolean;
+  /**
+   * Set when a caller renders reply text live (e.g. the CLI TUI). Backends that
+   * stream text out early must stop retrying once text has gone out, so callers
+   * with no live view leave this unset and keep full retry and fallback.
+   */
+  streamText?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
@@ -196,6 +203,15 @@ export interface ICompletionOptions {
    * @see https://platform.openai.com/docs/guides/reasoning
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Explicit effort for an Anthropic turn, in Anthropic's own five-level vocabulary
+   * (`output_config.effort`). Takes precedence over `reasoningEffort`, which is mapped
+   * into that vocabulary when this is unset; unset both and the turn runs at the backend
+   * default (see resolveAnthropicEffort). This exists alongside `reasoningEffort` rather
+   * than replacing it because Anthropic's 'max' has no OpenAI counterpart and
+   * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
+   */
+  anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).
@@ -230,6 +246,8 @@ export interface ICompletionOptions {
     accumCacheWriteTokens?: number;
     /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
     accumTurnUsage?: TurnUsage[];
+    /** Stays undefined until a turn reports a count - see reasoningTokens.ts. */
+    accumReasoningTokens?: number;
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -351,6 +369,12 @@ export type CompletionInfo = {
   providerBlock?: ProviderBlock;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Provider-reported reasoning/thinking tokens: a SUBSET of `outputTokens`, not
+   * additive, and never billed separately. Absent when the provider reported nothing.
+   * Same accumulate-across-tool-turns contract as the other token counts.
+   */
+  reasoningTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
   toolsUsed?: Array<RecordableToolUse>;
@@ -368,12 +392,16 @@ export type CompletionInfo = {
     content: string;
     is_error?: boolean;
   }>;
-  /** Prompt caching statistics (if caching was enabled) */
+  /**
+   * Prompt caching statistics (if caching was enabled). Diagnostic only: no billing or token
+   * accounting reads it, because some adapters set it while keeping the cached tokens inside
+   * `inputTokens`. Accounting reads `cacheReadInputTokens`/`cacheCreationInputTokens` below.
+   */
   cacheStats?: CacheUsageStats;
   /**
-   * Anthropic-style cache token deltas. Surfaced separately from `inputTokens`
-   * so credit accounting can apply provider-specific multipliers (read: 0.1x,
-   * write: 1.25x of base input rate).
+   * Cache token counts in the billing convention: always disjoint from `inputTokens` (an adapter
+   * whose `inputTokens` includes cached tokens leaves these unset), so settlement prices each at
+   * its own rate. The fields `foldCompletionInfo` in @bike4mind/agents sums into agent totals.
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -477,7 +505,8 @@ export interface ICompletionBackend {
    * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
    * model this build has no id knowledge of get a correctly shaped request
    * instead of a 400. Optional: a backend whose request shape is id-independent
-   * has nothing to read.
+   * has nothing to read. Gemini and xAI also gate cache-read forwarding on this
+   * record, so for them it must be the record settlement prices with.
    */
   setDispatchModel?(info: ModelInfo): void;
 }

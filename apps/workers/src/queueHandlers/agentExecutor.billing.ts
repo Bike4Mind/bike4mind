@@ -14,7 +14,7 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTurnsCost, type ModelInfo, type TurnUsage } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
@@ -36,6 +36,8 @@ export type BillingCheckpoint = {
   totalCacheWriteTokens: number;
   /** Provider stop reason for this iteration's completion, e.g. from `AgentCheckpoint.finishReason`. */
   finishReason?: string;
+  /** `AgentCheckpoint.turnUsage`: the same totals per provider request (see unbilledTurns). */
+  turnUsage?: readonly TurnUsage[];
 };
 
 /** Per-iteration token deltas (this iteration's contribution). */
@@ -79,15 +81,15 @@ export function addToolUsage(pending: PendingToolUsage, usage: ToolUsageTotals):
 
 /**
  * Which generative tools have their provider media cost folded into the iteration bill, keyed
- * by the callback phase that folds them. Image cost is fully determined at call time by
- * n/size/quality, so it is reserved on start (mirrors classic chat's reserve-on-start); music
- * and audio cost depends on the delivered clip, so it settles on finish (the tools' failure
- * paths return before onFinish, so an undelivered clip is never billed). Must stay in sync
- * with the tool implementations in b4m-core/services.
+ * by the callback phase that folds them. Image and audio both settle on finish: the tools'
+ * failure paths return before onFinish, so an undelivered image or clip is never billed. The
+ * start phase owns nothing today; it stays so a tool can opt into it explicitly.
+ * video_generation and music_generation bill in their job instead. Must stay in sync with the
+ * tool implementations in b4m-core/services.
  */
 const MEDIA_COST_TOOLS_BY_PHASE = {
-  start: ['image_generation', 'edit_image'],
-  finish: ['music_generation', 'audio_generation'],
+  start: [],
+  finish: ['image_generation', 'edit_image', 'audio_generation'],
 } as const satisfies Record<'start' | 'finish', readonly string[]>;
 
 export type MediaCostPhase = keyof typeof MEDIA_COST_TOOLS_BY_PHASE;
@@ -173,13 +175,15 @@ export type IterationBillingEffects = {
   }) => void;
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
-  logGuardTrip: (details: { inputTokensDelta: number; contextWindow: number }) => void;
+  logGuardTrip: (details: { requestInputTokens: number; contextWindow: number }) => void;
   logNegativeDelta: (details: {
     costDelta: number;
     toolCostUsd: number;
     cumulativeCost: number;
     previousCumulativeCost: number;
   }) => void;
+  /** The checkpoint's turns did not reconcile with its totals and counters (see unbilledTurns). */
+  logTurnsFallback: (details: { turnSum: IterationTokenDeltas; totals: IterationTokenDeltas }) => void;
   usdToCredits: (usd: number) => number;
   now: () => number;
 };
@@ -225,9 +229,74 @@ type IterationTokenRecord = Pick<
 >;
 
 /**
+ * One iteration's agent usage as a single provider request: ReActAgent calls the model with
+ * executeTools: false, so an iteration is normally one request, and that request's own prompt
+ * picks its long-context tier. Pricing the run's cumulative totals instead tiers every iteration
+ * on the whole run (and on cache-exclusive input).
+ */
+function iterationTurn(tokens: IterationTokenRecord): TurnUsage {
+  return {
+    inputTokens: tokens.inputTokens,
+    outputTokens: tokens.outputTokens,
+    cacheReadInputTokens: tokens.cacheReadTokens,
+    cacheCreationInputTokens: tokens.cacheWriteTokens,
+  };
+}
+
+type TokenSums = IterationTokenDeltas;
+
+const sameTokens = (a: TokenSums, b: TokenSums): boolean =>
+  a.inputTokens === b.inputTokens &&
+  a.outputTokens === b.outputTokens &&
+  a.cacheReadTokens === b.cacheReadTokens &&
+  a.cacheWriteTokens === b.cacheWriteTokens;
+
+/**
+ * The provider requests this bill covers: the checkpoint's turns after the prefix that sums to
+ * `counters` (already billed). One bill can cover more than one request - a call aborted at the
+ * iteration deadline leaves its partial usage in the checkpoint the continuation resumes from, and
+ * a Lambda lost between the checkpoint write and the billing record leaves an unbilled iteration -
+ * and pricing those as one request would tier them on their combined prompt. Falls back to
+ * `deltas` as one request when there are no turns or they do not reconcile with the totals; the
+ * latter warns via `logTurnsFallback`, since the #657 guard in billIteration relies on it.
+ */
+function unbilledTurns(
+  checkpoint: BillingCheckpoint,
+  counters: BillingCounters,
+  deltas: TokenSums,
+  effects: IterationBillingEffects
+): TurnUsage[] {
+  const turns = checkpoint.turnUsage;
+  if (turns?.length) {
+    const sum: TokenSums = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    let billedCount = -1;
+    for (let i = 0; ; i++) {
+      if (billedCount < 0 && sameTokens(sum, counters)) billedCount = i;
+      if (i === turns.length) break;
+      sum.inputTokens += turns[i].inputTokens;
+      sum.outputTokens += turns[i].outputTokens;
+      sum.cacheReadTokens += turns[i].cacheReadInputTokens ?? 0;
+      sum.cacheWriteTokens += turns[i].cacheCreationInputTokens ?? 0;
+    }
+    const totals: TokenSums = {
+      inputTokens: checkpoint.totalInputTokens,
+      outputTokens: checkpoint.totalOutputTokens,
+      cacheReadTokens: checkpoint.totalCacheReadTokens,
+      cacheWriteTokens: checkpoint.totalCacheWriteTokens,
+    };
+    if (billedCount >= 0 && sameTokens(sum, totals)) return turns.slice(billedCount);
+    effects.logTurnsFallback({ turnSum: sum, totals });
+  }
+  return [iterationTurn(deltas)];
+}
+
+/**
  * Rebuild `counters` on resume from the persisted per-iteration token deltas. `cumulativeCost`
- * is re-priced with this invocation's `modelInfo` (the rate `billIteration` will use), never
- * carried over, so a price change between invocations cannot make the next delta negative.
+ * is re-priced iteration by iteration with this invocation's `modelInfo` (the rate and tiering
+ * `billIteration` uses), never carried over. Unlike the live running total, the reseeded figure
+ * prices each persisted iteration record as one request, so the two can differ when one bill
+ * covered several requests. Billing reads only the token counters; the cost is the reference
+ * the negative-delta warning reports against.
  */
 export function reseedCounters(
   iterationBilling: readonly IterationTokenRecord[],
@@ -247,13 +316,7 @@ export function reseedCounters(
     counters.cacheWriteTokens += billing.cacheWriteTokens;
   }
   if (iterationBilling.length > 0 && modelInfo) {
-    counters.cumulativeCost = getTextModelCost(
-      modelInfo,
-      counters.inputTokens,
-      counters.outputTokens,
-      counters.cacheReadTokens,
-      counters.cacheWriteTokens
-    );
+    counters.cumulativeCost = getTurnsCost(modelInfo, iterationBilling.map(iterationTurn));
   }
   return counters;
 }
@@ -267,35 +330,6 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
   const toolUsage = params.toolUsage ?? ZERO_TOOL_USAGE;
 
-  // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
-  // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
-  // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
-  const cumulativeCost = getTextModelCost(
-    modelInfo,
-    checkpoint.totalInputTokens,
-    checkpoint.totalOutputTokens,
-    checkpoint.totalCacheReadTokens,
-    checkpoint.totalCacheWriteTokens
-  );
-  // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
-  // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
-  // iteration with tool usage is always billable (never hits the no-op return below).
-  const agentCostDelta = cumulativeCost - counters.cumulativeCost;
-  const costDelta = agentCostDelta + toolUsage.costUsd;
-  // Should be unreachable: the rate is fixed per invocation and resume re-prices `counters` at
-  // that same rate (`reseedCounters`), so a negative agent delta means counters and checkpoint
-  // have diverged. Checked on the agent term alone so positive tool spend cannot mask it; the
-  // settle below is unchanged (net <= 0 skips with counters left put, net > 0 charges the net).
-  if (agentCostDelta < 0) {
-    effects.logNegativeDelta({
-      costDelta: agentCostDelta,
-      toolCostUsd: toolUsage.costUsd,
-      cumulativeCost,
-      previousCumulativeCost: counters.cumulativeCost,
-    });
-  }
-  if (costDelta <= 0) return;
-
   // Agent-only per-iteration token deltas (checkpoint totals are agent-loop only). These
   // are the resume-critical values summed to rebuild cumulative agent cost, so tool tokens
   // (a different model) must never enter them.
@@ -306,18 +340,45 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheWriteTokens: checkpoint.totalCacheWriteTokens - counters.cacheWriteTokens,
   };
 
-  // Sanity backstop (#657): one iteration is one completion call, so its input
-  // tokens can never exceed the model's context window (totalInputTokens excludes
-  // cache-read/write, so this compares like-for-like). A larger delta means an
-  // upstream token-count corruption - a live agent run reported ~49M input tokens
-  // on a ~72K-token prompt, which billed ~$148. Fail safe: alarm and skip the
-  // credit charge rather than deduct a bogus amount.
+  // Price each request this bill covers on its own tier (see unbilledTurns), cache tokens at
+  // their own rates: totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
+  const turns = unbilledTurns(checkpoint, counters, deltas, effects);
+  const agentCostDelta = getTurnsCost(modelInfo, turns);
+  const cumulativeCost = counters.cumulativeCost + agentCostDelta;
+  // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
+  // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
+  // iteration with tool usage is always billable (never hits the no-op return below).
+  const costDelta = agentCostDelta + toolUsage.costUsd;
+  // Should be unreachable: a negative agent delta means the checkpoint totals fell behind
+  // `counters` (resume reseeds them from the persisted deltas), i.e. the two have diverged.
+  // Checked on the agent term alone so positive tool spend cannot mask it; the settle below is
+  // unchanged (net <= 0 skips with counters left put, net > 0 charges the net).
+  if (agentCostDelta < 0) {
+    effects.logNegativeDelta({
+      costDelta: agentCostDelta,
+      toolCostUsd: toolUsage.costUsd,
+      cumulativeCost,
+      previousCumulativeCost: counters.cumulativeCost,
+    });
+  }
+  if (costDelta <= 0) return;
+
+  // Sanity backstop (#657): one provider request's input tokens can never exceed the
+  // model's context window (totalInputTokens excludes cache-read/write, so this compares
+  // like-for-like). A larger request means an upstream token-count corruption - a live agent
+  // run reported ~49M input tokens on a ~72K-token prompt, which billed ~$148. Fail safe:
+  // alarm and skip the credit charge rather than deduct a bogus amount.
+  // Checked per request (the same turns priced above), so a bill legitimately covering two
+  // requests cannot trip it on their sum. Corrupt totals stop reconciling with the adapter's
+  // turns, so unbilledTurns falls back to the whole delta as one request (warning via
+  // logTurnsFallback) and it still trips.
   // Guard on the AGENT input delta only (tool spend is a different, smaller model and is
   // not part of this sanity bound). On a trip we skip the whole iteration charge - the
   // snapshotted tool spend goes with it, consistent with dropping the agent charge; the
   // token counts that produced it were corrupt anyway.
-  if (modelInfo.contextWindow > 0 && deltas.inputTokens > modelInfo.contextWindow) {
-    effects.logGuardTrip({ inputTokensDelta: deltas.inputTokens, contextWindow: modelInfo.contextWindow });
+  const requestInputTokens = Math.max(0, ...turns.map(turn => turn.inputTokens));
+  if (modelInfo.contextWindow > 0 && requestInputTokens > modelInfo.contextWindow) {
+    effects.logGuardTrip({ requestInputTokens, contextWindow: modelInfo.contextWindow });
     // Counters still advance to the checkpoint so later iterations settle cleanly
     // from here.
     advanceCounters(counters, checkpoint, cumulativeCost);

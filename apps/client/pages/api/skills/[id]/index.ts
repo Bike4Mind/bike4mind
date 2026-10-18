@@ -21,6 +21,7 @@ import {
   canManageSkillSharing,
   redactShareRosterForViewer,
 } from '@server/utils/skillAccess';
+import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
@@ -33,7 +34,8 @@ const handler = baseApi()
       throw new ForbiddenError("You don't have permission to view this skill");
     }
 
-    res.json(redactShareRosterForViewer(skill, actor.id, await canManageSkillSharing(skill, actor)));
+    const [withStatus] = await attachMarketStatus([skill]);
+    res.json(redactShareRosterForViewer(withStatus, actor.id, await canManageSkillSharing(skill, actor)));
   })
   .put(async (req, res) => {
     const { id } = req.query;

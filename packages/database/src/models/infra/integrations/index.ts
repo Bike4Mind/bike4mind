@@ -1,5 +1,6 @@
 export * from './IntegrationAuditLogModel';
 export * from './IntegrationHealthCheckModel';
+export * from './IntegrationRequestModel';
 export * from './JiraWebhookConfigModel';
 export * from './JiraWebhookDeliveryModel';
 export * from './JiraWebhookSubscriptionModel';

@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 
 const {
   findOneMock,
+  updateOneMock,
   saveMock,
   getSettingsValueMock,
   sendToQueueMock,
@@ -27,6 +28,7 @@ const {
     moderationDeps: deps,
     buildDepsMock: vi.fn(() => deps),
     findOneMock: vi.fn(),
+    updateOneMock: vi.fn(),
     saveMock: vi.fn(),
     getSettingsValueMock: vi.fn(),
     sendToQueueMock: vi.fn(),
@@ -38,7 +40,7 @@ const {
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', () => ({
-  FabFile: { findOne: findOneMock },
+  FabFile: { findOne: findOneMock, updateOne: updateOneMock },
   User: { findById: userFindByIdMock },
   adminSettingsRepository: { getSettingsValue: getSettingsValueMock },
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
@@ -290,23 +292,30 @@ describe('POST /api/internal/s3/object-created', () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
 
       expect(userFindByIdMock).toHaveBeenCalledWith('u1');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), 'pending', {});
       expect(getMetadataMock).not.toHaveBeenCalled();
       expect(userDoc.save).toHaveBeenCalledWith({ session: {} });
+    });
+
+    it('judges the charge by the status the row had before this webhook marked it complete', async () => {
+      findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', save: saveMock });
+      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
+
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), undefined, {});
     });
 
     it('falls back to the stored object size when the payload has none', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('falls back to the stored object size when the payload size is invalid', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: -1 }), makeRes());
 
       expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
-      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), 'pending', {});
     });
 
     it('stamps the current time when the event time does not parse', async () => {

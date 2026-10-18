@@ -12,7 +12,10 @@ let updatePending = false;
 // A factory mock replaces the whole module, so every hook the component tree imports from it has
 // to be listed here - ScopedSettingOverrides (rendered for any setting declaring `scope`) reaches
 // the three scoped-override hooks, and a missing one fails this file at import time.
+// Stands in for the hook's server-provided defaultEmbeddingModel; undefined leaves the field silent.
+let floorWarning: string | undefined;
 vi.mock('@client/app/hooks/data/settings', () => ({
+  useFloorAboveMeasuredWarning: (key: string) => (key === 'forcedRetrievalMinSimilarityPct' ? floorWarning : undefined),
   useUpdateSettings: () => ({ mutate, isPending: updatePending, error: updateError }),
   useScopedSettingOverrides: () => ({ data: [] }),
   useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
@@ -347,6 +350,40 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     // Synced to unset, not left at '': a second click must not re-send the clear for a deleted row.
     fireEvent.click(floorSave());
     expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the above-measured warning and confirms it on save', () => {
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderField(floorSetting, null);
+      fireEvent.change(floorInput(), { target: { value: '75' } });
+
+      expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
+      fireEvent.click(floorSave());
+      expect(mutate).toHaveBeenCalledWith(
+        { key: floorSetting.key, value: 75, confirmAboveMeasuredFloor: true },
+        expect.anything()
+      );
+    } finally {
+      floorWarning = undefined;
+    }
+  });
+
+  it('shows the above-measured warning even when an earlier save left an error on the field', () => {
+    // The save sends the confirm flag whenever the warning is truthy, so the warning must win the
+    // helper line over a stale error from a previous attempt - otherwise the flag is sent for a
+    // warning the admin never saw.
+    updateError = new Error('save failed earlier');
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderField(floorSetting, null);
+      fireEvent.change(floorInput(), { target: { value: '75' } });
+
+      expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
+    } finally {
+      floorWarning = undefined;
+      updateError = undefined;
+    }
   });
 
   it('gives a number setting without the flag no unset placeholder', () => {

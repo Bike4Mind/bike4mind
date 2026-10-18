@@ -1,9 +1,27 @@
 import { ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, passthroughField } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { Subscription } from '@server/models/Subscription';
+import { respond } from '@server/utils/respond';
+import { z } from 'zod';
+
+// Must stay in sync with the .select() below and GrantSummary in app/hooks/data/adminOrganizations.ts.
+const grantsResponseSchema = z.object({
+  grants: z.array(
+    z.object({
+      id: z.string(),
+      ownerId: passthroughField,
+      grantedBy: passthroughField,
+      grantedReason: passthroughField,
+      quantity: passthroughField,
+      periodEndsAt: passthroughField,
+    })
+  ),
+  truncated: z.boolean(),
+  limit: z.number(),
+});
 
 /**
  * Returns the set of active admin-granted Subscriptions, scoped to Organizations.
@@ -35,7 +53,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
       );
     }
 
-    return res.status(200).json({ grants, truncated, limit: GRANTS_LIMIT });
+    return respond(res, grantsResponseSchema, { grants, truncated, limit: GRANTS_LIMIT });
   })
 );
 

@@ -57,11 +57,14 @@ function spyOnLogChannels() {
 // regression fails the ratio instead of hanging.
 //
 // In practice the ratio is close to a fixed budget rather than a true ratio: every baseline
-// measured here lands under this floor, so flooring the denominator reduces
-// `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
+// measured here lands under its floor, so flooring the denominator reduces
+// `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * minBaselineMs`.
 // The floor exists because a near-instant call is noise-dominated - without it, timer
 // jitter alone could inflate the ratio past the ceiling.
 const MIN_BASELINE_MS = 25;
+// Floor for heavy inputs whose doubled run takes tens of ms: at MIN_BASELINE_MS the check collapses
+// to a ~75ms budget a loaded runner misses on noise alone, while this gives ~450ms.
+const HEAVY_INPUT_MIN_BASELINE_MS = 150;
 // Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
 // (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
@@ -340,7 +343,7 @@ describe('parseArtifacts - graphically-empty SVG suppression', () => {
       64000,
       out => expect(out).toBe('false'),
       input => String(isSvgGraphicallyEmpty(input)),
-      150
+      HEAVY_INPUT_MIN_BASELINE_MS
     );
   });
 
@@ -592,7 +595,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
         180000,
         (out, input) => expect(out).toBe(input),
         convertCodeBlocksToArtifacts,
-        150
+        HEAVY_INPUT_MIN_BASELINE_MS
       );
     }
   });
@@ -680,7 +683,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       28000,
       (out, input) => expect(out).toBe(input),
       convertCodeBlocksToArtifacts,
-      150
+      HEAVY_INPUT_MIN_BASELINE_MS
     );
   });
 
@@ -743,7 +746,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
         16000,
         (out, input) => expect(out).toBe(input),
         convertCodeBlocksToArtifacts,
-        150
+        HEAVY_INPUT_MIN_BASELINE_MS
       );
     });
   });
@@ -856,14 +859,26 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // and its cost swings with host load, which is the reading the raised floor stops
     // the ratio from turning into a verdict now that the ceiling is the real guard.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 28000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 32000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
+    assertLinearGrowth(
+      n => '<html></html>\n'.repeat(n),
+      28000,
+      noOutputCheck,
+      convertCodeBlocksToArtifacts,
+      HEAVY_INPUT_MIN_BASELINE_MS
+    );
+    assertLinearGrowth(
+      n => '<html>\n'.repeat(n),
+      32000,
+      noOutputCheck,
+      convertCodeBlocksToArtifacts,
+      HEAVY_INPUT_MIN_BASELINE_MS
+    );
     assertLinearGrowth(
       n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n),
       22000,
       noOutputCheck,
       convertCodeBlocksToArtifacts,
-      150
+      HEAVY_INPUT_MIN_BASELINE_MS
     );
   });
 });
@@ -1627,7 +1642,13 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
         (n: number) => '<artifact identifier="a" type="text/plain" title="t">x</artifact>'.repeat(n),
       ],
     ])('stays linear on %s', (_name, build) => {
-      assertLinearGrowth(build, 16000, (out, input) => expect(out).toBe(input), convertCodeBlocksToArtifacts, 150);
+      assertLinearGrowth(
+        build,
+        16000,
+        (out, input) => expect(out).toBe(input),
+        convertCodeBlocksToArtifacts,
+        HEAVY_INPUT_MIN_BASELINE_MS
+      );
     });
 
     // Smaller size: a rescan per held artifact is quadratic, and 16000 of them would hang the runner.
@@ -1638,7 +1659,7 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
         2000,
         (out, input) => expect(out).toBe(input),
         convertCodeBlocksToArtifacts,
-        150
+        HEAVY_INPUT_MIN_BASELINE_MS
       );
     });
   });
@@ -2081,8 +2102,17 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
   });
 
   it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
+    // The tilde input stays cheap (a couple of milliseconds), so the default floor keeps its
+    // ratio sharp on fast hosts.
     assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
-    assertLinearGrowth(n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`, 20000);
+    // ~600KB doubled input, so it takes the heavy-input floor.
+    assertLinearGrowth(
+      n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`,
+      20000,
+      (out, input) => expect(out).toBe(input),
+      convertCodeBlocksToArtifacts,
+      HEAVY_INPUT_MIN_BASELINE_MS
+    );
   });
 
   describe('echoed tool output', () => {

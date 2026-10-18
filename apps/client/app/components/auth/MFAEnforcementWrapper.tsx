@@ -4,6 +4,10 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
+import { registerMfaEnrollmentInterceptor } from '@client/app/utils/mfaEnrollmentInterceptor';
+import { api } from '@client/app/contexts/ApiContext';
+import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import MFAModal from '@client/app/components/common/MFAModal';
 import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
@@ -19,6 +23,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const queryClient = useQueryClient();
   const [showMFASetup, setShowMFASetup] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  // The server answers an unenrolled session with a 403 instead of this tab's settings query
+  // seeing the toggle. That refusal is authoritative even if the status query then errors.
+  const [enrollmentRefused, setEnrollmentRefused] = useState(false);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -43,7 +50,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isPending: setupMFAIsPending,
     data: setupMFAData,
     isError: setupMFAIsError,
+    error: setupMFAError,
   } = setupMFA;
+  // Dismissing the verification prompt is a choice, not a failure: offer to continue instead.
+  const setupVerificationCancelled = setupMFAIsError && isStepUpCancelled(setupMFAError);
   const verifyMFASetup = useVerifyMFASetup();
 
   // Shared by the auto-start effect and the manual retry button (see the enforced-block
@@ -56,12 +66,26 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
         toast.info('Please complete MFA setup to continue');
       },
       onError: (error: any) => {
+        if (isStepUpCancelled(error)) return;
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
       },
     });
   }, [setupMFAMutate]);
+
+  // The server refuses a session that owes enrollment as soon as its own settings cache sees
+  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
+  // first refusal so the enrollment flow renders instead of an app whose every call fails.
+  useEffect(
+    () =>
+      registerMfaEnrollmentInterceptor(api, () => {
+        setEnrollmentRefused(true);
+        void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
+        void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+      }),
+    [queryClient]
+  );
 
   useEffect(() => {
     if (showMFASetup) {
@@ -99,8 +123,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
     setIsLoading(false);
 
-    // If MFA query failed (and we were checking), skip enforcement (allow normal app access)
-    if (shouldCheckMFA && mfaQueryFailed) {
+    // If MFA query failed (and we were checking), skip enforcement (allow normal app access) -
+    // unless the server itself already refused a call for enrollment, which settles the question.
+    if (shouldCheckMFA && mfaQueryFailed && !enrollmentRefused) {
       return;
     }
 
@@ -133,6 +158,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     setupMFAIsError,
     adminSettings,
     adminSettingsLoading,
+    enrollmentRefused,
   ]);
 
   const handleMFAVerification = (token: string) => {
@@ -218,11 +244,13 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     );
   }
 
-  // If MFA is enforced and user hasn't configured it, block access
-  // But only if the MFA query succeeded (don't block if query failed)
-  if (enforceMFA && !mfaQueryFailed && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
+  // If MFA is enforced and user hasn't configured it, block access.
+  // A failed status query normally leaves the app alone, but an observed enrollment refusal is
+  // the server telling us this session owes enrollment, so it blocks regardless.
+  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
     return (
       <Box
+        data-testid="mfa-enforcement-required-screen"
         sx={{
           display: 'flex',
           justifyContent: 'center',
@@ -242,7 +270,16 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           access the application.
         </Alert>
 
-        {setupMFAIsError ? (
+        {setupVerificationCancelled ? (
+          <>
+            <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+              Confirm it&apos;s you to start MFA setup.
+            </Typography>
+            <Button data-testid="mfa-enforcement-continue-btn" onClick={startMfaSetup} loading={setupMFAIsPending}>
+              Continue MFA setup
+            </Button>
+          </>
+        ) : setupMFAIsError ? (
           // A failed setup used to dead-end here on "please wait" forever (the auto-retry
           // guard intentionally won't re-fire, and the only signal was a toast that has
           // faded). Give the user an explicit way back in.

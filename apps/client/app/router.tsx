@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -34,6 +34,7 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -42,6 +43,7 @@ const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
+const IntegrationsPage = lazy(() => import('./routes/integrations/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
@@ -53,6 +55,11 @@ const SkillsPage = lazy(() => import('./routes/skills'));
 const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
+const SkillMarketPage = lazy(() => import('./routes/skills/market'));
+const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
+const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
+const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
@@ -364,6 +371,25 @@ const gearsRoute = createRoute({
   ),
 });
 
+// Integrations - the directory of every integration and model provider, with roadmap requests.
+// Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const CONNECTIONS_TABS = ['integrations', 'api-keys'] as const;
+export type ConnectionsTab = (typeof CONNECTIONS_TABS)[number];
+
+export const integrationsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/integrations',
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource; tab?: ConnectionsTab } => ({
+    source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+    tab: CONNECTIONS_TABS.find(t => t === search.tab),
+  }),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <IntegrationsPage />
+    </Suspense>
+  ),
+});
+
 // Projects index route (replaces /projects/index.tsx)
 const projectsRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -605,6 +631,24 @@ const newSkillRoute = createRoute({
     </Suspense>
   ),
 });
+
+// Skill Market. Static `market` segments outrank the `/skills/$id` param route in Tanstack's
+// ranking, so /skills/market never resolves as a skill id.
+const marketRoute = <TPath extends string>(path: TPath, Page: LazyExoticComponent<FC>) =>
+  createRoute({
+    getParentRoute: () => layoutRoute,
+    path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Page />
+      </Suspense>
+    ),
+  });
+const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
+const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
+const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
+const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
 
 const skillDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1208,6 +1252,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
+    integrationsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
@@ -1225,6 +1270,11 @@ const routeTree = rootRoute.addChildren([
     newSkillRoute,
     skillDetailRoute,
     editSkillRoute,
+    skillMarketRoute,
+    mySkillListingsRoute,
+    skillReviewQueueRoute,
+    unlistedSkillListingRoute,
+    skillListingRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,

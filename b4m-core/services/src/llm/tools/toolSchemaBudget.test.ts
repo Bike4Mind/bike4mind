@@ -3,7 +3,7 @@ import { ToolBuilder, type ToolBuilderConfig, type BuildToolsArgs } from './Tool
 import { b4mTools } from './index';
 import { AUTO_ADDED_TOOL_NAMES, resolveEnabledTools } from '../ChatCompletionProcess';
 import { createTokenizer } from '@bike4mind/utils';
-import { VIDEO_MODEL_IDS } from '@bike4mind/common';
+import { MUSIC_MODEL_IDS, VIDEO_MODEL_IDS } from '@bike4mind/common';
 
 /**
  * Tool schemas are serialized into every completion request whether or not the model calls one, so
@@ -40,7 +40,7 @@ const UNLISTED_TOOL_CEILING = 600;
 const AUTO_ADDED_CEILING = 1500;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
 /** Headroom for a few new tools, so legitimate growth does not force a ceiling bump. */
-const WHOLE_REGISTRY_CEILING = 10600;
+const WHOLE_REGISTRY_CEILING = 10900;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -49,9 +49,13 @@ const WHOLE_REGISTRY_CEILING = 10600;
  */
 const KNOWLEDGE_AUTO_OFFER = resolveEnabledTools({ requestTools: [], hasAttachedKnowledge: true });
 
-// video_generation builds an inert tool without a config; measure the real schema for every catalog model.
+// The job tools build an inert tool without a config; measure the real schema for every catalog model.
 const REPRESENTATIVE_VIDEO_CONFIG = {
   usableModels: VIDEO_MODEL_IDS,
+  createJob: vi.fn(),
+};
+const REPRESENTATIVE_MUSIC_CONFIG = {
+  usableModels: MUSIC_MODEL_IDS,
   createJob: vi.fn(),
 };
 
@@ -73,7 +77,7 @@ function buildSchemas(enabledTools: string[]) {
       quest: {} as never,
       saveQuest: vi.fn() as never,
       llm: {} as never,
-      config: { video_generation: REPRESENTATIVE_VIDEO_CONFIG },
+      config: { video_generation: REPRESENTATIVE_VIDEO_CONFIG, music_generation: REPRESENTATIVE_MUSIC_CONFIG },
     } as unknown as BuildToolsArgs) ?? []
   );
 }

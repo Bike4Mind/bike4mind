@@ -1,7 +1,7 @@
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
 import { verifyCallback } from '@server/utils/auth/verifyCallback';
@@ -23,6 +23,7 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from './tokenGenerator';
 import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
 import { verifyJwtPayload } from './verifyJwtPayload';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
@@ -82,6 +83,51 @@ const MFA_PENDING_ALLOWED_PATHS = new Set([
   '/api/identify', // read-only whoami
   '/api/settings/fetch', // MFAEnforcementWrapper reads enforceMFA
 ]);
+
+// What a full session that owes MFA enrollment (isMfaEnrollmentOwed) may still reach: the
+// mfaPending set, the step-up routes setup demands of a session that is not a fresh sign-in, and
+// the consent recording endpoint (the consent gate runs first and admits only its own allowlist,
+// so without it a user owing both could satisfy neither).
+const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
+  ...MFA_PENDING_ALLOWED_PATHS,
+  '/api/auth/step-up',
+  '/api/auth/step-up/options',
+  '/api/auth/step-up/email/send',
+  '/api/user/accept-policies',
+]);
+
+function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
+  const path = req.url.split('?')[0];
+  if (MFA_ENROLLMENT_ALLOWED_PATHS.has(path)) return true;
+  // auth/success bootstraps the current user from its own profile after a sign-in.
+  return req.method === 'GET' && path === `/api/users/${userId}`;
+}
+
+/**
+ * enforceMFA for sessions minted before it applied: the sign-in gate (resolveSecondFactor) only
+ * binds new sign-ins, so an existing session, and every access token its refresh chain mints,
+ * is confined here to the enrollment routes until the user enrolls. 403, not 401, so the client
+ * does not run its token-refresh cascade; MFAEnforcementWrapper renders the enrollment flow.
+ * API keys are exempt (they are not a sign-in). A failed settings read fails closed (next(err)).
+ */
+async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unknown) => void): Promise<void> {
+  const user = req.user as (IUserDocument & { impersonatedBy?: string }) | undefined;
+  if (!user || req.apiKeyInfo || isMfaEnrollmentAllowedRoute(req, user.id)) {
+    return next();
+  }
+  try {
+    if (!(await isMfaEnrollmentOwed(user, { impersonatedBy: user.impersonatedBy }))) return next();
+  } catch (err) {
+    return next(err);
+  }
+  req.logger?.info(`[AUTH] Blocked ${req.url} for user ${user.id}: MFA enrollment required.`);
+  res.status(403).json({
+    error: MFA_ENROLLMENT_REQUIRED_MESSAGE,
+    error_description: 'Multi-factor authentication is required. Set it up to continue.',
+    mfaEnrollmentRequired: true,
+    request_id: req.requestId,
+  });
+}
 
 const handler = nc<Request, Response>();
 
@@ -149,6 +195,10 @@ export const auth = handler
       });
     }
 
+    next();
+  })
+  .use(mfaEnrollmentGate)
+  .use((req, res, next) => {
     req.logger ??= new Logger();
     req.logger.updateMetadata({ userId: req.user?.id });
 

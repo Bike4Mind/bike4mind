@@ -13,6 +13,7 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -72,6 +73,7 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       mfaPending?: boolean;
       typ?: string;
       kind?: string;
+      impersonatedBy?: string;
     };
 
     // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
@@ -126,6 +128,13 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
     // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
     // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
     assertAccountStateUsable(user);
+
+    // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
+    // ForbiddenError so a transport that maps error classes (the Function-URL adapter, the
+    // ws-completions JWT catch) answers 403 with this message rather than a generic 401.
+    if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+      throw new ForbiddenError(`${MFA_ENROLLMENT_REQUIRED_MESSAGE} Set it up in the web app to continue.`);
+    }
 
     return {
       id: user.id,
@@ -369,6 +378,8 @@ export async function checkApiKeyRateLimitOrThrow(
  */
 const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
   cli: 1000,
+  // Never applies: a desktop request matches the client bucket below first and gets its cap.
+  desktop: 100,
   agent: 1000,
   api: 100,
   web: 100,
@@ -403,9 +414,7 @@ export type JwtRateLimitBucket = 'tools' | 'desktop' | 'ws' | 'completions';
  * past 1000 would lock the same user's CLI out of its own 1000 until the window closed - see the
  * JwtRateLimitBucket note above.
  *
- * Only the ceiling moves. A matched client never changes `source`, so credit and analytics keep
- * the route's own source (`api` on the SSE route, `cli` on the WS route) - on the SSE route that is
- * deliberately alongside third-party API clients, not as `cli`.
+ * Source attribution is resolved separately by the shared request classifier.
  */
 const JWT_RATE_LIMIT_BY_CLIENT: ReadonlyArray<{ pattern: RegExp; limit: number; bucket: JwtRateLimitBucket }> = [
   { pattern: /^b4m-desktop\//i, limit: 6000, bucket: 'desktop' },
