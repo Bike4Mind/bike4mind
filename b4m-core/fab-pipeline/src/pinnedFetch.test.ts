@@ -1,8 +1,9 @@
 import dns from 'dns';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
-import type { AddressInfo, Socket } from 'net';
+import { isIP, type AddressInfo, type Socket } from 'net';
 import { gzipSync } from 'zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NEVER_ADMITTED_NETWORKS, customMcpPrivateCidrProblem } from '@bike4mind/common';
 import {
   PinnedFetchError,
   buildPrivateAddressAdmission,
@@ -310,6 +311,17 @@ describe('buildPrivateAddressAdmission', () => {
     // Their opted-in neighbours stay reachable.
     expect(admit('fd00::5', 6)).toBe(true);
     expect(admit('100.64.0.1', 4)).toBe(true);
+  });
+
+  it('refuses every never-admitted network that the settings validator refuses, under a catch-all CIDR', () => {
+    const admit = buildPrivateAddressAdmission({ allowPrivateCidrs: ['0.0.0.0/0', '::/0'] });
+    for (const { cidr } of NEVER_ADMITTED_NETWORKS) {
+      expect(customMcpPrivateCidrProblem(cidr)).not.toBeNull();
+      const network = cidr.split('/')[0]!;
+      const family = isIP(network);
+      expect(admit(network, family)).toBe(false);
+      expect(buildPrivateAddressAdmission({ allowPrivateCidrs: [cidr] })(network, family)).toBe(false);
+    }
   });
 
   it('rejects a malformed CIDR', () => {
