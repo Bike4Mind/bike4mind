@@ -2129,7 +2129,10 @@ describe('ChatCompletionProcess', () => {
     });
 
     describe('caller abortSignal (wait=true deadline)', () => {
-      function arrangeTurn({ hangUntilAbort = false }: { hangUntilAbort?: boolean } = {}) {
+      function arrangeTurn({
+        hangUntilAbort = false,
+        pricing = {},
+      }: { hangUntilAbort?: boolean; pricing?: Record<number, { input: number; output: number }> } = {}) {
         let signalSeen: AbortSignal | undefined;
         let markBackendCalled: () => void = () => {};
         const backendCalled = new Promise<void>(resolve => {
@@ -2161,7 +2164,7 @@ describe('ChatCompletionProcess', () => {
             max_tokens: 100,
             contextWindow: 1000,
             can_stream: false,
-            pricing: {},
+            pricing,
             supportsImageVariation: false,
           },
         ]);
@@ -2300,7 +2303,8 @@ describe('ChatCompletionProcess', () => {
           incrementCredits,
         };
         mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
-        const { body, backendCalled } = arrangeTurn();
+        // enforceCredits refuses an unpriced model at admission (modelAdmission.ts), so price it.
+        const { body, backendCalled } = arrangeTurn({ pricing: { 200_000: { input: 1e-6, output: 2e-6 } } });
         const external = new AbortController();
 
         const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
