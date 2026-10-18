@@ -77,7 +77,11 @@ export function createOptimisticPromptBubble(
   // downstream patchers (swapOptimisticPromptBubbleId,
   // appendReplyToLatestOptimisticBubble) spread existing fields, so this value
   // survives until the real Quest replaces the bubble.
-  routingSource?: IChatHistoryItemDocument['routingSource']
+  routingSource?: IChatHistoryItemDocument['routingSource'],
+  // The send's per-message attachments. MessageContent only fetches a bubble's attachment
+  // chips when `fabFileIds` is set, and the id swap keeps it, so the chip renders once the
+  // bubble carries the real Quest id.
+  fabFileIds?: string[]
 ) {
   const optimisticQuest: Optimistic<IChatHistoryItemDocument> = {
     id: `optimistic-quest-${sessionId}-${Date.now()}`,
@@ -92,6 +96,7 @@ export function createOptimisticPromptBubble(
     updatedAt: new Date(),
     _optimistic: true,
     ...(routingSource ? { routingSource } : {}),
+    ...(fabFileIds?.length ? { fabFileIds } : {}),
   };
   setOptimisticQueryData(queryClient, ['quests', 'session', sessionId], optimisticQuest);
 }

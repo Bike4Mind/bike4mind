@@ -129,6 +129,23 @@ describe('startAgentExecution', () => {
     expect(mockPersistLinkedQuestId).toHaveBeenCalledWith('exec1', 'quest1');
   });
 
+  it('records the per-message attachments on the prompt Quest, as the chat path does', async () => {
+    await startAgentExecution(
+      input({ userId: 'attachments', messageFileIds: ['file-csv'], sessionFabFileIds: ['file-pinned'] }),
+      logger
+    );
+
+    // Message files only: session files live on the session and would otherwise render as a
+    // chip on every agent turn.
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: ['file-csv'] }));
+  });
+
+  it('records an empty attachment list on the prompt Quest when the send has none', async () => {
+    await startAgentExecution(input({ userId: 'no-attachments' }), logger);
+
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: [] }));
+  });
+
   it('rejects a session the caller does not own without creating anything', async () => {
     const cmd = input({ userId: 'not-owner' });
     mockSessionFindById.mockResolvedValue({ id: 's1', userId: 'someone-else' });
