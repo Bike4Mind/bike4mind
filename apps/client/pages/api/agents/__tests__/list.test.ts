@@ -21,28 +21,39 @@ vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls:
 
 await import('../index');
 
+const OWNER_ONLY_FIELDS = {
+  systemPrompt: 'secret prompt',
+  currentCredits: 500,
+  memoryJournal: [{ id: 'm1' }],
+  worldMemory: [{ id: 'w1' }],
+  pendingMessages: [{ id: 'p1' }],
+  tavernSessionId: 'session-1',
+};
+
 describe('GET /api/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.refreshAgentAvatarUrls.mockImplementation(async (agents: unknown[]) => agents);
     h.searchAccessible.mockResolvedValue({
       data: [
-        { id: 'mine', userId: 'viewer', tavernSessionId: 'session-mine' },
-        { id: 'shared', userId: 'other', tavernSessionId: 'session-shared', users: [{ userId: 'viewer' }] },
+        { id: 'mine', userId: 'viewer', ...OWNER_ONLY_FIELDS },
+        { id: 'shared', userId: 'other', name: 'Shared', ...OWNER_ONLY_FIELDS, users: [{ userId: 'viewer' }] },
       ],
       total: 2,
     });
   });
 
-  it("strips tavernSessionId from shared agents, keeping the caller's own", async () => {
+  it("returns shared agents through the viewer allowlist, keeping the caller's own whole", async () => {
     const json = vi.fn();
     await h.handler!({ user: { id: 'viewer' }, query: {} }, { json });
 
     const { data, total } = json.mock.calls[0][0];
     expect(total).toBe(2);
-    expect(data[0]).toMatchObject({ id: 'mine', tavernSessionId: 'session-mine' });
-    expect(data[1]).toMatchObject({ id: 'shared' });
-    expect(data[1]).not.toHaveProperty('tavernSessionId');
+    expect(data[0]).toEqual({ id: 'mine', userId: 'viewer', ...OWNER_ONLY_FIELDS });
+    expect(data[1]).toMatchObject({ id: 'shared', name: 'Shared' });
+    for (const field of Object.keys(OWNER_ONLY_FIELDS)) expect(data[1]).not.toHaveProperty(field);
+    expect(data[1]).not.toHaveProperty('users');
+    expect(data[1]).not.toHaveProperty('userId');
   });
 
   // A shared viewer must not be able to sort by the redacted field to learn its order.
