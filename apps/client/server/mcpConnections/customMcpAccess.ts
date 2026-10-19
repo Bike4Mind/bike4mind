@@ -36,7 +36,7 @@ export interface CustomMcpContext {
    */
   enabled: boolean;
   /** Set when `enabled` is false for a reason other than a switch being off. */
-  disabledReason?: 'platform_blocklist_invalid';
+  disabledReason?: 'platform_blocklist_invalid' | 'org_policy_invalid';
   /**
    * The resolved `customMcpPolicy` for each org the user is a member of, or the platform value
    * alone for a user in no org. Every one is applied: any org can close a host, none can reopen it.
@@ -154,11 +154,18 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
   for (const entry of policyEntries) warnOnDroppedOverrides('customMcpPolicy', entry);
   // An empty blocklist would quietly reopen every host the operator closed, so fail closed instead.
   const blocklistInvalid = platform.customMcpBlockedHosts.platformRejected === true;
+  // A skipped org override falls back to the platform value, which may be laxer than what the org set.
+  const orgPolicyInvalid = policyEntries.some(entry => (entry.ignoredOverrides?.length ?? 0) > 0);
   const privateNetworks = platform.customMcpAllowPrivateNetworks.value;
   const selfHostPrivate = isSelfHost() ? privateNetworks : undefined;
   return {
-    enabled: !blocklistInvalid && policies.every(policy => isCustomMcpEnabled(platformFlag, policy)),
-    ...(blocklistInvalid ? { disabledReason: 'platform_blocklist_invalid' as const } : {}),
+    enabled:
+      !blocklistInvalid && !orgPolicyInvalid && policies.every(policy => isCustomMcpEnabled(platformFlag, policy)),
+    ...(blocklistInvalid
+      ? { disabledReason: 'platform_blocklist_invalid' as const }
+      : orgPolicyInvalid
+        ? { disabledReason: 'org_policy_invalid' as const }
+        : {}),
     policies,
     platformBlockedHosts: platform.customMcpBlockedHosts.value.hosts,
     organizationIds: orgIds,

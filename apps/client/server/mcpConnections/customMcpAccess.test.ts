@@ -147,6 +147,17 @@ describe('resolveCustomMcpContext', () => {
       expect(warn.mock.calls[0][0]).toContain("'customMcpPolicy' at organization scope org-a");
     });
 
+    it('fails closed when an org policy failed validation, rather than falling back to the platform value', async () => {
+      state.orgIds = ['org-a'];
+      state.policyEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
+      const context = await resolveCustomMcpContext('u1');
+      expect(context).toMatchObject({ enabled: false, disabledReason: 'org_policy_invalid' });
+      await expect(assertCustomMcpEnabled({ id: 'u1' })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { code: 'policy_blocked', reason: 'org_policy_invalid' },
+      });
+    });
+
     it('warns once per process for each key and scope', async () => {
       state.privateNetworksEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
       await resolveCustomMcpContext('u1');
