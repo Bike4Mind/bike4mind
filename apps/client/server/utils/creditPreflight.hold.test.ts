@@ -137,6 +137,8 @@ describe('holdPreflightCredits', () => {
 
     await expect(held.settle(4, entry)).resolves.toBe(4);
 
+    // The over-reserve still went back to the user even though its ledger row did not land.
+    expect(balance.current).toBe(6);
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('settlement failed'), expect.anything());
   });
 
