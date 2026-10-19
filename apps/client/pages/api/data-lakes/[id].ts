@@ -78,13 +78,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // supporting detail on this endpoint, and a lake that cannot be opened at all is much worse
     // than one whose counts are briefly missing. Logged so it is not silent.
     if (dataLakeService.isFallbackLake(dataLake)) {
+      // respond() stays outside the try: a response-boundary failure is a 500, not a stats outage.
+      let stats: { fileCount: number; totalSizeBytes: number } | undefined;
       try {
-        const stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
-        return respond(res, dataLakeResponseSchema, {
-          ...redacted,
-          fileCount: stats.fileCount,
-          totalSizeBytes: stats.totalSizeBytes,
-        });
+        stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
       } catch (error) {
         // `.error` not `.warn`, since a stats-lookup failure here is worth surfacing at error
         // level even though the endpoint still succeeds. `err` is the message, not the raw
@@ -92,6 +89,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         req.logger?.error('[dataLakes] registry lake stats unavailable; returning lake without counts', {
           err: error instanceof Error ? error.message : String(error),
           lakeId: dataLake.id,
+        });
+      }
+      if (stats) {
+        return respond(res, dataLakeResponseSchema, {
+          ...redacted,
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
         });
       }
     }
