@@ -428,7 +428,11 @@ const IterationStream: FC<IterationStreamProps> = ({
         </Typography>
       ) : null}
       {execution.status === 'failed' && execution.failureReason ? (
-        <Typography level="body-sm" sx={{ color: 'danger.softColor' }}>
+        <Typography
+          level="body-sm"
+          sx={{ color: 'danger.softColor' }}
+          data-testid={`iteration-stream-${executionId}-failure`}
+        >
           {execution.failureReason === 'tool_denied' ? (
             (execution.errorMessage ?? 'Execution stopped: a tool call was denied.')
           ) : (

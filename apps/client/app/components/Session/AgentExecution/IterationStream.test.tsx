@@ -172,6 +172,38 @@ describe('IterationStream — render', () => {
     expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`permission-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
   });
+
+  describe('failure line', () => {
+    const renderFailed = (overrides: Partial<ParentExecution>) => {
+      mocks.execution = makeExecution({ status: 'failed', ...overrides });
+      render(
+        <TestWrapper>
+          <IterationStream executionId={EXECUTION_ID} />
+        </TestWrapper>
+      );
+      return screen.getByTestId(`iteration-stream-${EXECUTION_ID}-failure`);
+    };
+
+    it('shows the denial text for tool_denied instead of "Failed: tool_denied"', () => {
+      const line = renderFailed({
+        failureReason: 'tool_denied',
+        errorMessage: 'Execution stopped: you denied "web_search".',
+      });
+      expect(line).toHaveTextContent('Execution stopped: you denied "web_search".');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
+    it('falls back to a generic denial line when tool_denied has no message', () => {
+      const line = renderFailed({ failureReason: 'tool_denied' });
+      expect(line).toHaveTextContent('Execution stopped: a tool call was denied.');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
+    it('keeps "Failed: <reason> - <message>" for other reasons', () => {
+      const line = renderFailed({ failureReason: 'error', errorMessage: 'boom' });
+      expect(line).toHaveTextContent('Failed: error \u2014 boom');
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

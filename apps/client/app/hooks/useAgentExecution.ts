@@ -205,9 +205,10 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
 /**
  * Prompt-bubble text for a `failed` run. A `tool_denied` stop is a decision (the user
  * clicked Deny, or policy blocks the tool), not a crash, so it shows the server's denial
- * text - the same text both deny paths persist on the Quest (`server/websocket/agentExecute.ts`
- * and `workers/.../agentExecutorUtils/toolPermissions.ts`), so the bubble keeps its wording
- * when the persisted Quest replaces it. Every other reason stays generic.
+ * text - the same text both deny paths persist on the Quest (`apps/client/server/websocket/agentExecute.ts`
+ * and `apps/workers/src/queueHandlers/agentExecutorUtils/toolPermissions.ts`), so the bubble
+ * keeps its wording when the persisted Quest replaces it. Every other reason stays generic
+ * and carries no internal details.
  */
 export function failedRunReply(reason?: string, toolName?: string, message?: string): string {
   if (reason !== 'tool_denied') return 'Agent execution failed.';
