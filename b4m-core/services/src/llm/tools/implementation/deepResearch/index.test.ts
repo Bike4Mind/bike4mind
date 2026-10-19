@@ -131,6 +131,38 @@ describe('performDeepResearch citation numbering', () => {
     expect(result.data.finalAnalysisPrompt).not.toContain('unused');
   });
 
+  it('leaves a finding with a non-http source on its legacy label', async () => {
+    const webUrl = 'https://research.example/web';
+    const ftpUrl = 'ftp://research.example/offline.txt';
+    createFirecrawlApp.mockReturnValue({
+      search: vi.fn(async () => ({
+        data: [
+          { url: webUrl, title: 'Web source' },
+          { url: ftpUrl, title: 'Offline note' },
+        ],
+      })),
+      scrapeUrl: vi.fn(async (url: string) => ({ markdown: `Finding from ${url}`, error: null })),
+    });
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map((source, index) => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: index + 4 },
+      }))
+    );
+    const context = { ...makeContext(), registerCitables };
+
+    const result = await performDeepResearch(context, { topic: 'research topic' }, { maxDepth: 1, duration: 1 });
+
+    expect(result.success).toBe(true);
+    expect(registerCitables).toHaveBeenCalledTimes(1);
+    expect(registerCitables.mock.calls[0][0].map(source => source.url)).toEqual([webUrl]);
+    const prompt = result.data.finalAnalysisPrompt;
+    expect(prompt).toContain(`[4]: Finding from ${webUrl}`);
+    expect(prompt).toContain(`[From ${ftpUrl}]: Finding from ${ftpUrl}`);
+    expect(prompt.split('Sources:')[1]).not.toContain('Offline note');
+  });
+
   it('keeps legacy link citations when no registrar is wired', async () => {
     const url = 'https://research.example/only';
     createFirecrawlApp.mockReturnValue({

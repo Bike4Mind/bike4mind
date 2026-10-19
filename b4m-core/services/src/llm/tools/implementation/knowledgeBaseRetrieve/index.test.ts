@@ -1921,4 +1921,40 @@ describe('retrieve_knowledge_content registered citations', () => {
     const sources = updates.flatMap(([update]) => update.promptMeta?.citables ?? []);
     expect(sources.map(source => source.metadata?.citationIndex)).toEqual([7]);
   });
+
+  it('keeps registered numbers aligned when a zero-chunk file sits mid-list', async () => {
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map((source, index) => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: index + 7 },
+      }))
+    );
+    const ctx = makeContext({ retrievalFilter: undefined, registerCitables });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        id === 'b' || opts?.afterChunkId ? [] : [{ id: 'k1', text: `body of ${id}` }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        makeFile({ id: 'a', fileName: 'Alpha.pdf' }),
+        makeFile({ id: 'b', fileName: 'Bravo.pdf' }),
+        makeFile({ id: 'c', fileName: 'Charlie.pdf' }),
+      ],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'q' })) as string;
+
+    expect(registerCitables).toHaveBeenCalledOnce();
+    expect(registerCitables.mock.calls[0][0].map(source => source.id)).toEqual(['a', 'c']);
+    expect(out).toContain('### [7] Alpha.pdf');
+    expect(out).toContain('### [8] Charlie.pdf');
+    expect(out).not.toContain('### [8] Bravo');
+    expect(out).not.toContain('### [7] Bravo');
+    const updates = vi.mocked(ctx.statusUpdate).mock.calls;
+    const sources = updates.flatMap(([update]) => update.promptMeta?.citables ?? []);
+    expect(sources.map(source => source.metadata?.citationIndex)).toEqual([7, 8]);
+  });
 });
