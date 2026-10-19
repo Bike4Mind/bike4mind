@@ -19,6 +19,7 @@ import {
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -317,6 +318,9 @@ const handler = baseApi({ auth: false })
     // Self-host bootstrap: a fresh install has no admin to issue invites or enable
     // open registration, so the first account skips the invite gate and gets admin.
     const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
+    // The code above proved ownership of normalizedEmail, so an enabled partner-domain rule may
+    // admit it without an invite. Decided here, not in registerUser, where the email is unverified.
+    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
@@ -362,7 +366,7 @@ const handler = baseApi({ auth: false })
             creditLots: creditLotRepository,
           },
           logger: req.logger,
-          skipInviteCheck: isBootstrapUser,
+          skipInviteCheck: isBootstrapUser || partnerDomainAllowed,
         }
       );
     } catch (err) {

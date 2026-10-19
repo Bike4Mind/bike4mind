@@ -1032,6 +1032,77 @@ describe('verifyCallback - invite gate on federated first login', () => {
   });
 });
 
+describe('verifyCallback - partner-domain bypass of the invite gate', () => {
+  const partnerProfile = (verified: boolean | undefined, email = 'new@partner.example') => ({
+    id: 'sub-partner',
+    displayName: 'Partner Person',
+    emails: [{ value: email, ...(verified === undefined ? {} : { verified }) }],
+  });
+  const matchedGrant = {
+    matched: true,
+    ruleId: 'rule-1',
+    domain: 'partner.example',
+    entitlements: new Set(),
+    signupCredits: 0,
+    organizationId: null,
+    tags: [],
+    subscription: null,
+  };
+
+  beforeEach(() => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'u-partner', ...doc }));
+  });
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github])(
+    'lets a %s first login with a verified email on an enabled partner rule register',
+    async strategy => {
+      mockPartnerGrant.mockResolvedValue(matchedGrant);
+
+      const { user, info } = await runStandard(strategy, partnerProfile(true));
+
+      expect(user).toBeTruthy();
+      expect(info).toBeUndefined();
+      expect(mockCreate).toHaveBeenCalled();
+      expect(mockPartnerGrant).toHaveBeenCalledWith('new@partner.example', true);
+    }
+  );
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github])(
+    'still refuses a %s first login whose domain has no enabled rule',
+    async strategy => {
+      const { user, info } = await runStandard(strategy, partnerProfile(true, 'new@other.example'));
+
+      expect(user).toBeFalsy();
+      expect(info).toMatchObject({ code: 'registration_closed' });
+      expect(mockCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([false, undefined])('refuses a partner-domain email the provider marked verified=%s', async verified => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+
+    const { user, info } = await runStandard(AuthStrategy.Google, partnerProfile(verified));
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'registration_closed' });
+    expect(mockCreate).not.toHaveBeenCalled();
+    // An unverified email never reaches the rule lookup.
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the rules when open registration is on', async () => {
+    mockIsOpenRegistrationAllowed.mockResolvedValue(true);
+
+    const { user } = await runStandard(AuthStrategy.Google, partnerProfile(true, 'new@other.example'));
+
+    expect(user).toBeTruthy();
+    // The only lookup is the post-create signup grant, never the gate.
+    expect(mockPartnerGrant).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('verifyCallback - starter credits on OAuth signup', () => {
   const verifiedProfile = {
     id: 'provider-id-1',
