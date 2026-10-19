@@ -1,3 +1,4 @@
+// any: vitest mock shapes; test files are not typechecked
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { dispatch } from './whatsNewHighlights';
 import { AdminSettings, ModalModel, connectDB } from '@bike4mind/database';

@@ -153,7 +153,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         checks.push({
           name: 'LLM Analysis',
           status: 'warning',
-          message: `Unknown model: ${config.modelId}`,
+          message: `Model not servable: ${config.modelId}`,
         });
       }
     } else {

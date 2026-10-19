@@ -25,7 +25,7 @@ export default class TitanBedrockBackend extends BaseBedrockBackend {
     // still configured to one of these IDs then fails fast at the request-time availability check
     // (ChatCompletionInvoke) with a clean "model is not available" error instead of a raw Bedrock
     // 404 - and stops paging LiveOps. The ChatModels enum members are intentionally retained:
-    // supportedChatModels (z.enum(ChatModels)) validates persisted agent.preferredModel and action
+    // supportedChatModels (z.enum(ChatModels) minus the dated gpt-5.4-mini snapshot) validates persisted agent.preferredModel and action
     // summaryModelId values, so dropping the enum entries would reject historical records that
     // still reference these IDs.
     return [];

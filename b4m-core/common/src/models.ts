@@ -313,11 +313,11 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-export const CHAT_MODELS = Object.values(ChatModels);
 // The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
 // it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
 export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
+export const CHAT_MODELS = supportedChatModels.options;
 export const SERVABLE_CHAT_MODELS: string[] = [...supportedChatModels.options];
 
 /**
