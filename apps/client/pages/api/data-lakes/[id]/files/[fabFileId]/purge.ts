@@ -3,7 +3,6 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
-  changeStorageSize,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeFindingRepository,
@@ -11,7 +10,6 @@ import {
   fabFileChunkRepository,
   sessionRepository,
   withTransaction,
-  User,
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -22,6 +20,8 @@ import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
+import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
+import { storageOwnerOf } from '@bike4mind/common';
 import { isValidObjectId } from '@server/utils/objectId';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -145,22 +145,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         shredDocumentMemory: async ({ tagNames, fabFileId: source, ownerUserId, purgingLake }) => {
           await shredMemoryForLakeTags(tagNames, source, ownerUserId, purgingLake, { logger: req.logger });
         },
-        onPurged: async ({ ownerUserId, fileSize, tagNames }) => {
+        onPurged: async ({ ownerUserId, ownerOrganizationId, fileSize, tagNames }) => {
           // Return the bytes, mirroring the +size that the upload event added. Every other
           // destruction path (single + bulk file delete, the drive-lake ingest sweep) does the
           // same; without it a purging owner's quota ratchets down with no way back but an admin
-          // recalculate. The OWNER's, not the caller's - an admin may purge someone else's
-          // document. `fileSize` is 0 unless this call removed the row and the row was charged
+          // recalculate. The OWNER's (the owning org's, else the uploader's), not the caller's - an
+          // admin may purge someone else's document. `fileSize` is 0 unless this call removed the row and the row was charged
           // (`chargedBytes`), so this can never refund bytes that are still held.
           if (fileSize > 0) {
             try {
-              await withTransaction(async session => {
-                const owner = await User.findById(ownerUserId).session(session);
-                if (owner) {
-                  await changeStorageSize(owner, -fileSize);
-                  await owner.save({ session });
-                }
-              });
+              const owner = storageOwnerOf({ userId: ownerUserId, organizationId: ownerOrganizationId });
+              await withTransaction(session => adjustOwnerStorageInSession(owner, -fileSize, session));
             } catch (error) {
               req.logger.error('Error returning storage size after a permanent lake-document delete:', {
                 error: error instanceof Error ? error.message : 'Unknown error',

@@ -11,6 +11,7 @@ import {
   fabFileRepository,
   fabFileChunkRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -109,6 +110,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
           },
           enableDriveConnection: async ({ dataLakeId }) => {
@@ -157,6 +159,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
             // A restore puts the lake's files back inside every lake read, which is a membership
             // join the change log has to carry - the delete side already logged their removals.
@@ -181,6 +184,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             fabFiles: fabFileRepository,
             fabFileChunks: fabFileChunkRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
             // The teardown's soft delete takes every member file out of every lake read, which is
             // a membership departure - the restore door records the matching rejoins.

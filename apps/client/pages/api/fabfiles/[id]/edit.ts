@@ -13,6 +13,7 @@ import {
   adminSettingsRepository,
   fabFileRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -34,7 +35,11 @@ import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
-const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
+const rewriteStorageDb = {
+  fabFiles: fabFileRepository,
+  users: userRepository,
+  organizations: organizationRepository,
+};
 
 const handler = baseApi()
   .use((req, res, next) => {

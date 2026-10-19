@@ -1,8 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
 import {
-  User,
   adminSettingsRepository,
-  changeStorageSize,
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileChunkRepository,
@@ -12,11 +10,19 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { isDataLakeTagName, matchesTagPrefixArm, type IFabFile, type IFabFileDocument } from '@bike4mind/common';
+import {
+  isDataLakeTagName,
+  matchesTagPrefixArm,
+  storageOwnerOf,
+  type IFabFile,
+  type IFabFileDocument,
+  type StorageOwner,
+} from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
+import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
 import { evaluateConnectorCopyDeletion } from '@server/integrations/google/drive/connectorCopyGate';
 import { getFilesStorage } from '@server/utils/storage';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
@@ -42,10 +48,11 @@ export type LakeIngestRetirerContext = {
 export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
   const { lake, membershipActor, replacementOwnerId, logTag, logger } = ctx;
 
-  // Bytes reclaimed by the full deletes below, accumulated PER OWNER: after a reconnect the copies
-  // one run retires can belong to more than one user (see retireSupersededCopy), and each one's
-  // quota has to be given back to the right document.
-  const reclaimedBytesByUserId = new Map<string, number>();
+  // Bytes reclaimed by the full deletes below, accumulated PER OWNER (storageOwnerOf): after a
+  // reconnect the copies one run retires can belong to more than one user or org (see
+  // retireSupersededCopy), and each one's quota has to be given back to the right counter.
+  const reclaimedBytesByOwner = new Map<string, { owner: StorageOwner; bytes: number }>();
+  const ownerKey = (owner: StorageOwner) => `${owner.type}:${owner.id}`;
 
   // Every lake whose PREFIX arm could reach a file owned by anyone in this connection's stored set,
   // or by whoever is connected now. Memoized: resolved ONCE for the whole run rather than per retire,
@@ -184,8 +191,10 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
-        onDeleteComplete: async (_fabFile, size) => {
-          reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
+        onDeleteComplete: async (deleted, size) => {
+          const owner = storageOwnerOf(deleted);
+          const staged = reclaimedBytesByOwner.get(ownerKey(owner)) ?? { owner, bytes: 0 };
+          reclaimedBytesByOwner.set(ownerKey(owner), { owner, bytes: staged.bytes + size });
         },
         searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         logger,
@@ -205,29 +214,22 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
   // Best-effort, and deliberately non-fatal: the files are already gone, so a failed quota write
   // must not throw the whole reconcile into an SQS retry that would re-walk and re-ingest.
   const flushReclaimedStorage = async () => {
-    if (reclaimedBytesByUserId.size === 0) return;
+    if (reclaimedBytesByOwner.size === 0) return;
     // Drain before deducting: this also runs from a `finally`, and a partial failure must not leave
     // bytes staged for a later flush to deduct a second time.
-    const pending = [...reclaimedBytesByUserId.entries()];
-    reclaimedBytesByUserId.clear();
-    for (const [ownerId, bytes] of pending) {
+    const pending = [...reclaimedBytesByOwner.values()];
+    reclaimedBytesByOwner.clear();
+    for (const { owner, bytes } of pending) {
       if (bytes <= 0) continue;
       try {
-        // Load the owner HERE, never the document read at the top of the handler. changeStorageSize
-        // mutates in memory and save() writes an ABSOLUTE currentStorageSize, so a document read
-        // before the loop would overwrite the increments every storage.upload in it just made
-        // through objectCreated - which loads and saves its own copy of the same user. Same reason
-        // bulk-delete.ts re-reads immediately before deducting; the transaction makes this
-        // read-modify-write conflict-checked rather than merely narrow.
-        await withTransaction(async () => {
-          const owner = await User.findById(ownerId);
-          if (!owner) return;
-          await changeStorageSize(owner, -bytes);
-          await owner.save();
-        });
+        // adjustOwnerStorageInSession loads a user owner inside the transaction, never the document
+        // read at the top of the handler: save() writes an ABSOLUTE currentStorageSize, so an earlier
+        // copy would overwrite the increments every storage.upload in this run made through
+        // objectCreated. The transaction makes that read-modify-write conflict-checked.
+        await withTransaction(session => adjustOwnerStorageInSession(owner, -bytes, session));
       } catch (e) {
         logger.error(`${logTag} failed to deduct reclaimed storage`, {
-          ownerId,
+          owner,
           bytes,
           error: e instanceof Error ? e.message : String(e),
         });
@@ -238,7 +240,8 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
   return {
     retireSupersededCopy,
     flushReclaimedStorage,
-    stagedReclaimFor: (userId: string) => reclaimedBytesByUserId.get(userId) ?? 0,
+    /** Bytes staged for refund to `owner` but not yet flushed: the quota gate's headroom credit. */
+    stagedReclaimFor: (owner: StorageOwner) => reclaimedBytesByOwner.get(ownerKey(owner))?.bytes ?? 0,
   };
 }
 

@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   fabFiles: { kind: 'fabFiles', findByIdAndDelete: vi.fn() },
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: h.adminSettings,
   scopedSettingsRepository: h.scopedSettings,
   dataLakeRepository: h.dataLakes,

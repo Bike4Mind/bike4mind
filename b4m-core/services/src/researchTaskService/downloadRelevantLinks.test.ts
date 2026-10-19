@@ -572,7 +572,7 @@ describe('downloadRelevantLinks', () => {
     );
   });
 
-  it('should handle organization-based research task', async () => {
+  it('should not forward the task organizationId to createFabFile (the owner derives from the lake)', async () => {
     // Arrange
     const orgTask = {
       ...mockResearchTask,
@@ -600,7 +600,6 @@ describe('downloadRelevantLinks', () => {
     expect(mockedFabFilesService.createFabFile).toHaveBeenCalledWith(
       'test-user-id',
       expect.objectContaining({
-        organizationId: 'test-org-id',
         prefix: 'research-tasks/test-task-id',
       }),
       // Narrowed to {db, storage} - createFabFile never sees this door's `jobs`/`logger` adapters.

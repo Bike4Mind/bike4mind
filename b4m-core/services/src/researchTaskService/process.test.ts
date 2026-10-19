@@ -617,7 +617,7 @@ describe('researchTaskService - process', () => {
     });
   });
 
-  it('should set organizationId on created fab files when research task has organizationId', async () => {
+  it('should not pass the task organizationId to createFabFile (the owner derives from the lake)', async () => {
     // Arrange
     const taskId = 'test-task-id';
     const organizationId = 'test-organization-id';
@@ -656,7 +656,6 @@ describe('researchTaskService - process', () => {
         fileSize: Buffer.byteLength(mockMarkdownContent, 'utf8'),
         type: KnowledgeType.TEXT,
         content: mockMarkdownContent,
-        organizationId,
         tags: [],
       }),
       { db: adapters.db, storage: adapters.storage }

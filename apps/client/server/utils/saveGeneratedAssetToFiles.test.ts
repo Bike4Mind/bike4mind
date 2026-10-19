@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/services', () => ({ saveGeneratedAsset: mocks.saveGeneratedAsset }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: {},
   dataLakeRepository: {},
   fabFileRepository: {},

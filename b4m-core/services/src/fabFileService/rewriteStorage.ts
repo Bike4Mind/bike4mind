@@ -3,11 +3,14 @@ import {
   isStorageLimitError,
   NotFoundError,
   redactStorageLimitError,
+  storageOwnerOf,
   type IFabFileRepository,
+  type IOrganizationRepository,
   type IUserDocument,
   type IUserRepository,
 } from '@bike4mind/common';
-import { checkStorageLimit } from '@bike4mind/utils';
+import { checkStorageLimitForOwner } from '@bike4mind/utils';
+import { adjustOwnerStorage } from './ownerStorage';
 
 /**
  * Storage accounting for rewriting an existing FabFile's bytes. Every rewrite site calls
@@ -23,33 +26,37 @@ import { checkStorageLimit } from '@bike4mind/utils';
 export type RewriteStorageDb = {
   fabFiles: Pick<IFabFileRepository, 'commitContentRewrite' | 'findChargeState'>;
   users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
+  organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
 };
 
 /**
- * Throws the standard 400 "File size exceeds storage limit" when the rewrite would grow the
- * OWNER's usage past their quota. A shrinking or same-size rewrite never throws. Measures against the
- * stored row (findChargeState), not `row`, which may be a stale copy. `actor` is
- * reused when it is the owner, else the owner is loaded (an update-share editor is not charged). An
- * editor's refusal keeps its error code but drops the byte counts, which are the owner's usage.
+ * Throws a StorageLimitError when the rewrite would grow the OWNER's usage past their quota: the
+ * owning org's pool for an org-owned row (storageOwnerOf), else the uploader's. A shrinking or
+ * same-size rewrite never throws. Measures against the stored row (findChargeState), not `row`, which
+ * may be a stale copy. `actor` is reused when it is the uploader, else the uploader is loaded (an
+ * update-share editor is not charged). An editor's refusal keeps its error code but drops the byte
+ * counts, which are the owner's usage.
  */
 export async function assertRewriteFits(
   row: { id: string },
   newSize: number,
-  db: Pick<RewriteStorageDb, 'fabFiles' | 'users'>,
+  db: Pick<RewriteStorageDb, 'fabFiles' | 'users' | 'organizations'>,
   actor?: IUserDocument
 ): Promise<void> {
   const stored = await db.fabFiles.findChargeState(row.id);
   if (!stored) return;
   const growth = newSize - chargedBytes(stored);
   if (growth <= 0) return;
-  const ownerIsActor = actor?.id === stored.userId;
-  const owner = ownerIsActor ? actor : await db.users.findById(stored.userId);
-  if (!owner) throw new NotFoundError('File owner not found');
+  const uploaderIsActor = actor?.id === stored.userId;
+  const uploader = uploaderIsActor ? actor : await db.users.findById(stored.userId);
+  if (!uploader) throw new NotFoundError('File owner not found');
   try {
-    await checkStorageLimit(owner, growth);
+    await checkStorageLimitForOwner({ user: uploader, organizationId: stored.organizationId }, growth, id =>
+      db.organizations.findById(id)
+    );
   } catch (error) {
-    // Any pool's refusal, not just the owner's: its byte counts are not the actor's to see.
-    throw !ownerIsActor && isStorageLimitError(error) ? redactStorageLimitError(error) : error;
+    // Any pool's refusal (the org's or the uploader's): its byte counts are not the actor's to see.
+    throw !uploaderIsActor && isStorageLimitError(error) ? redactStorageLimitError(error) : error;
   }
 }
 
@@ -67,7 +74,6 @@ export async function commitContentRewrite(
   const pre = await db.fabFiles.commitContentRewrite(fabFileId, { ...set, fileSize: newSize }, filter);
   if (!pre) return false;
 
-  const delta = newSize - chargedBytes(pre);
-  if (delta !== 0) await db.users.incrementCurrentStorage(pre.userId, delta);
+  await adjustOwnerStorage(db, storageOwnerOf(pre), newSize - chargedBytes(pre));
   return true;
 }

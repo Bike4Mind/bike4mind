@@ -82,7 +82,10 @@ interface ResearchTaskProcessAdapters {
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    organizations: Pick<
+      IOrganizationRepository,
+      'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights' | 'incrementCurrentStorage'
+    >;
     // Optional, but wire it for the same reason as scopedSettings above: this `db` reaches
     // ToolContext.db, and without it a grant-reached lake drops out of the research tools'
     // retrieval while browse still shows it. All three methods, because the same object serves
@@ -387,7 +390,6 @@ const processScrape = async (
         content,
         type: KnowledgeType.TEXT,
         fileSize: Buffer.byteLength(content, 'utf8'),
-        organizationId: researchTask.organizationId,
         tags: arrTags,
       };
 
@@ -630,7 +632,6 @@ const processDeepResearch = async (
       content: reportContent,
       type: KnowledgeType.TEXT,
       fileSize: Buffer.byteLength(reportContent, 'utf8'),
-      organizationId: researchTask.organizationId,
       tags: arrTags,
     };
 

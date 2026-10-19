@@ -49,7 +49,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_STORAGE_LIMIT_MB. */
+  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
   storageLimit?: number;
 
   /**
@@ -132,6 +132,15 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * Same contract as IUserRepository.incrementCurrentStorage.
    */
   incrementCurrentStorage(organizationId: string, bytes: number): Promise<void>;
+
+  /** Same contract as IUserRepository.setCurrentStorageIfUnchanged, for the org counter. */
+  setCurrentStorageIfUnchanged(organizationId: string, expected: number, next: number): Promise<boolean>;
+
+  /** The org's `currentStorageSize` (missing counts as 0), or null when the org does not exist. */
+  findCurrentStorageSize(organizationId: string): Promise<number | null>;
+
+  /** One keyset page of organization ids in `_id` order, starting after `afterId` (null = first page). */
+  listOrganizationIdsAfter(afterId: string | null, limit: number): Promise<string[]>;
 
   /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
