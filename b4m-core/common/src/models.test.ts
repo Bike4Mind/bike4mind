@@ -5,6 +5,7 @@ import {
   REASONING_SUPPORTED_MODELS,
   supportedChatModels,
 } from './models';
+import { settingsMap } from './schemas/settings';
 
 describe('gpt-5.4-mini dated snapshot', () => {
   it('is a ChatModels member beside the unchanged alias', () => {
@@ -21,4 +22,12 @@ describe('gpt-5.4-mini dated snapshot', () => {
     expect(REASONING_SUPPORTED_MODELS.has(ChatModels.GPT5_4_MINI_2026_03_17)).toBe(true);
     expect(REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(ChatModels.GPT5_4_MINI_2026_03_17)).toBe(true);
   });
+
+  it.each(['DefaultAPIModel', 'EmailAnalysisModel'] as const)(
+    '%s setting rejects the snapshot and accepts the alias',
+    key => {
+      expect(settingsMap[key].schema.safeParse(ChatModels.GPT5_4_MINI_2026_03_17).success).toBe(false);
+      expect(settingsMap[key].schema.safeParse(ChatModels.GPT5_4_MINI).success).toBe(true);
+    }
+  );
 });
