@@ -61,6 +61,7 @@ import {
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { RetrievalFloorBanner } from './RetrievalFloorBanner';
+import { LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -1356,6 +1357,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       }),
     [cleanReply, completed, promptMeta?.finishReason]
   );
+  // An empty reply sent with a budget below the model's default gets the actionable notice instead.
+  const lowOutputBudget = useLowOutputBudget(promptMeta?.model?.name, promptMeta?.model?.parameters?.maxTokens);
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
@@ -1548,7 +1551,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' ||
+      {truncationNotice === 'reply-empty' && lowOutputBudget && <LowOutputBudgetBanner {...lowOutputBudget} />}
+      {((truncationNotice === 'reply-empty' && !lowOutputBudget) ||
         truncationNotice === 'reply-partial' ||
         truncationNotice === 'reply-degenerate') && (
         <Alert
