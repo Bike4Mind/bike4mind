@@ -101,4 +101,14 @@ describe('AuditEntryDrawer', () => {
     expect(screen.getByText('null')).toBeTruthy();
     expect(screen.getAllByText('note')).toHaveLength(2);
   });
+
+  it('related rows are not buttons when no onSelectRelated is given', () => {
+    const related = makeAuditEntry({ id: 'rel-1' });
+    render(<AuditEntryDrawer entry={makeAuditEntry()} onClose={vi.fn()} relatedEntries={[related]} />, {
+      wrapper: TestWrapper,
+    });
+    const row = screen.getByTestId('audit-drawer-related-row-rel-1');
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.getAttribute('tabindex')).toBeNull();
+  });
 });

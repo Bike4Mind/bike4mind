@@ -112,10 +112,10 @@ export const RelatedEventRow: React.FC<{ entry: AuditEntry; onSelect?(entry: Aud
   <Sheet
     variant="outlined"
     data-testid={`audit-drawer-related-row-${entry.id}`}
-    role="button"
-    tabIndex={0}
-    onClick={() => onSelect?.(entry)}
-    onKeyDown={activateOnKey(() => onSelect?.(entry))}
+    role={onSelect ? 'button' : undefined}
+    tabIndex={onSelect ? 0 : undefined}
+    onClick={onSelect && (() => onSelect(entry))}
+    onKeyDown={onSelect && activateOnKey(() => onSelect(entry))}
     sx={{
       p: 1,
       borderRadius: 'sm',

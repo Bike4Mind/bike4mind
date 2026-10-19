@@ -41,7 +41,8 @@ export const useAuditEntry = (id: string | null, initialEntry?: AuditEntry) =>
       return reviveAuditEntry(response.data);
     },
     enabled: id !== null,
-    initialData: initialEntry ? reviveAuditEntry(initialEntry) : undefined,
+    // Only seed from the entry the caller resolved for this id; a stale one would flash the wrong drawer.
+    initialData: initialEntry && initialEntry.id === id ? reviveAuditEntry(initialEntry) : undefined,
   });
 
 export const useAuditSummary = (windowDays: AuditSummaryWindow) =>
