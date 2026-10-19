@@ -104,9 +104,12 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  */
 export default function GitHubConnectAction({
   lake,
+  startChatForLake,
   onChatStarted,
 }: {
   lake: LakeSourcePanelLake;
+  /** Lets a surface own lake-scoped session creation instead of navigating away. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding this card handle "Ask about this repo" itself instead of navigating away. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 }) {
@@ -242,6 +245,7 @@ export default function GitHubConnectAction({
             lake={lake}
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
             testId="github-ask-about-repo-btn"
+            startChatForLake={startChatForLake}
             onChatStarted={onChatStarted}
           >
             Ask about this repo

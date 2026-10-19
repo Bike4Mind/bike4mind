@@ -32,6 +32,8 @@ export type LakeSourcePanelLake = LakeSourceLake & { id: string; status?: DataLa
 /** What every source's Panel receives; a panel that starts a chat takes `onChatStarted`. */
 export type LakeSourcePanelProps = {
   lake: LakeSourcePanelLake;
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding the panel handle a started chat itself instead of navigating away. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 };
