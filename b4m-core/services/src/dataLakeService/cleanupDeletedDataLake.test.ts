@@ -144,6 +144,42 @@ describe('cleanupDeletedDataLake', () => {
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('u1', 500);
   });
 
+  it('recomputes the owner even when stripping the lake signals changes nothing', async () => {
+    const db = makeDb([]);
+    db.dataLakes.findById = vi.fn(async () => ({ ...LAKE, organizationId: 'org-sales' }));
+    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    const survivor = {
+      id: 's1',
+      userId: 'u1',
+      organizationId: 'org-sales',
+      fileSize: 500,
+      storageChargedAt: new Date('2026-10-10'),
+      status: 'complete',
+      createdAt: new Date('2026-10-09'),
+    };
+    db.fabFiles.findById = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...survivor,
+        tags: [
+          { name: 'datalake:sales', strength: 1 },
+          { name: 'datalake:mine', strength: 1 },
+        ],
+      })
+      // The pull matched nothing: an earlier attempt cleared the tags before its reassign failed,
+      // or a concurrent removal won the race. The owner still has to be recomputed from the tags
+      // the row carries now.
+      .mockResolvedValue({ ...survivor, tags: [{ name: 'datalake:mine', strength: 1 }] });
+    db.fabFiles.pullTagsByFabFileId = vi.fn(async () => 0 as never);
+    db.dataLakes.findByDatalakeTags.mockResolvedValue([{ id: 'lake-mine', datalakeTag: 'datalake:mine' }]);
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith('s1', expect.anything(), undefined);
+    expect(db.organizations.incrementCurrentStorage).toHaveBeenCalledWith('org-sales', -500);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('u1', 500);
+  });
+
   it('is a no-op when the lake is already gone', async () => {
     const db = makeDb();
     db.dataLakes.findById = vi.fn(async () => undefined as never);
