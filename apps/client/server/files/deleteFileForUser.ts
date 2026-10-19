@@ -14,10 +14,10 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
+import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import type { Request } from 'express';
 
 /**

@@ -2,7 +2,7 @@ import { questRepository, type StaleCallbackDispatchCriteria } from '@bike4mind/
 import type { Logger } from '@bike4mind/observability';
 import { SQSService } from '@bike4mind/utils';
 import { Resource } from 'sst';
-import type { GenerationCallbackMessage } from './messages';
+import type { GenerationCallbackMessage } from '@bike4mind/server-utils/generationCallback/messages';
 
 /**
  * The delivery queue's url, or undefined where it is not provisioned: the queue is optional on a

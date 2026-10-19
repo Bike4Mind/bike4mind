@@ -36,7 +36,7 @@ import { AuthEvents, AuthStrategy } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
-import { encryptSecret } from '@server/security/secretEncryption';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';

@@ -17,7 +17,7 @@ import { connectDB, securityFindingRunRepository } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { getTargetUrlForStage } from '@server/integrations/github/githubWorkflowTrigger';
+import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 import { e2eExposureProbe } from './probes/e2eExposure';
 import { otcSendFloodProbe } from './probes/otcSendFlood';
 import { refreshTokenSecurityProbe } from './probes/refreshTokenSecurity';
@@ -25,7 +25,10 @@ import { adminAuthzProbe } from './probes/adminAuthz';
 import { openRedirectProbe } from './probes/openRedirect';
 import { ingestTokenSecurityProbe } from './probes/ingestTokenSecurity';
 import { assertTargetUrlIsSafe } from './probes/probeUtils';
-import type { AttackSimulationFinding, AttackSimulationIngestPayload } from '@server/security/attackSimulation/types';
+import type {
+  AttackSimulationFinding,
+  AttackSimulationIngestPayload,
+} from '@bike4mind/server-utils/security/attackSimulation/types';
 
 const logger = new Logger({ metadata: { service: 'attack-simulation-runner' } });
 

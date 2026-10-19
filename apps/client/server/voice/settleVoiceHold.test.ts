@@ -33,7 +33,11 @@ import {
   VOICE_HOLD_SETTLED_LOG,
   voiceHoldSettleTransactionId,
 } from './settleVoiceHold';
-import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS, realtimeCreditsFloor } from './voiceSessionLimits';
+import {
+  MAX_SESSION_SECONDS,
+  REALTIME_VOICE_HOLD_SECONDS,
+  realtimeCreditsFloor,
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const STARTED = new Date('2026-10-11T12:00:00Z');
 const at = (seconds: number) => new Date(STARTED.getTime() + seconds * 1000);

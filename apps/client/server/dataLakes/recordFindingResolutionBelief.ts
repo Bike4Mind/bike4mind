@@ -10,7 +10,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
-import { createMementoEmbedder, type MementoEmbedder } from '@server/memory/mementoEmbedder';
+import { createMementoEmbedder, type MementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
 
 /**
  * Why a resolution did not become a belief. Every one of these is an ordinary outcome, not a fault -

@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PublicMusicModel } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { toPublicMusicModel } from '../../../server/musicGenerations/listUsableMusicModels';
+import { toPublicMusicModel } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 import MusicStudioForm from './MusicStudioForm';
 
 const musicV2 = toPublicMusicModel('music_v2');

@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // The whole module is replaced, so every repo the route (or lakeConfigAuditDb) names must be
 // present - a missing export is an import-time failure, not a silent undefined.
 vi.mock('@bike4mind/database', () => ({

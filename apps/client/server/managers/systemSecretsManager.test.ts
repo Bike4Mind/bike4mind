@@ -26,7 +26,7 @@ vi.mock('../utils/config', () => ({
   },
 }));
 
-vi.mock('../security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: vi.fn((encrypted: string) => `decrypted_${encrypted}`),
   isValidEncryptionKey: vi.fn((key: string) => key.length === 64 && /^[a-f0-9]+$/i.test(key)),
 }));
@@ -34,7 +34,7 @@ vi.mock('../security/secretEncryption', () => ({
 // Import mocks for manipulation
 import { systemSecretRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { decryptSecret, isValidEncryptionKey } from '../security/secretEncryption';
+import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 
 describe('systemSecretsManager', () => {
   beforeEach(() => {

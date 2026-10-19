@@ -107,7 +107,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { func } from './voiceSessionEnded';
-import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { realtimeCreditsFloor, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const HOLD = 100;
 const STARTING_BALANCE = 1000;

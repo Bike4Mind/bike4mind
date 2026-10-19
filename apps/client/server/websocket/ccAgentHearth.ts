@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/hearth';
 import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4mind/common';
 import { getSettingByName } from '@bike4mind/utils';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { toPresenceProjection, toWireHearthEvent, wireActorIdentity } from '@server/utils/hearthWire';
 import { sendToClient } from '@server/websocket/utils';
 

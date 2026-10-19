@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,

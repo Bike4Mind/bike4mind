@@ -14,7 +14,7 @@ import {
   validateSeatChange,
   resolveSubscriptionSource,
 } from '@server/services/organizationService';
-import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 const UpdateSeatsSchema = z.object({
   organizationId: z.string(),

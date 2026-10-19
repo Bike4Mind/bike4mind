@@ -7,7 +7,10 @@ import {
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
-import { computeCodeScore, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
+import {
+  computeCodeScore,
+  computeDeterministicStatus,
+} from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';

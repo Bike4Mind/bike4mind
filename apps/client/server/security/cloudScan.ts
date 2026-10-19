@@ -21,7 +21,7 @@ import {
 import { CloudTrailClient, DescribeTrailsCommand, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { EC2Client, DescribeSecurityGroupsCommand, type SecurityGroup } from '@aws-sdk/client-ec2';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { computeStatusScoreAndSummary } from './securityDashboardScoring';
+import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 

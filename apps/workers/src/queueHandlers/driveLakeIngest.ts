@@ -69,7 +69,7 @@ import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,
   driveIngestSkipReason,
-} from '@server/integrations/google/drive/driveIngestLimits';
+} from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';

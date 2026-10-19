@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
@@ -206,6 +207,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
 
           // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
           await executeCompletion({
+            creditHolds: createCompletionCreditHolds(logger),
             userId,
             model,
             messages: messages as IMessage[],

@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById, update: userUpdate },
   mcpServerRepository: { findOne: mcpFindOne, update: mcpUpdate },
 }));
-vi.mock('@server/integrations/jira/atlassianConfig', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({ clientId: 'cid', clientSecret: 'secret' }),
 }));
 vi.mock('@server/security/tokenEncryption', () => ({

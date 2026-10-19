@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => {
     h.featureFlags.push(flag);
     return () => {};
@@ -62,7 +62,9 @@ vi.mock('@bike4mind/database', () => ({
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: { dataLakeConfigChanges: {} } }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({
+  lakeConfigAuditDb: { dataLakeConfigChanges: {} },
+}));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({
   lakeConfigAuditPrincipal: () => ({ kind: 'user', userId: 'creator-1' }),
 }));

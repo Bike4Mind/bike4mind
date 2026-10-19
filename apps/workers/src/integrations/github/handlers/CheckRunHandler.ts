@@ -18,7 +18,7 @@ import {
   GitHubHandlerResult,
   GitHubCheckRunPayload,
   GitHubWebhookPayload,
-} from '@server/integrations/github/types';
+} from '@bike4mind/server-utils/integrations/github/types';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 
 export class CheckRunHandler implements GitHubEventHandler {

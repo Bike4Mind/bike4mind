@@ -58,7 +58,7 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-vi.mock('@server/services/teamPlanSettings', () => ({
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));

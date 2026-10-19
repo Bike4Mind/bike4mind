@@ -23,7 +23,7 @@ import { Logger } from '@bike4mind/observability';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
   readDriveLakePollFlags,
-} from '@server/integrations/google/drive/drivePollSchedule';
+} from '@bike4mind/server-utils/integrations/google/drive/drivePollSchedule';
 import { Config } from '@server/utils/config';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';

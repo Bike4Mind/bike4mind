@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { briefcasePromptRepository } from '@bike4mind/database';

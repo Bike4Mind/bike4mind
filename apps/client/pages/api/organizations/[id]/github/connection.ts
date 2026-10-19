@@ -19,7 +19,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { encryptSecret, isEncrypted, decryptSecret } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';

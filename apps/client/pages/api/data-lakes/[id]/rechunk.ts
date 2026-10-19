@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -17,8 +17,8 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
-import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
-import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
+import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
+import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 
 /**
  * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, rebuildingCount,

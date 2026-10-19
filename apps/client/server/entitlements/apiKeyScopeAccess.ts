@@ -2,7 +2,7 @@ import { hasDeveloperUserTag, settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import type { ApiKeyScopeAccess } from '@client/app/constants/apiKeyScopes';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { getRequestEntitlements, type EntitlementRequest } from './index';
 
 /**
