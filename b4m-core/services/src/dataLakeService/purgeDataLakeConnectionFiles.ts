@@ -10,7 +10,7 @@ import type {
   IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
-import { isLegalHoldError } from '@bike4mind/common';
+import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import {
   bestEffortAdjustOwnerStorage,
   groupStorageDeltaByOwner,
@@ -44,6 +44,8 @@ export type PurgeableConnectionFile = Pick<
   | 'versions'
   | 'tags'
   | 'deletedAt'
+  | 'moderationStatus'
+  | 'blockReason'
 >;
 
 export interface PurgeDataLakeConnectionFilesAdapters {
@@ -179,7 +181,13 @@ export const purgeDataLakeConnectionFiles = async (
       // reads deletedFiles, or a sibling still running past a rejection would miss it.
       const settled = await Promise.allSettled(
         slice.map(async file => {
-          if (storage) {
+          // An evidence-held file keeps its bytes (same rule as fabFileService/deleteStoredObjects.ts);
+          // its row delete below is refused too, so deleting first would strand a held row over nothing.
+          if (storage && isModerationEvidenceHold(file)) {
+            logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', {
+              fabFileId: file.id,
+            });
+          } else if (storage) {
             const currentKey = isStorageKey(file.filePath) ? file.filePath : null;
             // EVERY stored key, not just the current one - an AI-edited file's earlier revisions
             // each sit under their own object key (mirrors cleanupDeletedDataLake/purgeDataLakeDocument).

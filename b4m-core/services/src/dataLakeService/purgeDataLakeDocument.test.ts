@@ -611,6 +611,51 @@ describe('purgeDataLakeDocument', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  it("keeps an evidence-held file's stored objects and row, and reports every object as still stored", async () => {
+    // The row delete is refused for a blocked file, so deleting its bytes first would leave a held
+    // row over evidence that is gone. Same rule as fabFileService/deleteStoredObjects.ts.
+    const db = makeDb({
+      filePath: 'uploads/evidence-v2.png',
+      versions: [{ filePath: 'uploads/evidence-v1.png' }],
+      moderationStatus: 'blocked',
+      blockReason: 'explicit',
+    });
+    const storage = makeStorage();
+    const onPurged = vi.fn(async () => {});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, onPurged, logger });
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      storageObjectDeleted: false,
+      documentDeleted: false,
+      storageObjectsTotal: 2,
+      storageObjectsRemaining: 2,
+      verified: false,
+    });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('legal hold'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
+
+  it("still deletes an unsupported_format block's stored objects, matching the user-delete path", async () => {
+    const db = makeDb({
+      filePath: 'uploads/photo.heic',
+      moderationStatus: 'blocked',
+      blockReason: 'unsupported_format',
+    });
+    const storage = makeStorage();
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
+  });
+
   it('deletes every prior version object, not just the current filePath', async () => {
     // An AI-edited file keeps each earlier revision under its own key; `filePath` names only the
     // newest, so deleting that alone leaves the original document's bytes stored forever.

@@ -109,3 +109,81 @@ describe('cleanupDeletedDataLake - legal-hold skip (F3)', () => {
     expect(db.dataLakes.delete).not.toHaveBeenCalled();
   });
 });
+
+describe('cleanupDeletedDataLake - evidence-held stored objects', () => {
+  const runSweep = async (
+    members: Array<{
+      id: string;
+      filePath: string;
+      versions?: { filePath: string }[];
+      moderationStatus?: 'blocked' | 'clean';
+      blockReason?: string;
+    }>
+  ) => {
+    const db = buildDb();
+    db.fabFiles.findIdsByDataLakeTag.mockResolvedValue(members.map(member => member.id));
+    db.fabFiles.findStorageKeysByIds.mockResolvedValue(members);
+    const storage = { delete: vi.fn().mockResolvedValue(undefined) };
+    const deleteFileAndChunks = vi.fn(async (id: string) => {
+      if (members.find(member => member.id === id)?.moderationStatus === 'blocked') {
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${id}: moderationStatus is 'blocked' (legal hold)`);
+      }
+    });
+    const logger = { warn: vi.fn() };
+
+    await expect(
+      cleanupDeletedDataLake(ACTOR, LAKE_ID, {
+        db,
+        beginPurge: vi.fn().mockResolvedValue(true),
+        purgeClaimId: CLAIM_ID,
+        deleteFileAndChunks,
+        storage,
+        logger,
+      })
+    ).resolves.toBeUndefined();
+
+    return { db, storage, deleteFileAndChunks, logger };
+  };
+
+  it("never deletes an evidence-held member's current or prior-version objects, and still finishes the sweep", async () => {
+    const { db, storage, logger } = await runSweep([
+      {
+        id: 'file-blocked',
+        filePath: 'files/evidence.png',
+        versions: [{ filePath: 'files/evidence-v1.png' }],
+        moderationStatus: 'blocked',
+        blockReason: 'explicit',
+      },
+    ]);
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(db.dataLakes.delete).toHaveBeenCalledWith(LAKE_ID);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('keeping the stored objects'),
+      expect.objectContaining({ fabFileId: 'file-blocked' })
+    );
+  });
+
+  it("still deletes a non-held sibling's objects in the same sweep", async () => {
+    const { storage, deleteFileAndChunks } = await runSweep([
+      { id: 'file-blocked', filePath: 'files/evidence.png', moderationStatus: 'blocked', blockReason: 'explicit' },
+      { id: 'file-clean', filePath: 'files/clean.png', versions: [{ filePath: 'files/clean-v1.png' }] },
+    ]);
+
+    expect(storage.delete.mock.calls).toEqual([['files/clean-v1.png'], ['files/clean.png']]);
+    expect(deleteFileAndChunks).toHaveBeenCalledWith('file-clean');
+  });
+
+  it("still deletes an unsupported_format block's objects, matching the user-delete path", async () => {
+    const { storage } = await runSweep([
+      {
+        id: 'file-unscannable',
+        filePath: 'files/photo.heic',
+        moderationStatus: 'blocked',
+        blockReason: 'unsupported_format',
+      },
+    ]);
+
+    expect(storage.delete).toHaveBeenCalledWith('files/photo.heic');
+  });
+});

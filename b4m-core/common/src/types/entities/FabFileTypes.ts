@@ -2202,9 +2202,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
    *
    * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
-   * requires it locally.
+   * requires it locally. Moderation state rides along so the purge can keep an evidence-held
+   * file's bytes (see isModerationEvidenceHold).
    */
-  findStorageKeysByIds?(
-    fabFileIds: string[]
-  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
+  findStorageKeysByIds?(fabFileIds: string[]): Promise<
+    Array<
+      {
+        id: string;
+        filePath?: string;
+        versions?: Array<Pick<IFabFileVersion, 'filePath'>>;
+      } & Pick<IFabFile, 'moderationStatus' | 'blockReason'>
+    >
+  >;
 }

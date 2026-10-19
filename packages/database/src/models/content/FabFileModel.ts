@@ -3550,13 +3550,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (fabFileIds.length === 0) return [];
     // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
     const docs = await this.fabFileModel
-      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .find(
+        { _id: { $in: convertIds(fabFileIds) } },
+        { filePath: 1, 'versions.filePath': 1, moderationStatus: 1, blockReason: 1 }
+      )
       .setOptions({ includeDeleted: true })
       .lean();
     return docs.map(d => ({
       id: d._id.toString(),
       filePath: d.filePath ?? undefined,
       versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+      moderationStatus: d.moderationStatus ?? undefined,
+      blockReason: d.blockReason ?? undefined,
     }));
   }
 

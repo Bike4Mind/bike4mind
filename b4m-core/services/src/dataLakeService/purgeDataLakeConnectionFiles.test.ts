@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
+import { LegalHoldError, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { purgeDataLakeConnectionFiles, type PurgeableConnectionFile } from './purgeDataLakeConnectionFiles';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
@@ -139,5 +139,51 @@ describe('purgeDataLakeConnectionFiles storage refund', () => {
 
     expect(second.filesPurged).toBe(0);
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('purgeDataLakeConnectionFiles evidence hold', () => {
+  it("keeps an evidence-held file's stored objects while a non-held sibling is purged normally", async () => {
+    const files = [
+      file({
+        id: 'f-held',
+        filePath: 'uploads/evidence.png',
+        versions: [{ filePath: 'uploads/evidence-v1.png' }] as PurgeableConnectionFile['versions'],
+        moderationStatus: 'blocked',
+        blockReason: 'explicit',
+      }),
+      file({ id: 'f-clean', filePath: 'uploads/clean.png' }),
+    ];
+    const db = makeDb();
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      if (id === 'f-held') {
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${id}: moderationStatus is 'blocked' (legal hold)`);
+      }
+      return true;
+    });
+    const storage = { delete: vi.fn(async () => {}) };
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+
+    const result = await purgeDataLakeConnectionFiles(SCOPE, files, { db, storage, logger });
+
+    expect(storage.delete.mock.calls).toEqual([['uploads/clean.png']]);
+    expect(result).toMatchObject({ filesPurged: 1, storageObjectsDeleted: 1 });
+  });
+
+  it("still deletes an unsupported_format block's stored objects, matching the user-delete path", async () => {
+    const files = [
+      file({
+        id: 'f-unscannable',
+        filePath: 'uploads/photo.heic',
+        moderationStatus: 'blocked',
+        blockReason: 'unsupported_format',
+      }),
+    ];
+    const db = makeDb();
+    const storage = { delete: vi.fn(async () => {}) };
+
+    await purgeDataLakeConnectionFiles(SCOPE, files, { db, storage });
+
+    expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
   });
 });

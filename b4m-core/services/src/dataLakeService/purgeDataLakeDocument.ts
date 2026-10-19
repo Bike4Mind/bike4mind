@@ -10,7 +10,7 @@ import type {
   ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
-import { isLegalHoldError } from '@bike4mind/common';
+import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -254,22 +254,30 @@ export const purgeDataLakeDocument = async (
     }
   };
 
-  for (const path of versionKeys) {
-    await deleteKey(path);
-  }
-  if (currentKey) {
-    if (storageKeysUnreached.length > 0) {
-      // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
-      // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
-      // and its dialog copy report.
-      storageKeysUnreached.push(currentKey);
-      logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
-        fabFileId: file.id,
-        filePath: currentKey,
-        unreachedVersionKeys: storageKeysUnreached.length - 1,
-      });
-    } else {
-      await deleteKey(currentKey);
+  if (isModerationEvidenceHold(file)) {
+    // An evidence-held file keeps its bytes (same rule as fabFileService/deleteStoredObjects.ts),
+    // and its row delete would be refused anyway. Every key counts as unreached, so the receipt
+    // reports them as still stored and nothing destructive below runs.
+    storageKeysUnreached.push(...versionKeys, ...(currentKey ? [currentKey] : []));
+    logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', { fabFileId: file.id });
+  } else {
+    for (const path of versionKeys) {
+      await deleteKey(path);
+    }
+    if (currentKey) {
+      if (storageKeysUnreached.length > 0) {
+        // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
+        // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
+        // and its dialog copy report.
+        storageKeysUnreached.push(currentKey);
+        logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
+          fabFileId: file.id,
+          filePath: currentKey,
+          unreachedVersionKeys: storageKeysUnreached.length - 1,
+        });
+      } else {
+        await deleteKey(currentKey);
+      }
     }
   }
   const storageObjectDeleted = storageKeysUnreached.length === 0;

@@ -54,6 +54,18 @@ describe('FabFileRepository.findStorageKeysByIds', () => {
     expect(rows.map(row => row.filePath).sort()).toEqual(['org/deleted.txt', 'org/live.txt']);
   });
 
+  it("carries a soft-deleted blocked row's moderation state, so the purge can keep held evidence", async () => {
+    const file = await makeFile('org/evidence.png');
+    await FabFile.collection.updateOne(
+      { _id: file._id },
+      { $set: { moderationStatus: 'blocked', blockReason: 'explicit', deletedAt: new Date() } }
+    );
+
+    const [row] = await fabFileRepository.findStorageKeysByIds([file._id.toString()]);
+
+    expect(row).toMatchObject({ moderationStatus: 'blocked', blockReason: 'explicit' });
+  });
+
   it('short-circuits an empty id list without a query', async () => {
     await expect(fabFileRepository.findStorageKeysByIds([])).resolves.toEqual([]);
   });
