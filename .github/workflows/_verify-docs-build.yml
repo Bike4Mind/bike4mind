@@ -84,6 +84,13 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'docs-site/pnpm-lock.yaml'
 
+      - name: Check docs content guard
+        if: steps.docs-changes.outputs.has_changes == 'true'
+        working-directory: docs-site
+        run: |
+          node --test scripts/*.test.mjs
+          node scripts/check-docs-content.mjs
+
       - name: Cache docs dependencies
         if: steps.docs-changes.outputs.has_changes == 'true'
         uses: actions/cache@v5
