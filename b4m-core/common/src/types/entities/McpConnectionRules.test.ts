@@ -27,6 +27,13 @@ describe('mcpApiKeyHeaderNameProblem', () => {
     'Proxy-Authorization',
     'Content-Type',
     'Accept',
+    'X-Real-IP',
+    'True-Client-IP',
+    'CF-Connecting-IP',
+    'Via',
+    'X-HTTP-Method-Override',
+    'X-HTTP-Method',
+    'X-Method-Override',
   ])('denies %j', name => {
     expect(mcpApiKeyHeaderNameProblem(name)).toMatch(/cannot carry/);
   });

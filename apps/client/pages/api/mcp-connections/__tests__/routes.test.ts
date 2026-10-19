@@ -374,6 +374,14 @@ describe('POST /api/mcp-connections', () => {
     expect((await createConnection({ url: 'https://169.254.169.254/' })).body).toMatchObject({ reason: 'ip_literal' });
   });
 
+  it('refuses an API key over self-host plain http to a hostname, before writing', async () => {
+    h.context = context({ network: { ownHosts: [], allowHttp: true, allowPrivateCidrs: ['10.20.0.0/16'] } });
+    const result = await createConnection({ url: 'http://mcp.internal.example:8080/mcp' });
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ code: 'policy_blocked', reason: 'api_key_over_http' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+  });
+
   it.each(['Host', 'Cookie', 'X-Forwarded-For', 'Mcp-Session-Id', 'Transfer-Encoding', 'bad header'])(
     'refuses the API-key header %j without echoing the key',
     async headerName => {

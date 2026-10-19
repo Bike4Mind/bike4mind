@@ -13,11 +13,14 @@ import {
 } from '@bike4mind/common';
 import { cacheRepository, mcpConnectionRepository, type CustomMcpAuditMetadata } from '@bike4mind/database';
 import {
+  DEFAULT_REMOTE_MCP_LIMITS,
   RemoteMcpAuthFailedError,
   RemoteMcpAuthRequiredError,
   RemoteMcpClient,
   RemoteMcpError,
+  RemoteMcpProtocolError,
   RemoteMcpUpstreamError,
+  validateRemoteMcpUrl,
   type RemoteMcpCallToolResult,
   type RemoteMcpClientConfig,
   type RemoteMcpErrorCode,
@@ -25,6 +28,7 @@ import {
   type RemoteMcpListToolsResult,
 } from '@bike4mind/mcp/remote';
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { Resource } from 'sst';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -33,6 +37,7 @@ import { recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
 import { resolveMcpTenantKey } from '@server/utils/mcpTenantKey';
 import {
   evaluateConnectionPolicy,
+  isSelfHost,
   resolveCustomMcpContext,
   type CustomMcpContext,
   type RemoteMcpNetworkOptions,
@@ -201,6 +206,54 @@ export function describeRemoteMcpError(
   }
 }
 
+/**
+ * On a hosted deployment a blocked address reads exactly like a server that is not answering, so
+ * the error cannot be used to map which internal names resolve. The audit keeps the real code.
+ * Self-host keeps the distinct reason: its admin chose the networks and needs to see why.
+ */
+function userFacingRemoteMcpError(error: RemoteMcpError): RemoteMcpError {
+  if (error.code !== 'ssrf_blocked' || isSelfHost()) return error;
+  return new RemoteMcpProtocolError('The server did not respond as an MCP server');
+}
+
+/**
+ * The RFC 9728 metadata URL from a 401, kept only when it passes the connector URL rules over https
+ * on the connection's own host or registrable domain; anything else is dropped rather than stored
+ * for the OAuth flow to fetch.
+ */
+function trustedResourceMetadataUrl(
+  raw: string | undefined,
+  connection: IMcpConnectionDocument,
+  network: RemoteMcpNetworkOptions
+): string | undefined {
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = validateRemoteMcpUrl(raw, network);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'https:') return undefined;
+  if (url.hostname === connection.urlHost) return url.toString();
+  const domain = registrableDomain(url.hostname, { allowPrivateDomains: true });
+  return domain && domain === registrableDomain(connection.urlHost, { allowPrivateDomains: true })
+    ? url.toString()
+    : undefined;
+}
+
+/** Each requested limit may only tighten the default, never loosen it. */
+function clampLimits(requested: Partial<RemoteMcpLimits> | undefined): Partial<RemoteMcpLimits> | undefined {
+  if (!requested) return undefined;
+  const clamped: Partial<RemoteMcpLimits> = {};
+  for (const key of Object.keys(DEFAULT_REMOTE_MCP_LIMITS) as (keyof RemoteMcpLimits)[]) {
+    const value = requested[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      clamped[key] = Math.min(value, DEFAULT_REMOTE_MCP_LIMITS[key]);
+    }
+  }
+  return clamped;
+}
+
 /** A server-supplied scope is shown to the user and later sent to the authorization server. */
 function cleanScope(scope: string | undefined): string | undefined {
   return typeof scope === 'string'
@@ -212,18 +265,21 @@ function cleanScope(scope: string | undefined): string | undefined {
  * Stores what a failure means for the connection. Auth failures always move the status (they need
  * the user). Anything else moves it on a listTools (probe, discovery, refresh) or when it is about
  * the address itself; a transient call failure leaves a connected connection connected and is the
- * breaker's business, so one timeout does not pull the connector out of chat.
+ * breaker's business, so one timeout does not pull the connector out of chat. What is stored is
+ * the user-facing form of the error (`shown`); the decision is made on the real one.
  */
 async function recordFailure(
   connection: IMcpConnectionDocument,
   action: RemoteMcpAction,
-  error: RemoteMcpError
+  error: RemoteMcpError,
+  shown: RemoteMcpError,
+  network: RemoteMcpNetworkOptions
 ): Promise<void> {
-  const message = describeRemoteMcpError(error, connection.auth.kind);
+  const message = describeRemoteMcpError(shown, connection.auth.kind);
   if (error instanceof RemoteMcpAuthRequiredError) {
     if (connection.auth.kind === 'none') {
       await mcpConnectionRepository.setPendingAuth(connection.id, {
-        resourceMetadataUrl: error.resourceMetadataUrl,
+        resourceMetadataUrl: trustedResourceMetadataUrl(error.resourceMetadataUrl, connection, network),
         scope: cleanScope(error.scope),
         message,
       });
@@ -256,7 +312,7 @@ async function recordFailure(
     return;
   }
   if (action === 'listTools' || error.code === 'ssrf_blocked' || error.code === 'invalid_url') {
-    await mcpConnectionRepository.setStatus(connection.id, 'error', { code: error.code, message });
+    await mcpConnectionRepository.setStatus(connection.id, 'error', { code: shown.code, message });
   }
 }
 
@@ -362,7 +418,11 @@ export async function invokeRemoteMcp(
     audit.failure('policy_blocked', { policyVerdict: 'disabled' });
     throw new CustomMcpPolicyBlockedError('Custom MCP connectors are disabled', 'disabled');
   }
-  const verdict = evaluateConnectionPolicy(context, { urlHost: connection.urlHost, authKind: connection.auth.kind });
+  const verdict = evaluateConnectionPolicy(context, {
+    urlHost: connection.urlHost,
+    authKind: connection.auth.kind,
+    url: connection.displayUrl,
+  });
   if (!verdict.allowed) {
     audit.failure('policy_blocked', { policyVerdict: verdict.reason });
     throw new CustomMcpPolicyBlockedError(verdict.message, verdict.reason);
@@ -416,7 +476,7 @@ export async function invokeRemoteMcp(
       headers: buildAuthHeaders(connection),
       action: request.action,
       ...(request.action === 'callTool' ? { toolName: request.toolName, args } : {}),
-      limits: request.limits,
+      limits: clampLimits(request.limits),
       network: context.network,
     };
     const runner = options.runner ?? resolveRemoteMcpRunner();
@@ -450,8 +510,9 @@ export async function invokeRemoteMcp(
     }
     if (error instanceof RemoteMcpError) {
       audit.failure(error.code);
-      await recordFailure(connection, request.action, error);
-      throw error;
+      const shown = userFacingRemoteMcpError(error);
+      await recordFailure(connection, request.action, error, shown, context.network);
+      throw shown;
     }
     audit.failure('internal_error');
     throw error;

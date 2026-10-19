@@ -9,6 +9,7 @@ import {
   type IMcpConnectionDocument,
 } from '@bike4mind/common';
 import {
+  DEFAULT_REMOTE_MCP_LIMITS,
   RemoteMcpAuthFailedError,
   RemoteMcpAuthRequiredError,
   RemoteMcpClient,
@@ -192,6 +193,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('invokeRemoteMcp - round trips against the fixture', () => {
@@ -263,8 +265,10 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
       'auth_required'
     );
+    // The fixture advertises metadata on another domain, so only the scope is kept.
+    expect(FIXTURE_RESOURCE_METADATA_URL).toMatch(/^https:\/\/auth\.fixture\.example\//);
     expect(repo.setPendingAuth).toHaveBeenCalledWith(id, {
-      resourceMetadataUrl: FIXTURE_RESOURCE_METADATA_URL,
+      resourceMetadataUrl: undefined,
       scope: 'tools.read',
       message: 'The server requires sign-in',
     });
@@ -290,6 +294,47 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       message: 'The server rejected the API key',
       requiredScope: 'tools.read',
     });
+  });
+
+  it('keeps a metadata URL only over https on the connection host or its registrable domain', async () => {
+    const challenged = async (resourceMetadataUrl: string) => {
+      const id = seed('/mcp', { status: 'pending_auth' }, 'mcp.vendor.test');
+      const runner = async () => {
+        throw new RemoteMcpAuthRequiredError({ resourceMetadataUrl });
+      };
+      await expectRemoteCode(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
+        'auth_required'
+      );
+      return (repo.setPendingAuth.mock.calls.at(-1)![1] as { resourceMetadataUrl?: string }).resourceMetadataUrl;
+    };
+    const wellKnown = '/.well-known/oauth-protected-resource/mcp';
+    expect(await challenged(`https://mcp.vendor.test${wellKnown}`)).toBe(`https://mcp.vendor.test${wellKnown}`);
+    expect(await challenged(`https://auth.vendor.test${wellKnown}`)).toBe(`https://auth.vendor.test${wellKnown}`);
+    expect(await challenged(`http://mcp.vendor.test${wellKnown}`)).toBeUndefined();
+    expect(await challenged(`https://attacker.test${wellKnown}`)).toBeUndefined();
+    expect(await challenged('https://169.254.169.254/latest/meta-data')).toBeUndefined();
+    expect(await challenged(`https://app.example.com${wellKnown}`)).toBeUndefined();
+    expect(await challenged('not a url')).toBeUndefined();
+  });
+
+  it('clamps requested limits so a caller can only tighten them', async () => {
+    const id = seed('/mcp');
+    const seen: unknown[] = [];
+    const capturing: typeof runner = async payload => {
+      seen.push(payload.limits);
+      return runner(payload);
+    };
+    await invokeRemoteMcp(
+      {
+        action: 'listTools',
+        connectionId: id,
+        userId: 'user-1',
+        limits: { maxBodyBytes: 1024 ** 3, listToolsTimeoutMs: 1_000, maxTools: Number.POSITIVE_INFINITY },
+      },
+      { runner: capturing, context: context() }
+    );
+    expect(seen[0]).toEqual({ maxBodyBytes: DEFAULT_REMOTE_MCP_LIMITS.maxBodyBytes, listToolsTimeoutMs: 1_000 });
   });
 
   it('cleans a server-supplied scope before storing it', async () => {
@@ -401,7 +446,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     });
   });
 
-  it('surfaces ssrf_blocked when the host resolves to a private address, and records it even on a call', async () => {
+  it('on self-host, surfaces ssrf_blocked for a private address, and records it even on a call', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     answers['private.test'] = '10.0.0.5';
     const id = seed('/mcp', {}, 'private.test');
     await expectRemoteCode(
@@ -415,6 +461,21 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
       code: 'ssrf_blocked',
       message: 'The server address resolves to a private or blocked network',
+    });
+    expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
+  });
+
+  it('hosted, a private address reads like an unreachable server; only the audit keeps ssrf_blocked', async () => {
+    answers['private.test'] = '10.0.0.5';
+    const id = seed('/mcp', {}, 'private.test');
+    const error = await invokeRemoteMcp(
+      { action: 'listTools', connectionId: id, userId: 'user-1' },
+      { runner, context: context() }
+    ).catch((e: unknown) => e as RemoteMcpError);
+    expect(error).toMatchObject({ code: 'protocol', message: 'The server did not respond as an MCP server' });
+    expect(repo.setStatus).toHaveBeenCalledWith(id, 'error', {
+      code: 'protocol',
+      message: 'The server did not respond as an MCP server',
     });
     expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });

@@ -169,6 +169,33 @@ describe('resolveCustomMcpContext', () => {
   });
 });
 
+describe('evaluateConnectionPolicy - API keys over plain http', () => {
+  const policies = [CustomMcpPolicySchema.parse({ mode: 'any' })];
+  const network = { ownHosts: [], allowHttp: true, allowPrivateCidrs: ['10.20.0.0/16'] };
+  const verdict = (url: string, authKind: 'api_key' | 'none' = 'api_key', net: typeof network | undefined = network) =>
+    evaluateConnectionPolicy(
+      { policies, platformBlockedHosts: [], network: net },
+      { urlHost: new URL(url).hostname, authKind, url }
+    );
+
+  it('refuses an API key over http to a hostname, or to an address outside the private CIDRs', () => {
+    expect(verdict('http://mcp.internal.example:8080/mcp')).toMatchObject({
+      allowed: false,
+      reason: 'api_key_over_http',
+    });
+    expect(verdict('http://10.30.0.5:8080/mcp')).toMatchObject({ reason: 'api_key_over_http' });
+  });
+
+  it('allows it to an IP literal inside the private CIDRs, over https, without a key, or without the opt-in', () => {
+    expect(verdict('http://10.20.0.5:8080/mcp')).toEqual({ allowed: true });
+    expect(verdict('https://mcp.internal.example/mcp')).toEqual({ allowed: true });
+    expect(verdict('http://mcp.internal.example:8080/mcp', 'none')).toEqual({ allowed: true });
+    expect(verdict('http://mcp.internal.example:8080/mcp', 'api_key', { ...network, allowHttp: false })).toEqual({
+      allowed: true,
+    });
+  });
+});
+
 describe('assertCustomMcpEnabled', () => {
   it('throws 403 when off and returns the context when on', async () => {
     await expect(assertCustomMcpEnabled({ id: 'u1' })).resolves.toMatchObject({ enabled: true });

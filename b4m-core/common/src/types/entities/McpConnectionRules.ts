@@ -31,6 +31,13 @@ export const MCP_API_KEY_DENIED_HEADER_NAMES: ReadonlySet<string> = new Set([
   'mcp-protocol-version',
   'forwarded',
   'proxy-authorization',
+  'x-real-ip',
+  'true-client-ip',
+  'cf-connecting-ip',
+  'via',
+  'x-http-method-override',
+  'x-http-method',
+  'x-method-override',
 ]);
 
 const DENIED_HEADER_PREFIXES = ['x-forwarded-', 'proxy-'];

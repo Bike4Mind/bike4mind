@@ -181,7 +181,9 @@ export interface IMcpConnectionServerInfo {
 
 /**
  * The 401 challenge from the probe of a server that wants OAuth (RFC 9728), kept for the OAuth
- * flow. Server-supplied and untrusted: the OAuth code validates the URL before fetching it.
+ * flow. Server-supplied and untrusted: `resourceMetadataUrl` is kept only when it passes the
+ * connector URL rules over https on the connection's own host or registrable domain
+ * (invokeRemoteMcp), and the OAuth code still validates it before fetching it.
  */
 export interface IMcpConnectionAuthChallenge {
   resourceMetadataUrl?: string;

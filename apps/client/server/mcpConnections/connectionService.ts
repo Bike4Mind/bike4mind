@@ -67,7 +67,11 @@ export function toPublicView(
 ): IMcpConnectionPublic {
   return toMcpConnectionPublic(
     connection,
-    evaluateConnectionPolicy(context, { urlHost: connection.urlHost, authKind: connection.auth?.kind ?? 'none' })
+    evaluateConnectionPolicy(context, {
+      urlHost: connection.urlHost,
+      authKind: connection.auth?.kind ?? 'none',
+      url: connection.displayUrl,
+    })
   );
 }
 
@@ -141,7 +145,11 @@ export async function createUserConnection(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
   const prepared = prepareConnectionUrl(body.url, context.network);
-  const verdict = evaluateConnectionPolicy(context, { urlHost: prepared.urlHost, authKind: body.auth.kind });
+  const verdict = evaluateConnectionPolicy(context, {
+    urlHost: prepared.urlHost,
+    authKind: body.auth.kind,
+    url: prepared.url,
+  });
   if (!verdict.allowed) {
     throw new ForbiddenError(verdict.message, { code: 'policy_blocked', reason: verdict.reason });
   }

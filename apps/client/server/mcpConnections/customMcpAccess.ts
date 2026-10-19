@@ -10,6 +10,8 @@ import {
   type SettingScope,
 } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, scopedSettingsRepository } from '@bike4mind/database';
+import { buildPrivateAddressAdmission } from '@bike4mind/fab-pipeline/ssrf';
+import { isIP } from 'net';
 import { scopedSettingsService } from '@bike4mind/services';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 
@@ -43,7 +45,7 @@ export interface CustomMcpContext {
   maxConnectionsPerUser: number;
 }
 
-function isSelfHost(): boolean {
+export function isSelfHost(): boolean {
   return process.env.B4M_SELF_HOST === 'true';
 }
 
@@ -145,13 +147,47 @@ export async function assertCustomMcpEnabled(user: { id: string }): Promise<Cust
   return context;
 }
 
-/** The policy verdict for a connection across every applicable policy. */
-export function evaluateConnectionPolicy(
-  context: Pick<CustomMcpContext, 'policies' | 'platformBlockedHosts'>,
-  connection: { urlHost: string; authKind: McpConnectionAuthKind; presetRemoteHost?: string }
+/**
+ * Self-host can allow plain http; an API key sent that way is readable on every hop, so it is
+ * allowed only to an IP literal inside the admin's private CIDRs. A hostname is refused even when
+ * it resolves inside them: the address is not known at this layer, and DNS can change.
+ */
+function apiKeyOverHttpVerdict(
+  network: RemoteMcpNetworkOptions | undefined,
+  url: string | undefined,
+  authKind: McpConnectionAuthKind
 ): CustomMcpPolicyVerdict {
-  return combineCustomMcpPolicyVerdicts(
-    context.policies.map(policy =>
+  if (!network?.allowHttp || authKind !== 'api_key' || !url) return { allowed: true };
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { allowed: true };
+  }
+  if (parsed.protocol !== 'http:') return { allowed: true };
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const family = isIP(host);
+  const admitted =
+    family !== 0 && buildPrivateAddressAdmission({ allowPrivateCidrs: network.allowPrivateCidrs ?? [] })(host, family);
+  return admitted
+    ? { allowed: true }
+    : {
+        allowed: false,
+        reason: 'api_key_over_http',
+        message: 'An API key can be sent over plain http only to an address inside the allowed private networks',
+      };
+}
+
+/**
+ * The policy verdict for a connection across every applicable policy. Pass `url` (the stored
+ * `displayUrl` or the prepared URL) and the context's `network` to apply the plain-http API key rule.
+ */
+export function evaluateConnectionPolicy(
+  context: Pick<CustomMcpContext, 'policies' | 'platformBlockedHosts'> & { network?: RemoteMcpNetworkOptions },
+  connection: { urlHost: string; authKind: McpConnectionAuthKind; presetRemoteHost?: string; url?: string }
+): CustomMcpPolicyVerdict {
+  return combineCustomMcpPolicyVerdicts([
+    ...context.policies.map(policy =>
       evaluateCustomMcpPolicy({
         urlHost: connection.urlHost,
         authKind: connection.authKind,
@@ -159,6 +195,7 @@ export function evaluateConnectionPolicy(
         policy,
         platformBlockedHosts: context.platformBlockedHosts,
       })
-    )
-  );
+    ),
+    apiKeyOverHttpVerdict(context.network, connection.url, connection.authKind),
+  ]);
 }

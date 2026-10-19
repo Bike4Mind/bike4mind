@@ -14,6 +14,7 @@ export const CUSTOM_MCP_POLICY_DENY_REASONS = [
   'presets_only',
   'host_not_allowlisted',
   'unauthenticated_not_allowed',
+  'api_key_over_http',
 ] as const;
 export type CustomMcpPolicyDenyReason = (typeof CUSTOM_MCP_POLICY_DENY_REASONS)[number];
 
