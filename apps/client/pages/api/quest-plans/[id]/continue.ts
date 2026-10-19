@@ -6,12 +6,14 @@ import {
   projectRepository,
   fabFileRepository,
 } from '@bike4mind/database';
+import { questMasterPlanMutationResponseSchema } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
@@ -21,6 +23,11 @@ const ContinueRequestSchema = z.object({
   sessionId: z.string().refine(isValidObjectId, {
     error: 'Invalid sessionId format',
   }),
+});
+
+const continueResponseSchema = questMasterPlanMutationResponseSchema.extend({
+  sessionId: z.string(),
+  contextMessage: z.object({ id: z.string(), prompt: z.string() }),
 });
 
 const continueRateLimit = rateLimit({ limit: 20, windowMs: 60000, bucket: 'quest-plans/continue' });
@@ -142,7 +149,7 @@ const handler = baseApi()
         status: 'done',
       });
 
-      res.json({
+      respond(res, continueResponseSchema, {
         success: true,
         plan,
         sessionId: actualSessionId,

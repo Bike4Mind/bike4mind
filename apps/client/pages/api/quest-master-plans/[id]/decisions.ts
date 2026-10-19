@@ -1,9 +1,10 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { NotFoundError, QuestDecision } from '@bike4mind/common';
+import { NotFoundError, QuestDecision, questMasterPlanMutationResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { verifyQuestPlanWriteAccess, QUEST_ID_PATTERN } from '@server/utils/questMasterPlanAccess';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { v4 as uuidv4 } from 'uuid';
@@ -18,6 +19,8 @@ const AddDecisionSchema = z.object({
   relatedQuestId: z.string().min(1).max(100).regex(QUEST_ID_PATTERN, 'Invalid questId format').optional(),
   relatedSubQuestId: z.string().min(1).max(100).regex(QUEST_ID_PATTERN, 'Invalid subQuestId format').optional(),
 });
+
+const decisionResponseSchema = questMasterPlanMutationResponseSchema.extend({ decisionId: z.string() });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))
@@ -37,7 +40,7 @@ const handler = baseApi()
 
     if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
-    res.json({ success: true, plan: updatedPlan, decisionId: decision.id });
+    respond(res, decisionResponseSchema, { success: true, plan: updatedPlan, decisionId: decision.id });
   });
 
 export default handler;
