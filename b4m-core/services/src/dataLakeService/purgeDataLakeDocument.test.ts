@@ -634,9 +634,11 @@ describe('purgeDataLakeDocument', () => {
       documentDeleted: false,
       storageObjectsTotal: 2,
       storageObjectsRemaining: 2,
+      heldForModeration: true,
       verified: false,
     });
     expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+    expect(logger.error).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('legal hold'),
       expect.objectContaining({ fabFileId: 'file-1' })
@@ -651,9 +653,20 @@ describe('purgeDataLakeDocument', () => {
     });
     const storage = makeStorage();
 
-    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
 
     expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
+    expect(receipt.heldForModeration).toBe(false);
+  });
+
+  it('treats a block with no recorded reason as held', async () => {
+    const db = makeDb({ filePath: 'uploads/evidence.png', moderationStatus: 'blocked' });
+    const storage = makeStorage();
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({ heldForModeration: true, storageObjectsRemaining: 1 });
   });
 
   it('deletes every prior version object, not just the current filePath', async () => {

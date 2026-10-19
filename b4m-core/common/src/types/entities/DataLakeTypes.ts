@@ -1645,6 +1645,12 @@ export interface DataLakeDocumentPurgeReceipt {
    */
   storageObjectsRemaining: number;
   /**
+   * The file is a moderation evidence hold (see isModerationEvidenceHold), so the sweep kept its row
+   * and every stored object on purpose. `verified` is false, but a retry cannot change that until the
+   * hold is cleared - a caller must not present it as a failure to retry.
+   */
+  heldForModeration: boolean;
+  /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.
    * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment
    * keeps vectors on the chunk documents, so the chunk delete already removed them. `unwired`:

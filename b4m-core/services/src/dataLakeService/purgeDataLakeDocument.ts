@@ -254,7 +254,8 @@ export const purgeDataLakeDocument = async (
     }
   };
 
-  if (isModerationEvidenceHold(file)) {
+  const heldForModeration = isModerationEvidenceHold(file);
+  if (heldForModeration) {
     // An evidence-held file keeps its bytes (same rule as fabFileService/deleteStoredObjects.ts),
     // and its row delete would be refused anyway. Every key counts as unreached, so the receipt
     // reports them as still stored and nothing destructive below runs.
@@ -413,6 +414,7 @@ export const purgeDataLakeDocument = async (
     storageObjectDeleted,
     storageObjectsTotal: versionKeys.length + (currentKey ? 1 : 0),
     storageObjectsRemaining: storageKeysUnreached.length,
+    heldForModeration,
     retrievalIndexOutcome: retrievalIndex ? 'purged' : vectorsCollocated ? 'collocated' : 'unwired',
     verified,
     purgedAt: new Date().toISOString(),
@@ -422,6 +424,8 @@ export const purgeDataLakeDocument = async (
 
   if (verified) {
     logger?.info('[dataLake] permanently deleted a lake document', receipt);
+  } else if (heldForModeration) {
+    logger?.info('[dataLake] permanent deletion kept a document under moderation hold', receipt);
   } else {
     logger?.error('[dataLake] permanent deletion did not fully converge', receipt);
   }

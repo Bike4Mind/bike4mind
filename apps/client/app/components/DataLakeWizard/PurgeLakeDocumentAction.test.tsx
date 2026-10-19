@@ -29,6 +29,7 @@ const RECEIPT: DataLakeDocumentPurgeReceipt = {
   storageObjectDeleted: true,
   storageObjectsTotal: 1,
   storageObjectsRemaining: 0,
+  heldForModeration: false,
   retrievalIndexOutcome: 'collocated' as const,
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',
@@ -119,6 +120,30 @@ describe('PurgeLakeDocumentAction', () => {
     // leaves the current object alone on purpose, and the copy says so rather than implying every
     // remaining object was individually rejected.
     expect(note).toContain('left in place deliberately');
+  });
+
+  it('presents a moderation hold as kept on purpose, not as a failure to retry', async () => {
+    const user = userEvent.setup();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess({
+        ...RECEIPT,
+        documentDeleted: false,
+        chunksRemaining: 12,
+        storageObjectDeleted: false,
+        storageObjectsTotal: 2,
+        storageObjectsRemaining: 2,
+        heldForModeration: true,
+        verified: false,
+      })
+    );
+    renderAction();
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    const summary = (await screen.findByTestId('datalake-purgefile-receipt-summary')).textContent;
+    expect(summary).toContain('held for moderation review');
+    expect(summary).not.toContain('retry');
+    expect(screen.queryByTestId('datalake-purgefile-receipt-storage')).toBeNull();
   });
 
   it('leaves the storage note out of a clean receipt', async () => {

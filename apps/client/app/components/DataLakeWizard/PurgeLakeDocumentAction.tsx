@@ -109,21 +109,29 @@ export default function PurgeLakeDocumentAction({
 
       <Modal open={!!receipt} onClose={dismissReceipt}>
         <ModalDialog data-testid="datalake-purgefile-receipt">
-          <DialogTitle>{receipt?.verified ? 'Deleted permanently' : 'Deletion did not finish'}</DialogTitle>
+          <DialogTitle>
+            {receipt?.verified
+              ? 'Deleted permanently'
+              : receipt?.heldForModeration
+                ? 'Kept under moderation hold'
+                : 'Deletion did not finish'}
+          </DialogTitle>
           <DialogContent>
             <Typography level="body-sm" data-testid="datalake-purgefile-receipt-summary">
               {receipt?.verified
                 ? `"${receipt.fileName}" is gone. ${receipt.chunksBefore} chunk(s) and their vectors were destroyed, and the document was confirmed absent afterwards.`
-                : `"${receipt?.fileName}" was not fully destroyed: ${receipt?.chunksRemaining} chunk(s) still remain${
-                    receipt?.documentDeleted ? '' : ' and the document is still present'
-                  }. The attempt has been recorded - retry, or contact support.`}
+                : receipt?.heldForModeration
+                  ? `"${receipt.fileName}" is held for moderation review, so the document and its stored copies were kept. It cannot be permanently deleted while the hold is in place.`
+                  : `"${receipt?.fileName}" was not fully destroyed: ${receipt?.chunksRemaining} chunk(s) still remain${
+                      receipt?.documentDeleted ? '' : ' and the document is still present'
+                    }. The attempt has been recorded - retry, or contact support.`}
             </Typography>
             <Typography level="body-xs" sx={{ mt: 1.5, color: 'text.tertiary' }}>
               {receipt?.embeddingModels.length
                 ? `Vector indexes reached: ${receipt.embeddingModels.join(', ')}.`
                 : 'This document had no vectors.'}
             </Typography>
-            {receipt && !receipt.storageObjectDeleted && (
+            {receipt && !receipt.storageObjectDeleted && !receipt.heldForModeration && (
               <Typography
                 level="body-xs"
                 data-testid="datalake-purgefile-receipt-storage"
