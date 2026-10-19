@@ -32,13 +32,19 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 import { holdPreflightCredits, InsufficientCreditsPreflightError } from './creditPreflight';
 
-const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const hold = (estimatedCredits: number) =>
-  holdPreflightCredits({ userId: 'u1', estimatedCredits, featureLabel: 'text-to-speech', logger });
+  holdPreflightCredits({
+    userId: 'u1',
+    estimatedCredits,
+    featureLabel: 'text-to-speech',
+    logger: logger as never,
+  });
 const entry = { type: 'text_to_speech_usage' as const, model: 'tts-1', sessionId: 's1' };
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
+  logger.error.mockClear();
   mocks.getSettingsMap.mockResolvedValue({});
   mocks.createTransaction.mockResolvedValue(undefined);
   balance.failRefund = false;
@@ -122,5 +128,25 @@ describe('holdPreflightCredits', () => {
 
     await expect(held.settle(6, entry)).resolves.toBe(6);
     expect(balance.current).toBe(-6);
+  });
+
+  it('resolves the charge when the ledger write rejects, so a delivered result is not failed by billing', async () => {
+    balance.current = 10;
+    const held = await hold(6);
+    mocks.createTransaction.mockRejectedValueOnce(new Error('ledger write failed'));
+
+    await expect(held.settle(4, entry)).resolves.toBe(4);
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('settlement failed'), expect.anything());
+  });
+
+  it('resolves release when the refund write rejects, so the provider error still reaches the caller', async () => {
+    balance.current = 10;
+    const held = await hold(6);
+    balance.failRefund = true;
+
+    await expect(held.release()).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('refund failed'), expect.anything());
   });
 });
