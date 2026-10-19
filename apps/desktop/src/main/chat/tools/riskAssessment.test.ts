@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { publicVideoModel } from '../media/__fixtures__/videoModels';
 import { toolsForRequest } from './registry';
-import { readsUntrusted, sendsOut, spendsCredits } from './riskAssessment';
+import { mayReadUntrusted, readsUntrusted, readUntrustedContent, sendsOut, spendsCredits } from './riskAssessment';
 
 describe('the credit-spending axis', () => {
   it.each(['generate_image', 'generate_speech', 'generate_sound_effect', 'generate_music', 'session_spawn'])(
@@ -22,13 +22,25 @@ describe('the credit-spending axis', () => {
 });
 
 describe('the untrusted-content and outbound axes', () => {
-  it('reads the tools whose result is someone else\'s text, by name and by family', () => {
-    for (const name of ['web_fetch', 'web_search', 'skill', 'session_read', 'browser_snapshot', 'mcp__notion_search']) {
+  it("reads the tools whose result is someone else's text, by name and by family", () => {
+    for (const name of ['web_fetch', 'web_search', 'browser_snapshot', 'mcp__notion_search']) {
       expect(readsUntrusted(name), name).toBe(true);
     }
-    for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_send']) {
+    for (const name of ['bash_execute', 'file_read', 'grep_search', 'session_send', 'skill', 'session_read']) {
       expect(readsUntrusted(name), name).toBe(false);
     }
+  });
+
+  /** A local skill file and a conversation that read nothing untrusted are the user's own text. */
+  it('leaves a skill and another conversation to say whether their result was untrusted', () => {
+    expect(mayReadUntrusted('skill')).toBe(true);
+    expect(mayReadUntrusted('session_read')).toBe(true);
+    expect(mayReadUntrusted('web_fetch')).toBe(false);
+
+    expect(readUntrustedContent({ name: 'skill' })).toBe(false);
+    expect(readUntrustedContent({ name: 'skill', untrusted: true })).toBe(true);
+    expect(readUntrustedContent({ name: 'session_read', untrusted: true })).toBe(true);
+    expect(readUntrustedContent({ name: 'web_search' })).toBe(true);
   });
 
   it('sends out on the shell, the browser, the web and another conversation', () => {
@@ -50,7 +62,7 @@ describe('the untrusted-content and outbound axes', () => {
 
   /**
    * The families are matched by prefix, so a new member is covered as it ships; a tool that
-   * belongs to none of the three axes has to be named here instead. This is what makes a new
+   * belongs to none of these axes has to be named here instead. This is what makes a new
    * tool's classification a decision rather than a default: add one without a line here and
    * this test fails.
    */
@@ -67,7 +79,7 @@ describe('the untrusted-content and outbound axes', () => {
     'bash_kill',
     'todo_write',
     'explore',
-    // Conversations of this project: reading one taints, listing and archiving do not.
+    // Conversations of this project: listing and archiving them reads none of their content.
     'session_list',
     'session_archive',
     'session_delete',
@@ -106,7 +118,7 @@ describe('the untrusted-content and outbound axes', () => {
     }).map(entry => entry.toolSchema.name);
 
     const unclassified = declared.filter(
-      name => !spendsCredits(name) && !readsUntrusted(name) && !sendsOut(name)
+      name => !spendsCredits(name) && !readsUntrusted(name) && !mayReadUntrusted(name) && !sendsOut(name)
     );
     expect([...unclassified].sort()).toEqual([...NEITHER].sort());
   });

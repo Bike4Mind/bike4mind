@@ -248,6 +248,13 @@ export interface ChatToolCall {
    * same bytes or the prompt cache is lost from this point on. `preview` stays for the thread.
    */
   cleared?: true;
+  /**
+   * The result carried text the user did not write, from a tool whose results only sometimes
+   * do: a skill from the account, or another conversation that had itself read such
+   * content. Tools whose every result counts are classified by name instead (main's
+   * riskAssessment.readsUntrusted), so this is absent on them.
+   */
+  untrusted?: true;
 }
 
 /** Sum over a sub-loop's rounds: how many requests it made and where its time went. */
@@ -541,6 +548,11 @@ export interface ChatRelayOrigin {
   /** The sending conversation's title as it was at send time, for the row that names it. */
   fromTitle: string;
   hops: number;
+  /**
+   * The sending conversation had read web, browser, MCP or other untrusted content, so the turn
+   * this message starts begins as though it had read it too.
+   */
+  untrusted?: true;
 }
 
 /**

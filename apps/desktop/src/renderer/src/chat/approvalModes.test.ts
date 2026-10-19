@@ -31,20 +31,26 @@ describe('approval mode copy', () => {
     expect(approvalModeOption('auto').description).toMatch(/send data out/i);
   });
 
-  it('says approve-for-me asks before sending data out and after reading untrusted content', () => {
+  it('says approve-for-me asks before sending data out only after reading untrusted content', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/send data off this computer/i);
-    expect(notes).toMatch(/read web, browser, MCP or skill content/i);
+    expect(notes).toMatch(/once the reply has read web, browser or MCP content/i);
+    expect(notes).toMatch(/until then they run/i);
     expect(notes).toMatch(/browsing a site/i);
+  });
+
+  it('says your own skills are not counted as untrusted content', () => {
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/your own skill files are not/i);
   });
 
   /**
    * The copy states the gap rather than implying the list is exhaustive: what a shell command
    * prints does not count as content the reply read, so a page reached with `curl` does not by
-   * itself turn on the asks above.
+   * itself turn on the asks above, and the outbound scan cannot see inside a script file.
    */
   it('admits that what a command printed is not counted as reading', () => {
     expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed is not counted/i);
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/script that sends data .* still runs/i);
   });
 
   /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */

@@ -58,6 +58,7 @@ describe('explore', () => {
         notice: vi.fn(),
         label: vi.fn(),
         moved: vi.fn(),
+        untrusted: vi.fn(),
         diff: vi.fn(),
         detail: vi.fn(),
         image: vi.fn(),

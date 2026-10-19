@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -13,6 +13,10 @@ import { remoteSkillsKey } from './skills/accountSkills';
 import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+/** A `gh` stub first on PATH, so a command the gate lets through never reaches GitHub. */
+const fakeBin = vi.hoisted(() => ({ dir: '' }));
+vi.mock('./tools/userPath', () => ({ resolveUserPath: vi.fn(async () => `${fakeBin.dir}:/usr/bin:/bin`) }));
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -41,6 +45,10 @@ describe('ChatService and skills', () => {
 
   beforeEach(async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-chatskills-')));
+    fakeBin.dir = join(base, 'bin');
+    await mkdir(fakeBin.dir);
+    await writeFile(join(fakeBin.dir, 'gh'), '#!/bin/sh\necho "gh $*"\n', 'utf8');
+    await chmod(join(fakeBin.dir, 'gh'), 0o755);
     project = join(base, 'repo');
     await mkdir(project, { recursive: true });
     await skill(project, 'ship-it', ['---', 'description: Use whenever the user asks to release.', '---', '', 'Ship.']);
@@ -144,30 +152,51 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
   });
 
-  it('asks in "Approve for me" before an outbound call that follows a skill', async () => {
-    const id = await session();
-    await catalog.setTrusted(project, true);
-    await service.send(id, 'release it');
+  const card = () =>
+    events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+
+  async function afterSkill(id: string, name: string, next: { name: string; input: Record<string, unknown> }) {
+    await service.setApprovalMode(id, 'auto');
+    await service.send(id, 'go');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
     streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: '{"skill":"ship-it"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: name }) }] })
     );
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
     streams[1].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'web_fetch', arguments: '{"url":"https://example.com/"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: next.name, arguments: JSON.stringify(next.input) }] })
     );
     streams[1].write(frame('[DONE]'));
+  }
 
-    const asked = await vi.waitUntil(
+  /** The user's own skill file is their instruction, so what it asks for runs as if they typed it. */
+  it('runs an outbound command unasked in "Approve for me" after a local skill', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+    const command = 'gh issue edit 889 --add-assignee "@me" && gh issue view 889 --json title,body';
+    await afterSkill(id, 'ship-it', { name: 'bash_execute', input: { command, cwd: project } });
+
+    const settled = await vi.waitUntil(
       () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find((call): call is ChatToolCall => call?.status === 'awaiting-approval'),
+        events.find(
+          event => event.type === 'tool-end' && event.call.name === 'bash_execute' && event.call.status === 'done'
+        ),
       { timeout: 3000, interval: 5 }
     );
+    expect(settled.type === 'tool-end' && settled.call.preview).toContain('gh issue edit 889');
+    expect(card()).toBeUndefined();
+  });
+
+  it('asks in "Approve for me" before an outbound call that follows a skill the account served', async () => {
+    const id = await session();
+    await afterSkill(id, 'web-summary', { name: 'web_fetch', input: { url: 'https://example.com/' } });
+
+    const asked = await vi.waitUntil(card, { timeout: 3000, interval: 5 });
     expect(asked.name).toBe('web_fetch');
-    expect(asked.approvalDetail).toContain('read content from a skill (skill)');
+    expect(asked.approvalDetail).toContain('Asking because this reply read a skill from your account (skill).');
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

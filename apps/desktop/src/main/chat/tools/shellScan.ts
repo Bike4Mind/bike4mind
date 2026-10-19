@@ -25,7 +25,7 @@ export interface ShellScan {
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
-  /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
+  /** Why a command can send data off this computer, e.g. `curl --data`; see outboundReason. */
   outbound: string[];
 }
 
@@ -349,9 +349,9 @@ function sendsBody(method: string | undefined): boolean {
 }
 
 /**
- * Why one simple command can send data off this computer, or null. Defence in depth only: a
- * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ * Why one simple command can send data off this computer, or null. Best effort: a script file, a
+ * decoded payload or a wrapper not listed here slips past. A command this finds asks in 'auto'
+ * only once the reply has read untrusted content (see ChatService's DirectoryTurn.untrusted).
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);

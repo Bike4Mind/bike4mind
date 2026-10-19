@@ -68,6 +68,9 @@ export const skillTool: ToolDefinition = {
 
     const expanded = await expandSkill(command, args, context.roots, context.workingDirectory);
     if (!expanded.body.trim()) throw new Error(`The skill "${name}" has an empty body, so there is nothing to run.`);
+    // A skill file in the user's own or the trusted project's skill folder is their instruction;
+    // the account also serves system and organisation skills that someone else wrote.
+    if (command.source === 'remote') context.report?.untrusted();
 
     return [`Instructions for the skill "${name}", from ${command.filePath}. Follow them.`, '', expanded.body].join(
       '\n'

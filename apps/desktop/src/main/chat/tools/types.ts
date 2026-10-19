@@ -130,6 +130,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
+  /** This call's result is untrusted text; only for the tools riskAssessment.mayReadUntrusted names. */
+  untrusted(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -399,8 +401,11 @@ export interface HostContext {
   spawnBase(): Promise<string>;
   /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
   listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
-  /** One session's transcript as plain text, or null when it is gone or not in this project. */
-  readSession(sessionId: string): Promise<string | null>;
+  /**
+   * One session's transcript as plain text, and whether that session had read untrusted content;
+   * null when it is gone or not in this project.
+   */
+  readSession(sessionId: string): Promise<{ transcript: string; untrusted: boolean } | null>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
   /** Irreversible. False when the id names nothing this session may address. */
@@ -471,9 +476,15 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a script that does not parse.
    */
   askInAuto?: true;
+  /**
+   * Set by a shell command's prompt: whether its scan found a command that can send data off
+   * this computer. Only such a command asks in a reply that has read untrusted content; absent,
+   * the tool's own riskAssessment.sendsOut classification stands.
+   */
+  outbound?: boolean;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that

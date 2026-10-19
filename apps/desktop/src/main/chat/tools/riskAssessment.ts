@@ -1,3 +1,4 @@
+import type { ChatToolCall } from '@shared/chat';
 import { WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from '@shared/webSearch';
 import { MCP_TOOL_PREFIX } from '../mcp/names';
 
@@ -30,8 +31,8 @@ export function spendsCredits(toolName: string): boolean {
 }
 
 /**
- * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
- * session's transcript, which may have read any of those - that can carry injected instructions.
+ * Tools whose every result is someone else's text - a web page, a search result, a page in the
+ * browser, an MCP server - that can carry injected instructions.
  *
  * A shell command's output is NOT here, even though `curl` prints what a page said: a script
  * file or a decoded payload slips past any check on the text, so a command is judged on what it
@@ -39,21 +40,34 @@ export function spendsCredits(toolName: string): boolean {
  *
  * `browser_*` and every server tool are matched by prefix, so a new one is covered as it ships.
  */
-const READS_UNTRUSTED: ReadonlySet<string> = new Set([
-  WEB_FETCH_TOOL_NAME,
-  WEB_SEARCH_TOOL_NAME,
-  'skill',
-  'session_read',
-]);
+const READS_UNTRUSTED: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME]);
 
 export function readsUntrusted(toolName: string): boolean {
   return READS_UNTRUSTED.has(toolName) || toolName.startsWith('browser_') || toolName.startsWith(MCP_TOOL_PREFIX);
 }
 
 /**
+ * Tools whose result is untrusted only sometimes, and which say so through
+ * `ToolReporter.untrusted`: a skill is the user's own instructions when it is a file in their
+ * skill folders, and not when the account served it; another conversation's transcript is
+ * untrusted only when that conversation had read untrusted content itself.
+ */
+const MAY_READ_UNTRUSTED: ReadonlySet<string> = new Set(['skill', 'session_read']);
+
+export function mayReadUntrusted(toolName: string): boolean {
+  return MAY_READ_UNTRUSTED.has(toolName);
+}
+
+/** Whether a settled call put untrusted text in front of the model; see ChatToolCall.untrusted. */
+export function readUntrustedContent(call: Pick<ChatToolCall, 'name' | 'untrusted'>): boolean {
+  return call.untrusted === true || readsUntrusted(call.name);
+}
+
+/**
  * Tools that can carry data off this computer, or into a session that has not read the untrusted
- * content. A reply that has read such content asks before each of these, whatever "always" was
- * answered before.
+ * content. In 'auto', a reply that has read such content asks before each of these, whatever
+ * "always" was answered before - except a shell command whose scan found nothing that sends data
+ * out (see ApprovalPrompt.outbound).
  */
 const SENDS_OUT: ReadonlySet<string> = new Set([
   'bash_execute',

@@ -102,9 +102,10 @@ export const sessionRead: ToolDefinition = {
   },
   async run(input, context) {
     const host = requireHost(context);
-    const transcript = await host.readSession(requireString(input, 'session_id'));
-    if (transcript === null) return 'No conversation with that id in this project.';
-    return transcript;
+    const read = await host.readSession(requireString(input, 'session_id'));
+    if (read === null) return 'No conversation with that id in this project.';
+    if (read.untrusted) context.report?.untrusted();
+    return read.transcript;
   },
 };
 
