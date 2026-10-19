@@ -66,6 +66,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
   const [isEditingEvents, setIsEditingEvents] = useState(false);
   const [editedEvents, setEditedEvents] = useState<string[]>([]);
+  const [testTargetUrl, setTestTargetUrl] = useState('');
 
   // Data hooks
   const { data: config, isLoading, isError, error } = useGetOrgWebhookConfig(organization.id);
@@ -166,8 +167,10 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
   }, [config, organization.id, updateConfig]);
 
   const handleTestWebhook = useCallback(async () => {
-    await testWebhook.mutateAsync({ orgId: organization.id });
-  }, [organization.id, testWebhook]);
+    const targetUrl = testTargetUrl.trim();
+    if (!targetUrl) return;
+    await testWebhook.mutateAsync({ orgId: organization.id, targetUrl });
+  }, [organization.id, testTargetUrl, testWebhook]);
 
   const handleReplayDLQ = useCallback(() => {
     setConfirmationModal({
@@ -461,6 +464,22 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
 
         <Divider />
 
+        {/* Test ping target */}
+        <FormControl>
+          <FormLabel>Test Ping Target URL</FormLabel>
+          <Input
+            type="url"
+            placeholder="https://example.com/webhook"
+            value={testTargetUrl}
+            onChange={e => setTestTargetUrl(e.target.value)}
+            slotProps={{ input: { 'data-testid': 'test-webhook-target-url' } }}
+          />
+          <FormHelperText>
+            A signed ping event is POSTed to this URL. Private and internal addresses are rejected, and redirects are
+            not followed.
+          </FormHelperText>
+        </FormControl>
+
         {/* Actions */}
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Button
@@ -468,6 +487,7 @@ const OrgWebhookConfig: FC<OrgWebhookConfigProps> = ({ organization }) => {
             color="neutral"
             onClick={handleTestWebhook}
             loading={testWebhook.isPending}
+            disabled={!testTargetUrl.trim()}
             startDecorator={<PlayArrowIcon />}
             data-testid="test-webhook"
           >
