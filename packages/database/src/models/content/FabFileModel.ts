@@ -3712,6 +3712,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     nextOrganizationId: string | undefined
   ): Promise<boolean> {
     // `null` matches a missing field, so a row read without one compares equal to the stored doc.
+    // Status is the exception: the schema defaults it to 'pending', so a hydrated read fills that
+    // value into a legacy row that stores no status at all. Match the missing field as the same
+    // charge state (chargedBytes reads it as not-complete), or every such row loses the CAS.
     // No includeDeleted: a tombstone's bytes were already refunded, so it has nothing to move.
     const result = await this.fabFileModel.updateOne(
       {
@@ -3719,7 +3722,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         ...(expected.organizationId ? { organizationId: expected.organizationId } : PERSONAL_STORAGE_FILTER),
         fileSize: expected.fileSize ?? null,
         storageChargedAt: expected.storageChargedAt ?? null,
-        status: expected.status ?? null,
+        status: expected.status === 'pending' ? { $in: ['pending', null] } : (expected.status ?? null),
       },
       nextOrganizationId ? { $set: { organizationId: nextOrganizationId } } : { $unset: { organizationId: '' } }
     );

@@ -177,6 +177,21 @@ describe('storage owner follows lake membership', () => {
     expect(await orgBytes(ACME_ID)).toBe(BASELINE);
   });
 
+  it('moves a legacy row that stores no status when it leaves its only org lake', async () => {
+    await seedOwners();
+    const acme = await seedLake('acme', ACME_ID);
+    const fileId = await seedFile(['datalake:acme'], ACME_ID);
+    // Pre-status rows are live in prod: the hydrated read fills in the schema default, but the
+    // stored document has no such field, so the restamp's compare-and-set must still match it.
+    await FabFile.collection.updateOne({ _id: new mongoose.Types.ObjectId(fileId) }, { $unset: { status: '' } });
+
+    await remove(acme, fileId);
+
+    expect(await storedOwner(fileId)).toBeUndefined();
+    expect(await orgBytes(ACME_ID)).toBe(BASELINE - FILE_BYTES);
+    expect(await userBytes()).toBe(BASELINE + FILE_BYTES);
+  });
+
   it('lets a removal through even when the uploader is over quota', async () => {
     await seedOwners();
     await User.collection.updateOne({ _id: UPLOADER_ID }, { $set: { storageLimit: 0 } });
@@ -201,6 +216,16 @@ describe('setOwnerOrganizationIfUnchanged', () => {
 
     expect(await fabFileRepository.setOwnerOrganizationIfUnchanged(fileId, read!, ACME_ID.toString())).toBe(false);
     expect(await storedOwner(fileId)).toBeUndefined();
+  });
+
+  it('restamps a legacy row that stores no status', async () => {
+    const fileId = await seedFile([]);
+    await FabFile.collection.updateOne({ _id: new mongoose.Types.ObjectId(fileId) }, { $unset: { status: '' } });
+    // The hydrated read reports the schema default 'pending' for this row.
+    const read = await fabFileRepository.findById(fileId);
+
+    expect(await fabFileRepository.setOwnerOrganizationIfUnchanged(fileId, read!, ACME_ID.toString())).toBe(true);
+    expect(await storedOwner(fileId)).toBe(ACME_ID.toString());
   });
 
   it('restamps, then unstamps, an unchanged row', async () => {
