@@ -186,11 +186,22 @@ describe('executeCompletion - output budget', () => {
     expect(capturedOptions).not.toHaveProperty('reasoningEffort');
   });
 
-  it('never raises a budget the caller asked for explicitly', async () => {
+  // An explicit budget below the floor starves the same way an absent one used to: the
+  // reasoning consumes it and the turn ends at max_tokens with no visible text.
+  it('raises an explicit budget below the floor on an adaptive model', async () => {
     availableModels = [ADAPTIVE_MODEL];
     const { db } = buildDb();
 
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { maxTokens: 1000 } });
+
+    expect(capturedOptions?.maxTokens).toBe(64_000);
+  });
+
+  it('never raises an explicit budget on a model that does not reason inside it', async () => {
+    availableModels = [PLAIN_MODEL];
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: 'plain-model', db, options: { maxTokens: 1000 } });
 
     expect(capturedOptions?.maxTokens).toBe(1000);
   });
@@ -327,10 +338,11 @@ describe('executeCompletion - output budget', () => {
       model: 'adaptive-model',
       db: { ...db, organizations: organizations as any },
       billingOrganizationId: 'org1',
-      options: { maxTokens: 50_000 },
+      // Above the reasoning floor, so the budget reaches the cap check unchanged.
+      options: { maxTokens: 100_000 },
     });
 
-    expect(vi.mocked(isMemberCreditCapExceeded)).toHaveBeenCalledWith(organization, 'user1', 50);
+    expect(vi.mocked(isMemberCreditCapExceeded)).toHaveBeenCalledWith(organization, 'user1', 100);
   });
 
   // Without this the CLI cannot tell a cut-off reply from a finished one, which is what

@@ -11,6 +11,7 @@ import { ChatModels, type IMessage } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import type { ICompletionOptions } from './backend';
+import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from './thinkingParams';
 
 const SENTINEL = new Error('captured-params-sentinel');
 
@@ -67,7 +68,8 @@ describe('AnthropicBackend reasoningEffort', () => {
 
     expect(request.thinking).toEqual({ type: 'adaptive' });
     expect(request.output_config).toEqual({ effort: 'low' });
-    expect(request.max_tokens).toBe(2000);
+    // Thinking stays on, so the caller's 2000 is lifted to the reasoning floor.
+    expect(request.max_tokens).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
   });
 
   it('sends a clamped thinking budget to a legacy model, with temperature 1 and no top_p', async () => {

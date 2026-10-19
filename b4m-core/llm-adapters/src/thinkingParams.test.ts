@@ -13,6 +13,7 @@ import {
   toAnthropicEffort,
   type AnthropicEffort,
   THINKING_ANSWER_HEADROOM_TOKENS,
+  wasOutputBudgetRaised,
 } from './thinkingParams';
 import {
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
@@ -136,24 +137,48 @@ describe('resolveOutputMaxTokens', () => {
       modelMaxOutputTokens: modelInfo.max_tokens,
     });
 
-  describe('an explicit caller budget is never raised', () => {
-    // The bug this guards: flooring adaptive models unconditionally silently
-    // multiplied a caller's stated budget, which also inflates the credit
-    // pre-reservation and shrinks the usable input window.
-    it('honors a budget below the adaptive floor on an adaptive model', () => {
-      expect(resolve(16_000, adaptiveModel)).toBe(16_000);
+  describe('an explicit caller budget', () => {
+    // The bug this guards: a saved 8192 "Max output tokens" on an adaptive model let reasoning
+    // consume the whole budget, so every substantive turn ended at max_tokens with no visible text.
+    it('is raised to the floor on an adaptive model', () => {
+      expect(resolve(8192, adaptiveModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
-    it('honors a tiny budget on an adaptive model', () => {
-      expect(resolve(50, adaptiveModel)).toBe(50);
+    it('is raised to the floor even when tiny', () => {
+      expect(resolve(50, adaptiveModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
-    it('honors a budget on a legacy model', () => {
+    it('is raised to the floor on an OpenAI reasoning model', () => {
+      expect(resolve(16_000, openAiReasoningModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('is honored above the floor on an adaptive model', () => {
+      expect(resolve(100_000, adaptiveModel)).toBe(100_000);
+    });
+
+    // Legacy thinking is opt-in and separately budgeted, so a small value there is a real choice.
+    it('is honored on a legacy model', () => {
       expect(resolve(16_000, legacyModel)).toBe(16_000);
     });
 
-    it('honors a budget on an OpenAI reasoning model', () => {
-      expect(resolve(16_000, openAiReasoningModel)).toBe(16_000);
+    it('is never raised past a declared cap below the floor', () => {
+      expect(resolve(2048, { ...adaptiveModel, max_tokens: 8192 })).toBe(8192);
+    });
+  });
+
+  describe('wasOutputBudgetRaised', () => {
+    it('reports a raised explicit budget', () => {
+      expect(wasOutputBudgetRaised(8192, resolve(8192, adaptiveModel))).toBe(true);
+    });
+
+    it('does not report an honored explicit budget', () => {
+      expect(wasOutputBudgetRaised(16_000, resolve(16_000, legacyModel))).toBe(false);
+    });
+
+    // An absent request is sized for the model, not raised from anything.
+    it('does not report an absent or unusable request', () => {
+      expect(wasOutputBudgetRaised(undefined, resolve(undefined, adaptiveModel))).toBe(false);
+      expect(wasOutputBudgetRaised(Number.NaN, resolve(Number.NaN, adaptiveModel))).toBe(false);
     });
   });
 
@@ -219,8 +244,8 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, derived(catalogOnlyReasoningModel))).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
-    it('honors an explicit budget above the derived cap', () => {
-      expect(resolve(32_000, derived(adaptiveModel))).toBe(32_000);
+    it('raises an explicit budget above the derived cap to the floor', () => {
+      expect(resolve(32_000, derived(adaptiveModel))).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
     // Still a clamp, just a defensible one: an over-request would 400 the turn, and the value
@@ -323,8 +348,8 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, kimiK25)).toBe(16_384);
     });
 
-    it('still honors an explicit caller budget', () => {
-      expect(resolve(2048, kimiThinking)).toBe(2048);
+    it('raises an explicit caller budget to its own cap', () => {
+      expect(resolve(2048, kimiThinking)).toBe(16_384);
     });
 
     it('leaves a non-listed model on the fallback', () => {
@@ -361,8 +386,8 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, deepseekFlash)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
-    it('still honors an explicit budget on DeepSeek Flash', () => {
-      expect(resolve(8192, deepseekFlash)).toBe(8192);
+    it('raises an explicit budget on DeepSeek Flash to the floor', () => {
+      expect(resolve(8192, deepseekFlash)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
     const deepseekV4Pro: ModelInfo = {
@@ -383,8 +408,8 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, deepseekV4Pro)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
-    it('still honors an explicit budget on DeepSeek V4 Pro', () => {
-      expect(resolve(8192, deepseekV4Pro)).toBe(8192);
+    it('raises an explicit budget on DeepSeek V4 Pro to the floor', () => {
+      expect(resolve(8192, deepseekV4Pro)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
     // Bedrock DeepSeek R1 also inlines its monologue into the output budget
@@ -410,8 +435,8 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, deepseekR1Bedrock)).toBe(32_768);
     });
 
-    it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
-      expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
+    it('raises an explicit budget on Bedrock DeepSeek R1 to its own cap', () => {
+      expect(resolve(8192, deepseekR1Bedrock)).toBe(32_768);
     });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
@@ -106,16 +107,8 @@ export function resolveAnthropicEffort(input: {
   );
 }
 
-/**
- * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
- * models self-manage extended thinking *within* max_tokens, which is a ceiling
- * (they stop at end_turn), not a target - so a larger floor costs nothing on
- * short replies but keeps reasoning from consuming the whole budget and leaving
- * no room for the visible answer. Both paths that size an adaptive model's output
- * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget).
- */
-export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+// Lives in common so the settings UI can warn against the same number this module enforces.
+export { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR };
 
 /**
  * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
@@ -185,21 +178,25 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
 /**
  * Resolves the output budget to send as the model's max-tokens param.
  *
- * The distinction that matters: `requested` being undefined means the caller
- * expressed no preference, which is the only case we are free to size for the
- * model. An explicit number is a deliberate choice and is never raised - raising
- * it would silently exceed the budget the caller asked for, and it also feeds the
- * credit pre-reservation and shrinks the usable input window, so a "harmless"
- * bump is neither harmless nor invisible. Explicit values are still clamped down
- * to the model's own cap, since over-requesting 400s the whole turn.
+ * `requested` being undefined means the caller expressed no preference, so the budget is
+ * sized for the model. An explicit number is honored as-is on a model that does not reason
+ * inside its output budget, and clamped down to the model's own cap everywhere, since
+ * over-requesting 400s the whole turn.
  *
- * Models that reason inside the output budget default to
- * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
- * be consumed entirely by reasoning, leaving an empty visible reply. "Their own cap"
- * means a DECLARED one - a cap toModelInfo derived is only a default, and clamping
- * such a model to it reproduces that same starvation, so derivedOutputCeiling stands
- * in for it. Every path that has a usable cap ends in a clamp against it; a model with
- * no usable cap at all (line 138) is a different, deliberate exception - see its comment.
+ * Models that reason inside the output budget get ADAPTIVE_THINKING_MAX_TOKENS_FLOOR as a
+ * minimum, explicit or not, clamped to their own cap. Below it the reasoning can consume the
+ * whole budget and the turn ends at max_tokens with no visible text - and an explicit small
+ * value is usually not a deliberate choice for this model at all but a saved setting carried
+ * over from a model that did not reason. Raising it is cheap where it used not to be: max_tokens
+ * is a ceiling these models stop well short of, the credit hold is capped independently
+ * (reservationOutputTokens), and the floor is the same reserve an unstated budget already takes
+ * out of the input window. Callers that log can compare `requested` against the result to report
+ * the raise (see wasOutputBudgetRaised).
+ *
+ * "Their own cap" means a DECLARED one - a cap toModelInfo derived is only a default, and
+ * clamping such a model to it reproduces that same starvation, so derivedOutputCeiling stands
+ * in for it. Every path that has a usable cap ends in a clamp against it; a model with no usable
+ * cap at all is a different, deliberate exception - see its comment.
  */
 export function resolveOutputMaxTokens({
   requested,
@@ -222,8 +219,10 @@ export function resolveOutputMaxTokens({
   modelMaxOutputTokens: number | undefined;
 }): number {
   const reasonsWithinBudget = reasonsWithinOutputBudget(modelInfo);
-  const preferred =
-    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  const explicit = usableTokenCount(requested);
+  const preferred = reasonsWithinBudget
+    ? Math.max(explicit ?? 0, ADAPTIVE_THINKING_MAX_TOKENS_FLOOR)
+    : (explicit ?? fallback);
   const cap = usableTokenCount(modelMaxOutputTokens);
   // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
   // a credit reservation downstream, so the resolver has to be total or a malformed catalog
@@ -239,6 +238,16 @@ export function resolveOutputMaxTokens({
     return Math.min(preferred, derivedOutputCeiling(modelInfo, cap));
   }
   return Math.min(preferred, cap);
+}
+
+/**
+ * Whether resolveOutputMaxTokens raised an explicit caller budget - true only when the caller
+ * named a usable number and the resolved budget is larger. An absent request is sized, not
+ * raised, so it never counts.
+ */
+export function wasOutputBudgetRaised(requested: number | undefined, resolved: number): boolean {
+  const explicit = usableTokenCount(requested);
+  return explicit !== undefined && resolved > explicit;
 }
 
 /**

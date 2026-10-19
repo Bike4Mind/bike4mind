@@ -77,10 +77,20 @@ describe('AnthropicBackend default max_tokens', () => {
     expect(getCaptured()[0].max_tokens).toBe(4096);
   });
 
-  it('never raises a budget the caller asked for explicitly', async () => {
+  // A saved low "Max output tokens" setting used to reach an adaptive model as-is, and its
+  // reasoning consumed the whole budget: the turn ended at max_tokens with no visible text.
+  it('raises an explicit budget below the floor on an adaptive model', async () => {
     const { backend, getCaptured } = buildBackend();
 
-    await runComplete(backend, { stream: true, maxTokens: 1000 }, ChatModels.CLAUDE_5_OPUS);
+    await runComplete(backend, { stream: true, maxTokens: 8192 }, ChatModels.CLAUDE_5_OPUS);
+
+    expect(getCaptured()[0].max_tokens).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+  });
+
+  it('never raises an explicit budget on a model that does not reason inside it', async () => {
+    const { backend, getCaptured } = buildBackend();
+
+    await runComplete(backend, { stream: true, maxTokens: 1000 }, ChatModels.CLAUDE_4_5_SONNET);
 
     expect(getCaptured()[0].max_tokens).toBe(1000);
   });
