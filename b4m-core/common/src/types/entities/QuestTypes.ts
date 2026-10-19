@@ -34,6 +34,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     sessionId: string,
     data: Partial<IChatHistoryItemDocument> & { id: string }
   ) => Promise<IChatHistoryItemDocument | null>;
+  // `update` that matches only while the stored status is not terminal ('done' / 'stopped'); null otherwise.
+  updateIfUnfinished: (
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ) => Promise<IChatHistoryItemDocument | null>;
   // Lightweight method for status checks
   findByIdWithStatus: (id: string) => Promise<Pick<IChatHistoryItemDocument, 'id' | 'status'> | null>;
   // Flag a quest as stopped so an in-flight pipeline's cancellation watcher aborts it.

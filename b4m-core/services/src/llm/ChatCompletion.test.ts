@@ -286,6 +286,7 @@ describe('ChatCompletionProcess', () => {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
         update: vi.fn().mockResolvedValue(undefined),
+        updateIfUnfinished: vi.fn().mockResolvedValue(undefined),
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
@@ -2121,7 +2122,7 @@ describe('ChatCompletionProcess', () => {
           let holdWrites = false;
           let writeStarted = false;
           let releaseWrite: (value: unknown) => void = () => {};
-          mockDb.quests.update.mockImplementation(() => {
+          mockDb.quests.updateIfUnfinished.mockImplementation(() => {
             if (!holdWrites) return Promise.resolve(undefined);
             writeStarted = true;
             return new Promise(resolve => {
@@ -8907,6 +8908,70 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('streaming heartbeat vs a user Stop', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('saves mid-turn through updateIfUnfinished so a stored Stop is not overwritten with running', async () => {
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: true,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['partial']);
+              // Outlive the 10s streaming heartbeat so it fires mid-turn.
+              await new Promise(resolve => setTimeout(resolve, 25_000));
+              await cb(['partial answer']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // saveQuest passes the live quest object, so record the status at call time.
+      const conditionalSaveStatuses: string[] = [];
+      mockDb.quests.updateIfUnfinished.mockImplementation(async (q: { status: string }) => {
+        conditionalSaveStatuses.push(q.status);
+        return null;
+      });
+      const plainSaveStatuses: string[] = [];
+      mockDb.quests.update.mockImplementation(async (q: { status: string }) => {
+        plainSaveStatuses.push(q.status);
+        return undefined;
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(conditionalSaveStatuses.length).toBeGreaterThan(0);
+      expect(conditionalSaveStatuses.every(status => status === 'running')).toBe(true);
+      expect(plainSaveStatuses).not.toContain('running');
+    });
+  });
+
   describe('isStreamIdleTimeoutError', () => {
     it('should match lowercase "stream timeout"', () => {
       expect(
@@ -9690,6 +9755,7 @@ describe('prompt moderation', () => {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
         update: vi.fn().mockResolvedValue(undefined),
+        updateIfUnfinished: vi.fn().mockResolvedValue(undefined),
         create: vi.fn(),
       },
       sessions: {
