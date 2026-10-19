@@ -98,6 +98,15 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 
+vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+  premiumWorkspaceSessionSettings: {
+    'example-workspace': {
+      ownedFields: ['enabledTools', 'temperature'],
+      resolve: async () => ({ enabledTools: ['tool_w'] }),
+    },
+  },
+}));
+
 import handler from '../index';
 import { ApiKeyScope, ConcurrencyConflictError, NotFoundError, SessionEvents } from '@bike4mind/common';
 
@@ -177,6 +186,25 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(res._getStatusCode()).toBe(200);
       expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');
+    });
+
+    it("returns the workspace's effective settings rather than the stored ones", async () => {
+      mockGetSession.mockResolvedValue({
+        id: 'sess-1',
+        name: 'Untitled',
+        userId: 'user-1',
+        surface: 'example-workspace',
+        enabledTools: ['stale_tool'],
+        temperature: 0.9,
+        maxToolCalls: 4,
+      });
+      const { req, res } = fire({ method: 'GET' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.enabledTools).toEqual(['tool_w']);
+      expect(body).not.toHaveProperty('temperature');
+      expect(body.maxToolCalls).toBe(4);
     });
 
     it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS]])(
