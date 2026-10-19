@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/voice",
-  "version": "0.10.0",
+  "version": "0.10.2",
   "publishConfig": {
     "access": "restricted"
   },

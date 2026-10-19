@@ -16,7 +16,11 @@ const {
   mockPersistLinkedQuestId,
   mockResolveExecutorName,
   mockFindRememberedApprovals,
+  mockUserFindById,
+  mockPinFiles,
 } = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
+  mockPinFiles: vi.fn(),
   mockSend: vi.fn(),
   mockSessionFindById: vi.fn(),
   mockOrgFindById: vi.fn(),
@@ -51,7 +55,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
   sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
+  userRepository: { findById: mockUserFindById },
 }));
+
+vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
 vi.mock('@server/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
@@ -107,6 +114,8 @@ beforeEach(() => {
   mockPersistLinkedQuestId.mockResolvedValue(undefined);
   mockResolveExecutorName.mockReturnValue('agent-executor-fn');
   mockFindRememberedApprovals.mockResolvedValue(null);
+  mockUserFindById.mockImplementation(async (id: string) => ({ id }));
+  mockPinFiles.mockResolvedValue(undefined);
 });
 
 describe('startAgentExecution', () => {
@@ -127,6 +136,70 @@ describe('startAgentExecution', () => {
     // Also stamped on the execution doc, so a checkpointed continuation - which never
     // sees the start payload - can still key lake-access audit rows to the real Quest.
     expect(mockPersistLinkedQuestId).toHaveBeenCalledWith('exec1', 'quest1');
+  });
+
+  it('pins the in-app run message attachments to the session, minus message-only files', async () => {
+    await startAgentExecution(
+      input({
+        userId: 'pins',
+        messageFileIds: ['file-csv', 'file-note'],
+        messageOnlyFileIds: ['file-note'],
+        pinMessageFiles: true,
+      }),
+      logger
+    );
+
+    expect(mockPinFiles).toHaveBeenCalledWith(expect.objectContaining({ id: 's1' }), ['file-csv'], {
+      user: { id: 'pins' },
+      logger,
+    });
+  });
+
+  it('still dispatches, and warns, when the user lookup for the pin fails', async () => {
+    mockUserFindById.mockRejectedValueOnce(new Error('db'));
+    const result = await startAgentExecution(
+      input({ userId: 'pin-user-fails', messageFileIds: ['file-csv'], pinMessageFiles: true }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockPinFiles).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('session knowledge pin'),
+      expect.objectContaining({ userId: 'pin-user-fails' })
+    );
+  });
+
+  it('leaves a run message attachments unpinned when the door does not ask for it', async () => {
+    await startAgentExecution(input({ userId: 'no-pins', messageFileIds: ['file-csv'] }), logger);
+    expect(mockPinFiles).not.toHaveBeenCalled();
+  });
+
+  it('pins nothing when the start is refused', async () => {
+    mockCountActive.mockResolvedValueOnce(MAX_CONCURRENT_EXECUTIONS_PER_USER);
+    await startAgentExecution(
+      input({ userId: 'refused-pins', messageFileIds: ['file-csv'], pinMessageFiles: true }),
+      logger
+    );
+    expect(mockPinFiles).not.toHaveBeenCalled();
+  });
+
+  it('records the per-message attachments on the prompt Quest, as the chat path does', async () => {
+    await startAgentExecution(
+      input({ userId: 'attachments', messageFileIds: ['file-csv'], sessionFabFileIds: ['file-pinned'] }),
+      logger
+    );
+
+    // Message files only: session files live on the session and would otherwise render as a
+    // chip on every agent turn.
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: ['file-csv'] }));
+  });
+
+  it('records an empty attachment list on the prompt Quest when the send has none', async () => {
+    await startAgentExecution(input({ userId: 'no-attachments' }), logger);
+
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: [] }));
   });
 
   it('rejects a session the caller does not own without creating anything', async () => {

@@ -1,5 +1,11 @@
 # @bike4mind/cli
 
+## 3.1.0
+
+### Minor Changes
+
+- [#4935](https://github.com/Bike4Mind/bike4mind/pull/4935) [`5a491df`](https://github.com/Bike4Mind/bike4mind/commit/5a491df942d3af2691ee0d2873aa77128efd5285) Thanks [@onoya](https://github.com/onoya)! - add create_artifact tool to the B4M MCP server
+
 ## 3.0.0
 
 ### Major Changes

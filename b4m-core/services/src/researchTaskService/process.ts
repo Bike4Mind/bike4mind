@@ -140,7 +140,8 @@ export const process = async (
 
   // Update status to PROCESSING before starting (no transaction needed for single operation)
   researchTask.status = ResearchTaskStatus.PROCESSING;
-  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
+  researchTask.warnings = [];
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status, warnings: researchTask.warnings });
 
   logger?.info(`✅ [PROCESS_START] Processing research task ${researchTask.id} with status: ${researchTask.status}`);
 
@@ -400,6 +401,14 @@ const processScrape = async (
         adapters,
         logger
       );
+
+      if (result?.storageLimitReached) {
+        await db.researchTasks.addWarning(researchTask.id, `Storage limit reached: kept the previous copy of ${url}`);
+        await sendStatusUpdate(
+          `\u26a0\ufe0f [${index}/${urls.length}] Storage limit reached: kept the previous copy of ${url}`,
+          0
+        );
+      }
 
       if (result?.file) {
         mainFile = result.file;

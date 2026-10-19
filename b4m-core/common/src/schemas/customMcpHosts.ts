@@ -101,15 +101,45 @@ export function cidrContains(cidr: ParsedCidr, address: string): boolean {
 }
 
 /**
- * Cloud instance-metadata endpoints, plus the IPv4 one in its IPv4-mapped and NAT64 IPv6 forms.
- * Never reachable through `customMcpAllowPrivateNetworks`, self-host included.
+ * Networks a private-network opt-in never reaches, whatever the operator lists, self-host included.
+ * One list for both sides: the settings validator refuses any range that overlaps an entry, and the
+ * fetch path (`buildNeverAdmitted` in fab-pipeline's pinnedFetch.ts) refuses these at connect time.
+ * IPv4 entries also cover their IPv4-mapped IPv6 forms (`::ffff:0:0/96`) on both sides.
  */
-export const CLOUD_METADATA_ADDRESSES = [
-  '169.254.169.254',
-  'fd00:ec2::254',
-  '::ffff:169.254.169.254',
-  '64:ff9b::169.254.169.254',
+export const NEVER_ADMITTED_NETWORKS = [
+  { cidr: '0.0.0.0/8', label: 'this network' },
+  { cidr: '127.0.0.0/8', label: 'loopback' },
+  { cidr: '169.254.0.0/16', label: 'link-local, including cloud metadata' },
+  // Cloud metadata endpoints outside link-local: one in CGNAT space, AWS IMDS over IPv6 (ULA), and
+  // the link-local IMDS address in its NAT64 form.
+  { cidr: '100.100.100.200/32', label: 'cloud metadata' },
+  { cidr: 'fd00:ec2::254/128', label: 'cloud metadata' },
+  { cidr: '64:ff9b::a9fe:a9fe/128', label: 'cloud metadata' },
+  { cidr: '::/128', label: 'unspecified' },
+  { cidr: '::1/128', label: 'loopback' },
+  { cidr: 'fe80::/10', label: 'link-local' },
 ] as const;
+
+const IPV4_MAPPED_PREFIX = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
+
+/** An IPv4 CIDR in its IPv4-mapped IPv6 form; other CIDRs unchanged. */
+function asIpv6(cidr: ParsedCidr): ParsedCidr {
+  if (cidr.version === 6) return cidr;
+  return { version: 6, bytes: [...IPV4_MAPPED_PREFIX, ...cidr.bytes], prefix: cidr.prefix + 96 };
+}
+
+function cidrsOverlap(a: ParsedCidr, b: ParsedCidr): boolean {
+  const [left, right] = a.version === b.version ? [a, b] : [asIpv6(a), asIpv6(b)];
+  const prefix = Math.min(left.prefix, right.prefix);
+  for (let bit = 0; bit < prefix; bit++) {
+    const byte = bit >> 3;
+    const mask = 0x80 >> (bit & 7);
+    if (((left.bytes[byte] ?? 0) & mask) !== ((right.bytes[byte] ?? 0) & mask)) return false;
+  }
+  return true;
+}
+
+const NEVER_ADMITTED_PARSED = NEVER_ADMITTED_NETWORKS.map(entry => ({ ...entry, parsed: parseCidr(entry.cidr)! }));
 
 /** Why `raw` may not be allowed as a private network, or null when it may. */
 export function customMcpPrivateCidrProblem(raw: string): string | null {
@@ -117,8 +147,8 @@ export function customMcpPrivateCidrProblem(raw: string): string | null {
   if (!cidr) return 'Must be a CIDR such as 10.0.0.0/8 or fd12:3456::/32';
   const minPrefix = CUSTOM_MCP_MIN_CIDR_PREFIX[cidr.version];
   if (cidr.prefix < minPrefix) return `IPv${cidr.version} ranges must be /${minPrefix} or narrower`;
-  const metadata = CLOUD_METADATA_ADDRESSES.find(address => cidrContains(cidr, address));
-  if (metadata) return `Range covers the cloud metadata address ${metadata}`;
+  const blocked = NEVER_ADMITTED_PARSED.find(entry => cidrsOverlap(cidr, entry.parsed));
+  if (blocked) return `Range overlaps ${blocked.cidr} (${blocked.label}), which is never reachable`;
   return null;
 }
 

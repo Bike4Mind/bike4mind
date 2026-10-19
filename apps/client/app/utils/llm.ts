@@ -77,7 +77,11 @@ export function createOptimisticPromptBubble(
   // downstream patchers (swapOptimisticPromptBubbleId,
   // appendReplyToLatestOptimisticBubble) spread existing fields, so this value
   // survives until the real Quest replaces the bubble.
-  routingSource?: IChatHistoryItemDocument['routingSource']
+  routingSource?: IChatHistoryItemDocument['routingSource'],
+  // The send's per-message attachments. MessageContent only fetches a bubble's attachment
+  // chips when `fabFileIds` is set, and the id swap keeps it, so the chip renders once the
+  // bubble carries the real Quest id.
+  fabFileIds?: string[]
 ) {
   const optimisticQuest: Optimistic<IChatHistoryItemDocument> = {
     id: `optimistic-quest-${sessionId}-${Date.now()}`,
@@ -92,6 +96,7 @@ export function createOptimisticPromptBubble(
     updatedAt: new Date(),
     _optimistic: true,
     ...(routingSource ? { routingSource } : {}),
+    ...(fabFileIds?.length ? { fabFileIds } : {}),
   };
   setOptimisticQueryData(queryClient, ['quests', 'session', sessionId], optimisticQuest);
 }
@@ -234,6 +239,29 @@ export function addGenerationJobsToRunBubble(
       if (!added.length) return page;
       const data = [...page.data];
       data[idx] = { ...page.data[idx], generationJobs: [...existing, ...added] };
+      return { ...page, data };
+    });
+    return { ...current, pages };
+  });
+}
+
+/**
+ * Set the write-preview action an agent run just raised on its quest, so the Confirm card renders mid-run. Same
+ * matching rules as addGenerationJobsToRunBubble; the action replaces any earlier one.
+ */
+export function setPendingActionOnRunBubble(
+  queryClient: QueryClient,
+  sessionId: string,
+  questId: string,
+  pendingAction: NonNullable<IChatHistoryItemDocument['pendingAction']>
+): void {
+  queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
+    if (!current?.pages) return current;
+    const pages = current.pages.map(page => {
+      const idx = page.data.findIndex(q => q.id === questId);
+      if (idx < 0) return page;
+      const data = [...page.data];
+      data[idx] = { ...page.data[idx], pendingAction };
       return { ...page, data };
     });
     return { ...current, pages };

@@ -87,6 +87,11 @@ export interface IBaseResearchTask {
    * The date and time the task was completed
    */
   statusCompletedAt?: Date;
+  /**
+   * Non-fatal notices from the latest run, such as a re-crawl that kept its previous copy because
+   * the owner's storage is full. Cleared when a run starts.
+   */
+  warnings?: string[];
 
   /**
    * The execution type of the task
@@ -304,6 +309,11 @@ export interface IResearchTaskRepository extends IBaseRepository<IResearchTask> 
    * Update many research tasks by research agent ID
    */
   updateManyByResearchAgentId(researchAgentId: string, update: Partial<IResearchTask>): Promise<unknown>;
+
+  /**
+   * Append a warning to the task's `warnings`, keeping only the most recent ones
+   */
+  addWarning(id: string, warning: string): Promise<void>;
 
   /**
    * Find all research tasks by user ID and research agent ID

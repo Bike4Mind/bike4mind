@@ -118,6 +118,7 @@ export async function persistRunAsQuest(
         sessionId: execution.sessionId,
         type: 'message',
         prompt: execution.query,
+        fabFileIds: execution.messageFileIds ?? [],
         replies: [replyText],
         timestamp: new Date(),
         status: 'done',

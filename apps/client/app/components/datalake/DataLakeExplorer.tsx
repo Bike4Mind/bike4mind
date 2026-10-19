@@ -241,6 +241,8 @@ export default function DataLakeExplorer({
 
   // Resolves whether the file was newly attached. An existing session must persist
   // knowledgeIds: a workbench-only add rides one send as fabFileIds, then drops out of context.
+  // (The server pins a composer message attachment itself - see pinFilesToSessionKnowledge - but
+  // never the workbench, which a stale tab could send.)
   // A freshly minted session was created already holding the file, so the workbench suffices.
   // Mid notebook switch (route on B, currentSessionId still A) there is no safe target yet.
   // The docked overlay chat is outside the notebook routes, so its current session is the target.

@@ -296,6 +296,12 @@ const ReplyChoicesOutcomeSchema = subSchema({
   reason: { type: String, required: false },
 });
 
+// A tool call the model wrote as text and finalize stripped. Sub-Schema with `default: undefined`
+// so a turn without one has no field rather than an empty object.
+const NarratedToolCallSchema = subSchema({
+  toolNames: { type: [String], required: false, default: undefined },
+});
+
 export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
@@ -501,6 +507,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     finishReason: { type: String, required: false },
     // Must stay in sync with the Zod PromptMeta `replyChoices` (parity test enforces it).
     replyChoices: { type: ReplyChoicesOutcomeSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `narratedToolCall`.
+    narratedToolCall: { type: NarratedToolCallSchema, required: false, default: undefined },
     artifacts: { type: [ArtifactSchema], required: false, default: undefined },
     toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
     executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
@@ -1253,6 +1261,15 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   async addImagesByAgentExecutionId(agentExecutionId: string, images: string[]) {
     if (!images.length) return;
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
+  }
+
+  /**
+   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
+   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
+   * Quest matches.
+   */
+  async setPendingAction(questId: string, action: { tool: string; params: Record<string, unknown>; ts: number }) {
+    await this.model.updateOne({ _id: convertId(questId) }, { $set: { pendingAction: action } });
   }
 
   /**

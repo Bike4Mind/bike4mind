@@ -13,6 +13,7 @@
 
 import { BlockList, isIP } from 'net';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { NEVER_ADMITTED_NETWORKS } from '@bike4mind/common';
 import {
   SSRF_BLOCKED_CODE,
   createSsrfSafeLookup,
@@ -37,8 +38,8 @@ export class PinnedFetchError extends Error {
 export interface PinnedFetchOptions {
   /**
    * Self-host opt-in: private CIDRs (e.g. `10.20.0.0/16`) that may be dialled. Default deny. Loopback,
-   * link-local and the cloud metadata addresses (including AWS IMDS over IPv6 and Alibaba's CGNAT
-   * endpoint) are never admitted, whatever is listed.
+   * link-local and the cloud metadata addresses (`NEVER_ADMITTED_NETWORKS` in @bike4mind/common) are
+   * never admitted, whatever is listed.
    */
   allowPrivateCidrs?: string[];
   /** Permit plain http. Default false. */
@@ -72,19 +73,13 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 const CROSS_ORIGIN_STRIPPED_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];
 
+/** The shared never-admit list; the settings validator refuses the same networks (customMcpHosts.ts). */
 function buildNeverAdmitted(): BlockList {
   const list = new BlockList();
-  list.addSubnet('0.0.0.0', 8, 'ipv4');
-  list.addSubnet('127.0.0.0', 8, 'ipv4');
-  list.addSubnet('169.254.0.0', 16, 'ipv4');
-  // Cloud metadata endpoints that are not link-local: AWS IMDS over IPv6 is ULA, and Alibaba's metadata
-  // endpoint sits in CGNAT space. An operator opting in `fd00::/8` or `100.64.0.0/10` would otherwise
-  // hand a user-supplied URL a path to instance credentials.
-  list.addAddress('fd00:ec2::254', 'ipv6');
-  list.addAddress('100.100.100.200', 'ipv4');
-  list.addAddress('::', 'ipv6');
-  list.addAddress('::1', 'ipv6');
-  list.addSubnet('fe80::', 10, 'ipv6');
+  for (const { cidr } of NEVER_ADMITTED_NETWORKS) {
+    const { network, prefix, type } = parseCidr(cidr);
+    list.addSubnet(network, prefix, type);
+  }
   return list;
 }
 

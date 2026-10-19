@@ -27,6 +27,7 @@ import {
   type PipelineTaskStatus,
 } from '@bike4mind/agents';
 import type { AuthOrigin } from '@bike4mind/common';
+import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { DagDispatcher, DagNodeHandle } from '@bike4mind/services/llm';
 import { agentExecutionRepository, type AgentExecutionStatus, type IDagSpec } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -106,7 +107,7 @@ export function makeDagDispatcher(args: {
         authOrigin: nodeDefaults.authOrigin,
         ...(nodeDefaults.apiKeyId && { apiKeyId: nodeDefaults.apiKeyId }),
         ...(nodeDefaults.scopeDeniedTools?.length && { scopeDeniedTools: nodeDefaults.scopeDeniedTools }),
-        model,
+        model: resolveDeprecatedModelId(model, 'agentExecutorDag'),
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
         approvedTools: [...nodeDefaults.approvedTools],

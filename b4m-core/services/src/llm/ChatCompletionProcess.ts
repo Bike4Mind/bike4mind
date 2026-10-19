@@ -22,6 +22,9 @@ import {
   getViewSummaryForLLM,
   isNavigableFeaturePath,
   applyReplyChoices,
+  applyNarratedToolCallStrip,
+  NARRATED_TOOL_CALL_NOTICE,
+  stripNarratedToolCallsFromReplies,
   REPLY_CHOICES_GUIDANCE,
   stripChoicesFromReplies,
   ReasoningEffort,
@@ -2000,6 +2003,14 @@ export class ChatCompletionProcess {
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
     };
+    // Set once the turn's tools are built. Every exit that persists streamed text (finalize, a
+    // rejecting Stop, the error reply) strips tool calls written as text against this list.
+    let turnOfferedToolNames: readonly string[] = [];
+    const flagNarratedToolCalls = (toolNames: string[]) => {
+      if (toolNames.length === 0) return;
+      logger.warn('[NarratedToolCall] Reply wrote a tool call as text; stripped and not run', { questId, toolNames });
+      if (quest.promptMeta) quest.promptMeta.narratedToolCall = { toolNames };
+    };
 
     try {
       const abilityStartTime = Date.now();
@@ -3269,6 +3280,7 @@ export class ChatCompletionProcess {
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
+      turnOfferedToolNames = offeredToolNames;
       logger.info('🔧 [Tools] allTools:', {
         count: offeredToolNames.length,
         names: offeredToolNames,
@@ -5222,8 +5234,23 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = successStatus();
+        const finalStatus = successStatus();
+        quest.status = finalStatus;
         clearStaleFallbackInfoIfNoAnswer();
+        const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
+        // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
+        const narratedStrip = applyNarratedToolCallStrip(quest, turnOfferedToolNames, {
+          truncated: finalStatus === 'stopped',
+        });
+        flagNarratedToolCalls(narratedStrip.toolNames);
+        // The snapshot counted blocks the strip just removed. Taking their size off it keeps a short
+        // answer after the last real tool call from reading as no answer; a block stripped after
+        // the call is covered by endsOnCall instead. The clamp only bites when blocks stripped after
+        // the call outweigh the visible text before it, which overstates the answer, never hides one.
+        visibleCharsAtLastToolCall = Math.max(
+          0,
+          visibleCharsAtLastToolCall - (visibleCharsBeforeStrip - countVisibleChars(quest.replies))
+        );
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
         // The system-prompt budget can evict the guidance after it was requested (lowest priority in
@@ -5262,19 +5289,25 @@ export class ChatCompletionProcess {
             echoToolsUsed.length > 0 &&
             isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
         });
-        if (incompleteAnswerNotice) {
+        // When the reply ended on a stripped call, say why in place of the generic notice. An answer
+        // written after the call gets no notice: "try again" next to it would read as "you got nothing".
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && quest.status !== 'stopped';
+        const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
+        if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,
             model: currentModel.id,
             stopReason: actualTokenUsage.stopReason,
             toolCallCount: toolCallsSeen,
           });
-          // Same shape as setErrorReply in the catch below: the notice is its own slot and
-          // quest.reply carries the visible text. Visible only, because the client's
-          // extractThinking reads reply AND replies, so raw slots here would show the
-          // reasoning twice. The leading break keeps it off the preamble's line, since
-          // extractReplies joins slots with ''.
-          quest.replies = [...(quest.replies ?? []), `\n\n${incompleteAnswerNotice}`];
+        }
+        // Same shape as setErrorReply in the catch below: the notice is its own slot and
+        // quest.reply carries the visible text. Visible only, because the client's
+        // extractThinking reads reply AND replies, so raw slots here would show the
+        // reasoning twice. The leading break keeps it off the preamble's line, since
+        // extractReplies joins slots with ''.
+        if (turnNotice) {
+          quest.replies = [...(quest.replies ?? []), `\n\n${turnNotice}`];
           quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
         }
 
@@ -6407,17 +6440,23 @@ export class ChatCompletionProcess {
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
         quest.status = 'stopped';
-        // Same rule as the success path, so an abort that rejects and one that resolves persist alike.
+        // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
+        flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
         finalQuest = await saveQuest(quest);
         return;
       }
+      const narratedStripped = stripNarratedToolCallsFromReplies(streamedRepliesBeforeError ?? [], {
+        offeredToolNames: turnOfferedToolNames,
+        truncated: true,
+      });
+      flagNarratedToolCalls(narratedStripped.toolNames);
       const setErrorReply = (message: string) => {
         // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
         // slot with no separator - otherwise an unterminated block swallows the appended error as
         // "part of the block", and once the error is the last slot the client no longer reads the
         // earlier slot's block at all, leaking the raw JSON.
-        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const choicesStripped = stripChoicesFromReplies(narratedStripped.replies).replies;
         const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
