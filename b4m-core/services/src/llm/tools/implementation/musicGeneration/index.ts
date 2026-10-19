@@ -172,6 +172,8 @@ export const musicGenerationTool: ToolDefinition = {
     // until the tool-call cap with no song, and a rephrased prompt that is blocked again falls through to the card.
     let rephraseRequested = false;
     // Jobs discarded for a rephrase never got a card; an identical retry must show it, or the block stays invisible.
+    // The set covers retries within one tool instance. An unbilled block is carded on any dead replay, because a
+    // rebuilt tool instance starts with an empty set. Duplicate cards are deduped downstream.
     const discardedJobIds = new Set<string>();
     return {
       toolFn: async (parameters?: unknown) => {
@@ -192,13 +194,13 @@ export const musicGenerationTool: ToolDefinition = {
         if (!result.ok) return `Music generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;
-          if (discardedJobIds.delete(result.job.id)) {
+          if (discardedJobIds.delete(result.job.id) || isUnbilledPromptBlock(result.job)) {
             await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'music' }] });
           }
           return `Music generation failed (${reason}): an identical request already ended without a song.`;
         }
         let outcome: IGenerationJobDocument | null = null;
-        if (!rephraseRequested && config.findJob) {
+        if (result.created && !rephraseRequested && config.findJob) {
           // Claimed before the wait so parallel calls in one turn cannot each be offered the rephrase.
           rephraseRequested = true;
           outcome = await awaitEarlyOutcome(config.findJob, result.job, context);
