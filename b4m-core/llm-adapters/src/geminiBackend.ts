@@ -1644,6 +1644,7 @@ export class GeminiBackend implements ICompletionBackend {
     }
     // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
     const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+    // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
     const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
     const maxOutputTokens = Math.min(ceiling, wanted);
     if (wanted >= ceiling) return { maxOutputTokens };
