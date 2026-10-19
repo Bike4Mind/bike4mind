@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
 import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
-import { resolveRequestPathname } from '@server/utils/resolveRouteTemplate';
+import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface OAuthRoutePolicy {
   /**
@@ -31,7 +31,7 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
     if (!grant) return next(); // not an OAuth token; unaffected
     const logError = () =>
       logOAuthError(req.logger, {
-        route: resolveRequestPathname(req),
+        route: resolveRouteTemplate(req),
         clientId: grant.clientId,
         error: 'insufficient_scope',
         status: 403,

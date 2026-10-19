@@ -15,7 +15,11 @@ const run = (user: unknown, policy?: { oauthScopes?: string[] }) => {
   const next = vi.fn();
   const res = mockRes();
   const logger = { warn: vi.fn() };
-  oauthRouteGate(policy)({ user, logger, originalUrl: '/api/users/me?x=1' } as never, res as never, next);
+  oauthRouteGate(policy)(
+    { user, logger, originalUrl: '/api/agents/a1?x=1', query: { id: 'a1', x: '1' } } as never,
+    res as never,
+    next
+  );
   return { next, res, logger };
 };
 
@@ -52,7 +56,7 @@ describe('oauthRouteGate', () => {
 });
 
 describe('oauthRouteGate error logging', () => {
-  const LINE = '[OAUTH_ERROR] route=/api/users/me client=c1 error=insufficient_scope status=403';
+  const LINE = '[OAUTH_ERROR] route=/api/agents/[id] client=c1 error=insufficient_scope status=403';
 
   it('logs the grant client on a first-party-only route', () => {
     const { logger } = run({ oauthGrant: { scopes: ['openid'], clientId: 'c1' } });

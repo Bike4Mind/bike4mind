@@ -1,9 +1,10 @@
 import type { Logger } from '@bike4mind/observability';
 
 // Route and client can come from request input, so anything that could forge a log line or bloat it
-// is stripped. A value with nothing left logs as `unknown`.
-function sanitize(value: unknown): string {
-  const clean = typeof value === 'string' ? value.replace(/[^A-Za-z0-9._:/-]/g, '').slice(0, 128) : '';
+// is stripped. A value with nothing left logs as `unknown`. Only the route keeps `[]`, for templates
+// like `/api/agents/[id]`.
+function sanitize(value: unknown, disallowed = /[^A-Za-z0-9._:/-]/g): string {
+  const clean = typeof value === 'string' ? value.replace(disallowed, '').slice(0, 128) : '';
   return clean || 'unknown';
 }
 
@@ -18,7 +19,7 @@ export function logOAuthError(
 ): void {
   try {
     logger?.warn(
-      `[OAUTH_ERROR] route=${sanitize(route)} client=${sanitize(clientId)} error=${sanitize(error)} status=${status}`
+      `[OAUTH_ERROR] route=${sanitize(route, /[^A-Za-z0-9._:/[\]-]/g)} client=${sanitize(clientId)} error=${sanitize(error)} status=${status}`
     );
   } catch {
     // Logging must never turn an error response into a 500.
