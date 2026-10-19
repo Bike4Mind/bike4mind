@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import ButtonGroup from '@mui/joy/ButtonGroup';
+import Dropdown from '@mui/joy/Dropdown';
 import FormControl from '@mui/joy/FormControl';
 import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
@@ -124,7 +126,6 @@ export function SpawnSuggestionCard({
   const repository = suggestion.repository !== false;
   const [choice, setChoice] = useState<SpawnSuggestionPlacement>(() => initialChoice(repository));
   const [menuOpen, setMenuOpen] = useState(false);
-  const caret = useRef<HTMLButtonElement>(null);
   const seenRevision = useRef(suggestion.revision);
 
   useEffect(() => {
@@ -291,51 +292,49 @@ export function SpawnSuggestionCard({
       )}
 
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* A MenuButton inside a Dropdown rather than an IconButton anchoring a bare Menu: only
+            the Dropdown moves focus into the menu, which is what makes the choices reachable
+            from the keyboard. */}
         <ButtonGroup size="sm" variant="solid" color="primary" disabled={busy}>
           <Button disabled={!canStart} onClick={() => void start(choice)} data-testid="spawn-suggestion-start-btn">
             {SPAWN_CHOICE_TEXT[choice].action}
           </Button>
-          <IconButton
-            ref={caret}
-            onClick={() => setMenuOpen(open => !open)}
-            aria-label="Choose where to run this task"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            data-testid="spawn-suggestion-start-menu-btn"
-          >
-            <CaretDownIcon />
-          </IconButton>
+          <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: {
+                  'aria-label': 'Choose where to run this task',
+                  'data-testid': 'spawn-suggestion-start-menu-btn',
+                },
+              }}
+            >
+              <CaretDownIcon />
+            </MenuButton>
+            <Menu placement="bottom-start" size="sm" sx={{ maxWidth: 320 }} data-testid="spawn-suggestion-start-menu">
+              {CHOICES.map(option => {
+                const unavailable = option === 'worktree' && !repository;
+                return (
+                  <MenuItem
+                    key={option}
+                    selected={option === choice}
+                    disabled={unavailable}
+                    onClick={() => pick(option)}
+                    data-testid={`spawn-suggestion-choice-${option}-item`}
+                    sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 0.25 }}
+                  >
+                    <Typography level="body-sm" fontWeight="lg">
+                      {SPAWN_CHOICE_TEXT[option].label}
+                    </Typography>
+                    <Typography level="body-xs" textColor="text.tertiary" sx={{ whiteSpace: 'normal' }}>
+                      {unavailable ? 'Needs a git repository.' : SPAWN_CHOICE_TEXT[option].hint}
+                    </Typography>
+                  </MenuItem>
+                );
+              })}
+            </Menu>
+          </Dropdown>
         </ButtonGroup>
-        <Menu
-          open={menuOpen}
-          anchorEl={caret.current}
-          onClose={() => setMenuOpen(false)}
-          placement="bottom-start"
-          size="sm"
-          sx={{ maxWidth: 320 }}
-          data-testid="spawn-suggestion-start-menu"
-        >
-          {CHOICES.map(option => {
-            const unavailable = option === 'worktree' && !repository;
-            return (
-              <MenuItem
-                key={option}
-                selected={option === choice}
-                disabled={unavailable}
-                onClick={() => pick(option)}
-                data-testid={`spawn-suggestion-choice-${option}-item`}
-                sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 0.25 }}
-              >
-                <Typography level="body-sm" fontWeight="lg">
-                  {SPAWN_CHOICE_TEXT[option].label}
-                </Typography>
-                <Typography level="body-xs" textColor="text.tertiary" sx={{ whiteSpace: 'normal' }}>
-                  {unavailable ? 'Needs a git repository.' : SPAWN_CHOICE_TEXT[option].hint}
-                </Typography>
-              </MenuItem>
-            );
-          })}
-        </Menu>
         <Button
           size="sm"
           variant="plain"

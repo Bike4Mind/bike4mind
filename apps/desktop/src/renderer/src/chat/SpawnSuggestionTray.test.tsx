@@ -223,6 +223,29 @@ describe('SpawnSuggestionTray', () => {
     expect(byTestId('spawn-suggestion-start-menu-btn').getAttribute('aria-expanded')).toBe('true');
   });
 
+  it('opens the menu from the keyboard with focus inside it, so a choice can be picked by key', async () => {
+    const on = handlers();
+    render([BASE], on);
+    const caret = byTestId('spawn-suggestion-start-menu-btn');
+    act(() => caret.focus());
+    await act(async () => {
+      caret.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    const menu = inDocument('spawn-suggestion-start-menu');
+    expect(menu?.contains(document.activeElement)).toBe(true);
+    expect(caret.getAttribute('aria-expanded')).toBe('true');
+
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    });
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('spawn-suggestion-choice-here-item');
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(primary().textContent).toBe('Run here');
+    expect(on.onStart).not.toHaveBeenCalled();
+  });
+
   it('remembers the last choice for the next card', async () => {
     render([BASE], handlers());
     await choose('here');
