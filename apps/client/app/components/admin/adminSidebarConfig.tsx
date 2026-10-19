@@ -201,7 +201,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     key: 'securityCompliance',
     Icon: VerifiedUserIcon,
     label: 'Security & Compliance',
-    items: [{ Icon: HistoryIcon, tab: AdminTab.AuditLog, label: 'Audit Log', testid: 'admin-sidebar-audit-log' }],
+    items: [{ Icon: HistoryIcon, tab: AdminTab.AuditLog, label: 'Audit Log', testid: 'admin-audit-log-btn' }],
   },
   {
     key: 'reliability',
