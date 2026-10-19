@@ -1335,7 +1335,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     { limit, maxTimeMS }: { limit: number; maxTimeMS?: number }
   ): Promise<OrganizationStorageUploaderGroup[]> {
     const aggregate = this.fabFileModel.aggregate<OrganizationStorageUploaderGroup>([
-      { $match: { organizationId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+      {
+        $match: {
+          organizationId: { $eq: organizationId, $type: 'string' },
+          deletedAt: null,
+          ...STORAGE_CHARGED_FILTER,
+        },
+      },
       { $group: { _id: '$userId', bytes: { $sum: { $ifNull: ['$fileSize', 0] } }, fileCount: { $sum: 1 } } },
       { $sort: { bytes: -1, _id: 1 } },
       { $limit: limit },

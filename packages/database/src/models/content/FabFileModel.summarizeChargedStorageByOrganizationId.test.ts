@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -74,5 +74,30 @@ describe('FabFileRepository.summarizeChargedStorageByOrganizationId', () => {
 
     const groups = await fabFileRepository.summarizeChargedStorageByOrganizationId(organizationId, { limit: 2 });
     expect(groups.map(g => g.userId)).toEqual(['bob', 'alice']);
+  });
+
+  it('is answered from the partial org index', async () => {
+    await FabFile.syncIndexes();
+    await FabFile.insertMany(
+      Array.from({ length: 200 }, (_, i) => ({
+        userId: `u${i}`,
+        fileName: `p${i}.txt`,
+        mimeType: 'text/plain',
+        type: KnowledgeType.FILE,
+        filePath: `p${i}.txt`,
+        status: 'complete',
+        storageChargedAt: new Date(),
+        fileSize: 1,
+      }))
+    );
+    await makeFile('alice', 100);
+
+    const aggregateSpy = vi.spyOn(FabFile, 'aggregate');
+    await fabFileRepository.summarizeChargedStorageByOrganizationId(organizationId, { limit: 10 });
+    const pipeline = aggregateSpy.mock.calls[0][0] as Record<string, unknown>[];
+    aggregateSpy.mockRestore();
+
+    const plan = JSON.stringify(await FabFile.aggregate(pipeline).explain('executionStats'));
+    expect(plan).toContain('organizationId_1_deletedAt_1');
   });
 });
