@@ -86,7 +86,7 @@ export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ onApply })
               event.preventDefault();
               onApply({ ...tile.filters, from: summary?.since });
             }}
-            sx={{ minWidth: 160, cursor: 'pointer', '&:hover': { borderColor: 'primary.outlinedHoverBorder' } }}
+            sx={{ minWidth: 160, cursor: 'pointer', '&:hover': { borderColor: 'primary.outlinedBorder' } }}
           >
             <Typography level="body-xs">{tile.label}</Typography>
             <Typography level="title-lg">{tile.value}</Typography>
