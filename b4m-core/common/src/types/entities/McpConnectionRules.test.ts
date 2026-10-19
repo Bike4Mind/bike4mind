@@ -25,6 +25,7 @@ describe('mcpApiKeyHeaderNameProblem', () => {
     'x-forwarded-host',
     'Forwarded',
     'Proxy-Authorization',
+    'Proxy-Custom-Auth',
     'Content-Type',
     'Accept',
     'X-Real-IP',

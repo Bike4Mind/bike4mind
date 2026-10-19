@@ -658,11 +658,12 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
    */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
-  /** A failure status always records why. */
+  /** A failure status records why; an API-key snapshot prevents stale requests undoing rotation. */
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
-    lastError: McpConnectionLastErrorInput
+    lastError: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.

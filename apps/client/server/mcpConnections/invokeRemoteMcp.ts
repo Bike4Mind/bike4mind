@@ -9,6 +9,7 @@ import {
   mcpApiKeyHeaderNameProblem,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
+  type McpConnectionLastErrorInput,
   type McpConnectionTransport,
 } from '@bike4mind/common';
 import { cacheRepository, mcpConnectionRepository, type CustomMcpAuditMetadata } from '@bike4mind/database';
@@ -276,6 +277,12 @@ async function recordFailure(
   network: RemoteMcpNetworkOptions
 ): Promise<void> {
   const message = describeRemoteMcpError(shown, connection.auth.kind);
+  const setFailureStatus = (status: 'error' | 'needs_reconnect', failure: McpConnectionLastErrorInput) => {
+    if (connection.auth.kind !== 'api_key') {
+      return mcpConnectionRepository.setStatus(connection.id, status, failure);
+    }
+    return mcpConnectionRepository.setStatus(connection.id, status, failure, connection.auth.apiKey?.valueEnc ?? null);
+  };
   if (error instanceof RemoteMcpAuthRequiredError) {
     if (connection.auth.kind === 'none') {
       await mcpConnectionRepository.setPendingAuth(connection.id, {
@@ -285,7 +292,7 @@ async function recordFailure(
       });
       return;
     }
-    await mcpConnectionRepository.setStatus(connection.id, 'needs_reconnect', {
+    await setFailureStatus('needs_reconnect', {
       code: 'auth_required',
       message,
       requiredScope: cleanScope(error.scope),
@@ -294,25 +301,21 @@ async function recordFailure(
   }
   if (error instanceof RemoteMcpAuthFailedError) {
     if (error.scope) {
-      await mcpConnectionRepository.setStatus(connection.id, 'needs_reconnect', {
+      await setFailureStatus('needs_reconnect', {
         code: 'insufficient_scope',
         message: 'The server needs more access than was granted',
         requiredScope: cleanScope(error.scope),
       });
       return;
     }
-    await mcpConnectionRepository.setStatus(
-      connection.id,
-      connection.auth.kind === 'none' ? 'error' : 'needs_reconnect',
-      {
-        code: 'auth_failed',
-        message,
-      }
-    );
+    await setFailureStatus(connection.auth.kind === 'none' ? 'error' : 'needs_reconnect', {
+      code: 'auth_failed',
+      message,
+    });
     return;
   }
   if (action === 'listTools' || error.code === 'ssrf_blocked' || error.code === 'invalid_url') {
-    await mcpConnectionRepository.setStatus(connection.id, 'error', { code: shown.code, message });
+    await setFailureStatus('error', { code: shown.code, message });
   }
 }
 

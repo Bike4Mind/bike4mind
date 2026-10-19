@@ -132,13 +132,19 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
     isFeatureEnabled('EnableMCPServer'),
     isFeatureEnabled('EnableCustomMcpConnectors'),
     organizationRepository.findMembershipOrgIds(userId),
-    scopedSettingsService.resolveScopedSettingEntries(CUSTOM_MCP_HOST_SETTING_KEYS, policyScope(userId), db),
+    scopedSettingsService.resolveScopedSettingEntries(CUSTOM_MCP_HOST_SETTING_KEYS, policyScope(userId), db, {
+      readFailureMode: 'throw',
+    }),
   ]);
   const scopes = orgIds.length > 0 ? orgIds.map(orgId => policyScope(userId, orgId)) : [policyScope(userId)];
   const policyEntries = await Promise.all(
     scopes.map(
       async scope =>
-        (await scopedSettingsService.resolveScopedSettingEntries(['customMcpPolicy'], scope, db)).customMcpPolicy
+        (
+          await scopedSettingsService.resolveScopedSettingEntries(['customMcpPolicy'], scope, db, {
+            readFailureMode: 'throw',
+          })
+        ).customMcpPolicy
     )
   );
   const policies = policyEntries.map(entry => entry.value);

@@ -657,3 +657,41 @@ describe('custom MCP connector settings (org-scoped object and flag)', () => {
     expect(isCustomMcpEnabled(flag.value, { mode: 'any' })).toBe(true);
   });
 });
+
+describe('strict security-setting reads', () => {
+  it('rejects a failed org-policy lookup instead of reopening a disabled org', async () => {
+    const db = makeDb(
+      { customMcpPolicy: JSON.stringify({ mode: 'any' }) },
+      [override(SettingScopeLevel.Organization, 'o1', JSON.stringify({ mode: 'off' }), 'customMcpPolicy')],
+      { throwOverrides: true }
+    );
+    await expect(
+      resolveScopedSettingEntries(['customMcpPolicy'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('overlay down');
+  });
+
+  it('rejects a failed platform blocklist lookup instead of treating it as empty', async () => {
+    const db = makeDb({}, [], { throwPlatform: true });
+    await expect(
+      resolveScopedSettingEntries(['customMcpBlockedHosts'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
+  });
+
+  it('threads strict resolution through the single-key and values APIs', async () => {
+    const db = makeDb({}, [], { throwPlatform: true });
+    await expect(
+      resolveScopedSetting('customMcpPolicy', fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
+    await expect(
+      resolveScopedSettingValues(['customMcpPolicy'], fullScope, db, {
+        readFailureMode: 'throw',
+      })
+    ).rejects.toThrow('settings table down');
+  });
+});

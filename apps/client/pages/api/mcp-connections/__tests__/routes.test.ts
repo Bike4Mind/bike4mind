@@ -179,12 +179,20 @@ function installRepo(): void {
     if (!ownerMatches(doc, owner) || (doc!.auth as Doc['auth']).kind !== 'api_key') return null;
     return patch(id, owner, { auth: { kind: 'api_key', apiKey } });
   });
-  repo.setStatus.mockImplementation(async (id: string, status: string, lastError?: Record<string, unknown>) => {
-    const doc = h.store.get(id);
-    if (!doc) return null;
-    Object.assign(doc, { status, lastError });
-    return defaultRead(doc);
-  });
+  repo.setStatus.mockImplementation(
+    async (id: string, status: string, lastError?: Record<string, unknown>, expectedApiKeyValueEnc?: string | null) => {
+      const doc = h.store.get(id);
+      const auth = doc?.auth as Doc['auth'] | undefined;
+      if (
+        expectedApiKeyValueEnc !== undefined &&
+        (auth?.kind !== 'api_key' || (auth.apiKey?.valueEnc ?? null) !== expectedApiKeyValueEnc)
+      )
+        return null;
+      if (!doc) return null;
+      Object.assign(doc, { status, lastError });
+      return defaultRead(doc);
+    }
+  );
   repo.deleteForOwner.mockImplementation(async (id: string, owner: { ownerKey: string }) => {
     if (!ownerMatches(h.store.get(id), owner)) return false;
     return h.store.delete(id);
@@ -701,4 +709,23 @@ describe('POST /api/mcp-connections/[id]/api-key', () => {
     expect((await call(routes.apiKey, { method: 'POST', id, body: { value: NEW_KEY } })).status).toBe(403);
     expect(repo.setApiKey).not.toHaveBeenCalled();
   });
+});
+
+it('does not let an older rotation probe failure overwrite a newer successful rotation', async () => {
+  const id = ((await createConnection()).body as { id: string }).id;
+  const started = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<never>();
+  discover.mockImplementationOnce(async () => {
+    started.resolve();
+    return pending.promise;
+  });
+  const older = call(routes.apiKey, { method: 'POST', id, body: { value: 'old-rotation-key' } });
+  await started.promise;
+  const newer = await call(routes.apiKey, { method: 'POST', id, body: { value: 'new-rotation-key' } });
+  expect(newer.status).toBe(200);
+  const { ConflictError } = await import('@bike4mind/common');
+  pending.reject(new ConflictError('discovery raced', { code: 'discovery_conflict' }));
+  expect((await older).status).toBe(200);
+  expect(h.store.get(id)?.status).toBe('connected');
+  expect(h.store.get(id)?.lastError).toBeUndefined();
 });

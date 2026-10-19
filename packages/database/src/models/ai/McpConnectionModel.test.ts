@@ -121,6 +121,47 @@ describe('McpConnectionModel', () => {
     await McpConnection.deleteMany({});
   });
 
+  it('preserves empty schema objects through create, discovery and every full read', async () => {
+    const inputSchema = { type: 'object', properties: {}, $defs: { empty: { default: {} } } };
+    const created = await mcpConnectionRepository.create(
+      apiKeyConnection({
+        tools: [tool('noop', { inputSchema })],
+      })
+    );
+    expect(created.tools[0]?.inputSchema).toEqual(inputSchema);
+    const discovered = await mcpConnectionRepository.updateDiscovery(created.id, {
+      tools: [tool('noop', { inputSchema })],
+      fingerprint: 'empty-schema',
+      expectedFingerprint: null,
+      expectedRevision: 0,
+    });
+    const reads = [
+      discovered,
+      await mcpConnectionRepository.findById(created.id),
+      await mcpConnectionRepository.findByIdForOwner(created.id, OWNER),
+      await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER),
+      ...(await mcpConnectionRepository.listForUser('user-1')),
+    ];
+    for (const read of reads) expect(read?.tools[0]?.inputSchema).toEqual(inputSchema);
+  });
+
+  it('refuses a failure status from an API key that has since been rotated', async () => {
+    const created = await mcpConnectionRepository.create(apiKeyConnection());
+    await mcpConnectionRepository.setApiKey(created.id, OWNER, {
+      headerName: 'Authorization',
+      scheme: 'Bearer',
+      valueEnc: 'enc:new',
+      last4: '****',
+    });
+    const failure = { code: 'auth_required' as const, message: 'Old key rejected' };
+    expect(await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, 'enc:key')).toBeNull();
+    expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.status).toBe('connected');
+    expect(await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, 'enc:new')).toMatchObject({
+      status: 'needs_reconnect',
+      lastError: failure,
+    });
+  });
+
   describe('indexes', () => {
     it('declares the design indexes by name', async () => {
       const indexes = await McpConnection.collection.indexes();

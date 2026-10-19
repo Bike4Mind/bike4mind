@@ -114,7 +114,7 @@ const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
     state: { type: String, enum: MCP_TOOL_STATES, required: true },
     firstSeenAt: { type: Date, required: true },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
 function toolsWithinBounds(tools: unknown): boolean {
@@ -263,9 +263,10 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   },
   {
     timestamps: true,
+    minimize: false,
     // `getters` restores the escaped tool input-schema keys on every read.
-    toJSON: { virtuals: true, getters: true },
-    toObject: { virtuals: true, getters: true },
+    toJSON: { virtuals: true, getters: true, minimize: false },
+    toObject: { virtuals: true, getters: true, minimize: false },
   }
 );
 
@@ -701,12 +702,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
-    lastError: McpConnectionLastErrorInput
+    lastError: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   async setStatus(
     id: string,
     status: McpConnectionStatus,
-    lastError?: McpConnectionLastErrorInput
+    lastError?: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
       throw new Error(`setStatus(${status}) requires a lastError`);
@@ -729,7 +732,13 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
                 : {}),
             },
           };
-    const filter = status === 'connected' ? { _id: id, ...CONNECTABLE_FILTER } : { _id: id };
+    const filter = {
+      _id: id,
+      ...(status === 'connected' ? CONNECTABLE_FILTER : {}),
+      ...(expectedApiKeyValueEnc !== undefined
+        ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': expectedApiKeyValueEnc }
+        : {}),
+    };
     const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
   }

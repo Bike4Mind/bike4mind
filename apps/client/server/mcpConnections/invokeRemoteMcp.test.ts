@@ -14,6 +14,7 @@ import {
   RemoteMcpAuthRequiredError,
   RemoteMcpClient,
   RemoteMcpError,
+  RemoteMcpTimeoutError,
   type RemoteMcpErrorCode,
 } from '@bike4mind/mcp/remote';
 // The c1 fixture server is test-only source, not part of the package's published surface.
@@ -36,11 +37,19 @@ const repo = vi.hoisted(() => ({
     const doc = state.connections.get(id);
     return doc && doc.ownerKey === owner.ownerKey ? structuredClone(doc) : null;
   }),
-  setStatus: vi.fn(async (id: string, status: string, lastError?: Record<string, unknown>) => {
-    const doc = state.connections.get(id);
-    if (doc) Object.assign(doc, { status, lastError });
-    return doc ?? null;
-  }),
+  setStatus: vi.fn(
+    async (id: string, status: string, lastError?: Record<string, unknown>, expectedApiKeyValueEnc?: string | null) => {
+      const doc = state.connections.get(id);
+      const auth = doc?.auth as IMcpConnectionDocument['auth'] | undefined;
+      if (
+        expectedApiKeyValueEnc !== undefined &&
+        (auth?.kind !== 'api_key' || (auth.apiKey?.valueEnc ?? null) !== expectedApiKeyValueEnc)
+      )
+        return null;
+      if (doc) Object.assign(doc, { status, lastError });
+      return doc ?? null;
+    }
+  ),
   setPendingAuth: vi.fn(async (id: string, challenge: Record<string, unknown>) => {
     const doc = state.connections.get(id);
     if (doc) Object.assign(doc, { status: 'pending_auth', authChallenge: challenge });
@@ -289,11 +298,16 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       ),
       'auth_required'
     );
-    expect(repo.setStatus).toHaveBeenCalledWith(id, 'needs_reconnect', {
-      code: 'auth_required',
-      message: 'The server rejected the API key',
-      requiredScope: 'tools.read',
-    });
+    expect(repo.setStatus).toHaveBeenCalledWith(
+      id,
+      'needs_reconnect',
+      {
+        code: 'auth_required',
+        message: 'The server rejected the API key',
+        requiredScope: 'tools.read',
+      },
+      'enc:k'
+    );
   });
 
   it('keeps a metadata URL only over https on the connection host or its registrable domain', async () => {
@@ -371,7 +385,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     expect(repo.setStatus).toHaveBeenCalledWith(
       keyed,
       'needs_reconnect',
-      expect.objectContaining({ code: 'insufficient_scope', requiredScope: 'tools.read grant all' })
+      expect.objectContaining({ code: 'insufficient_scope', requiredScope: 'tools.read grant all' }),
+      'enc:k'
     );
   });
 
@@ -392,7 +407,8 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
       expect.objectContaining({
         code: 'insufficient_scope',
         requiredScope: 'tools.write',
-      })
+      }),
+      'enc:k'
     );
   });
 
@@ -687,4 +703,63 @@ describe('resolveRemoteMcpRunner', () => {
     state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
     expect(() => resolveRemoteMcpRunner()).toThrow(/not implemented/);
   });
+});
+
+describe('API-key rotation while a request is in flight', () => {
+  it.each(['auth_required', 'auth_failed', 'timeout'] as const)(
+    'ignores a late %s failure after the new key connected',
+    async code => {
+      const id = seed('/mcp', {
+        auth: {
+          kind: 'api_key',
+          apiKey: {
+            headerName: 'Authorization',
+            scheme: 'Bearer',
+            valueEnc: 'enc:old',
+            last4: '****',
+          },
+        },
+      });
+      const started = Promise.withResolvers<void>();
+      const pending = Promise.withResolvers<never>();
+      const request = invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        {
+          context: context(),
+          runner: async payload => {
+            expect(payload.headers.Authorization).toBe('Bearer old');
+            started.resolve();
+            return pending.promise;
+          },
+        }
+      );
+      const outcome = expectRemoteCode(request, code);
+      await started.promise;
+      const doc = state.connections.get(id)!;
+      Object.assign(doc, {
+        auth: {
+          kind: 'api_key',
+          apiKey: {
+            headerName: 'Authorization',
+            scheme: 'Bearer',
+            valueEnc: 'enc:new',
+            last4: '****',
+          },
+        },
+        status: 'connected',
+        lastError: undefined,
+      });
+      pending.reject(
+        code === 'auth_required'
+          ? new RemoteMcpAuthRequiredError({})
+          : code === 'auth_failed'
+            ? new RemoteMcpAuthFailedError('rejected')
+            : new RemoteMcpTimeoutError('slow')
+      );
+      await outcome;
+      expect(doc.status).toBe('connected');
+      expect(doc.lastError).toBeUndefined();
+      expect(repo.setStatus).toHaveBeenLastCalledWith(id, expect.any(String), expect.any(Object), 'enc:old');
+    }
+  );
 });

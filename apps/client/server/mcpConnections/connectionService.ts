@@ -168,7 +168,8 @@ function operationalProbeFailure(
 async function probe(
   actor: ConnectionActor,
   connection: IMcpConnectionDocument,
-  options: InvokeRemoteMcpOptions
+  options: InvokeRemoteMcpOptions,
+  expectedApiKeyValueEnc?: string
 ): Promise<void> {
   const probeAudit = audit(actor, 'probe_result', connection);
   try {
@@ -187,7 +188,11 @@ async function probe(
     probeAudit.failure(failure.auditCode);
     if (!failure.lastError) return;
     try {
-      await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError);
+      if (expectedApiKeyValueEnc !== undefined) {
+        await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError, expectedApiKeyValueEnc);
+      } else {
+        await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError);
+      }
     } catch (statusError) {
       console.warn(`[connectionService] Could not record the probe failure on ${connection.id}:`, statusError);
     }
@@ -260,7 +265,7 @@ export async function createUserConnection(
   if (!created) throw new ConflictError('Could not pick a free slug', { code: 'slug_conflict' });
 
   audit(actor, 'connection_created', created, { authKind: body.auth.kind }).success();
-  await probe(actor, created, { ...options, context });
+  await probe(actor, created, { ...options, context }, base.auth.apiKey?.valueEnc);
   const reloaded = await mcpConnectionRepository.findByIdForOwner(created.id, userOwner(actor.id));
   if (!reloaded) throw new NotFoundError('Connection not found');
   return toPublicView(context, reloaded);
@@ -382,7 +387,7 @@ export async function rotateUserConnectionApiKey(
   if (!rotated) throw new NotFoundError('Connection not found');
   audit(actor, 'api_key_rotated', rotated).success();
 
-  await probe(actor, rotated, { ...options, context });
+  await probe(actor, rotated, { ...options, context }, valueEnc);
   const reloaded = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!reloaded) throw new NotFoundError('Connection not found');
   return toPublicView(context, reloaded);

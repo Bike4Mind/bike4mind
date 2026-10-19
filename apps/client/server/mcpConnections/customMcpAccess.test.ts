@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { scopedSettingsService } from '@bike4mind/services';
 import { CustomMcpPolicySchema, ForbiddenError, type CustomMcpPolicy } from '@bike4mind/common';
 
 const state = vi.hoisted(() => ({
@@ -258,5 +259,28 @@ describe('assertCustomMcpEnabled', () => {
     await expect(assertCustomMcpEnabled({ id: 'u1' })).resolves.toMatchObject({ enabled: true });
     state.flags.EnableCustomMcpConnectors = false;
     await expect(assertCustomMcpEnabled({ id: 'u1' })).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe('security-setting resolution', () => {
+  it('requests strict reads for host settings and every membership policy', async () => {
+    vi.mocked(scopedSettingsService.resolveScopedSettingEntries).mockClear();
+    state.orgIds = ['org-1', 'org-2'];
+    await resolveCustomMcpContext('user-1');
+    const calls = vi.mocked(scopedSettingsService.resolveScopedSettingEntries).mock.calls;
+    expect(calls).toHaveLength(3);
+    for (const call of calls) expect(call[3]).toEqual({ readFailureMode: 'throw' });
+    expect(calls.map(call => call[0])).toEqual([
+      ['customMcpBlockedHosts', 'customMcpAllowPrivateNetworks'],
+      ['customMcpPolicy'],
+      ['customMcpPolicy'],
+    ]);
+  });
+
+  it('propagates a security-setting read failure', async () => {
+    vi.mocked(scopedSettingsService.resolveScopedSettingEntries).mockRejectedValueOnce(
+      new Error('settings unavailable')
+    );
+    await expect(resolveCustomMcpContext('user-1')).rejects.toThrow('settings unavailable');
   });
 });
