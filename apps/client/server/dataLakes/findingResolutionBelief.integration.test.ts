@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildLakeMemoryContext, findingSourceRef } from '@bike4mind/common';
-import { makeFakeLedger, makeFakeKeyring } from '@server/memory/__tests__/utils/ledgerDoubles';
+import { makeFakeLedger, makeFakeKeyring } from '@bike4mind/server-utils/memory/__tests__/utils/ledgerDoubles';
 
 /**
  * The CROSS-SEAM claim, which the unit suites cannot make.
@@ -43,16 +43,16 @@ vi.mock('@bike4mind/server-utils/memory/factCipher', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/memory/factCipher')>()),
   createKeyProvider: () => h.keyring.provider,
 }));
-vi.mock('@server/memory/mementoEmbedder', () => ({ createMementoEmbedder: () => h.embed }));
+vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({ createMementoEmbedder: () => h.embed }));
 // Recall's QUERY embedder, distinct from the write-path one above. Stubbed to an empty vector so
 // recall degrades to the lexical scorer: deterministic, and it keeps the cosine floor (calibrated for
 // a real embedding space) out of a test that is about source filtering, not ranking.
-vi.mock('@server/memory/mementoQueryEmbedding', () => ({
+vi.mock('@bike4mind/server-utils/memory/mementoQueryEmbedding', () => ({
   embedMementoQuery: vi.fn(async () => ({ vector: [] as number[], model: '' })),
 }));
 
 import { recordFindingResolutionBelief } from './recordFindingResolutionBelief';
-import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
+import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { recallLakeMemory } from '@server/memory/recallLakeMemory';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };

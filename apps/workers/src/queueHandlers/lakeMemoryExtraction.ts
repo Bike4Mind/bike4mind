@@ -1,6 +1,6 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@workers/dataLakes/extractLakeMemory';
-import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';

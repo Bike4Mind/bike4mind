@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@server/integrations/github/types';
+import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 
 /**
  * Unit tests for GitHub webhook configuration API.

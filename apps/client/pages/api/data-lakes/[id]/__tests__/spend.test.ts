@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // scopeForLake is stubbed at the gate rather than reimplemented here - the owner derivation itself
 // is covered in resolveScopedSetting.test.ts, so what this suite owns is that the endpoint FEEDS
 // that owner type to the lever resolver.

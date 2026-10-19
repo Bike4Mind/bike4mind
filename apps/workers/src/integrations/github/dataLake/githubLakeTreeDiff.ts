@@ -1,4 +1,4 @@
-import type { GitHubLakeCandidate } from '@server/integrations/github/dataLake/lakeFileFilter';
+import type { GitHubLakeCandidate } from '@bike4mind/server-utils/integrations/github/dataLake/lakeFileFilter';
 
 export type GitHubLakeStoredCopy = {
   id: string;

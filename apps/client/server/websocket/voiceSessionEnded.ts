@@ -26,7 +26,7 @@ import {
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
-import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@server/voice/voiceSessionLimits';
+import { REALTIME_VOICE_RESERVE_USD, realtimeCreditsFloor } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { isVoiceLedgerKeyTaken, recordVoiceUsage, VOICE_TRANSACTION_OPTIONS } from '@server/voice/settleVoiceHold';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {

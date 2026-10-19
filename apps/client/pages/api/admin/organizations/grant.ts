@@ -10,7 +10,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';

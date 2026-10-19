@@ -1,12 +1,12 @@
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps, type WakeOutcome } from '@bike4mind/agents';
-import { MongoDeepAgentStore } from './store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from './llmSteps';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from './missionSessionBridge';
-import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from './resolveBackend';
+import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**
  * Run a freshly-enrolled mission's FIRST wake so it is born alive - the single

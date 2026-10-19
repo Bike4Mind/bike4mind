@@ -51,7 +51,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,
@@ -88,7 +88,7 @@ vi.mock('@server/utils/auditLog', () => ({
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
 vi.mock('sst', () => ({ Resource: { SECRET_ENCRYPTION_KEY: { value: 'test-secret-encryption-key' } } }));
 
 import handler from '../purge';

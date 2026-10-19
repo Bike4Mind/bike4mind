@@ -39,7 +39,7 @@ import {
   MAX_SESSION_SECONDS,
   voiceSessionTokenExpiresAtMs,
   shouldReuseVoiceHold,
-} from '@server/voice/voiceSessionLimits';
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 

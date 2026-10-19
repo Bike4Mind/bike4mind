@@ -33,7 +33,7 @@ import {
   REALTIME_VOICE_HOLD_SECONDS,
   realtimeClientSecretTtlSeconds,
   shouldReuseVoiceHold,
-} from '@server/voice/voiceSessionLimits';
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';

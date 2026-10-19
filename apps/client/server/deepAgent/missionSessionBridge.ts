@@ -1,7 +1,7 @@
 import type { Charter, Episode, WakeOutcome } from '@bike4mind/agents';
 import { deepAgentCharterRepository, sessionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import type { ReviewOutcome } from './reviewWake';
+import type { ReviewOutcome } from '@bike4mind/server-utils/deepAgent/reviewWake';
 
 /**
  * Mission session bridge - wake outputs join the B4M fabric.

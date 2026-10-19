@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
-import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@server/integrations/github/types';
+import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import { Logger } from '@bike4mind/observability';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 

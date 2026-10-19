@@ -225,6 +225,32 @@ describe('settleCreditHold', () => {
       { userId: 'u1', organizationId: undefined, error: 'ledger down' }
     );
   });
+  it('throws a partial-refund failure when settlement must roll back its transaction', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    vi.spyOn(adapters.users, 'incrementCredits').mockRejectedValueOnce(new Error('refund down'));
+
+    await expect(
+      settleCreditHold(hold, 20, entry, { featureLabel: 'video', logger, throwOnWriteFailure: true }, adapters)
+    ).rejects.toThrow('refund down');
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+  });
+
+  it('throws a ledger failure when settlement must roll back its transaction', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(
+      settleCreditHold(hold, 30, entry, { featureLabel: 'video', logger, throwOnWriteFailure: true }, adapters)
+    ).rejects.toThrow('ledger down');
+  });
 });
 
 describe('releaseCreditHold', () => {

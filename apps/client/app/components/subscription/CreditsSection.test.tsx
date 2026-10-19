@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -70,6 +72,27 @@ describe('CreditsSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: /58,333/ }));
     expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_50k');
     expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 58,333 credits for $35');
+  });
+
+  it('card radios are not pinned to a fixed input size by global styles', () => {
+    // jsdom cannot resolve CSS hit areas; a fixed size on the global radio input rule shrinks the
+    // overlay input of card radios to a corner, so assert the stylesheet never pins one.
+    const globalCss = readFileSync(resolve(__dirname, '../../globals.css'), 'utf8');
+    const rule = globalCss.match(/\[class\*='MuiRadio-input'\]\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule?.[1]).not.toMatch(/(^|[\s;])(width|height|min-width|min-height|max-width|max-height)\s*:/);
+  });
+
+  it('renders each pack as an overlay radio inside its card', () => {
+    renderSection();
+    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+      const card = screen.getByTestId(`credits-pack-${id}`);
+      const input = card.querySelector('input[type="radio"]') as HTMLInputElement;
+      expect(input).not.toBeNull();
+      // Joy's overlay action span is the radio's positioned ancestor and stretches over the card.
+      expect(input.parentElement?.className).toMatch(/MuiRadio-action/);
+      expect(card.querySelectorAll('input[type="radio"]')).toHaveLength(1);
+    }
   });
 
   it('marks each pack credit count with the decorative credit icon', () => {

@@ -32,6 +32,7 @@ import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
@@ -116,6 +117,7 @@ async function main() {
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
   registerVoiceHoldSweep(worker);
+  registerCreditHoldSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

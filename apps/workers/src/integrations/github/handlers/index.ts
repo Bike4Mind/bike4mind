@@ -9,7 +9,7 @@ initializeSlackPackage();
  */
 
 import { Logger } from '@bike4mind/observability';
-import { GitHubEventHandler, GitHubEventType } from '@server/integrations/github/types';
+import { GitHubEventHandler, GitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 import { PingHandler } from './PingHandler';
 import { PullRequestHandler } from './PullRequestHandler';

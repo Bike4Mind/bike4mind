@@ -6,7 +6,7 @@ import {
   formatMissionStatusReport,
   listMissionsForAgent,
 } from '@server/deepAgent/missions';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 
 /**

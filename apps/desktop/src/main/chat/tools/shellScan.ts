@@ -27,6 +27,12 @@ export interface ShellScan {
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
+  /**
+   * True when every command is one `containedCommand` accepts and nothing in the script sets the
+   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
+   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
+   */
+  contained: boolean;
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
@@ -351,7 +357,8 @@ function sendsBody(method: string | undefined): boolean {
 /**
  * Why one simple command can send data off this computer, or null. Defence in depth only: a
  * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ * has read untrusted content asks before any command `containedCommand` does not vouch for (see
+ * ChatService's DirectoryTurn.untrusted).
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
@@ -426,8 +433,14 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       return `gh ${sub} ${action}`;
     }
     if (sub === 'release' && action === 'create') return 'gh release create';
-    const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
-    return sub === 'api' && (fields || sendsBody(optionValue(args, ['-X', '--method']))) ? 'gh api' : null;
+    if (sub !== 'api') return null;
+    // gh's flag parser accepts clustered shorthands: `-iftitle=x` is `--include --field title=x`
+    // and `-iXPOST` is `--include --method POST`. Cut each cluster at its first field or method
+    // letter so both checks see the flag it means, and any field turns the call into a POST.
+    const apiArgs = args.map(arg => arg.replace(/^-[a-zA-Z]*?([fFX])/, '-$1'));
+    if (sendsBody(optionValue(apiArgs, ['-X', '--method']))) return 'gh api';
+    const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
+    return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
   if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
@@ -461,6 +474,155 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     return `${program} publish`;
   }
   return null;
+}
+
+/**
+ * Whether `gh api graphql`'s fields only carry a query: a GraphQL read is POSTed, so without this
+ * every one of them would count as a body sent out. A mutation, a field read from a file
+ * (`-F x=@path`) or `--input` is still a body.
+ */
+function graphqlReadOnly(args: readonly string[]): boolean {
+  if (args.some(arg => /^--input(=|$)/.test(arg))) return false;
+  for (let i = 0; i < args.length; i++) {
+    const flag = /^(-f|-F|--field|--raw-field)(?:=(.*))?$/.exec(args[i]) ?? /^(-[fF])(.+)$/.exec(args[i]);
+    if (!flag) continue;
+    const value = flag[2] ?? args[++i] ?? '';
+    const field = value.slice(value.indexOf('=') + 1);
+    if (flag[1] !== '-f' && flag[1] !== '--raw-field' && field.startsWith('@')) return false;
+    if (/\bmutation\b/.test(field)) return false;
+  }
+  return true;
+}
+
+/**
+ * Programs that only read or write files on this computer and run no other program. Matched by
+ * exact name, not basename: `./cat` is whatever the project put there.
+ */
+const LOCAL_PROGRAMS = new Set([
+  'basename',
+  'cat',
+  'cmp',
+  'column',
+  'comm',
+  'cut',
+  'date',
+  'diff',
+  'dirname',
+  'du',
+  'echo',
+  'egrep',
+  'false',
+  'fgrep',
+  'file',
+  'find',
+  'fold',
+  'grep',
+  'head',
+  'jq',
+  'ls',
+  'mkdir',
+  'nl',
+  'paste',
+  'printf',
+  'pwd',
+  'readlink',
+  'realpath',
+  'rev',
+  'rg',
+  'sort',
+  'stat',
+  'tail',
+  'tee',
+  'test',
+  'tr',
+  'tree',
+  'true',
+  'uniq',
+  'wc',
+  'which',
+]);
+
+/** Options that make a listed program run another one. */
+const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
+  find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
+  rg: /^--pre(-glob)?(=|$)/,
+};
+
+/**
+ * Whether `sort` would write a file (`-o`, `--output`) or run one (`--compress-program`).
+ * getopt_long accepts any unambiguous prefix, so `--o` and `--co` name those options too.
+ * The short cluster is read properly: `-t o` and `-k o` are values, not an output flag.
+ */
+function sortRunsOrWrites(args: readonly string[]): boolean {
+  const valueLetters = 'kStT';
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2).split('=')[0];
+      if (name !== '' && ('output'.startsWith(name) || 'compress-program'.startsWith(name))) return true;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') continue;
+    const cluster = arg.slice(1);
+    for (let at = 0; at < cluster.length; at++) {
+      if (cluster[at] === 'o') return true;
+      if (valueLetters.includes(cluster[at])) {
+        if (at === cluster.length - 1) i++;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+/** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
+const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
+  pr: new Set(['checks', 'diff', 'list', 'status', 'view']),
+  issue: new Set(['list', 'status', 'view']),
+  run: new Set(['list', 'view', 'watch']),
+  repo: new Set(['view']),
+  release: new Set(['list', 'view']),
+  workflow: new Set(['list', 'view']),
+  search: new Set(['code', 'commits', 'issues', 'prs', 'repos']),
+};
+
+/**
+ * Whether a gh call only reads from github.com. Any other host is refused, whichever way it is
+ * named: `--hostname`, a URL argument, or a `-R HOST/OWNER/REPO`.
+ */
+function readOnlyGh(args: readonly string[]): boolean {
+  if (args.some(arg => /^--hostname(=|$)/.test(arg) || arg === '--web' || arg === '-w')) return false;
+  if (args.some(arg => arg.includes('://') && !arg.startsWith('https://github.com/'))) return false;
+  const repo = optionValue(args, ['-R', '--repo']);
+  if (repo !== undefined && repo.split('/').length > 2 && !repo.startsWith('github.com/')) return false;
+  const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+  if (sub === 'api') {
+    return outboundReason(['gh', ...args]) === null && !args.some(arg => /^--input(=|$)/.test(arg));
+  }
+  return GH_READS[sub]?.has(action) === true;
+}
+
+/**
+ * Whether one simple command provably keeps to this computer, or only reads from GitHub as the
+ * user. Deliberately an allowlist: anything it does not recognise - an interpreter, a build tool,
+ * a wrapper that runs another program - is not contained. `git` is not on it: a repository's own
+ * config can name a program for `status`, `diff` and the rest to run (`core.fsmonitor`,
+ * `filter.*.clean`, `diff.external`), and no scan of the argv can rule that out.
+ */
+export function containedCommand(raw: readonly string[]): boolean {
+  if (raw.length === 0) return false;
+  const tokens = raw.map(unquote);
+  const [program, ...args] = tokens;
+  if (isDynamic(raw[0])) return false;
+  if (LOCAL_PROGRAMS.has(program)) {
+    if (program === 'sort') return !sortRunsOrWrites(args);
+    const runs = RUNS_A_PROGRAM[program];
+    return !runs || !args.some(arg => runs.test(arg));
+  }
+  // A computed argument can carry what it read into the request path itself.
+  if (program === 'gh') return !raw.slice(1).some(isDynamic) && readOnlyGh(args);
+  return false;
 }
 
 function words(node: Node): string[] {
@@ -502,6 +664,7 @@ export async function scanShell(
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
     const writtenCommands = new Set<number>();
+    let contained = true;
 
     const noteEnvFile = (raw: string): void => {
       const path = expandHome(unquote(raw));
@@ -549,6 +712,7 @@ export async function scanShell(
       });
       const sends = outboundReason(tokens, readsStdin(node));
       if (sends) outbound.add(sends);
+      if (sends || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) return;
@@ -595,6 +759,7 @@ export async function scanShell(
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false });
+        contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -604,6 +769,7 @@ export async function scanShell(
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
         commands.push({ text: header, always: header, coverable: false });
+        contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
       }
@@ -634,7 +800,13 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
-    return { commands, directories: [...directories], envFiles: [...envFiles], outbound: [...outbound] };
+    return {
+      commands,
+      directories: [...directories],
+      envFiles: [...envFiles],
+      outbound: [...outbound],
+      contained: contained && commands.length > 0,
+    };
   } finally {
     tree.delete();
   }

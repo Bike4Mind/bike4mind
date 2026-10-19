@@ -43,7 +43,7 @@ const SITES: { path: string; matches: number; note: string }[] = [
     note: 'Corpus defer gate. Deliberately STRICTER: an unlabeled file counts as unreachable',
   },
   {
-    path: 'apps/client/server/memory/lakeSourceReachability.ts',
+    path: 'packages/server-utils/src/memory/lakeSourceReachability.ts',
     matches: 1,
     note: 'isFabFileCitable. Deliberately STRICTER, same reason',
   },

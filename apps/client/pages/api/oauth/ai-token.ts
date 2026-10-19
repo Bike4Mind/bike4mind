@@ -34,7 +34,7 @@ import {
 } from '@bike4mind/database/auth';
 import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
-import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@server/utils/ip';

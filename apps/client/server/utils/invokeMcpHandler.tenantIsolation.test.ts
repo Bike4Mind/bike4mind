@@ -18,7 +18,7 @@ const { snapshots, mockLocalMcpHandler } = vi.hoisted(() => ({
   mockLocalMcpHandler: vi.fn(),
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: vi.fn().mockResolvedValue({ available: true, reason: null }),
 }));
 

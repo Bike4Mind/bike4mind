@@ -54,7 +54,7 @@ describe('musicGenerationPollInterval', () => {
   });
 
   it('keeps polling a succeeded job with no output yet, then gives up', () => {
-    const job = musicJob({ state: 'succeeded', output: null });
+    const job = musicJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: null });
     expect(musicGenerationPollInterval(job, true, NOW)).toBe(SOCKET_DOWN_POLL_MS);
     expect(musicGenerationPollInterval(job, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS)).toBe(false);
   });
@@ -62,19 +62,23 @@ describe('musicGenerationPollInterval', () => {
   it('polls a scanning song and stops for an unavailable or failed one', () => {
     const scanning = musicJob({
       state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
       output: musicOutput({ availability: 'pending_scan', url: null, expires_at: null }),
     });
     expect(musicGenerationPollInterval(scanning, true, NOW)).toBe(PENDING_SCAN_POLL_MS);
     const gone = musicJob({
       state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
       output: musicOutput({ availability: 'unavailable', url: null, expires_at: null }),
     });
     expect(musicGenerationPollInterval(gone, true, NOW)).toBe(false);
-    expect(musicGenerationPollInterval(musicJob({ state: 'failed' }), true, NOW)).toBe(false);
+    expect(
+      musicGenerationPollInterval(musicJob({ state: 'failed', credits: { reserved: 10, settled: 0 } }), true, NOW)
+    ).toBe(false);
   });
 
   it('schedules a re-sign for a ready song', () => {
-    const ready = musicJob({ state: 'succeeded', output: musicOutput() });
+    const ready = musicJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: musicOutput() });
     expect(musicGenerationPollInterval(ready, true, NOW)).toBeGreaterThan(0);
   });
 });
@@ -294,7 +298,8 @@ describe('music Studio hooks', () => {
     });
     const cached = queryClient.getQueryData<MusicGenerationList>(musicGenerationKeys.list);
     expect(cached?.pages[0].data.map(job => job.id)).toEqual(['music-new', 'music-old']);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: CREDITS_BALANCE_KEY });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: CREDITS_BALANCE_KEY, refetchType: 'all' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
     expect(h.toastSuccess).toHaveBeenCalledWith('Song generation started');
   });
 
@@ -321,4 +326,113 @@ describe('music Studio hooks', () => {
     const cached = queryClient.getQueryData<MusicGenerationList>(musicGenerationKeys.list);
     expect(cached?.pages[0].data[0].state).toBe('cancelled');
   });
+});
+
+describe('music generation balance settlement', () => {
+  let queryClient: QueryClient;
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
+
+  beforeEach(() => {
+    h.get.mockReset();
+    h.post.mockReset();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  });
+
+  it.each(['succeeded', 'failed', 'cancelled'] as const)(
+    'refreshes balances once when detail polling observes %s settlement, with no websocket event',
+    async state => {
+      const job = musicJob({
+        id: 'balance-job',
+        state,
+        credits: { reserved: 10, settled: 0 },
+        updated_at: '2026-10-07T00:02:00.000Z',
+      });
+      queryClient.setQueryData(musicGenerationKeys.detail(job.id), musicJob({ id: job.id, state }));
+      h.get
+        .mockResolvedValueOnce({ data: { ...job, credits: { reserved: 10, settled: null } } })
+        .mockResolvedValue({ data: job });
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const { result } = renderHook(() => useMusicGeneration(job.id), { wrapper });
+
+      await act(() => result.current.refetch());
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+      await act(async () => {
+        const fetched = await result.current.refetch();
+        expect(h.get).toHaveBeenCalled();
+        expect(fetched.error).toBeNull();
+        expect(fetched.data).toEqual(job);
+      });
+      await act(() => result.current.refetch());
+
+      expect(queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(job.id))?.state).toBe(state);
+      expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'credits-balance')).toHaveLength(1);
+      expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations')).toHaveLength(1);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+    }
+  );
+
+  it('refreshes balances once when a gallery refetch discovers a completed job', async () => {
+    const previous = musicJob({ id: 'balance-job', state: 'running' });
+    const finished = musicJob({
+      id: previous.id,
+      state: 'failed',
+      credits: { reserved: 10, settled: 0 },
+      updated_at: '2026-10-07T00:02:00.000Z',
+    });
+    queryClient.setQueryData(musicGenerationKeys.detail(previous.id), previous);
+    queryClient.setQueryData(musicGenerationKeys.list, {
+      pages: [{ data: [previous], next_cursor: null }],
+      pageParams: [undefined],
+    });
+    h.get.mockResolvedValue({ data: { data: [finished], next_cursor: null } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useMusicGenerations(), { wrapper });
+    await waitFor(() => expect(result.current.data?.pages[0].data[0].state).toBe('failed'));
+
+    await act(() => result.current.refetch());
+
+    expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations')).toHaveLength(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+  });
+
+  it('does not refresh balances for an older terminal snapshot rejected by reconciliation', async () => {
+    const previous = musicJob({ id: 'balance-job', state: 'running', updated_at: '2026-10-07T00:02:00.000Z' });
+    queryClient.setQueryData(musicGenerationKeys.detail(previous.id), previous);
+    h.get.mockResolvedValue({
+      data: musicJob({
+        id: previous.id,
+        state: 'failed',
+        credits: { reserved: 10, settled: 0 },
+        updated_at: '2026-10-07T00:01:00.000Z',
+      }),
+    });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useMusicGeneration(previous.id), { wrapper });
+
+    await act(() => result.current.refetch());
+
+    expect(result.current.data?.state).toBe('running');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancelled', 'running'] as const)(
+    'refreshes cancellation balances only for a terminal response (%s)',
+    async state => {
+      h.post.mockResolvedValue({
+        data: musicJob({
+          id: 'balance-job',
+          state,
+          credits: { reserved: 10, settled: state === 'cancelled' ? 0 : null },
+        }),
+      });
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
+
+      await act(() => result.current.mutateAsync('balance-job'));
+
+      const balanceRefreshes = invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations');
+      expect(balanceRefreshes).toHaveLength(state === 'cancelled' ? 1 : 0);
+    }
+  );
 });

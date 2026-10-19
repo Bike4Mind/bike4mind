@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
 // Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
 // assert a value was encrypted at rest without depending on real AES output. update.ts pulls
-// encryptSecret/isEncrypted/isValidEncryptionKey through @server/security/secretEncryption,
+// encryptSecret/isEncrypted/isValidEncryptionKey through @bike4mind/server-utils/security/secretEncryption,
 // which re-exports from @bike4mind/utils/security, so mocking the subpath covers those too.
 vi.mock('@bike4mind/utils/security', () => ({
   decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
@@ -40,7 +40,7 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 }));
 
 import handler from '../update';
-import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
@@ -259,6 +259,32 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'forcedRetrievalRelativeFloorPct' },
       { $set: { settingValue: 85 } },
+      expect.anything()
+    );
+  });
+});
+
+describe('settings/update per-credit price floor', () => {
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    vi.mocked(invalidateSettingsCache).mockClear();
+  });
+
+  it('refuses to save a per-credit price below the floor', async () => {
+    await expect(runHandler('pricePerCredit', String(MIN_PRICE_PER_CREDIT_USD / 2))).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining(`at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)},`),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invalidateSettingsCache).not.toHaveBeenCalled();
+  });
+
+  it('stores a per-credit price at the floor', async () => {
+    stageWriteResult('pricePerCredit', MIN_PRICE_PER_CREDIT_USD);
+    await runHandler('pricePerCredit', String(MIN_PRICE_PER_CREDIT_USD));
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'pricePerCredit' },
+      { $set: { settingValue: MIN_PRICE_PER_CREDIT_USD } },
       expect.anything()
     );
   });

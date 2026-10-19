@@ -7,7 +7,7 @@ import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
-import type { WhatsNewHighlightsPayload } from '@server/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
 import {
   HIGHLIGHTS_NOTE_LIMIT,

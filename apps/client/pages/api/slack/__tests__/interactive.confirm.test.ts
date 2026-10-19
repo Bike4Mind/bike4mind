@@ -23,7 +23,7 @@ vi.mock('@server/utils/pendingActionExecutor', () => ({
   isPendingActionRequester: vi.fn(),
   MCP_DISABLED_MESSAGE: 'MCP disabled',
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/integrations/atlassian/confluenceAttachmentCleanup', () => ({
   cleanupConfluencePageContent: vi.fn(),
@@ -61,7 +61,7 @@ import {
   executePendingAction,
   isPendingActionRequester,
 } from '@server/utils/pendingActionExecutor';
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { buildAttachmentDownloadButtons } from '@bike4mind/slack';

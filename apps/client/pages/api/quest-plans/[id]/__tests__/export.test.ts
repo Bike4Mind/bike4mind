@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: vi.fn() }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ questMasterPlanRepository: { findById: h.findById } }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.send }));

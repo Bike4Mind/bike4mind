@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { dataLakeService } from '@bike4mind/services';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';

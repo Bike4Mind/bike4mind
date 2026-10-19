@@ -10,7 +10,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';

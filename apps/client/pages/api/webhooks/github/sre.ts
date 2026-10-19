@@ -16,7 +16,7 @@ import { SreAgentConfig, SreAgentConfigSchema, resolveWebhookSecret } from '@bik
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { GitHubEvent } from '@server/integrations/github/GitHubEvent';
-import { GitHubEventType } from '@server/integrations/github/types';
+import { GitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import {
   verifyGitHubSignature,
   getRawBody,

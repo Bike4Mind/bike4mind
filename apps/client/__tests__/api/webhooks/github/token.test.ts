@@ -7,7 +7,7 @@ import {
   PayloadTooLargeError,
   getRawBody,
 } from '@server/integrations/github/webhookUtils';
-import { isValidGitHubEventType } from '@server/integrations/github/types';
+import { isValidGitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 
 /**
  * Unit tests for GitHub Webhook URL-based Routing Endpoint

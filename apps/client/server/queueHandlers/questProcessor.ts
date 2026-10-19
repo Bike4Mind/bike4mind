@@ -41,7 +41,7 @@ import { Config } from '@server/utils/config';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
-import { withLatticeTools } from './latticeChatTools';
+import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { Resource } from 'sst';

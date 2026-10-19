@@ -130,6 +130,12 @@ export interface IMcpConnectionTool {
   descriptionRawHash: string;
   inputSchema: Record<string, unknown>;
   annotations?: IMcpConnectionToolAnnotations;
+  /**
+   * sha256 over everything that sends a tool back to review (name, title, description, raw
+   * description hash, schema, annotations), set by discovery. A review names the version it saw,
+   * so approving a tool the server changed in the meantime fails instead of approving the change.
+   */
+  versionHash?: string;
   enabled: boolean;
   approval: McpToolApprovalMode;
   state: McpToolState;
@@ -155,6 +161,9 @@ export const MCP_CONNECTION_ERROR_CODES = [
   'policy_blocked',
   'invalid_grant',
   'insufficient_scope',
+  'rate_limited',
+  'circuit_open',
+  'discovery_failed',
 ] as const;
 export type McpConnectionErrorCode = (typeof MCP_CONNECTION_ERROR_CODES)[number];
 
@@ -171,6 +180,18 @@ export interface IMcpConnectionServerInfo {
   name?: string;
   version?: string;
   protocolVersion?: string;
+}
+
+/**
+ * The 401 challenge from the probe of a server that wants OAuth (RFC 9728), kept for the OAuth
+ * flow. Server-supplied and untrusted: `resourceMetadataUrl` is kept only when it passes the
+ * connector URL rules over https on the connection's own host or registrable domain
+ * (invokeRemoteMcp), and the OAuth code still validates it before fetching it.
+ */
+export interface IMcpConnectionAuthChallenge {
+  resourceMetadataUrl?: string;
+  scope?: string;
+  at: Date;
 }
 
 /** Single-writer lease for OAuth refresh; see `acquireRefreshLease`. */
@@ -216,6 +237,13 @@ export interface IMcpConnection {
   toolsFetchedAt?: Date;
   /** Tools the server listed that discovery refused (invalid name, over a cap). */
   toolsDropped?: number;
+  /**
+   * Bumped by every write to `tools` (`setToolSettings`, `updateDiscovery`). Discovery compares and
+   * sets on it as well as on the fingerprint, so a review saved while a discovery was in flight is
+   * re-merged instead of overwritten. Absent on documents written before it existed (read as 0).
+   */
+  toolsRevision?: number;
+  authChallenge?: IMcpConnectionAuthChallenge;
   enabled: boolean;
   lastUsedAt?: Date;
   refreshLease?: IMcpConnectionRefreshLease;
@@ -241,6 +269,7 @@ export const MCP_CONNECTION_LIMITS = {
   displayNameLength: 100,
   maxScopes: 50,
   requiredScopeLength: 1000,
+  authChallengeUrlLength: 2048,
 } as const;
 
 /** Dotted paths of the auth secrets. An org definition may carry none of them (members connect their own). */
@@ -468,6 +497,9 @@ export const MCP_CONNECTION_PROTECTED_FIELDS = [
   'urlEnc',
   'urlHost',
   'displayUrl',
+  'tools',
+  'toolsFingerprint',
+  'toolsRevision',
 ] as const;
 
 /** A generic repository write named a field only the dedicated McpConnection methods may touch. */
@@ -478,10 +510,26 @@ export class McpConnectionProtectedFieldError extends Error {
   }
 }
 
+/** Creating one more connection would pass the owner's connection cap. */
+export class McpConnectionCapError extends ConflictError {
+  constructor(readonly limit: number) {
+    super(`You can have at most ${limit} custom connections`, { code: 'connection_limit', limit });
+    this.name = 'McpConnectionCapError';
+  }
+}
+
+/** A tool review named a version the stored tool no longer has (the server changed it); nothing was written. */
+export class McpToolVersionConflictError extends ConflictError {
+  constructor() {
+    super('A tool changed since it was reviewed; reload and review it again', { code: 'tool_version_conflict' });
+    this.name = 'McpToolVersionConflictError';
+  }
+}
+
 /** The slug is already taken for this owner (the `mcpconn_owner_slug` unique index). */
 export class McpConnectionSlugConflictError extends ConflictError {
   constructor(readonly slug: string) {
-    super(`A connection with the slug "${slug}" already exists`, { slug });
+    super(`A connection with the slug "${slug}" already exists`, { code: 'slug_taken', slug });
     this.name = 'McpConnectionSlugConflictError';
   }
 }
@@ -499,9 +547,21 @@ export type McpRefreshLeaseResult =
 /** One tool's review choices. Omitted fields are left as stored; unknown tool names are ignored. */
 export interface McpToolSettingsUpdate {
   name: string;
+  /**
+   * The `versionHash` the reviewer saw. When given, the whole write is refused (see
+   * McpToolVersionConflictError) unless the stored tool still carries it.
+   */
+  versionHash?: string;
   enabled?: boolean;
   approval?: McpToolApprovalMode;
   state?: McpToolState;
+}
+
+/** Rename, enable and tool review applied together; omitted parts are left as stored. */
+export interface McpConnectionSettingsUpdate {
+  displayName?: string;
+  enabled?: boolean;
+  tools?: McpToolSettingsUpdate[];
 }
 
 export interface McpDiscoveryUpdate {
@@ -509,12 +569,49 @@ export interface McpDiscoveryUpdate {
   fingerprint: string;
   /** Fingerprint the caller read and diffed against; null for the first discovery. */
   expectedFingerprint: string | null;
+  /** `toolsRevision` the caller read and merged against (0 when the read had none). */
+  expectedRevision: number;
   detectedTransport?: McpConnectionDetectedTransport;
   serverInfo?: IMcpConnectionServerInfo;
   dropped?: number;
+  /**
+   * Also mark the connection `connected` and clear `lastError` and `authChallenge`, in the same
+   * guarded write. Adds the `setStatus('connected')` guard: an OAuth connection with no access
+   * token does not match, so the write resolves null like a lost compare-and-set.
+   */
+  markConnected?: boolean;
+  /**
+   * API-key connections: the stored `auth.apiKey.valueEnc` the discovery ran with. A rotated key
+   * does not match, so the write resolves null and must be abandoned, not retried.
+   */
+  expectedApiKeyValueEnc?: string | null;
+}
+
+/** A rotated API key; the caller encrypts the value and derives `last4`. */
+export interface McpApiKeyUpdate {
+  headerName: string;
+  scheme: McpApiKeyScheme;
+  valueEnc: string;
+  last4: string;
 }
 
 export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnectionDocument> {
+  /**
+   * Creates a user connection only if the owner stays within `cap`. Count-then-insert races, so it
+   * inserts, re-counts, and deletes its own insert when the count is over: concurrent creates at the
+   * boundary can all fail, but the cap is never exceeded. Throws `McpConnectionCapError`.
+   */
+  createWithinUserCap(
+    data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>,
+    cap: number
+  ): Promise<IMcpConnectionDocument>;
+  /** Replaces the API key of an `api_key` connection; null when not found, not the owner's, or another kind. */
+  setApiKey(id: string, owner: McpConnectionOwner, apiKey: McpApiKeyUpdate): Promise<IMcpConnectionDocument | null>;
+  /** The probe met a 401: `pending_auth`, the challenge kept for OAuth, `lastError` saying why. */
+  setPendingAuth(
+    id: string,
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+  ): Promise<IMcpConnectionDocument | null>;
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
   findByIdWithCredentials(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
@@ -539,16 +636,26 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   deleteAllForUser(userId: string): Promise<number>;
   rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
   setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
-  /** Applies every entry in one atomic write. */
+  /** Applies every entry in one atomic write and bumps `toolsRevision`. Same guards as `updateSettings`. */
   setToolSettings(
     id: string,
     owner: McpConnectionOwner,
     settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null>;
   /**
-   * Compare-and-set on `toolsFingerprint === expectedFingerprint`: resolves null when another
-   * discovery already moved the fingerprint, so the caller re-reads and re-diffs instead of
-   * overwriting the review choices that discovery merged.
+   * Rename, enable and tool review in one atomic write (bumping `toolsRevision` when tools are
+   * named). Null when not found or not the owner's; throws McpToolVersionConflictError, writing
+   * nothing, when a tool entry's `versionHash` no longer matches the stored tool.
+   */
+  updateSettings(
+    id: string,
+    owner: McpConnectionOwner,
+    update: McpConnectionSettingsUpdate
+  ): Promise<IMcpConnectionDocument | null>;
+  /**
+   * Compare-and-set on `toolsFingerprint === expectedFingerprint` AND `toolsRevision ===
+   * expectedRevision`: resolves null when another discovery or a review moved either, so the caller
+   * re-reads and re-merges instead of overwriting the review choices. Bumps `toolsRevision`.
    */
   updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
   /**
@@ -556,11 +663,12 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
    */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
-  /** A failure status always records why. */
+  /** A failure status records why; an API-key snapshot prevents stale requests undoing rotation. */
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
-    lastError: McpConnectionLastErrorInput
+    lastError: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.

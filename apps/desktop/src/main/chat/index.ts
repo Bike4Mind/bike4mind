@@ -22,7 +22,6 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
-  CreateCodeSessionRequest,
   ProjectInspection,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
@@ -47,7 +46,8 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
-import { registerSidebarIpc } from './sidebarIpc';
+import { registerSessionCreateIpc } from './sessionCreateIpc';
+import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
@@ -468,17 +468,20 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
-  ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
     recentFolders
       .record(directory)
       .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
   };
-  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, async (_event, request: CreateCodeSessionRequest) => {
-    const result = await service.createCodeSession(request);
-    rememberFolder(folderToRemember(request, result));
-    return result;
+  registerSessionCreateIpc(ipcMain, {
+    createSession: () => service.createSession(),
+    createCodeSession: request => service.createCodeSession(request),
+    place: (sessionId, sectionId) =>
+      placeNewSession(sidebarSections, sessionId, sectionId, error =>
+        logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
+      ),
+    rememberFolder,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {

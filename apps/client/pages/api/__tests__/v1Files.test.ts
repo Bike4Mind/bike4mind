@@ -85,8 +85,8 @@ vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: m
 vi.mock('@server/files/deleteFileForUser', () => ({ deleteFileForUser: mockDeleteFileForUser }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
-vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
-vi.mock('@server/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb', () => ({ lakeMembershipAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: () => undefined }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ assertDataLakeWriteScope: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { updateFabFile: mockUpdateFabFile } }));

@@ -12,7 +12,7 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
-import { createMementoEmbedder } from '@server/memory/mementoEmbedder';
+import { createMementoEmbedder } from '@bike4mind/server-utils/memory/mementoEmbedder';
 
 /**
  * Reserved curator-tag markers that promote a lake document's facts to the `human-reviewed` tier. A

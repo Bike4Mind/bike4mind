@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { encryptSecret, generateEncryptionKey } from './secretEncryption';
+import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 
 // Mock config before importing tokenEncryption
 const mockConfig: Record<string, string | undefined> = {};

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
-import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
 const findByIdMock = vi.fn();

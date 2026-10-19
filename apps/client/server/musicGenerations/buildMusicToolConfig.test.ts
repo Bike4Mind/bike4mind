@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./listUsableMusicModels', () => ({ listUsableMusicModels: vi.fn() }));
+vi.mock('@bike4mind/server-utils/musicGenerations/listUsableMusicModels', () => ({ listUsableMusicModels: vi.fn() }));
 vi.mock('@bike4mind/services/musicJobs', () => ({ createMusicJob: vi.fn() }));
 
 import { createMusicJob } from '@bike4mind/services/musicJobs';
 import { isMusicToolConfig } from '@bike4mind/services/llm/tools';
 import { buildMusicToolConfig } from './buildMusicToolConfig';
-import { listUsableMusicModels } from './listUsableMusicModels';
+import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 
 const deps = { availability: {} as never, createDeps: { tag: 'create-deps' } as never };
 const input = {

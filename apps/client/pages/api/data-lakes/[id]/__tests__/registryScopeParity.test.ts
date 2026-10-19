@@ -41,7 +41,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => undefined }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 vi.mock('@bike4mind/database', () => ({

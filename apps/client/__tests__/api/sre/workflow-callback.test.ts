@@ -62,7 +62,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 
 const mockDecryptSecret = vi.fn();
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (...args: unknown[]) => mockDecryptSecret(...args),
 }));
 

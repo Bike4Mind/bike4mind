@@ -1,7 +1,7 @@
 import { CreditHolderType } from '@bike4mind/common';
 import { creditTransactionRepository, sessionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { creditsForElapsed, realtimeCreditsFloor } from './voiceSessionLimits';
+import { creditsForElapsed, realtimeCreditsFloor } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const logger = new Logger({ metadata: { service: 'voiceHoldSettlement' } });
 
