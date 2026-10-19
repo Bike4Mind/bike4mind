@@ -107,7 +107,7 @@ export const ResearchConfigPanel: FC<ResearchConfigPanelProps> = ({ index, confi
             onClick={() =>
               onUpdate({
                 enabled: true,
-                model: (textModels[0]?.id as ChatModels) || ChatModels.GPT4_1,
+                model: (textModels[0]?.id as ChatModelName) || ChatModels.GPT4_1,
                 parameters: {
                   temperature: 0.7,
                   maxTokens: 4096,
