@@ -4,7 +4,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
@@ -118,21 +118,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       subscription_data: { metadata },
     });
 
-    await logAuditEvent(
-      {
-        userId: organization.userId,
-        action: AdminOrgAuditEvents.ORG_CONVERT_INITIATED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        metadata: {
-          organizationId: organization.id,
-          seats: organization.seats,
-          stripeCustomerId: organization.stripeCustomerId,
-          checkoutSessionId: session.id,
-        },
+    await recordAdminActionFromRequest(req, {
+      action: 'org.conversion.initiated',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'initiated conversion to a paid subscription',
+      details: {
+        seats: organization.seats,
+        stripeCustomerId: organization.stripeCustomerId,
+        checkoutSessionId: session.id,
+        ownerId: organization.userId,
       },
-      req.logger
-    );
+    });
 
     return res.status(200).json({ checkoutUrl: session.url });
   })
