@@ -27,6 +27,7 @@ import ActiveSessionsSection from './ActiveSessionsSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
+import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import MfaCard from './MfaCard';
 import SettingsActionButton from './SettingsActionButton';
@@ -463,6 +464,8 @@ const GeneralSettingsTab = () => {
           </Grid>
         </Grid>
       </SectionContainer>
+
+      <WorkspaceVisibilitySection />
 
       <SectionContainer title="Danger zone">
         <Box

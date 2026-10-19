@@ -523,7 +523,12 @@
         "subtitle": "These features are still works in progress and may cause unexpected results. Opting to enable them means you agree to use them in their current state."
       }
     },
-    "ui_preferences": "UI Preferences"
+    "ui_preferences": "UI Preferences",
+    "workspace_visibility": {
+      "title": "Workspaces",
+      "subtitle": "Choose which workspaces appear in your sidebar, menus and suggestions. A hidden workspace stays available through a direct link.",
+      "show_in_sidebar": "Show in sidebar"
+    }
   },
   "mementos": {
     "title": "Mementos",

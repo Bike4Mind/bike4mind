@@ -756,6 +756,7 @@ export function useSendMessage({
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
       skipAutoOffers,
+      activeSurface: sessionToSend?.surface,
       deniedTools: effectiveDisabledTools(currentSession),
     });
     if (refused) {

@@ -1,7 +1,7 @@
 import { useModalTrigger } from '@client/app/contexts/ModalTriggerContext';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
-import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useTheme } from '@mui/joy/styles';
 import { gray } from '@client/app/utils/themes/colors';
 import CloseIcon from '@mui/icons-material/Close';
@@ -32,7 +32,7 @@ const SideNavHeader = () => {
   const navigate = useNavigate();
   // Entitlement-aware (admin/developer/OptiHashi Pro entitlement): the logo click
   // routes tag-less email-domain grantees to /opti too, not just `Opti`-tagged users.
-  const isOptiUser = useOptiAccess();
+  const isOptiUser = useOptiVisible();
   const hasUnreadInbox = useInboxHasUnread();
   const setInboxOpen = useInbox(s => s.setOpen);
   const setInboxIndex = useInbox(s => s.setInboxIndex);
