@@ -1,8 +1,10 @@
 import { questMasterPlanRepository, userRepository } from '@bike4mind/database';
+import { questMasterPlanResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId, toObjectIdString } from '@server/utils/objectId';
 import { z } from 'zod';
@@ -65,7 +67,7 @@ const handler = baseApi()
       plan.lastAccessedAt = new Date();
       await questMasterPlanRepository.update({ id: planId, lastAccessedAt: plan.lastAccessedAt });
 
-      res.json(plan);
+      respond(res, questMasterPlanResponseSchema, plan);
     } catch (error) {
       console.error('Error fetching quest plan:', error);
       res.status(500).json({ error: 'Failed to fetch quest plan' });
@@ -150,7 +152,11 @@ const handler = baseApi()
       changes.lastAccessedAt = new Date();
 
       const updated = await questMasterPlanRepository.update(changes);
-      res.json(updated);
+      if (!updated) {
+        return res.status(404).json({ error: 'Quest plan not found' });
+      }
+
+      respond(res, questMasterPlanResponseSchema, updated);
     } catch (error) {
       console.error('Error updating quest plan:', error);
       res.status(500).json({ error: 'Failed to update quest plan' });
