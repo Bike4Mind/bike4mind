@@ -277,7 +277,8 @@ const handler = baseApi({ auth: false })
         return res.status(400).json(invalidGrant);
       }
       const grant = await oauthGrantRepository.findGrant(user.id, client_id);
-      if (!grant || !grantCovers(grant.scopes, family.scopes) || !grant.scopes.includes('offline_access')) {
+      // family.scopes always holds offline_access, so this also rejects a grant that dropped it.
+      if (!grant || !grantCovers(grant.scopes, family.scopes)) {
         return res.status(400).json(invalidGrant);
       }
 

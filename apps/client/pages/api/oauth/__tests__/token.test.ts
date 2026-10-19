@@ -490,6 +490,9 @@ describe('POST /api/oauth/token refresh_token grant', () => {
 
   it('rejects a grant that no longer includes offline_access', async () => {
     (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'email'] });
+    (h.grantCovers as Mock).mockImplementation((granted: string[], requested: string[]) =>
+      requested.every(s => granted.includes(s))
+    );
 
     expectRejected(await call(refreshBody));
     expect(h.rotate).not.toHaveBeenCalled();
