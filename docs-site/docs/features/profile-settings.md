@@ -77,7 +77,7 @@ Connect with other Bike4Mind users.
 
 ### Workspaces
 
-If your account has access to an additional workspace (for example OptiHashi), the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your sidebar, the logo link, the move and copy menus, automatic tool suggestions, and suggested navigation.
+If your account has access to an additional workspace, the **Workspaces** card lists it with a **Show in sidebar** switch. Turning the switch off hides that workspace from your sidebar, the logo link, the move and copy menus, automatic tool suggestions, and suggested navigation.
 
 Hiding is a display preference only. Your access does not change: a direct link to the workspace still opens it, notebooks already in that workspace keep working, and turning the switch back on shows it again. The card does not appear if you have no workspace you can hide.
 
@@ -464,4 +464,3 @@ Manage email-to-notebook functionality.
 - [AI Models](./ai-models.md) - Model selection and availability
 - [Agents](./agents.md) - Custom AI assistants
 - [Quest Master](./quest-master.md) - Autonomous task planning
-- OptiHashi - Optimization engine
