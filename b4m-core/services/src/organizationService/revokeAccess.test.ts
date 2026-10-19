@@ -221,6 +221,21 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
   });
 
+  it('points a manager removing themselves at leaving instead', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['user1', 'user2'],
+    });
+
+    await expect(
+      revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user2' }, mockAdapters)
+    ).rejects.toThrow(BadRequestError);
+
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
+  });
+
   it('refuses the legacy managerId removing an org manager', async () => {
     mockAdapters.db.organizations.findById.mockResolvedValue({
       ...existingOrganization,

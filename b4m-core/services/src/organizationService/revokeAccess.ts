@@ -77,6 +77,9 @@ export const revokeAccess = async (
 
   // Removing a manager edits the Managers list, which only the owner may do (see canRevokeOrgMember).
   if (!canRevokeOrgMember(user, organization, userId)) {
+    if (userId === user.id) {
+      throw new BadRequestError('Use leave to exit the organization; managers cannot remove themselves');
+    }
     throw new ForbiddenError('Only the organization owner can remove a manager');
   }
 
