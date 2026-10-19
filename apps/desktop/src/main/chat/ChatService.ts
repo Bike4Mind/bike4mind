@@ -3457,8 +3457,8 @@ export class ChatService {
     const stuck = looping && mode === 'auto';
     // Once this reply has read web, browser or MCP content, an injected instruction may be
     // steering it, so a call that can send data out is asked whatever "always" was answered
-    // before. A shell command is judged by its scan rather than by its tool. In 'ask' the taint
-    // only stops a remembered "always" for an outbound command, as askInAuto did before.
+    // before. A shell command is judged by its scan rather than by its tool. 'ask' asks about
+    // every call anyway, so there the taint only stops a remembered "always" for an outbound command.
     const outbound = prompt.outbound ?? sendsOut(call.name);
     const tainted =
       outbound && (mode === 'auto' || (mode === 'ask' && prompt.outbound === true)) ? directories.untrusted : undefined;

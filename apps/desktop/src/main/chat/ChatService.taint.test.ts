@@ -1,10 +1,10 @@
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
@@ -98,6 +98,10 @@ describe('ChatService untrusted content in a reply', () => {
       queue: new MessageQueue(() => undefined),
       emit: event => testEvents.push(event),
     });
+  });
+
+  afterAll(async () => {
+    await rm(`/tmp/b4m-taint-${process.pid}.md`, { force: true });
   });
 
   afterEach(() => {
@@ -226,15 +230,21 @@ describe('ChatService untrusted content in a reply', () => {
       expect(calls('file_read', 'awaiting-approval')).toHaveLength(0);
     });
 
-    it('still asks before reading a .env file, tainted or not', async () => {
-      await writeFile(join(root, '.env'), 'KEY=1\n', 'utf8');
-      const id = await session('auto');
-      await reply(id, [['bash_execute', { command: 'cat .env', cwd: root }]]);
+    it.each([
+      ['after a web fetch', [fetch]],
+      ['in a reply that read nothing', []],
+    ] as [string, [string, Record<string, unknown>][]][])(
+      'still asks before reading a .env file %s',
+      async (_, before) => {
+        await writeFile(join(root, '.env'), 'KEY=1\n', 'utf8');
+        const id = await session('auto');
+        await reply(id, [...before, ['bash_execute', { command: 'cat .env', cwd: root }]]);
 
-      const asked = await awaitCall('bash_execute', 'awaiting-approval');
-      expect(asked.approvalDetail).toContain('usually holds secrets');
-      expect(asked.approvalDetail).not.toContain('Asking because');
-    });
+        const asked = await awaitCall('bash_execute', 'awaiting-approval');
+        expect(asked.approvalDetail).toContain('usually holds secrets');
+        expect(asked.approvalDetail).not.toContain('Asking because');
+      }
+    );
 
     it('does not let an exact "always" skip the question', async () => {
       const id = await session('ask');
@@ -318,7 +328,8 @@ describe('ChatService untrusted content in a reply', () => {
       'gh issue edit 889 --add-assignee "@me" && gh issue view 889 --json title,body',
       'gh issue view 887 --json title && git status --short && git branch --list "fix/*" && ' +
         'gh api -X POST repos/o/r/branches/old/rename -f new_name=new && git branch -m old new && gh pr view 913',
-      "cat <<'EOF' >issue-890-comment.md\nDone.\nEOF\ngh issue comment 890 --body-file issue-890-comment.md",
+      // Outside every granted root on purpose: the temp dirs are allowed the way the user's own /tmp was.
+      `cat <<'EOF' >/tmp/b4m-taint-${process.pid}.md\nDone.\nEOF\ngh issue comment 890 --body-file /tmp/b4m-taint-${process.pid}.md`,
     ])('runs %s without a card', async command => {
       const id = await session('auto');
       await reply(id, [['bash_execute', { command, cwd: root }]]);
