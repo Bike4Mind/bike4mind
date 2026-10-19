@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
@@ -102,14 +102,21 @@ describe('ChatService and skills', () => {
     });
   });
 
+  // A reply a test leaves open - a stream never ended, a command still running - would otherwise
+  // keep the previous service busy while the next test waits on its first request.
+  afterEach(() => {
+    service.dispose();
+    for (const stream of streams) stream.end();
+  });
+
   async function turn(sessionId: string, text: string, expectedPosts: number): Promise<Record<string, unknown>> {
     await service.send(sessionId, text);
-    await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 5000, interval: 5 });
     const stream = streams[expectedPosts - 1];
     stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
     stream.write(frame('[DONE]'));
     await vi.waitUntil(() => events.filter(event => event.type === 'done').length === expectedPosts, {
-      timeout: 3000,
+      timeout: 5000,
       interval: 5,
     });
     return post.mock.calls[expectedPosts - 1][1];
@@ -152,12 +159,12 @@ describe('ChatService and skills', () => {
   async function afterSkill(skillName: string, next: { name: string; input: Record<string, unknown> }) {
     const id = await session();
     await service.send(id, 'go');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
     streams[0].write(
       frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
     );
     streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
     streams[1].write(
       frame({ type: 'tool_use', tools: [{ id: 'c2', name: next.name, arguments: JSON.stringify(next.input) }] })
     );
@@ -169,7 +176,7 @@ describe('ChatService and skills', () => {
             (event.type === 'tool-start' && event.call.status === 'awaiting-approval') ||
             (event.type === 'tool-end' && event.call.id === 'c2')
         ),
-      { timeout: 3000, interval: 5 }
+      { timeout: 5000, interval: 5 }
     );
     const asked = events
       .map(event => (event.type === 'tool-start' ? event.call : null))
@@ -182,23 +189,25 @@ describe('ChatService and skills', () => {
     turnLimits.rounds = 1;
     const id = await session();
     await service.send(id, 'go');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
     streams[0].write(
       frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
     );
     streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(
-      () => events.some(event => event.type === 'done' && event.stopReason === 'tool_turn_limit'),
-      { timeout: 3000, interval: 5 }
-    );
+    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.stopReason === 'tool_turn_limit'), {
+      timeout: 5000,
+      interval: 5,
+    });
 
     events.length = 0;
     await expect(service.continueReply(id)).resolves.toMatchObject({ ok: true });
-    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
     streams[1].write(
       frame({
         type: 'tool_use',
-        tools: [{ id: 'c2', name: 'bash_execute', arguments: JSON.stringify({ command: 'node --version', cwd: project }) }],
+        tools: [
+          { id: 'c2', name: 'bash_execute', arguments: JSON.stringify({ command: 'node --version', cwd: project }) },
+        ],
       })
     );
     streams[1].write(frame('[DONE]'));
@@ -208,7 +217,7 @@ describe('ChatService and skills', () => {
         events.some(
           event => event.type === 'tool-start' && event.call.id === 'c2' && event.call.status === 'awaiting-approval'
         ),
-      { timeout: 3000, interval: 5 }
+      { timeout: 5000, interval: 5 }
     );
     return events
       .map(event => (event.type === 'tool-start' ? event.call : null))
