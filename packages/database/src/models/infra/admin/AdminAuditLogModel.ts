@@ -276,27 +276,29 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
 
   async summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>> {
     const creditGrants = { category: 'credits' };
-    const [facets] = await this.auditLogModel.aggregate<SummaryFacets>([
-      { $match: { occurredAt: { $gte: since } } },
-      {
-        $facet: {
-          grantCount: facetCount(creditGrants),
-          topGranters: [
-            { $match: creditGrants },
-            { $group: { _id: '$actor.userId', name: { $first: '$actor.name' }, count: { $sum: 1 } } },
-            { $sort: { count: -1, _id: 1 } },
-            { $limit: TOP_GRANTER_LIMIT },
-          ],
-          permissionChanges: facetCount({
-            category: 'access',
-            action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
-          }),
-          impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
-          deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
-          deniedAttempts: facetCount({ action: { $regex: '\\.denied$' } }),
+    const [facets] = await this.auditLogModel
+      .aggregate<SummaryFacets>([
+        { $match: { occurredAt: { $gte: since } } },
+        {
+          $facet: {
+            grantCount: facetCount(creditGrants),
+            topGranters: [
+              { $match: creditGrants },
+              { $group: { _id: '$actor.userId', name: { $first: '$actor.name' }, count: { $sum: 1 } } },
+              { $sort: { count: -1, _id: 1 } },
+              { $limit: TOP_GRANTER_LIMIT },
+            ],
+            permissionChanges: facetCount({
+              category: 'access',
+              action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
+            }),
+            impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
+            deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
+            deniedAttempts: facetCount({ action: { $regex: '\\.denied$' } }),
+          },
         },
-      },
-    ]);
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
 
     return {
       creditGrants: {
