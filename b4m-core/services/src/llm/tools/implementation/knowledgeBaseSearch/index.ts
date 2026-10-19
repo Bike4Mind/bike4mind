@@ -1,5 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { INDEXED_TOOL_CITATION_LABEL, citationNumbersById } from '../../citationNumbering';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
@@ -228,7 +228,7 @@ function formatSemanticResults(
     budgetNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
-    (citationNumbers?.size ? `${INDEXED_TOOL_CITATION_LABEL}\n\n` : '') +
+    (citationNumbers?.size ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
     conflictNote +
     renderRetrievedContentBlock(blocks)
   );
@@ -1178,7 +1178,7 @@ function formatSearchResults(
   return (
     `Found ${files.length} document(s) in your knowledge base:\n\n` +
     formattedFiles.join('\n\n') +
-    (citationNumbers?.size ? `\n\n${INDEXED_TOOL_CITATION_LABEL}` : '') +
+    (citationNumbers?.size ? `\n\n${INDEXED_TOOL_CITATION_RULE}` : '') +
     '\n\n*Use retrieve_knowledge_content with a file ID or tags to read the actual document content.*'
   );
 }

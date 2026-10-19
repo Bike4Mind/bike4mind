@@ -28,7 +28,7 @@ import {
 import { buildRetrievalConflictSignal, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
-import { INDEXED_TOOL_CITATION_LABEL } from '../../citationNumbering';
+import { INDEXED_TOOL_CITATION_RULE } from '../../citationNumbering';
 import { attributeAccessedLakeIds, citableOriginFor } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
@@ -687,7 +687,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             header +
             '\n' +
             `${GROUNDED_NO_INVENTION_RULE}\n\n` +
-            (numberedCitables ? `${INDEXED_TOOL_CITATION_LABEL}\n\n` : '') +
+            (numberedCitables ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
             conflict.note +
             renderRetrievedContentBlock(labelledSections);
 

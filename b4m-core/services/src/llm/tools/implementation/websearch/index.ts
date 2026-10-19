@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
-import { INDEXED_TOOL_CITATION_LABEL } from '../../citationNumbering';
+import { INDEXED_TOOL_CITATION_RULE } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
   CitableSource,
@@ -435,7 +435,7 @@ export async function performWebSearch(
     const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
     const baseText = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}` +
-        (numberedCitables ? `\n${INDEXED_TOOL_CITATION_LABEL}\n` : '')
+        (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')
       : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
         : 'No results found from web search.';
