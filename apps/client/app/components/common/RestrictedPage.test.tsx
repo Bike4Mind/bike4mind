@@ -154,6 +154,37 @@ describe('RestrictedPage — auth redirect', () => {
       search: { redirectTo: '/quests#section-2' },
     });
   });
+
+  it('does not re-wrap redirectTo when the effect re-runs while the /login navigation is pending', () => {
+    mockUseUser.mockReturnValue({ currentUser: null });
+    mockRouterState.location = {
+      pathname: '/admin',
+      searchStr: '?tab=organizations',
+      hash: '',
+      search: { tab: 'organizations' },
+    };
+    // The router moves state.location to the pending target as soon as navigate() is called,
+    // before this component re-renders with the new pathname.
+    mockNavigate.mockImplementationOnce(({ search }: { search?: { redirectTo?: string } }) => {
+      const searchStr = search?.redirectTo ? `?redirectTo=${encodeURIComponent(search.redirectTo)}` : '';
+      mockRouterState.location = { pathname: '/login', searchStr, hash: '', search: search ?? {} };
+    });
+
+    // StrictMode (on by default in Next dev) runs the effect twice with no render in between.
+    render(
+      <React.StrictMode>
+        <RestrictedPage>
+          <div>secret</div>
+        </RestrictedPage>
+      </React.StrictMode>
+    );
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/login',
+      search: { redirectTo: '/admin?tab=organizations' },
+    });
+  });
 });
 
 describe('RestrictedPage — requireEntitlement gate', () => {

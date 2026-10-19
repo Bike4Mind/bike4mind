@@ -63,11 +63,16 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
 
   // Handle redirects in useEffect to avoid setState during render
   useEffect(() => {
-    if (!currentUser && pathname !== '/login') {
+    // Read path, query and hash from ONE live snapshot, not the render-time `pathname`: once the
+    // /login navigation below starts, router.state.location already points at the pending
+    // /login?redirectTo=... URL, and a re-run that paired the stale pathname with that query
+    // would wrap redirectTo inside itself (/admin?redirectTo=%2Fadmin...).
+    const location = router.state.location;
+    if (!currentUser && location.pathname !== '/login') {
       const redirectTo = buildRedirectTo(
-        pathname,
-        router.state.location.searchStr,
-        router.state.location.hash ? `#${router.state.location.hash}` : ''
+        location.pathname,
+        location.searchStr,
+        location.hash ? `#${location.hash}` : ''
       );
       navigate({ to: '/login', search: redirectTo ? { redirectTo } : undefined });
       return;
