@@ -2,10 +2,11 @@ import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope, encodeAuditCursor, type AuditLogPage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensurePlatformAdmin, parseAuditListQuery } from '@server/utils/adminAuditQuery';
+import { parseAuditListQuery } from '@server/utils/adminAuditQuery';
+import { ensureAdmin } from '@server/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensurePlatformAdmin(req.user);
+  ensureAdmin(req.user?.isAdmin);
   const { filters, limit, cursor } = parseAuditListQuery(req.query);
 
   const { entries, nextCursor } = await adminAuditLogRepository.list(filters, { limit, cursor });

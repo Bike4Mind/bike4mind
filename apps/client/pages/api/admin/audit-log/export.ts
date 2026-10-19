@@ -12,8 +12,8 @@ import { toCsv } from '@client/app/utils/csv';
 import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { stageAdminAuditExport } from '@server/utils/adminAuditExportStorage';
-import { ensurePlatformAdmin, parseAuditExportQuery } from '@server/utils/adminAuditQuery';
-import { InternalServerError } from '@server/utils/errors';
+import { parseAuditExportQuery } from '@server/utils/adminAuditQuery';
+import { ensureAdmin, InternalServerError } from '@server/utils/errors';
 
 const EXPORT_PAGE_SIZE = 1000;
 
@@ -82,7 +82,7 @@ const stageExportOrThrow = async (csv: string, fileName: string, rowCount: numbe
 };
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensurePlatformAdmin(req.user);
+  ensureAdmin(req.user?.isAdmin);
   const filters = parseAuditExportQuery(req.query);
 
   const { entries, truncated } = await collectEntries(filters);

@@ -1,11 +1,10 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensurePlatformAdmin } from '@server/utils/adminAuditQuery';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensurePlatformAdmin(req.user);
+  ensureAdmin(req.user?.isAdmin);
 
   const { id } = req.query;
   if (typeof id !== 'string') throw new BadRequestError('Invalid audit entry id');

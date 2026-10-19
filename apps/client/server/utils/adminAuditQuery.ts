@@ -1,14 +1,9 @@
 import { AuditLogFiltersSchema, decodeAuditCursor, type AuditLogCursor, type AuditLogFilters } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError } from '@server/utils/errors';
 
 const DEFAULT_LIMIT = 50;
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 100;
-
-/** requiredScopes only gates the API-key path, so every audit route also checks the user flag. */
-export const ensurePlatformAdmin = (user: { isAdmin?: boolean | null } | undefined): void => {
-  if (!user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-};
 
 /** Rejects repeated params rather than silently taking the first; empty values count as absent. */
 const readSingleValues = (query: unknown): Record<string, string> => {

@@ -1,8 +1,7 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope, AUDIT_SUMMARY_WINDOWS, type AuditSummary, type AuditSummaryWindow } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensurePlatformAdmin } from '@server/utils/adminAuditQuery';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 
 const DEFAULT_WINDOW_DAYS: AuditSummaryWindow = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -15,7 +14,7 @@ const parseWindow = (raw: unknown): AuditSummaryWindow => {
 };
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensurePlatformAdmin(req.user);
+  ensureAdmin(req.user?.isAdmin);
 
   const windowDays = parseWindow(req.query.window);
   const since = new Date(Date.now() - windowDays * DAY_MS);
