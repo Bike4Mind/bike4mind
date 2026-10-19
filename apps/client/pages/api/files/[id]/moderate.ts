@@ -4,13 +4,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import {
   claimModerationScan,
-  normalizeETag,
+  recordLandedObject,
   releaseModerationClaim,
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
 } from '@server/s3/moderationScan';
-import { getFilesStorage } from '@server/utils/storage';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
@@ -79,18 +78,19 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       return res.json({ moderationStatus: 'pending' });
     }
 
-    // Read before the bytes, so the verdict never names a newer version than it scanned. Without it
-    // the S3 event treats the verdict as covering an unknown version and rescans.
-    const eTag = normalizeETag(
-      await getFilesStorage()
-        .getMetadata(objectKey)
-        .then(
-          m => m.etag,
-          () => undefined
-        )
-    );
+    // Version reconciliation owns its compare-and-set. A separate HEAD followed by an unconditional
+    // version write in the claim could rewind a newer event's version while this request waited.
+    try {
+      await recordLandedObject(fabFile._id, objectKey);
+    } catch (error) {
+      req.logger.warn('On-demand moderation could not reconcile the current object; leaving it pending', {
+        fabFileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return res.json({ moderationStatus: 'pending' });
+    }
     let claimedAt = new Date();
-    const claimed = await claimModerationScan(fabFile._id, claimedAt, eTag);
+    const claimed = await claimModerationScan(fabFile._id, claimedAt);
     // Lost the claim: the S3 event (or an earlier call) owns the verdict and will land it.
     if (!claimed) return settleOnOwnerVerdict('claim lost');
 
@@ -109,8 +109,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
         await releaseModerationClaim(fabFile._id, claimedAt);
         await sleep(SCAN_RETRY_DELAY_MS);
         claimedAt = new Date();
-        if (!(await claimModerationScan(fabFile._id, claimedAt, eTag)))
-          return settleOnOwnerVerdict('claim lost on retry');
+        if (!(await claimModerationScan(fabFile._id, claimedAt))) return settleOnOwnerVerdict('claim lost on retry');
         result = await scan();
       }
       // The byte-sniffed type rides in the guarded write: the S3 handler persists it through its own

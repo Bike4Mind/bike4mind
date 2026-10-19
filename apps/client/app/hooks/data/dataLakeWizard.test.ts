@@ -134,6 +134,26 @@ describe('useBatchUpload onError', () => {
     useDataLakeWizardStore.getState().resetWizard();
   });
 
+  it('declares the actual uploaded bytes when the wizard size snapshot is stale', async () => {
+    installApiPostRouter();
+    seedWizardFile();
+    const [wizardFile] = useDataLakeWizardStore.getState().allFiles;
+    useDataLakeWizardStore.setState({ allFiles: [{ ...wizardFile, size: 999 }] });
+
+    const { result } = mountBatchUpload();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/files/generate-presigned-urls-batch',
+      expect.objectContaining({
+        files: [expect.objectContaining({ fileSize: wizardFile.file.size })],
+      })
+    );
+    expect(uploadFileToUrlMock).toHaveBeenCalledWith(expect.any(String), wizardFile.file, wizardFile.file.type);
+  });
+
   it('fails fast without ever calling the API when navigator.onLine is false', async () => {
     // Regression: previously the mutation's only defense against being offline was
     // whatever axios/the browser did with a timeout-less request - which, per manual

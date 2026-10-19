@@ -1,6 +1,6 @@
 import { adminSettingsRepository, FabFile, organizationRepository, User } from '@bike4mind/database';
 import { chargedBytes, StorageLimitError, type StorageChargeFields } from '@bike4mind/common';
-import { checkStorageLimitForFile, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { ILogger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
@@ -58,8 +58,10 @@ export const judgeLandedUpload = async (
     // before either is charged (the charge comes after the row is complete, and the user counter is
     // a load-modify-save), so the overshoot is bounded by those landings, each within MaxFileSize.
     if (owner) {
-      await checkStorageLimitForFile(owner, measuredSize - chargedBytes(row), row.organizationId ?? undefined, id =>
-        organizationRepository.findById(id)
+      await checkStorageLimitForOwner(
+        { user: owner, organizationId: row.organizationId ?? undefined },
+        measuredSize - chargedBytes(row),
+        id => organizationRepository.findById(id)
       );
     }
   } catch (error) {

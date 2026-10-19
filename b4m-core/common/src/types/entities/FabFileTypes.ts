@@ -478,6 +478,9 @@ export interface IFabFile {
    */
   moderationETag?: string;
 
+  /** Monotonic identity of moderation-version writes; distinguishes A -> B -> A from unchanged A. */
+  moderationRevision?: number;
+
   /**
    * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
    * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):

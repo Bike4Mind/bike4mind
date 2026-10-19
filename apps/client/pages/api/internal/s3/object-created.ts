@@ -6,7 +6,7 @@ import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage } from '@server/utils/storage';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
-import { normalizeETag, recordLandedObject } from '@server/s3/moderationScan';
+import { recordLandedObject } from '@server/s3/moderationScan';
 import { admitLandedUpload } from '@server/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
@@ -171,20 +171,9 @@ const handler = baseApi({ auth: false }).post(
       metadata.status = 'complete';
       await metadata.save();
 
-      // Same overwrite check as the hosted event (objectCreated.ts): a re-PUT of a judged object
-      // sends its verdict back to 'pending' before the scan below claims it.
-      // The row is already complete, so a failed HEAD must not 500 the webhook (see the charge below).
-      const eTag = normalizeETag(
-        record.s3?.object?.eTag ??
-          (await getFilesStorage()
-            .getMetadata(objectKey)
-            .then(head => head.etag)
-            .catch((err: unknown) => {
-              req.logger.error(`No eTag for ${objectKey}; overwrite check skipped`, err);
-              return undefined;
-            }))
-      );
-      if (eTag) await recordLandedObject(metadata._id, eTag);
+      // Reconcile against the current stored version before scanning. A failed HEAD or a competing
+      // reconciliation must retry, so an old event cannot reopen a newer terminal verdict.
+      await recordLandedObject(metadata._id, objectKey);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 
       // Charged from the stored object's size, never the row's client-claimed fileSize. The

@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: h.findOrganization },
   User: { findById: h.findUser },
 }));
-// Only the settings read is stubbed; getSettingsValue and checkStorageLimitForFile are real.
+// Only the settings read is stubbed; getSettingsValue and checkStorageLimitForOwner are real.
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingsMap: vi.fn(async () => h.settings),

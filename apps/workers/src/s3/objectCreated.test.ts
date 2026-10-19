@@ -16,9 +16,10 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   changeStorageSize: vi.fn(),
-  recordRejectedUploadBatch: vi.fn(),
-  withTransaction: vi.fn(),
   admit: vi.fn(),
+  recordRejectedUploadBatch: vi.fn(),
+  recordLandedObject: vi.fn(),
+  withTransaction: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -69,6 +70,11 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://test' }, fabFileChunkQueue: { url: 'http://sqs/chunk' } },
 }));
 
+vi.mock('@server/s3/moderationScan', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  recordLandedObject: h.recordLandedObject,
+}));
+
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
@@ -100,6 +106,8 @@ beforeEach(() => {
   h.claimFileStatus.mockResolvedValue(true);
   h.incrementCounter.mockResolvedValue({ uploadedFiles: 1 });
   h.admit.mockResolvedValue(true);
+  h.recordLandedObject.mockReset();
+  h.recordLandedObject.mockResolvedValue(undefined);
 });
 
 describe('objectCreated - measured-size gate', () => {
@@ -152,12 +160,22 @@ describe('objectCreated - overwrite of a judged object', () => {
 
     await run('uploads/report.pdf', undefined, 'etag-b');
 
-    expect(h.updateOne).toHaveBeenCalledWith({ _id: 'ff1', moderationETag: { $ne: 'etag-b' } }, expect.any(Array));
-    const recordCall = h.updateOne.mock.calls.findIndex(([filter]) => 'moderationETag' in filter);
-    expect(h.updateOne.mock.invocationCallOrder[recordCall]).toBeLessThan(
+    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
+    expect(h.recordLandedObject.mock.invocationCallOrder[0]).toBeLessThan(
       h.findOneAndUpdate.mock.invocationCallOrder[0]
     );
     expect(h.moderateUploadedFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('objectCreated - reconciliation failure', () => {
+  it('retries before scanning or charging when current object reconciliation fails', async () => {
+    h.findOne.mockResolvedValue(metadata({ status: 'complete', moderationStatus: 'blocked' }));
+    h.recordLandedObject.mockRejectedValueOnce(new Error('head unavailable'));
+    await expect(run()).rejects.toThrow('head unavailable');
+    expect(h.moderateUploadedFile).not.toHaveBeenCalled();
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });
 

@@ -207,7 +207,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   <Upload sx={{ mr: 1 }} />
                   File Upload
                 </Tab>
-                <Tab value="json" className="notebook-import-modal-tab">
+                <Tab value="json" className="notebook-import-modal-tab" data-testid="notebook-import-json-tab">
                   <DataObject sx={{ mr: 1 }} />
                   JSON Data
                 </Tab>
@@ -271,6 +271,7 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                   <FormLabel>JSON Data</FormLabel>
                   <Textarea
                     className="notebook-import-modal-textarea"
+                    slotProps={{ textarea: { 'data-testid': 'notebook-import-json-input' } }}
                     minRows={8}
                     maxRows={12}
                     placeholder="Paste your exported notebook JSON data here..."

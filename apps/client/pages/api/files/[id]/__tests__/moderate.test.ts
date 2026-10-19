@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   scan: vi.fn(),
   writeVerdict: vi.fn(),
   getMetadata: vi.fn(),
+  reconcile: vi.fn(),
   sendToClient: vi.fn(),
   sleep: vi.fn(),
   baseApiOptions: undefined as unknown,
@@ -27,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateO
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: h.getMetadata }) }));
 vi.mock('@server/s3/moderationScan', () => ({
   claimModerationScan: h.claim,
+  recordLandedObject: h.reconcile,
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   releaseModerationClaim: h.release,
   scanUploadedObject: h.scan,
@@ -77,6 +79,8 @@ describe('POST /api/files/[id]/moderate', () => {
     h.scan.mockResolvedValue({ moderationStatus: 'clean' });
     h.writeVerdict.mockResolvedValue(true);
     h.getMetadata.mockResolvedValue({ etag: '"etag-a"' });
+    h.reconcile.mockReset();
+    h.reconcile.mockResolvedValue(undefined);
     h.release.mockResolvedValue(undefined);
     h.updateOne.mockResolvedValue(undefined);
     h.sendToClient.mockResolvedValue(undefined);
@@ -119,28 +123,30 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'clean' });
   });
 
+  it('reconciles the current version before claiming without rewriting its ETag', async () => {
+    await handler(makeReq(), makeRes());
+    expect(h.reconcile).toHaveBeenCalledWith('oid1', 'masks/m.png');
+    expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date));
+    expect(h.reconcile.mock.invocationCallOrder[0]).toBeLessThan(h.claim.mock.invocationCallOrder[0]);
+  });
+
+  it('logs and leaves the file pending when its current version cannot be reconciled', async () => {
+    h.reconcile.mockRejectedValueOnce(new Error('head failed'));
+    const res = makeRes();
+    const req = makeReq();
+    await handler(req, res);
+    expect(h.claim).not.toHaveBeenCalled();
+    expect(h.scan).not.toHaveBeenCalled();
+    expect(h.writeVerdict).not.toHaveBeenCalled();
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not reconcile'), expect.anything());
+    expect(res.body).toEqual({ moderationStatus: 'pending' });
+  });
+
   it('scans the file row itself, so a marked upload reaches the constraint in scanUploadedObject', async () => {
     const marked = file({ sourceMetadata: { uploadedVia: 'ai-generate-key-upload' } });
     h.findById.mockResolvedValue(marked);
     await handler(makeReq(), makeRes());
     expect(h.scan).toHaveBeenCalledWith(expect.objectContaining({ fabFile: marked }));
-  });
-
-  it('claims under the ETag it read before scanning, so the S3 event does not rescan that version', async () => {
-    await handler(makeReq(), makeRes());
-
-    expect(h.getMetadata).toHaveBeenCalledWith('masks/m.png');
-    expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date), 'etag-a');
-    expect(h.getMetadata.mock.invocationCallOrder[0]).toBeLessThan(h.scan.mock.invocationCallOrder[0]);
-  });
-
-  it('still scans when the ETag cannot be read, leaving the version unknown', async () => {
-    h.getMetadata.mockRejectedValue(new Error('head failed'));
-    const res = makeRes();
-    await handler(makeReq(), res);
-
-    expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date), undefined);
-    expect(res.body).toEqual({ moderationStatus: 'clean' });
   });
 
   it('reports a blocked verdict with its reason', async () => {

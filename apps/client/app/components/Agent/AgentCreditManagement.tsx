@@ -422,7 +422,9 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
           <Typography sx={{ fontSize: '12px', fontWeight: 500, color: 'primary.solidBg' }}>
             {useOwnCredits
               ? 'This agent will use its own credits for all operations instead of deducting from your account.'
-              : "Currently using YOUR credits for this agent's operations. Switch to \"Agent's own credits balance\" above to use the agent's credits instead."}
+              : sourceLocked
+                ? 'This agent uses your account credits. The credit source is fixed when the agent is created.'
+                : 'This agent will use your account credits. Select "Agent\'s own credits balance" above to use the agent\'s credits instead.'}
           </Typography>
         </Box>
       )}

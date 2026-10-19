@@ -109,6 +109,32 @@ describe('RekognitionImageModerationService.checkImage - animated images', () =>
     await expect(service.checkImage(fixture(name), 'image/gif')).rejects.toThrow(ImageModerationBlockedError);
   });
 
+  it('blocks an APNG whose separate fallback poster is flagged while every animation frame is clean', async () => {
+    // Encoded independently with Python's struct/zlib: red default IDAT image, then two white
+    // animation frames. Its first fcTL follows IDAT, so the poster is not animation frame 0.
+    const bytes = fixture('fallback-poster.png');
+    // APNG-unaware viewers show the original IDAT poster. Only that image is flagged; the
+    // animation itself is clean, so omitting the poster from moderation must fail this test.
+    const send = vi.fn(async (command: DetectModerationLabelsCommand) => ({
+      ModerationLabels: Buffer.from(command.input.Image!.Bytes!).equals(bytes)
+        ? [{ Name: 'Explicit', ParentName: '', Confidence: EXPLICIT_NUDITY_CONFIDENCE + 1 }]
+        : [],
+    }));
+    const service = new RekognitionImageModerationService(Logger.globalInstance, {
+      send,
+    } as unknown as RekognitionClient);
+
+    await expect(service.checkImage(bytes, 'image/png')).rejects.toThrow(ImageModerationBlockedError);
+    expect(send.mock.calls.some(([command]) => Buffer.from(command.input.Image!.Bytes!).equals(bytes))).toBe(true);
+
+    const frames = await extractAnimationFrames(bytes);
+    expect(frames).toHaveLength(3);
+    expect(frames![0]).toEqual(bytes);
+    for (const frame of frames!.slice(1)) {
+      expect(await fullyRed(frame)).toBe(false);
+    }
+  });
+
   it('blocks an animated WebP when only a later frame is flagged', async () => {
     const flagged = (await extractAnimationFrames(fixture('keyframes.webp')))![2];
     const send = vi.fn(async (command: DetectModerationLabelsCommand) => ({

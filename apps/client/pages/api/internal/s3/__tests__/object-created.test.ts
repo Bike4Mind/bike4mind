@@ -350,26 +350,25 @@ describe('POST /api/internal/s3/object-created', () => {
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5, eTag: 'etag-b' }), makeRes());
     await vi.waitFor(() => expect(moderateFilesMock).toHaveBeenCalled());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'etag-b');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
     expect(recordLandedMock.mock.invocationCallOrder[0]).toBeLessThan(moderateFilesMock.mock.invocationCallOrder[0]);
   });
 
-  it('reads the ETag from storage when the notification omits it', async () => {
+  it('reconciles the current storage version when the notification omits its ETag', async () => {
     getMetadataMock.mockResolvedValue({ size: 5, etag: '"etag-c"' });
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'etag-c');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
   });
 
-  // The row is already complete by then, so a 500 would make a redelivery enqueue chunking twice.
-  it('still answers 200 and scans when the ETag read fails', async () => {
-    getMetadataMock.mockRejectedValue(new Error('minio down'));
-    const res = makeRes();
-    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), res);
-
-    expect(recordLandedMock).not.toHaveBeenCalled();
-    expect(moderateFilesMock).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
+  it('retries before scanning or charging when current-version reconciliation fails', async () => {
+    recordLandedMock.mockRejectedValueOnce(new Error('head unavailable'));
+    await expect(handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes())).rejects.toThrow(
+      'head unavailable'
+    );
+    expect(chargeMock).not.toHaveBeenCalled();
+    expect(moderateFilesMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
   it('does not scan or charge when the file has no metadata row', async () => {
