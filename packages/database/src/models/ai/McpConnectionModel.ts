@@ -356,6 +356,9 @@ function oauthTokenWrite(
   return { $set, $unset };
 }
 
+// A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
+const CONNECTABLE_FILTER = { $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] };
+
 const TOOL_APPROVAL_MODES: ReadonlySet<string> = new Set(MCP_TOOL_APPROVAL_MODES);
 const TOOL_STATES: ReadonlySet<string> = new Set(MCP_TOOL_STATES);
 
@@ -603,11 +606,21 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
           .map(([key, value]) => [key, (value as string).slice(0, MCP_CONNECTION_LIMITS.serverInfoFieldLength)])
       );
     }
+    if (update.markConnected) set.status = 'connected';
     // `null` also matches a document that never had the field, for both guards.
     const revisionFilter = update.expectedRevision === 0 ? { $in: [0, null] } : update.expectedRevision;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, toolsFingerprint: update.expectedFingerprint, toolsRevision: revisionFilter },
-      { $set: set, $inc: { toolsRevision: 1 } },
+      {
+        _id: id,
+        toolsFingerprint: update.expectedFingerprint,
+        toolsRevision: revisionFilter,
+        ...(update.markConnected ? CONNECTABLE_FILTER : {}),
+      },
+      {
+        $set: set,
+        $inc: { toolsRevision: 1 },
+        ...(update.markConnected ? { $unset: { lastError: 1, authChallenge: 1 } } : {}),
+      },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
@@ -716,11 +729,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
                 : {}),
             },
           };
-    // A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
-    const filter =
-      status === 'connected'
-        ? { _id: id, $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] }
-        : { _id: id };
+    const filter = status === 'connected' ? { _id: id, ...CONNECTABLE_FILTER } : { _id: id };
     const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
   }

@@ -504,6 +504,36 @@ describe('McpConnectionModel', () => {
       expect(updated?.tools[0]).toMatchObject({ name: 'create_issue', state: 'pending_review', enabled: false });
     });
 
+    it('updateDiscovery with markConnected connects and clears lastError and authChallenge in one write', async () => {
+      const created = await mcpConnectionRepository.create(
+        apiKeyConnection({ status: 'error', lastError: { code: 'timeout', message: 'slow', at: new Date() } })
+      );
+      await mcpConnectionRepository.setPendingAuth(created.id, { scope: 'tools.read', message: 'sign in' });
+      const updated = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a')],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+        markConnected: true,
+      });
+      expect(updated?.status).toBe('connected');
+      expect(updated?.lastError).toBeUndefined();
+      expect(updated?.authChallenge).toBeUndefined();
+
+      // An OAuth connection whose token was cleared does not match, like a lost compare-and-set.
+      const oauth = await mcpConnectionRepository.create(baseConnection({ slug: 'oauthy', status: 'needs_reconnect' }));
+      await mcpConnectionRepository.clearOAuthTokens(oauth.id, OWNER);
+      expect(
+        await mcpConnectionRepository.updateDiscovery(oauth.id, {
+          tools: [tool('a')],
+          fingerprint: 'fp-1',
+          expectedFingerprint: null,
+          expectedRevision: 0,
+          markConnected: true,
+        })
+      ).toBeNull();
+    });
+
     it('a discovery diffed against a stale fingerprint loses and leaves the review choices alone', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       await mcpConnectionRepository.updateDiscovery(created.id, {
@@ -1215,6 +1245,14 @@ describe('McpConnectionModel', () => {
       await expect(mcpConnectionRepository.createWithinUserCap(connectionNumber(3), 3)).rejects.toThrow(
         McpConnectionCapError
       );
+      expect(await mcpConnectionRepository.countForUser('user-1')).toBe(3);
+    });
+
+    it('lets an uncontended create under the cap through', async () => {
+      for (let n = 0; n < 2; n++) await mcpConnectionRepository.createWithinUserCap(connectionNumber(n), 3);
+      await expect(mcpConnectionRepository.createWithinUserCap(connectionNumber(2), 3)).resolves.toMatchObject({
+        slug: 'conn_2',
+      });
       expect(await mcpConnectionRepository.countForUser('user-1')).toBe(3);
     });
 

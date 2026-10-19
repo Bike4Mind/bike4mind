@@ -4,8 +4,10 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  McpConnectionCapError,
   McpConnectionSlugConflictError,
   NotFoundError,
+  TooManyRequestsError,
   isValidMcpConnectionSlug,
   toMcpApiKeyLast4,
   toMcpConnectionPublic,
@@ -13,6 +15,7 @@ import {
   type IMcpConnectionDocument,
   type IMcpConnectionPublic,
   type IMcpConnectionSummary,
+  type McpConnectionLastErrorInput,
   type McpConnectionOwner,
   type McpToolSettingsUpdate,
 } from '@bike4mind/common';
@@ -28,7 +31,12 @@ import type {
 import { prepareConnectionUrl } from './connectionUrl';
 import { evaluateConnectionPolicy, type CustomMcpContext } from './customMcpAccess';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
-import { describeRemoteMcpError, type InvokeRemoteMcpOptions } from './invokeRemoteMcp';
+import {
+  CustomMcpPolicyBlockedError,
+  CustomMcpUnavailableError,
+  describeRemoteMcpError,
+  type InvokeRemoteMcpOptions,
+} from './invokeRemoteMcp';
 
 /**
  * The custom MCP connection operations behind pages/api/mcp-connections/**. Every operation is
@@ -47,7 +55,8 @@ const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', 
 function audit(
   actor: ConnectionActor,
   action: string,
-  connection: Pick<IMcpConnectionDocument, 'id' | 'urlHost' | 'slug'>,
+  // A refused create has no id or slug yet.
+  connection: Pick<IMcpConnectionDocument, 'urlHost'> & Partial<Pick<IMcpConnectionDocument, 'id' | 'slug'>>,
   extra: Record<string, unknown> = {}
 ): IntegrationAuditLogger {
   return IntegrationAuditLogger.create({
@@ -112,25 +121,91 @@ function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {
   };
 }
 
-/** Probe and discover; a remote failure is already recorded on the connection, so it is not an error here. */
+/**
+ * What a failed probe means when the failure is operational rather than remote: the audit code
+ * (the real reason) and what to store on the connection, if anything. Undefined for a programmer
+ * error, which the probe rethrows.
+ */
+function operationalProbeFailure(
+  error: unknown
+): { auditCode: string; lastError?: McpConnectionLastErrorInput } | undefined {
+  if (error instanceof NotFoundError) return { auditCode: 'not_found' };
+  if (error instanceof CustomMcpPolicyBlockedError) {
+    return { auditCode: 'policy_blocked', lastError: { code: 'policy_blocked', message: error.message } };
+  }
+  if (error instanceof TooManyRequestsError) {
+    return {
+      auditCode: 'rate_limited',
+      lastError: { code: 'rate_limited', message: 'Too many calls to this server; try again in a minute' },
+    };
+  }
+  if (error instanceof CustomMcpUnavailableError) {
+    return { auditCode: 'circuit_open', lastError: { code: 'circuit_open', message: error.message } };
+  }
+  if (error instanceof ConflictError) {
+    const code = typeof error.additionalInfo?.code === 'string' ? error.additionalInfo.code : 'conflict';
+    return {
+      auditCode: code,
+      lastError: { code: 'discovery_failed', message: 'The tools changed while they were being read; refresh them' },
+    };
+  }
+  // Mongoose validation or cast failure while storing what the server listed.
+  if (error instanceof Error && (error.name === 'ValidationError' || error.name === 'CastError')) {
+    return {
+      auditCode: 'validation_failed',
+      lastError: { code: 'discovery_failed', message: 'The server listed tools that could not be stored' },
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Probe and discover. Runs after the connection is already written, so no operational failure is
+ * an error for the caller: a remote failure is already recorded on the connection, and any other
+ * (policy, rate limit, breaker, discovery conflict, storage validation) is recorded here with the
+ * real code in the audit. Only programmer errors are rethrown.
+ */
 async function probe(
   actor: ConnectionActor,
   connection: IMcpConnectionDocument,
   options: InvokeRemoteMcpOptions
-): Promise<DiscoveryOutcome | undefined> {
+): Promise<void> {
   const probeAudit = audit(actor, 'probe_result', connection);
   try {
     const outcome = await discoverConnectionTools(connection.id, actor.id, options);
     probeAudit.success({ toolCount: outcome.connection.tools.length });
-    return outcome;
   } catch (error) {
     if (error instanceof RemoteMcpError) {
       probeAudit.failure(error.code);
-      return undefined;
+      return;
     }
-    probeAudit.failure('internal_error');
-    throw error;
+    const failure = operationalProbeFailure(error);
+    if (!failure) {
+      probeAudit.failure('internal_error');
+      throw error;
+    }
+    probeAudit.failure(failure.auditCode);
+    if (!failure.lastError) return;
+    try {
+      await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError);
+    } catch (statusError) {
+      console.warn(`[connectionService] Could not record the probe failure on ${connection.id}:`, statusError);
+    }
   }
+}
+
+function assertPolicyAllows(
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  connection: Pick<IMcpConnectionDocument, 'urlHost'> & Partial<Pick<IMcpConnectionDocument, 'id' | 'slug'>>,
+  authKind: IMcpConnectionAuth['kind'],
+  url: string,
+  action: string
+): void {
+  const verdict = evaluateConnectionPolicy(context, { urlHost: connection.urlHost, authKind, url });
+  if (verdict.allowed) return;
+  audit(actor, action, connection, { policyVerdict: verdict.reason }).failure('policy_blocked');
+  throw new ForbiddenError(verdict.message, { code: 'policy_blocked', reason: verdict.reason });
 }
 
 /**
@@ -145,14 +220,7 @@ export async function createUserConnection(
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
   const prepared = prepareConnectionUrl(body.url, context.network);
-  const verdict = evaluateConnectionPolicy(context, {
-    urlHost: prepared.urlHost,
-    authKind: body.auth.kind,
-    url: prepared.url,
-  });
-  if (!verdict.allowed) {
-    throw new ForbiddenError(verdict.message, { code: 'policy_blocked', reason: verdict.reason });
-  }
+  assertPolicyAllows(actor, context, { urlHost: prepared.urlHost }, body.auth.kind, prepared.url, 'connection_created');
 
   const organizationId =
     actor.organizationId && context.organizationIds.includes(actor.organizationId) ? actor.organizationId : undefined;
@@ -183,6 +251,9 @@ export async function createUserConnection(
       created = await mcpConnectionRepository.createWithinUserCap({ ...base, slug }, context.maxConnectionsPerUser);
       break;
     } catch (error) {
+      if (error instanceof McpConnectionCapError) {
+        audit(actor, 'connection_created', { urlHost: prepared.urlHost }).failure('connection_limit');
+      }
       if (!(error instanceof McpConnectionSlugConflictError) || slug === candidates[candidates.length - 1]) throw error;
     }
   }
@@ -249,6 +320,9 @@ export async function updateUserConnection(
     ...(settings ? { tools: settings } : {}),
   });
   if (!connection) throw new NotFoundError('Connection not found');
+  if (body.enabled !== undefined) {
+    audit(actor, body.enabled ? 'connection_enabled' : 'connection_disabled', connection).success();
+  }
   if (settings) audit(actor, 'tool_review_saved', connection, { toolCount: settings.length }).success();
   return toPublicView(context, connection);
 }
@@ -266,6 +340,7 @@ export async function refreshUserConnectionTools(
 ): Promise<RefreshResult> {
   const connection = await mcpConnectionRepository.findByIdForOwner(id, userOwner(actor.id));
   if (!connection) throw new NotFoundError('Connection not found');
+  assertPolicyAllows(actor, context, connection, connection.auth.kind, connection.displayUrl, 'tools_refresh');
   let outcome: DiscoveryOutcome;
   try {
     outcome = await discoverConnectionTools(id, actor.id, { ...options, context });
@@ -295,6 +370,7 @@ export async function rotateUserConnectionApiKey(
   if (connection.auth.kind !== 'api_key' || !current) {
     throw new ConflictError('This connection does not use an API key', { code: 'not_api_key' });
   }
+  assertPolicyAllows(actor, context, connection, 'api_key', connection.displayUrl, 'api_key_rotated');
   const valueEnc = encryptToken(body.value);
   if (!valueEnc) throw new BadRequestError('API key is required');
   const rotated = await mcpConnectionRepository.setApiKey(id, owner, {

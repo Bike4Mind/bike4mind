@@ -124,6 +124,7 @@ const repo = vi.hoisted(() => ({
   findByIdForOwner: vi.fn(),
   listAllForUser: vi.fn(),
   updateSettings: vi.fn(),
+  setStatus: vi.fn(),
   setApiKey: vi.fn(),
   deleteForOwner: vi.fn(),
 }));
@@ -177,6 +178,12 @@ function installRepo(): void {
     const doc = h.store.get(id);
     if (!ownerMatches(doc, owner) || (doc!.auth as Doc['auth']).kind !== 'api_key') return null;
     return patch(id, owner, { auth: { kind: 'api_key', apiKey } });
+  });
+  repo.setStatus.mockImplementation(async (id: string, status: string, lastError?: Record<string, unknown>) => {
+    const doc = h.store.get(id);
+    if (!doc) return null;
+    Object.assign(doc, { status, lastError });
+    return defaultRead(doc);
   });
   repo.deleteForOwner.mockImplementation(async (id: string, owner: { ownerKey: string }) => {
     if (!ownerMatches(h.store.get(id), owner)) return false;
@@ -340,6 +347,44 @@ describe('POST /api/mcp-connections', () => {
     expect(result.status).toBe(201);
     expect(result.body).toMatchObject({ status: 'error', lastError: { code: 'timeout' }, auth: { kind: 'none' } });
     expect(h.audits).toContainEqual({ action: 'probe_result', outcome: 'failure:timeout' });
+  });
+
+  it('never fails a create after the write: an operational probe failure is recorded with its real code', async () => {
+    const { ConflictError } = await import('@bike4mind/common');
+    discover.mockRejectedValueOnce(new ConflictError('raced', { code: 'discovery_conflict' }));
+    const result = await createConnection();
+    expect(result.status).toBe(201);
+    expect(result.body).toMatchObject({ status: 'error', lastError: { code: 'discovery_failed' } });
+    expect(h.audits).toContainEqual({ action: 'probe_result', outcome: 'failure:discovery_conflict' });
+
+    const validation = Object.assign(new Error('tools: too long'), { name: 'ValidationError' });
+    discover.mockRejectedValueOnce(validation);
+    const stored = await createConnection({ url: 'https://mcp2.linear.app/mcp' });
+    expect(stored.status).toBe(201);
+    expect(h.audits).toContainEqual({ action: 'probe_result', outcome: 'failure:validation_failed' });
+
+    h.audits.length = 0;
+    discover.mockRejectedValueOnce(h.makeTooMany());
+    expect((await createConnection({ url: 'https://mcp3.linear.app/mcp' })).body).toMatchObject({
+      lastError: { code: 'rate_limited' },
+    });
+    expect(h.audits).toContainEqual({ action: 'probe_result', outcome: 'failure:rate_limited' });
+  });
+
+  it('still surfaces a programmer error from the probe', async () => {
+    discover.mockRejectedValueOnce(new TypeError('undefined is not a function'));
+    expect((await createConnection()).status).toBe(500);
+    expect(h.audits).toContainEqual({ action: 'probe_result', outcome: 'failure:internal_error' });
+  });
+
+  it('audits a create refused by policy or by the cap', async () => {
+    h.context = context({ platformBlockedHosts: ['*.linear.app'] });
+    expect((await createConnection()).status).toBe(403);
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:policy_blocked' });
+
+    h.context = context({ maxConnectionsPerUser: 0 });
+    expect((await createConnection()).status).toBe(409);
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:connection_limit' });
   });
 
   it('answers 403 with the switch off and writes nothing', async () => {
@@ -509,6 +554,9 @@ describe('/api/mcp-connections/[id]', () => {
       }
     );
     expect(h.audits).toContainEqual({ action: 'tool_review_saved', outcome: 'success' });
+    expect(h.audits).toContainEqual({ action: 'connection_disabled', outcome: 'success' });
+    await call(routes.item, { method: 'PATCH', id, body: { enabled: true } });
+    expect(h.audits).toContainEqual({ action: 'connection_enabled', outcome: 'success' });
   });
 
   it('PATCH binds a review to the version reviewed: missing is 400, unknown tool is 400, stale is 409', async () => {
@@ -572,6 +620,16 @@ describe('POST /api/mcp-connections/[id]/refresh-tools', () => {
     expect((await call(routes.refresh, { method: 'POST', id, user: OTHER })).status).toBe(404);
   });
 
+  it('re-checks the policy before refreshing', async () => {
+    const id = ((await createConnection()).body as { id: string }).id;
+    discover.mockClear();
+    h.context = context({ platformBlockedHosts: ['mcp.linear.app'] });
+    const blocked = await call(routes.refresh, { method: 'POST', id });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body).toMatchObject({ code: 'policy_blocked', reason: 'platform_blocked_host' });
+    expect(discover).not.toHaveBeenCalled();
+  });
+
   it('answers 403 with the switch off and holds refreshes to 20 an hour', async () => {
     const id = ((await createConnection()).body as { id: string }).id;
     h.context = context({ enabled: false });
@@ -623,6 +681,18 @@ describe('POST /api/mcp-connections/[id]/api-key', () => {
     expect(wrongKind.body).toMatchObject({ code: 'not_api_key' });
 
     expect((await call(routes.apiKey, { method: 'POST', id, body: { value: NEW_KEY }, user: OTHER })).status).toBe(404);
+  });
+
+  it('re-checks the policy before storing the new key', async () => {
+    const id = ((await createConnection()).body as { id: string }).id;
+    discover.mockClear();
+    h.context = context({ platformBlockedHosts: ['mcp.linear.app'] });
+    const blocked = await call(routes.apiKey, { method: 'POST', id, body: { value: NEW_KEY } });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body).toMatchObject({ code: 'policy_blocked', reason: 'platform_blocked_host' });
+    expect(repo.setApiKey).not.toHaveBeenCalled();
+    expect(discover).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'api_key_rotated', outcome: 'failure:policy_blocked' });
   });
 
   it('answers 403 with the switch off', async () => {

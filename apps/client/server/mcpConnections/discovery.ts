@@ -76,8 +76,9 @@ const nameSha256 = (name: string) => createHash('sha256').update(name, 'utf8').d
 /**
  * Fetches the server's tools through the dispatcher, cleans them, merges them into the stored list
  * (new or changed tools wait for review) and stores the result with the fingerprint-and-revision
- * compare-and-set. A loss re-reads and re-merges, so a review saved mid-discovery is kept. Marks
- * the connection connected. Remote failures propagate, already recorded on the connection.
+ * compare-and-set. A loss re-reads and re-merges, so a review saved mid-discovery is kept. The
+ * same write marks the connection connected and clears the stale error and auth challenge. Remote
+ * failures propagate, already recorded on the connection.
  */
 export async function discoverConnectionTools(
   connectionId: string,
@@ -110,6 +111,8 @@ export async function discoverConnectionTools(
       detectedTransport: listed.detectedTransport,
       serverInfo,
       dropped,
+      // An OAuth connection whose token was cleared stays as it is; the tools are still stored.
+      markConnected: current.auth?.kind !== 'oauth' || current.auth.oauth?.hasAccessToken === true,
     });
     if (!stored) continue;
 
@@ -126,11 +129,7 @@ export async function discoverConnectionTools(
       droppedCount: dropped,
       changedCount: added.length + changed.length,
     });
-    const connection =
-      stored.status === 'connected'
-        ? stored
-        : ((await mcpConnectionRepository.setStatus(connectionId, 'connected')) ?? stored);
-    return { connection, added, changed, removed: merged.removed, dropped };
+    return { connection: stored, added, changed, removed: merged.removed, dropped };
   }
   throw new ConflictError('The tools changed while they were being refreshed; try again', {
     code: 'discovery_conflict',

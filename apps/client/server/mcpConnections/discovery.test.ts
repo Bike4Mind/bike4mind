@@ -12,6 +12,9 @@ interface StoredConnection {
   tools: IMcpConnectionTool[];
   toolsFingerprint?: string;
   toolsRevision?: number;
+  auth?: { kind: string; oauth?: { hasAccessToken?: boolean } };
+  lastError?: unknown;
+  authChallenge?: unknown;
 }
 
 const state = vi.hoisted(() => ({
@@ -41,6 +44,11 @@ const repo = vi.hoisted(() => ({
       toolsFingerprint: update.fingerprint,
       toolsRevision: (doc.toolsRevision ?? 0) + 1,
     });
+    if (update.markConnected) {
+      doc.status = 'connected';
+      delete doc.lastError;
+      delete doc.authChallenge;
+    }
     return structuredClone(doc);
   }),
   setStatus: vi.fn(async (_id: string, status: string) => {
@@ -210,5 +218,31 @@ describe('discoverConnectionTools', () => {
       droppedCount: 1,
       reasons: ['storage_cap'],
     });
+  });
+
+  it('marks connected and clears the stale error and challenge in the discovery write itself', async () => {
+    Object.assign(state.doc!, {
+      status: 'error',
+      lastError: { code: 'timeout', message: 'slow' },
+      authChallenge: { scope: 'x', at: new Date() },
+    });
+    state.listed = listed([{ name: 'search', description: 'Search' }]);
+    const outcome = await discoverConnectionTools('c1', 'user-1');
+
+    expect(repo.updateDiscovery).toHaveBeenCalledWith('c1', expect.objectContaining({ markConnected: true }));
+    expect(repo.setStatus).not.toHaveBeenCalled();
+    expect(outcome.connection.status).toBe('connected');
+    expect(state.doc).not.toHaveProperty('lastError');
+    expect(state.doc).not.toHaveProperty('authChallenge');
+  });
+
+  it('stores the tools but does not mark an OAuth connection without a token connected', async () => {
+    state.doc!.auth = { kind: 'oauth', oauth: { hasAccessToken: false } };
+    state.listed = listed([{ name: 'search', description: 'Search' }]);
+    const outcome = await discoverConnectionTools('c1', 'user-1');
+
+    expect(repo.updateDiscovery).toHaveBeenCalledWith('c1', expect.objectContaining({ markConnected: false }));
+    expect(outcome.connection.status).toBe('pending_auth');
+    expect(state.doc!.tools.map(t => t.name)).toEqual(['search']);
   });
 });

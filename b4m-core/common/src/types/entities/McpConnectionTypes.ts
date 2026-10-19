@@ -161,6 +161,9 @@ export const MCP_CONNECTION_ERROR_CODES = [
   'policy_blocked',
   'invalid_grant',
   'insufficient_scope',
+  'rate_limited',
+  'circuit_open',
+  'discovery_failed',
 ] as const;
 export type McpConnectionErrorCode = (typeof MCP_CONNECTION_ERROR_CODES)[number];
 
@@ -571,6 +574,12 @@ export interface McpDiscoveryUpdate {
   detectedTransport?: McpConnectionDetectedTransport;
   serverInfo?: IMcpConnectionServerInfo;
   dropped?: number;
+  /**
+   * Also mark the connection `connected` and clear `lastError` and `authChallenge`, in the same
+   * guarded write. Adds the `setStatus('connected')` guard: an OAuth connection with no access
+   * token does not match, so the write resolves null like a lost compare-and-set.
+   */
+  markConnected?: boolean;
 }
 
 /** A rotated API key; the caller encrypts the value and derives `last4`. */
