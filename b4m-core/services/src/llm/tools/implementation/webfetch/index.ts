@@ -348,10 +348,11 @@ export const webFetchTool: ToolDefinition = {
           },
         };
 
+        const citables = context.registerCitables ? context.registerCitables([citable]) : [citable];
         await context.statusUpdate(
           {
             promptMeta: {
-              citables: [citable],
+              citables,
             },
           },
           'WebFetch completed successfully'
@@ -361,7 +362,9 @@ export const webFetchTool: ToolDefinition = {
 
         // Surface truncation in-band (with the next offset to continue) so the model reasons
         // about incompleteness rather than assuming it received the whole page.
-        return webFetchBody(result);
+        const citationIndex = citables[0]?.metadata?.citationIndex;
+        const body = webFetchBody(result);
+        return citationIndex === undefined ? body : `Source [${citationIndex}]\n\n${body}`;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 

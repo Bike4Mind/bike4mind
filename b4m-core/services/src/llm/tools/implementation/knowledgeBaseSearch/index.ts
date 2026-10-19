@@ -147,11 +147,14 @@ function formatSemanticResults(
   scan?: SemanticSearchScanAccounting,
   skipNotice?: SkipNotice | null,
   logger?: Logger,
-  bounding?: { budgetBound: boolean; droppedCount: number }
+  bounding?: { budgetBound: boolean; droppedCount: number },
+  citables: CitableSource[] = []
 ): string {
+  const citationIndices = new Map(citables.map(source => [source.id, source.metadata?.citationIndex]));
   let clippedCount = 0;
   let longestChars = 0;
   const blocks = results.map((r, i) => {
+    const citationIndex = citationIndices.get(r.fileId);
     // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
     // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     longestChars = Math.max(longestChars, r.chunkText.trim().length);
@@ -170,7 +173,7 @@ function formatSemanticResults(
     // parenthetical rather than folded into it - the leading tokens of this shape are what
     // defangRetrievedContent matches on. Never from `createdAt` (#3047).
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
+      `${citationIndex !== undefined ? `[${citationIndex}]` : `${i + 1}.`} **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
       text
     );
   });
@@ -446,7 +449,7 @@ async function emitSemanticCitables(
    * concept (agent-scoped), which leaves the field off so the chip is not mislabelled as library.
    */
   originLakes?: ResolvedLakeAccess[]
-): Promise<void> {
+): Promise<CitableSource[]> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article).
   // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
   // and that is the passage chunkId/fullContext anchor the reader is deep-linked to.
@@ -487,6 +490,7 @@ async function emitSemanticCitables(
       },
     });
   }
+  const registeredCitables = context.registerCitables?.(citables) ?? citables;
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than a second update, which would read as a bug.
@@ -507,7 +511,7 @@ async function emitSemanticCitables(
     // does not narrow to this literal. Pre-existing pattern in this file.
     {
       promptMeta: {
-        citables,
+        citables: registeredCitables,
         ...(skipNotice ? { warnings: [skipNotice.text] } : {}),
         retrieval: {
           attempted: true,
@@ -525,6 +529,7 @@ async function emitSemanticCitables(
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
+  return registeredCitables;
 }
 
 /**
@@ -790,7 +795,7 @@ async function trySemanticKbSearch(
     // One pass over the served passages, feeding the chips below and the model's note further down,
     // so the reader is marked with exactly the conflicts the model is warned about (#3041).
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citables = await emitSemanticCitables(
       context,
       ranked,
       'the data lake',
@@ -825,7 +830,8 @@ async function trySemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citables
       ),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
@@ -947,7 +953,7 @@ async function tryScopedSemanticKbSearch(
     const ranked = bound.kept;
     // Same single pass as the owner-scoped arm above; see its comment.
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citables = await emitSemanticCitables(
       context,
       ranked,
       "this agent's knowledge base",
@@ -976,7 +982,8 @@ async function tryScopedSemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citables
       ),
       skipNotice,
       datalakeTags: [],
@@ -1137,7 +1144,8 @@ interface KnowledgeBaseSearchParams {
  * at all - which is worse than the delimited case, not better. No untrusted block wraps this: it
  * returns no document text, and the block would say "this is data" about our own listing.
  */
-function formatSearchResults(files: IFabFileDocument[]): string {
+function formatSearchResults(files: IFabFileDocument[], citables: CitableSource[] = []): string {
+  const citationIndices = new Map(citables.map(source => [source.id, source.metadata?.citationIndex]));
   if (files.length === 0) {
     return 'No documents found matching your search query in your knowledge base.';
   }
@@ -1152,7 +1160,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
     const pipeline = stall ? `\n   Pipeline: ${stall}` : '';
 
     return (
-      `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
+      `${citationIndices.get(file.id) !== undefined ? `[${citationIndices.get(file.id)}]` : `${index + 1}.`} **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
       `   Tags: ${tags}${pipeline}${notes}`
     );
@@ -1555,6 +1563,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // whole IFabFileDocuments by a metadata-only proxy (see the note above the ranking). No
           // chunk was scored, so there is no cited passage to deep-link to - a chunk anchor here
           // could only be a guess, and the reader lands on the whole document, which is honest.
+          let registeredCitables: CitableSource[] = [];
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
               const fileTagNames = file.tags?.map(t => t.name) || [];
@@ -1586,6 +1595,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
               };
             });
 
+            registeredCitables = context.registerCitables?.(citables) ?? citables;
+
             // Surface what we FOUND in the live status (not just "searching") so the user
             // watches the agent work the data lake. Clean up the raw "[Category] 01 Name.md"
             // filenames into readable titles for the status line.
@@ -1616,7 +1627,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             await context.statusUpdate(
               {
                 promptMeta: {
-                  citables,
+                  citables: registeredCitables,
                   ...(semantic.skipNotice ? { warnings: [semantic.skipNotice.text] } : {}),
                   retrieval: {
                     attempted: true,
@@ -1692,7 +1703,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           }
 
           return (
-            formatSearchResults(rankedResults) +
+            formatSearchResults(rankedResults, registeredCitables) +
             formatSkipNotice(semantic.skipNotice) +
             attachmentInlineNotice(context, rankedResults)
           );

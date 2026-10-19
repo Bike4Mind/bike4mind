@@ -477,6 +477,34 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     });
   }
 
+  it.each([false, true])('uses registered document numbers for repeated passages (scoped: %s)', async scoped => {
+    const results = [
+      hit,
+      { ...hit, chunkId: 'c2', fileId: 'f2', fileName: 'Policy.pdf', score: 0.8 },
+      { ...hit, chunkId: 'c3', chunkText: 'another handbook passage', score: 0.79 },
+    ];
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map(source => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: source.id === 'f1' ? 4 : 6 },
+      }))
+    );
+    const context = semanticContext({
+      registerCitables,
+      ...(scoped ? { kbScope: { fileIds: ['f1', 'f2'] } as never } : {}),
+    });
+    const search = scoped ? fileScopedSemanticSearchMock : semanticDataLakeSearchMock;
+    search.mockResolvedValue({ ...emptySemanticResult(), results, scan: scanOf({}) });
+
+    const output = await run(context);
+
+    expect(registerCitables).toHaveBeenCalledOnce();
+    expect(registerCitables.mock.calls[0][0].map(source => source.id)).toEqual(['f1', 'f2']);
+    expect(output.match(/\[4\] \*\*Handbook/g)).toHaveLength(2);
+    expect(output).toContain('[6] **Policy**');
+    expect(emittedCitables(context).map(source => source.metadata?.citationIndex)).toEqual([4, 6]);
+  });
+
   it('unscoped arm: a truncated scan warns the model not to claim the library holds nothing more', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       results: [hit],
@@ -4137,5 +4165,23 @@ describe('search_knowledge_base chip source origin', () => {
     expect(citables).toHaveLength(1);
     expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
     expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('search_knowledge_base registered catalog citations', () => {
+  it('uses the registered offset and reuses it across overlapping searches', async () => {
+    const context = makeContext({
+      registerCitables: sources =>
+        sources.map(source => ({
+          ...source,
+          metadata: { ...source.metadata, citationIndex: 5 },
+        })),
+    });
+    const tool = knowledgeBaseSearchTool.implementation(context, undefined);
+    const first = await tool.toolFn({ query: 'retired notes' });
+    const second = await tool.toolFn({ query: 'retired notes' });
+    expect(first).toContain('[5] **Clean retired notes.pdf**');
+    expect(second).toContain('[5] **Clean retired notes.pdf**');
+    expect(emittedCitables(context).map(source => source.metadata?.citationIndex)).toEqual([5]);
   });
 });

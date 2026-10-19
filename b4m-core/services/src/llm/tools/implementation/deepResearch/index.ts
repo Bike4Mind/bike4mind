@@ -1,4 +1,4 @@
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, type CitableSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
@@ -76,6 +76,28 @@ export interface ResearchState {
   endTime?: number;
   failedAttempts: number;
   maxFailedAttempts: number;
+}
+
+function isResearchSourceUrl(source: string): boolean {
+  try {
+    const url = new URL(source);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function researchCitables(state: ResearchState): CitableSource[] {
+  const titles = new Map(state.sources.map(source => [source.url, source.title]));
+  const urls = [...new Set(state.findings.map(finding => finding.source).filter(isResearchSourceUrl))];
+  return urls.map(url => ({
+    id: url,
+    type: 'web_url',
+    title: titles.get(url) || url,
+    url,
+    status: 'complete',
+    metadata: { sourceSystem: 'deep_research' },
+  }));
 }
 
 export async function performDeepResearch(
@@ -520,12 +542,32 @@ export async function performDeepResearch(
       depth: state.depth,
     });
 
+    const citables = context.registerCitables ? context.registerCitables(researchCitables(state)) : [];
+    if (citables.length > 0) {
+      await context.statusUpdate({ promptMeta: { citables } });
+    }
+    const citationIndices = new Map(citables.map(source => [source.url, source.metadata?.citationIndex]));
+    const numberedSources = citables
+      .filter(source => source.metadata?.citationIndex !== undefined)
+      .map(source => `[${source.metadata?.citationIndex}] ${source.title}: ${source.url}`)
+      .join('\n');
+    const findingsText = state.findings
+      .map(finding => {
+        const citationIndex = citationIndices.get(finding.source);
+        const sourceLabel = citationIndex === undefined ? `[From ${finding.source}]` : `[${citationIndex}]`;
+        return `${sourceLabel}: ${finding.text}`;
+      })
+      .join('\n');
+    const citationInstruction = numberedSources
+      ? 'Cite the numbered sources inline with [N] markers matching the source numbers below for every section.'
+      : 'Include citations to sources with links for every section.';
+    const sourceMapping = numberedSources ? `\nSources:\n${numberedSources}\n` : '';
     const finalAnalysisPrompt = `Create a comprehensive long analysis of ${topic} based on these findings:
-              ${state.findings.map(f => `[From ${f.source}]: ${f.text}`).join('\n')}
+              ${findingsText}
               ${state.summaries.map(s => `[Summary]: ${s}`).join('\n')}
               Provide all the thoughts processes including findings details,key insights, conclusions, and any remaining uncertainties. 
-              Include citations to sources with links for every section. This analysis should be very comprehensive and full of details. 
-              It is expected to be very long, detailed and comprehensive.`;
+              ${citationInstruction} This analysis should be very comprehensive and full of details.
+              It is expected to be very long, detailed and comprehensive.${sourceMapping}`;
 
     addActivity({
       type: 'synthesis',

@@ -1,11 +1,67 @@
 import { describe, it, expect } from 'vitest';
-import type { IChatHistoryItemDocument } from '@bike4mind/common';
-import { applyQuestStatusChanges } from './ToolBuilder';
+import type { CitableSource, IChatHistoryItemDocument } from '@bike4mind/common';
+import { applyQuestStatusChanges, registerQuestCitables } from './ToolBuilder';
 
 // Minimal quest factory - only the fields applyQuestStatusChanges touches matter.
 function makeQuest(overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument {
   return { id: 'q1', sessionId: 's1', ...overrides } as IChatHistoryItemDocument;
 }
+
+describe('registerQuestCitables', () => {
+  const source = (id: string): CitableSource => ({ id, type: 'web_url', title: id, url: `https://example.com/${id}` });
+
+  it('deduplicates the first batch when the quest has no prompt metadata', () => {
+    const quest = makeQuest();
+    expect(
+      registerQuestCitables(quest, [source('a'), source('a')], 'user-1').map(c => c.metadata?.citationIndex)
+    ).toEqual([1, 1]);
+    expect(
+      registerQuestCitables(quest, [source('b'), source('a')], 'user-1').map(c => c.metadata?.citationIndex)
+    ).toEqual([2, 1]);
+    expect(quest.promptMeta?.citables?.map(c => [c.id, c.metadata?.citationIndex])).toEqual([
+      ['a', 1],
+      ['b', 2],
+    ]);
+  });
+
+  it('reserves numbers before async status updates and reuses overlapping sources', async () => {
+    const quest = makeQuest({ promptMeta: { citables: [{ ...source('forced'), metadata: { citationIndex: 1 } }] } });
+    const first = registerQuestCitables(quest, [source('a'), source('a')], 'user-1');
+    const second = registerQuestCitables(quest, [source('b'), source('a')], 'user-1');
+    expect(first.map(c => c.metadata?.citationIndex)).toEqual([2, 2]);
+    expect(second.map(c => c.metadata?.citationIndex)).toEqual([3, 2]);
+    // Status delivery can finish in the opposite order to number reservation.
+    await Promise.all([
+      Promise.resolve().then(() => applyQuestStatusChanges(quest, { promptMeta: { citables: second } }, 'user-1')),
+      Promise.resolve().then(() => applyQuestStatusChanges(quest, { promptMeta: { citables: first } }, 'user-1')),
+    ]);
+    expect(quest.promptMeta?.citables?.map(c => [c.id, c.metadata?.citationIndex])).toEqual([
+      ['forced', 1],
+      ['a', 2],
+      ['b', 3],
+    ]);
+  });
+
+  it('keeps a reserved number when a passage anchor replaces a file chip', () => {
+    const quest = makeQuest();
+    registerQuestCitables(quest, [source('a')], 'user-1');
+    const anchored = { ...source('a'), metadata: { fullContext: 'Selected passage', conflictsWith: ['other'] } };
+    registerQuestCitables(quest, [anchored], 'user-1');
+    expect(quest.promptMeta?.citables).toEqual([{ ...anchored, metadata: { ...anchored.metadata, citationIndex: 1 } }]);
+    expect(anchored.metadata).not.toHaveProperty('citationIndex');
+  });
+
+  it('scopes numbering to the quest and uses URL or title when id is absent', () => {
+    const first = makeQuest();
+    const second = makeQuest();
+    const urlOnly: CitableSource = { id: '', type: 'web_url', title: 'Page', url: 'https://example.com' };
+    const titleOnly: CitableSource = { id: '', type: 'document', title: 'Document' };
+    expect(
+      registerQuestCitables(first, [urlOnly, titleOnly, urlOnly], 'user-1').map(c => c.metadata?.citationIndex)
+    ).toEqual([1, 2, 1]);
+    expect(registerQuestCitables(second, [source('b')], 'user-1')[0].metadata?.citationIndex).toBe(1);
+  });
+});
 
 describe('applyQuestStatusChanges', () => {
   describe('generationJobs', () => {

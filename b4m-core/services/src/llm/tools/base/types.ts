@@ -28,6 +28,7 @@ import {
   ILakeMembershipChangeEventRepository,
   ModelInfo,
   type AuthOrigin,
+  type CitableSource,
 } from '@bike4mind/common';
 
 /**
@@ -72,6 +73,8 @@ export type ToolLlmUsage = {
 };
 
 export interface ToolContext {
+  /** Reserves turn-wide citation numbers before tool output is formatted. Synchronous across parallel calls. */
+  registerCitables?: (citables: CitableSource[]) => CitableSource[];
   /** The only principal signal a tool call carries - identical whether this turn is a live chat
    * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
    * record every ToolContext-driven read as principalKind: 'user' for this reason; distinguishing

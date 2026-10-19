@@ -68,13 +68,17 @@ function makeContext(statusUpdate: ToolContext['statusUpdate']) {
   } as unknown as ToolContext;
 }
 
-async function runTool(url = 'https://example.com/doc', offset?: number) {
+async function runTool(
+  url = 'https://example.com/doc',
+  offset?: number,
+  registerCitables?: ToolContext['registerCitables']
+) {
   const citables: CitableSource[] = [];
   const statusUpdate = vi.fn(async (q: Parameters<ToolContext['statusUpdate']>[0]) => {
     const emitted = q?.promptMeta?.citables as CitableSource[] | undefined;
     if (emitted) citables.push(...emitted);
   });
-  const context = makeContext(statusUpdate);
+  const context = { ...makeContext(statusUpdate), registerCitables };
   const result = await webFetchTool.implementation(context, {}).toolFn({ url, offset });
   return { result: result as string, citable: citables[0] };
 }
@@ -87,6 +91,25 @@ beforeEach(() => {
   dnsLookup.mockImplementation(async () => [{ address: '93.184.216.34', family: 4 }]);
   mockCreateApp.mockClear();
   mockPlainFetch.mockClear();
+});
+
+describe('web_fetch citation numbering', () => {
+  it('emits the registered index with the page and preserves it on repeated fetches', async () => {
+    scrapeMarkdown = 'The page content.';
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map(source => ({ ...source, metadata: { ...source.metadata, citationIndex: 6 } }))
+    );
+
+    const first = await runTool('https://example.com/doc', undefined, registerCitables);
+    const repeated = await runTool('https://example.com/doc', undefined, registerCitables);
+
+    expect(registerCitables).toHaveBeenCalledTimes(2);
+    for (const { result, citable } of [first, repeated]) {
+      expect(result).toBe('Source [6]\n\nThe page content.');
+      expect(citable.metadata?.citationIndex).toBe(6);
+      expect(citable.id).toBe('https://example.com/doc');
+    }
+  });
 });
 
 describe('truncationMarker', () => {

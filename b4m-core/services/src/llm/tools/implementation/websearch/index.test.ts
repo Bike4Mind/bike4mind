@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { verifyImageUrlSignature } from '@bike4mind/common';
+import { verifyImageUrlSignature, type CitableSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import {
@@ -480,6 +480,56 @@ describe('performWebSearch - place handling', () => {
     mockGetProvider.mockResolvedValue('serpapi');
   };
 
+  it('uses registered turn indices for web hits, places and the anchor across repeated searches', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')], mapsPlace('ChIJanchor', 'Hotel'));
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map((source, index) => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: index + 7 },
+      }))
+    );
+    const params = { query: 'dinner', include_places: true, anchor_location: 'citizenM Copenhagen' };
+
+    const first = await performWebSearch(mockAdapters, params, TEST_SECRET, undefined, registerCitables);
+    const repeated = await performWebSearch(mockAdapters, params, TEST_SECRET, undefined, registerCitables);
+
+    expect(registerCitables).toHaveBeenCalledTimes(2);
+    for (const result of [first, repeated]) {
+      expect(result.citables.map(source => source.metadata?.citationIndex)).toEqual([7, 8, 9, 10]);
+      expect(result.formattedResults).toContain('[7] **Guide**');
+      expect(result.formattedResults).toContain('[8] Hotel');
+      expect(result.formattedResults).toContain('[9] A');
+      expect(result.formattedResults).toContain('[10] B');
+      expect(result.formattedResults).not.toContain('1. **Guide**');
+    }
+  });
+
+  it('forwards the context registrar and publishes the stamped web source', async () => {
+    useSerpApi();
+    stubSerpApi([]);
+    const statusUpdate = vi.fn();
+    const context = {
+      db: {},
+      logger: { log: vi.fn() },
+      statusUpdate,
+      registerCitables: (sources: CitableSource[]) =>
+        sources.map(source => ({ ...source, metadata: { ...source.metadata, citationIndex: 5 } })),
+    } as unknown as ToolContext;
+
+    const output = await webSearchTool.implementation(context).toolFn({ query: 'dinner' });
+
+    expect(output).toContain('[5] **Guide**');
+    expect(statusUpdate).toHaveBeenCalledWith(
+      {
+        promptMeta: {
+          citables: [expect.objectContaining({ metadata: expect.objectContaining({ citationIndex: 5 }) })],
+        },
+      },
+      'Web search complete'
+    );
+  });
+
   it('makes no place call and leaves the output untouched when include_places is unset', async () => {
     useSerpApi();
     const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
@@ -846,7 +896,10 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     it('logs one error naming the failed SerpAPI lead when the SearXNG backup answers empty', async () => {
       configure('serpapi');
-      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+      stubProviders({
+        serpOrganic: [{ status: 503 }, { status: 503 }],
+        searxng: { status: 200, body: { results: [] } },
+      });
 
       await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
       expect(errorSpy).toHaveBeenCalledTimes(1);

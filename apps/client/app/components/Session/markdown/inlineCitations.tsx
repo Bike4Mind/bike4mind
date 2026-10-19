@@ -95,10 +95,8 @@ export const ReplyCitablesContext = createContext<readonly CitableSource[]>([]);
 
 /**
  * Whether this reply's `[N]` markers can be trusted to mean `citables[N-1]`: every citable must
- * carry the stamp of its own position. The server stamps only the forced-retrieval prefix of an
- * indexed-style session, so a named-style reply never qualifies, and neither does a turn where a
- * knowledge or web tool appended sources: those tools number their results `1.`, `2.` too, so a
- * `[1]` there may mean a tool result rather than forced source 1.
+ * carry the stamp of its own position. Retrieval and registered tools share a turn-wide
+ * numbering scheme; legacy or mixed output without those stamps remains plain text.
  */
 export const citationMarkersLinkable = (citables: readonly CitableSource[]): boolean =>
   citables.length > 0 && citables.every((source, position) => source.metadata?.citationIndex === position + 1);

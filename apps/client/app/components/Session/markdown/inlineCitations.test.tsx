@@ -74,9 +74,15 @@ describe('citationMarkersLinkable', () => {
     expect(citationMarkersLinkable([lakeCitable('a', 2)])).toBe(false);
   });
 
-  it('does not hold on a turn where a tool appended sources after the numbered prefix', () => {
-    // The tool numbers its own results 1., 2., so a [1] on this turn may mean the tool's result 1.
+  it('does not hold when a legacy tool appends unstamped sources', () => {
     expect(citationMarkersLinkable([lakeCitable('a', 1), lakeCitable('b', 2), lakeCitable('tool-hit')])).toBe(false);
+  });
+
+  it('links a turn with retrieval and tool sources sharing the same numbering', () => {
+    const toolSource = { ...webCitable, metadata: { citationIndex: 2 } };
+    render(<Reply content="Knowledge [1] and web evidence [2]." citables={[lakeCitable('a', 1), toolSource]} />);
+    expect(markerLinks()).toHaveLength(2);
+    expect(markerLinks()[1]).toHaveAttribute('href', webCitable.url);
   });
 });
 

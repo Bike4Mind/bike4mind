@@ -1901,3 +1901,24 @@ describe('retrieve_knowledge_content with the library off', () => {
     });
   });
 });
+
+describe('retrieve_knowledge_content registered citations', () => {
+  it('uses the registered number in the document heading and emitted citable', async () => {
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map(source => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: 7 },
+      }))
+    );
+    const context = makeContext({ registerCitables });
+    vi.mocked(context.db.fabfiles!.findByIdAndUserId).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' }) as never
+    );
+    const output = await runById(context);
+    expect(output).toContain('### [7] Current Protocol.pdf');
+    expect(registerCitables).toHaveBeenCalledOnce();
+    const updates = vi.mocked(context.statusUpdate).mock.calls;
+    const sources = updates.flatMap(([update]) => update.promptMeta?.citables ?? []);
+    expect(sources.map(source => source.metadata?.citationIndex)).toEqual([7]);
+  });
+});

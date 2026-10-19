@@ -138,16 +138,26 @@ function describePlace(place: WebSearchPlace): string {
     .join(' - ');
 }
 
-export function formatPlaceResults(places: WebSearchPlace[], anchor?: WebSearchPlace): string {
+export function formatPlaceResults(
+  places: WebSearchPlace[],
+  anchor?: WebSearchPlace,
+  citationIndices?: ReadonlyMap<string, number>
+): string {
+  const anchorCitationIndex = anchor ? citationIndices?.get(`place:${anchor.id}`) : undefined;
+  const anchorLabel = anchorCitationIndex === undefined ? '' : `[${anchorCitationIndex}] `;
   return [
     'Places found for this search (each has a map location; refer to it by its id):',
     '',
-    ...places.map((place, index) => `${index + 1}. ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`),
+    ...places.map((place, index) => {
+      const citationIndex = citationIndices?.get(`place:${place.id}`);
+      const label = citationIndex === undefined ? `${index + 1}.` : `[${citationIndex}]`;
+      return `${label} ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`;
+    }),
     ...(anchor
       ? [
           '',
           'Anchor location (the place the user named):',
-          `${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
+          `${anchorLabel}${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
         ]
       : []),
   ].join('\n');
@@ -317,7 +327,8 @@ export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>
+  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>,
+  registerCitables?: ToolContext['registerCitables']
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -401,6 +412,14 @@ export async function performWebSearch(
       }
     }
 
+    const registeredCitables = registerCitables ? registerCitables(citables) : citables;
+    const citationIndices = new Map<string, number>();
+    for (const source of registeredCitables) {
+      if (source.id && source.metadata?.citationIndex !== undefined) {
+        citationIndices.set(source.id, source.metadata.citationIndex);
+      }
+    }
+
     const formattedResults = results
       .map((result, index) => {
         const imageLine =
@@ -410,8 +429,10 @@ export async function performWebSearch(
         // A hostile page's own title/snippet can carry raw newlines, same risk stripNewlines
         // already closes for the image pool's fields - here it would let a snippet forge a fake
         // numbered entry or a fake "Images:" line in this line-structured output.
+        const citationIndex = citationIndices.get(result.url);
+        const label = citationIndex === undefined ? `${index + 1}.` : `[${citationIndex}]`;
         return (
-          `${index + 1}. **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
+          `${label} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
           `Source: [${safeHostname(result.url)}](${result.url})\n`
         );
@@ -425,7 +446,7 @@ export async function performWebSearch(
     // return zero organic hits but a real image cluster (the dedicated image search runs
     // independently of the organic search), and that image cluster - plus the cards prompt telling
     // the model how to use it - must not be thrown away just because there's no prose to go with it.
-    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
+    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor, citationIndices)}\n` : '';
     const baseText = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}`
       : imageSection || placeSection
@@ -438,7 +459,7 @@ export async function performWebSearch(
       (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '') +
       (withPlaces ? `\n${WEB_SEARCH_MAP_PROMPT}` : '');
 
-    return { formattedResults: formattedOutput, citables };
+    return { formattedResults: formattedOutput, citables: registeredCitables };
   } catch (error) {
     Logger.globalInstance.error('❌ WebSearch Tool: Error during search:', error);
     throw error;
@@ -466,7 +487,8 @@ export const webSearchTool: ToolDefinition = {
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          providersPromise
+          providersPromise,
+          context.registerCitables
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,

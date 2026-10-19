@@ -50,6 +50,7 @@ export const generateTools = (
     apiKeyId,
     questId,
     getAbortSignal,
+    registerCitables,
   }: {
     db: ToolContext['db'];
     retrievalFilter?: ToolContext['retrievalFilter'];
@@ -69,6 +70,7 @@ export const generateTools = (
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
     getAbortSignal?: ToolContext['getAbortSignal'];
+    registerCitables?: ToolContext['registerCitables'];
   },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
@@ -93,6 +95,7 @@ export const generateTools = (
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
+    registerCitables,
     userId,
     user,
     sessionId,

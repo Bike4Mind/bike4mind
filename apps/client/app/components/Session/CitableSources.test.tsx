@@ -34,6 +34,18 @@ const renderWith = (metadata: CitableSource['metadata']) =>
     </TestWrapper>
   );
 
+describe('CitableSources numbering', () => {
+  it('shows the number matching the inline marker for a registered source', () => {
+    renderWith({ citationIndex: 1 });
+    expect(screen.getByTestId('citable-source-number')).toHaveTextContent('[1]');
+  });
+
+  it.each([undefined, 0, 2, -1, 1.5])('does not number legacy or misaligned sources (%s)', citationIndex => {
+    renderWith({ citationIndex });
+    expect(screen.queryByTestId('citable-source-number')).not.toBeInTheDocument();
+  });
+});
+
 describe('CitableSources truncation badge', () => {
   it('shows the truncation badge when metadata.truncated is true', () => {
     renderWith({ sourceSystem: 'web_fetch', contentLength: 50000, truncated: true, cap: 50000 });

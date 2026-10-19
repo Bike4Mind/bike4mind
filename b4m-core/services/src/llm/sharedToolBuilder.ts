@@ -48,6 +48,7 @@ import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/m
 
 /** Dependencies needed to build tools (provided by the caller's runtime context) */
 export interface ToolBuilderDeps {
+  registerCitables?: ToolContext['registerCitables'];
   userId: string;
   user: ToolContext['user'];
   logger: Logger;
@@ -394,6 +395,7 @@ export function buildSharedTools(
       apiKeyId,
       questId: callbacks.questId,
       getAbortSignal,
+      registerCitables: deps.registerCitables,
     },
     storage,
     imageGenerateStorage,

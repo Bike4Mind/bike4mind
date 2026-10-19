@@ -9,6 +9,7 @@ import {
   ModelInfo,
   materializePromptMetaSession,
   type GenerationJobRef,
+  type CitableSource,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -250,6 +251,27 @@ function resolveToolStatus(toolName: string, data: any): string | null {
   }
 }
 
+export function registerQuestCitables(
+  quest: IChatHistoryItemDocument,
+  citables: CitableSource[],
+  userId: string
+): CitableSource[] {
+  const existingCitables = quest.promptMeta?.citables ?? [];
+  const indices = new Map(
+    existingCitables.map((source, index) => [source.id || source.url || source.title, index + 1])
+  );
+  const registered = citables.map(source => {
+    const key = source.id || source.url || source.title;
+    if (!key) throw new Error('A citable source must have an identity');
+    const citationIndex = indices.get(key) ?? indices.size + 1;
+    indices.set(key, citationIndex);
+    return { ...source, metadata: { ...source.metadata, citationIndex } };
+  });
+  // Reserve positions before any async status push so concurrent tools cannot reuse a number.
+  applyQuestStatusChanges(quest, { promptMeta: { citables: registered } }, userId);
+  return registered;
+}
+
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
@@ -275,7 +297,7 @@ function resolveToolStatus(toolName: string, data: any): string | null {
  *     mergeRetrievalSummary (retrievalSummaryMerge.ts) for the merge policy.
  *
  * `userId` seeds `promptMeta.session` (via materializePromptMetaSession) on every write that
- * touches promptMeta, in EITHER branch below - not just the no-existing-meta one - because a quest
+ * touches promptMeta, including the first write, because a quest
  * read off disk can carry a promptMeta with no session block at all (bike4mind#2004: several
  * writers used to materialize promptMeta this way, and older rows never got backfilled). Without
  * this, `PromptMetaSchema.session.id`/`.userId` (required: true) go unenforced forever, since this
@@ -295,8 +317,9 @@ export function applyQuestStatusChanges(
     ...otherChanges
   } = changes;
 
-  if (changedPromptMeta && quest.promptMeta) {
-    const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
+  if (changedPromptMeta) {
+    const existingPromptMeta = quest.promptMeta ?? {};
+    const mergedCitables = [...(existingPromptMeta.citables || []), ...(changedPromptMeta.citables || [])];
     // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
     // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
     // whichever merely arrived first would silently drop the chip the reader can deep-link from
@@ -337,20 +360,19 @@ export function applyQuestStatusChanges(
         ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
         : winner;
     }
-    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
-    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
-    const finalCitables = changedPromptMeta.citables?.length
+    // Legacy tools still use local numbering; a mixed turn must keep failing the client's link gate.
+    const finalCitables = changedPromptMeta.citables?.some(citable => citable.metadata?.citationIndex === undefined)
       ? dedupedCitables.map(citable => {
           if (citable.metadata?.citationIndex === undefined) return citable;
           const { citationIndex: _stamp, ...metadata } = citable.metadata;
           return { ...citable, metadata };
         })
       : dedupedCitables;
-    const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
-    const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
+    const mergedWarnings = [...(existingPromptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
+    const mergedRetrieval = mergeRetrievalSummary(existingPromptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
       {
-        ...quest.promptMeta,
+        ...existingPromptMeta,
         ...changedPromptMeta,
         citables: finalCitables,
         // Omit the key entirely when neither side has warnings, so an untouched quest is not
@@ -362,8 +384,6 @@ export function applyQuestStatusChanges(
       },
       { sessionId: quest.sessionId, userId }
     );
-  } else if (changedPromptMeta) {
-    quest.promptMeta = materializePromptMetaSession(changedPromptMeta, { sessionId: quest.sessionId, userId });
   }
 
   if (changedImages) {
@@ -853,6 +873,7 @@ export class ToolBuilder {
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     return buildSharedTools(
       {
+        registerCitables: citables => registerQuestCitables(quest, citables, this.deps.user.id),
         userId: this.deps.user.id,
         user: this.deps.user,
         logger: this.deps.logger,

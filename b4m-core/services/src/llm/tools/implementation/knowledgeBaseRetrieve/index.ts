@@ -354,7 +354,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
           // Fetch chunks for each file, respecting char budget
           let totalCharsUsed = 0;
-          const sections: string[] = [];
+          const sections: Array<(citationIndex?: number) => string> = [];
           // Pre-defang `content`, which is the same bytes modulo the defang's leading spaces.
           const conflictPassages: RetrievalPassage[] = [];
           const retrievedFiles: IFabFileDocument[] = [];
@@ -459,7 +459,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // the file was uploaded: heading a decade-old document with last week's date is a claim
             // the model has no way to discount (#3047).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.documentDate)}\n` +
+              citationIndex =>
+                `### ${citationIndex !== undefined ? `[${citationIndex}] ` : ''}${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.documentDate)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
@@ -641,13 +642,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             };
           });
 
+          const registeredCitables = context.registerCitables?.(citables) ?? citables;
+
           // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
           // retrievedFiles.length === 0 case returns above, before this point). retrieval is
           // recorded unconditionally rather than gated on citables.length for that reason.
           await context.statusUpdate(
             {
               promptMeta: {
-                citables,
+                citables: registeredCitables,
                 retrieval: {
                   attempted: true,
                   outcome: 'ok',
@@ -673,7 +676,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // The conflict note below is last of our column-0 framing, nearest the content it
           // describes: the documents the caller named disagree, so say so rather than pick a side.
           const result =
-            header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + conflict.note + renderRetrievedContentBlock(sections);
+            header +
+            '\n' +
+            `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+            conflict.note +
+            renderRetrievedContentBlock(
+              sections.map((section, index) => section(registeredCitables[index]?.metadata?.citationIndex))
+            );
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

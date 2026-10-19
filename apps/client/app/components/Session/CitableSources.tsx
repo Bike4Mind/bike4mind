@@ -180,6 +180,7 @@ const internalLabelOf = (source: CitableSource): { label: string; title?: string
 
 interface CitableSourceItemProps {
   source: CitableSource;
+  citationIndex?: number;
   conflictingTitles: string[];
   conflictPlacement: 'top' | 'bottom';
   /** Outlined while another chip's conflict tooltip names this one. */
@@ -189,6 +190,7 @@ interface CitableSourceItemProps {
 
 const CitableSourceItem: FC<CitableSourceItemProps> = ({
   source,
+  citationIndex,
   conflictingTitles,
   conflictPlacement,
   highlighted,
@@ -319,6 +321,11 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
       <Box sx={{ flex: 1, minWidth: 0 }}>
         {/* Row so the truncation badge stays visible instead of being ellipsised with a long title. */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+          {citationIndex !== undefined && (
+            <Typography level="body-sm" data-testid="citable-source-number" sx={{ flexShrink: 0 }}>
+              [{citationIndex}]
+            </Typography>
+          )}
           <Typography
             level="body-sm"
             sx={{
@@ -461,6 +468,7 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, reply }) => {
   }
 
   const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
+  const numbered = citationMarkersLinkable(citables);
   const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
   const conflictingTitlesByIndex = visible.map(source => conflictingTitlesOf(source, titleById));
   const showConflictNote = conflictingTitlesByIndex.some(titles => titles.length > 0);
@@ -490,6 +498,7 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, reply }) => {
             <CitableSourceItem
               key={key}
               source={source}
+              citationIndex={numbered ? source.metadata?.citationIndex : undefined}
               conflictingTitles={conflictingTitlesByIndex[index]}
               conflictPlacement={conflictPlacementOf(source, visible[index - 1], visible[index + 1])}
               highlighted={!!source.id && !!openConflict?.ids.includes(source.id)}

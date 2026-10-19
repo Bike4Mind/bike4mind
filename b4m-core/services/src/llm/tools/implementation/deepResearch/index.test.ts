@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
+import type { CitableSource } from '@bike4mind/common';
 
 const createFirecrawlApp = vi.fn();
 vi.mock('../webfetch/firecrawlApp', () => ({
@@ -75,6 +76,60 @@ beforeEach(() => {
   createFirecrawlApp.mockReset();
   resolveWebSearchProviders.mockReset();
   plainFetchScrape.mockClear();
+});
+
+describe('performDeepResearch citation numbering', () => {
+  it('numbers actual findings with registered turn indices and excludes unused discovery results', async () => {
+    const firstUrl = 'https://research.example/first';
+    const secondUrl = 'https://research.example/second';
+    createFirecrawlApp.mockReturnValue({
+      search: vi.fn(async () => ({
+        data: [
+          { url: firstUrl, title: 'First source' },
+          { url: firstUrl, title: 'First source' },
+          { url: secondUrl, title: '' },
+          { url: 'https://research.example/unused', title: 'Unused discovery' },
+        ],
+      })),
+      scrapeUrl: vi.fn(async (url: string) => ({ markdown: `Finding from ${url}`, error: null })),
+    });
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
+    const registerCitables = vi.fn((sources: CitableSource[]) =>
+      sources.map((source, index) => ({
+        ...source,
+        metadata: { ...source.metadata, citationIndex: index + 4 },
+      }))
+    );
+    const context = { ...makeContext(), registerCitables };
+
+    const result = await performDeepResearch(context, { topic: 'research topic' }, { maxDepth: 1, duration: 1 });
+
+    expect(result.success).toBe(true);
+    expect(registerCitables).toHaveBeenCalledTimes(1);
+    expect(registerCitables.mock.calls[0][0].map(source => source.url)).toEqual([firstUrl, secondUrl]);
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        citables: [
+          expect.objectContaining({
+            id: firstUrl,
+            title: 'First source',
+            metadata: { sourceSystem: 'deep_research', citationIndex: 4 },
+          }),
+          expect.objectContaining({
+            id: secondUrl,
+            title: secondUrl,
+            metadata: { sourceSystem: 'deep_research', citationIndex: 5 },
+          }),
+        ],
+      },
+    });
+    expect(result.data.finalAnalysisPrompt).toContain(`[4]: Finding from ${firstUrl}`);
+    expect(result.data.finalAnalysisPrompt).toContain(`[5]: Finding from ${secondUrl}`);
+    expect(result.data.finalAnalysisPrompt).toContain(`[4] First source: ${firstUrl}`);
+    expect(result.data.finalAnalysisPrompt).toContain(`[5] ${secondUrl}: ${secondUrl}`);
+    expect(result.data.finalAnalysisPrompt).toContain('Cite the numbered sources inline with [N] markers');
+    expect(result.data.finalAnalysisPrompt).not.toContain('unused');
+  });
 });
 
 describe('performDeepResearch discovery precedence', () => {
