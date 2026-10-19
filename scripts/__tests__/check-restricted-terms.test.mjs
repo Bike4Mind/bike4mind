@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addedLines, compileTerms, run } from '../check-restricted-terms.mjs';
+import { addedLines, compileTerms, matches, run } from '../check-restricted-terms.mjs';
 
 // Invented placeholder terms; the real list lives only in the repository secret.
 const TERMS = ['zorblax', 'flim-?flam', '# a comment line', '', 'glorp\\d+'].join('\n');
@@ -137,6 +137,28 @@ describe('compileTerms', () => {
     } catch (err) {
       expect(err.message).not.toContain('bad(frag');
     }
+  });
+});
+
+describe('matches', () => {
+  const m = compileTerms(TERMS);
+
+  it('treats camelCase humps and letter-digit changes as boundaries', () => {
+    for (const text of ['useZorblaxClient', 'ZorblaxClient', 'HTTPZorblax', 'zorblax2', 'myFlimflam']) {
+      expect(matches(m, text), text).toBe(true);
+    }
+  });
+
+  it('still requires a whole word', () => {
+    for (const text of ['Zorblaxian', 'prezorblax', 'zorblaxian2']) {
+      expect(matches(m, text), text).toBe(false);
+    }
+  });
+
+  it('sees through fullwidth letters and invisible format characters', () => {
+    expect(matches(m, '\uFF5A\uFF4F\uFF52\uFF42\uFF4C\uFF41\uFF58')).toBe(true);
+    expect(matches(m, 'zor\u200Bblax')).toBe(true);
+    expect(matches(m, 'zor\u00ADblax')).toBe(true);
   });
 });
 

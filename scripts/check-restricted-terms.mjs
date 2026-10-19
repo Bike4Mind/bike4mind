@@ -2,8 +2,9 @@
 // Blocks a maintainer-configured list of restricted terms from PR text and diffs.
 //
 // The list comes from the RESTRICTED_TERMS secret: one case-insensitive regex
-// fragment per line, matched on word boundaries. Blank lines and lines starting
-// with `#` are ignored. Neither the list nor anything it matches is ever printed,
+// fragment per line, matched on word boundaries (camelCase humps count as
+// boundaries too; see `matches`). Blank lines and lines starting with `#` are
+// ignored. Neither the list nor anything it matches is ever printed,
 // because workflow logs on this repo are public: a hit reports only WHERE it was
 // found (PR title, commit sha, file and line), never what. A location that would
 // itself echo a term (a branch name, a matching file path) is withheld too.
@@ -45,6 +46,7 @@ function safeMessage(err) {
  * Compiles the term list into a single matcher, or throws a message safe to print.
  * Word boundaries are letters and digits only, so `_`, `-`, `/` and `.` separate
  * words: a term matches inside `term_helper` and `term-cli` but not `termination`.
+ * Test text with `matches`, which also treats camelCase humps as boundaries.
  */
 export function compileTerms(raw) {
   const fragments = [];
@@ -66,6 +68,23 @@ export function compileTerms(raw) {
   } catch {
     throw new SafeError('The restricted-term list is valid line by line but does not compile as one pattern.');
   }
+}
+
+// Where an identifier changes case or switches between letters and digits:
+// fooBar, HTTPServer, foo2.
+const HUMP = /(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{L})(?=\p{N})|(?<=\p{N})(?=\p{L})/gu;
+
+/**
+ * Tests text against the compiled list. The text is NFKC-folded and stripped of
+ * invisible format characters first, so fullwidth letters or a zero-width space
+ * inside a term do not hide it. It is tested as written and again with camelCase
+ * humps split, so a term inside an identifier (`useTermClient`) is caught too.
+ */
+export function matches(matcher, text) {
+  const folded = text.normalize('NFKC').replace(/\p{Cf}/gu, '');
+  if (matcher.test(folded)) return true;
+  const split = folded.replace(HUMP, ' ');
+  return split !== folded && matcher.test(split);
 }
 
 /** Returns the added lines of a unified diff as `{ line, text }`, numbered in the new file. */
@@ -129,7 +148,7 @@ function github(token, fetchImpl) {
 async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' }) {
   for (const [index, file] of files.entries()) {
     if (file.status === 'removed') continue;
-    const pathHit = matcher.test(file.filename);
+    const pathHit = matches(matcher, file.filename);
     const where = `${label}${pathHit ? `changed file #${index + 1} (path withheld)` : `file ${file.filename}`}`;
     if (pathHit) hit(`${where}: the file path`);
 
@@ -159,7 +178,7 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
         .map((text, i) => ({ line: i + 1, text }));
     }
     for (const { line, text } of lines) {
-      if (matcher.test(text)) hit(`${where} line ${line}`);
+      if (matches(matcher, text)) hit(`${where} line ${line}`);
     }
   }
 }
@@ -184,16 +203,16 @@ async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) 
 
 async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   const pr = await gh.json(`/repos/${repo}/pulls/${event.pull_request.number}`);
-  if (matcher.test(pr.title ?? '')) hit('PR title');
-  if (matcher.test(pr.body ?? '')) hit('PR body');
-  if (matcher.test(pr.head.ref ?? '')) hit('head branch name');
+  if (matches(matcher, pr.title ?? '')) hit('PR title');
+  if (matches(matcher, pr.body ?? '')) hit('PR body');
+  if (matches(matcher, pr.head.ref ?? '')) hit('head branch name');
 
   if (pr.commits > MAX_PR_COMMITS) {
     incomplete(`The PR has ${pr.commits} commits; the API lists only ${MAX_PR_COMMITS}. Split or squash it.`);
   }
   const commits = await gh.paginate(`/repos/${repo}/pulls/${pr.number}/commits`);
   for (const c of commits) {
-    if (matcher.test(c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
+    if (matches(matcher, c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
 
   if (pr.changed_files > MAX_PR_FILES) {
@@ -227,7 +246,7 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     files = await gh.paginate(`/repos/${repo}/commits/${event.after}`, body => body.files ?? []);
   }
   for (const c of commits) {
-    if (matcher.test(c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
+    if (matches(matcher, c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
   await scanFiles({ files, matcher, gh, repo, ref: event.after, hit, note: incomplete });
   await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
