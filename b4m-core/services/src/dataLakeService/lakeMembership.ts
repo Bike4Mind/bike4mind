@@ -13,6 +13,7 @@ import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import { storedTagNames } from '../tagService/bulkTagNames';
 import {
   assertStorageOwnerTransferFits,
   reassignStorageOwner,
@@ -213,9 +214,12 @@ export const removeFileFromLake = async (
   // first pull clears the tags and the second matches nothing, and recording off the read would
   // append two `removed` events for one transition - a permanent claim that the file left twice.
   if (pulled > 0) {
-    await reassignStorageOwner(file.id, db);
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
+  // Unconditional, unlike the event above: a retry after a failed reassign, or the losing half of
+  // two concurrent removals, has already pulled the tags and would otherwise never recompute the
+  // owner from them. A no-op when the stamp already matches the tags.
+  await reassignStorageOwner(file.id, db);
   return { contentTags };
 };
 
@@ -247,12 +251,14 @@ export const addFileToLake = async (
   // Gated before the push so a join refused for quota writes nothing, even outside a transaction.
   const file = await db.fabFiles.findById(fabFileId);
   if (file) {
-    const tagNames = (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
-    await assertStorageOwnerTransferFits(file, [...tagNames, lake.datalakeTag], db);
+    await assertStorageOwnerTransferFits(file, [...storedTagNames(file), lake.datalakeTag], db);
   }
 
   const priorState = await db.fabFiles.pushTagReturningPriorState(fabFileId, lake.datalakeTag, DATALAKE_TAG_STRENGTH);
-  if (priorState) await reassignStorageOwner(fabFileId, db);
+  // Unconditional: `priorState === null` means the tag was already there, which is also the state a
+  // retry finds after a reassign threw, so only recomputing on a fresh insert would leave that
+  // file's stamp wrong for good.
+  await reassignStorageOwner(fabFileId, db);
   // Idempotent by construction (the push is filtered on the name being absent), so a no-op re-add
   // of an existing member records nothing - matching `recordLakeConfigChange`'s own "no real
   // change, no row" rule.

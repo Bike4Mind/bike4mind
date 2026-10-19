@@ -11,6 +11,7 @@ import {
   type StorageOwner,
 } from '@bike4mind/common';
 import { checkStorageLimitForOwner } from '@bike4mind/utils';
+import { storedTagNames } from '../tagService/bulkTagNames';
 import { adjustOwnerStorage } from './ownerStorage';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 
@@ -56,9 +57,6 @@ export type StorageOwnerTransfer = {
   nextOrganizationId: string | undefined;
   bytes: number;
 };
-
-const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
-  (file.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string');
 
 /**
  * The owner change that giving `file` exactly the meta-tags in `tagNames` implies, or null when the
@@ -109,9 +107,13 @@ const MAX_REASSIGN_ATTEMPTS = 3;
  * Settles a live file's owner after its meta-tags changed: restamps `organizationId` from the tags
  * the file now carries and moves its charged bytes from the old owner's counter to the new one's.
  * Never quota-gated (see the policy above). Returns the transfer made, or null when the owner did
- * not change or the file is gone. The stamp write and the two counter moves are separate writes,
- * atomic only inside the caller's transaction; a crash between them drifts the counters until the
- * storage reconciliation runs.
+ * not change or the file is gone.
+ *
+ * The stamp write and the two counter moves are separate writes, atomic only inside the caller's
+ * transaction; a crash between them drifts the counters until the storage reconciliation runs. The
+ * stamp itself is NOT re-derived by that reconciliation (it recomputes counters FROM the stamp), so
+ * every caller runs this unconditionally after its tag write rather than only when the write changed
+ * something: a retry after a failed reassign must recompute from the tags and restamp.
  */
 export async function reassignStorageOwner(
   fabFileId: string,

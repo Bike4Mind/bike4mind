@@ -63,6 +63,26 @@ describe('addFileToLake', () => {
     expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
   });
 
+  it('recomputes the owner even when the tag was already there, so a retry repairs a failed transfer', async () => {
+    // Null pre-image: the filtered push matched nothing, as it does on a retry after the first
+    // attempt threw between the tag write and the owner restamp.
+    const adapters = makeAdapters(null);
+    adapters.db.fabFiles.findById.mockResolvedValue({
+      id: 'f1',
+      userId: 'owner',
+      organizationId: 'org1',
+      tags: [{ name: 'datalake:lake', strength: 1 }],
+    });
+
+    await addFileToLake(owner, lake(), 'f1', adapters);
+
+    expect(adapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
+      'f1',
+      expect.anything(),
+      undefined
+    );
+  });
+
   describe('membership event', () => {
     const makeAuditedAdapters = (prior: unknown = { userId: 'owner', tags: [] }) => ({
       db: withStorageOwnerFakes({
@@ -149,6 +169,27 @@ describe('removeFileFromLake', () => {
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
     }),
+  });
+
+  it('recomputes the owner even when another writer already pulled the tags', async () => {
+    // A concurrent removal, or a retry after a failed restamp, leaves nothing to pull - but the
+    // stamp still has to be reconciled with the tags that are now stored.
+    const adapters = {
+      db: withStorageOwnerFakes({
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({ ...fileInLake, organizationId: 'org-sales' }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(0),
+        },
+      }),
+    };
+
+    await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+    expect(adapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
+      'f1',
+      expect.anything(),
+      undefined
+    );
   });
 
   it('clears the membership signals without recomputing stats', async () => {

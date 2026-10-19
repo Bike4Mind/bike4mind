@@ -350,7 +350,10 @@ export const cleanupDeletedDataLake = async (
     const file = await db.fabFiles.findById(id);
     const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
     if (!file || !inLake) return;
-    if ((await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull)) > 0) await reassignStorageOwner(file.id, db);
+    // Not gated on the pull count: a retry after a failed reassign (this sweep re-runs the whole
+    // thing on DLQ redelivery) finds the tags already gone and must still recompute the owner.
+    await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+    await reassignStorageOwner(file.id, db);
   });
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
