@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
-  updateOne: vi.fn(),
+  findOneAndUpdate: vi.fn(),
+  findOne: vi.fn(),
   deleteObject: vi.fn(),
   findOrganization: vi.fn(),
   findUser: vi.fn(),
@@ -11,7 +12,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  FabFile: { updateOne: h.updateOne },
+  FabFile: { findOneAndUpdate: h.findOneAndUpdate, findOne: h.findOne },
   organizationRepository: { findById: h.findOrganization },
   User: { findById: h.findUser },
 }));
@@ -22,7 +23,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
 
-import { judgeLandedUpload, rejectLandedUpload, type LandedUploadRow } from './uploadSizeGate';
+import { admitLandedUpload, judgeLandedUpload, rejectLandedUpload, type LandedUploadRow } from './uploadSizeGate';
 
 const MB = 1024 * 1024;
 const owner = (over: Partial<IUserDocument> = {}) =>
@@ -107,20 +108,44 @@ describe('judgeLandedUpload', () => {
 
 describe('rejectLandedUpload', () => {
   it('deletes the object and withdraws the still-pending row', async () => {
-    h.updateOne.mockResolvedValue({ modifiedCount: 1 });
+    h.findOneAndUpdate.mockResolvedValue({ uploadRejectedAt: new Date() });
 
     expect(await rejectLandedUpload('ff1', 'uploads/x.pdf')).toBe(true);
     expect(h.deleteObject).toHaveBeenCalledWith('uploads/x.pdf');
-    expect(h.updateOne).toHaveBeenCalledWith(
+    expect(h.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: 'ff1', status: { $ne: 'complete' }, deletedAt: null },
-      { $set: { deletedAt: expect.any(Date) } }
+      { $set: { deletedAt: expect.any(Date), uploadRejectedAt: expect.any(Date) } },
+      { new: true }
     );
   });
 
   it('keeps the object of a row that went complete meanwhile', async () => {
-    h.updateOne.mockResolvedValue({ modifiedCount: 0 });
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findOne.mockResolvedValue(null);
 
     expect(await rejectLandedUpload('ff1', 'uploads/x.pdf')).toBe(false);
+    expect(h.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('retries cleanup of an already-rejected tombstone', async () => {
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findOne.mockResolvedValue({ uploadRejectedAt: new Date() });
+
+    expect(await rejectLandedUpload('ff1', 'uploads/x.pdf')).toBe(true);
+    expect(h.deleteObject).toHaveBeenCalledWith('uploads/x.pdf');
+    expect(h.findOne).toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' }, uploadRejectedAt: { $ne: null } },
+      null,
+      { includeDeleted: true }
+    );
+  });
+
+  it('does not reject a landing that another invocation already completed', async () => {
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findOne.mockResolvedValue(null);
+    const row = { _id: 'ff1', userId: 'u1', fileSize: 1, status: 'pending' as const, clientUpload: true };
+
+    expect(await admitLandedUpload(row, 2, 'uploads/x.pdf', logger)).toBe(true);
     expect(h.deleteObject).not.toHaveBeenCalled();
   });
 });

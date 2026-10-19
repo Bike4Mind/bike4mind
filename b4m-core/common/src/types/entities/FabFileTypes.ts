@@ -485,6 +485,9 @@ export interface IFabFile {
    */
   clientUpload?: boolean;
 
+  /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
+  uploadRejectedAt?: Date;
+
   /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated

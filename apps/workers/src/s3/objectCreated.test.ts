@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   changeStorageSize: vi.fn(),
+  recordRejectedUploadBatch: vi.fn(),
   withTransaction: vi.fn(),
   admit: vi.fn(),
 }));
@@ -55,6 +56,7 @@ vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
+vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
@@ -101,6 +103,30 @@ beforeEach(() => {
 });
 
 describe('objectCreated - measured-size gate', () => {
+  it('accounts a rejected batch file without completing or chunking it', async () => {
+    const file = metadata({ status: 'pending', batchId: 'b1' });
+    h.findOne.mockResolvedValue(file);
+    h.admit.mockResolvedValue(false);
+
+    await run();
+
+    expect(h.recordRejectedUploadBatch).toHaveBeenCalledWith(file, logger);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(file.save).not.toHaveBeenCalled();
+  });
+
+  it('includes rejected tombstones in the landing lookup so cleanup can be retried', async () => {
+    h.findOne.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.findOne).toHaveBeenCalledWith(
+      { filePath: 'uploads/report.pdf', $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+      null,
+      { includeDeleted: true }
+    );
+  });
+
   it('withdraws an upload the gate rejects before completing, scanning or charging it', async () => {
     h.findOne.mockResolvedValue(metadata({ fileSize: 4, status: 'pending' }));
     h.admit.mockResolvedValue(false);
@@ -152,7 +178,9 @@ describe('objectCreated - untracked-file skip list', () => {
 
       await run(key);
 
-      expect(h.findOne).toHaveBeenCalledWith({ filePath: key });
+      expect(h.findOne).toHaveBeenCalledWith(expect.objectContaining({ filePath: key }), null, {
+        includeDeleted: true,
+      });
     }
   );
 });

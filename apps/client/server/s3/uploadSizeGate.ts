@@ -15,6 +15,7 @@ export interface LandedUploadRow extends StorageChargeFields {
   organizationId?: string | null;
   fileSize?: number | null;
   clientUpload?: boolean | null;
+  uploadRejectedAt?: Date | null;
 }
 
 type GateLogger = Pick<ILogger, 'warn' | 'error'>;
@@ -74,14 +75,21 @@ export const judgeLandedUpload = async (
 /**
  * Discards a rejected landing: soft-deletes its still-pending row, then deletes the object, so it is
  * neither served, charged, moderated nor chunked. A row that went complete meanwhile keeps its
- * object. Returns whether the row was withdrawn.
+ * object. Rejected tombstones remain eligible on redelivery, including after a failed delete or
+ * a replay of the presigned PUT. Returns whether this is a rejected row, never an accepted one.
  */
 export const rejectLandedUpload = async (fabFileId: Types.ObjectId | string, objectKey: string): Promise<boolean> => {
-  const res = await FabFile.updateOne(
+  const withdrawn = await FabFile.findOneAndUpdate(
     { _id: fabFileId, status: { $ne: 'complete' }, deletedAt: null },
-    { $set: { deletedAt: new Date() } }
+    { $set: { deletedAt: new Date(), uploadRejectedAt: new Date() } },
+    { new: true }
   );
-  if (res.modifiedCount === 0) return false;
+  const rejected =
+    withdrawn ??
+    (await FabFile.findOne({ _id: fabFileId, status: { $ne: 'complete' }, uploadRejectedAt: { $ne: null } }, null, {
+      includeDeleted: true,
+    }));
+  if (!rejected) return false;
   await getFilesStorage().delete(objectKey);
   return true;
 };
@@ -97,9 +105,12 @@ export const admitLandedUpload = async (
   objectKey: string,
   logger: GateLogger
 ): Promise<boolean> => {
+  if (row.uploadRejectedAt) {
+    await rejectLandedUpload(row._id, objectKey);
+    return false;
+  }
   const rejection = await judgeLandedUpload(row, measuredSize, logger);
   if (!rejection) return true;
   logger.warn(`Rejecting upload ${objectKey} (${measuredSize} bytes): ${rejection}`);
-  await rejectLandedUpload(row._id, objectKey);
-  return false;
+  return !(await rejectLandedUpload(row._id, objectKey));
 };

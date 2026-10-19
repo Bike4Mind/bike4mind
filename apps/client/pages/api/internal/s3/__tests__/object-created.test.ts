@@ -19,10 +19,12 @@ const {
   userDoc,
   admitMock,
   recordLandedMock,
+  recordRejectedBatchMock,
 } = vi.hoisted(() => {
   const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
   return {
     admitMock: vi.fn(),
+    recordRejectedBatchMock: vi.fn(),
     recordLandedMock: vi.fn(),
     chargeMock: vi.fn(),
     getMetadataMock: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
 vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
+vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: recordRejectedBatchMock }));
 vi.mock('@server/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
@@ -198,7 +201,9 @@ describe('POST /api/internal/s3/object-created', () => {
       findOneMock.mockResolvedValue(null);
       const res = makeRes();
       await handler(makeReq('secret-token', key), res);
-      expect(findOneMock).toHaveBeenCalledWith({ filePath: key });
+      expect(findOneMock).toHaveBeenCalledWith(expect.objectContaining({ filePath: key }), null, {
+        includeDeleted: true,
+      });
     }
   );
 
@@ -206,7 +211,11 @@ describe('POST /api/internal/s3/object-created', () => {
     const res = makeRes();
     await handler(makeReq('secret-token', 'uploads/report.pdf'), res);
 
-    expect(findOneMock).toHaveBeenCalledWith({ filePath: 'uploads/report.pdf' });
+    expect(findOneMock).toHaveBeenCalledWith(
+      { filePath: 'uploads/report.pdf', $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+      null,
+      { includeDeleted: true }
+    );
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(sendToQueueMock).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
       fabFileId: 'ff1',
@@ -229,6 +238,29 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(saveMock).not.toHaveBeenCalled();
     expect(chargeMock).not.toHaveBeenCalled();
     expect(sendToQueueMock).not.toHaveBeenCalled();
+    expect(recordRejectedBatchMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'ff1' }), expect.anything());
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('retries a rejected landing even when its already-deleted object has no HEAD metadata', async () => {
+    findOneMock.mockResolvedValue({
+      id: 'ff1',
+      _id: 'ff1',
+      userId: 'u1',
+      status: 'pending',
+      batchId: 'b1',
+      uploadRejectedAt: new Date(),
+      save: saveMock,
+    });
+    admitMock.mockResolvedValue(false);
+    getMetadataMock.mockRejectedValue(new Error('NoSuchKey'));
+    const res = makeRes();
+
+    await handler(makeReq('secret-token', 'uploads/report.pdf'), res);
+
+    expect(getMetadataMock).not.toHaveBeenCalled();
+    expect(recordRejectedBatchMock).toHaveBeenCalledWith(expect.objectContaining({ batchId: 'b1' }), expect.anything());
+    expect(saveMock).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
