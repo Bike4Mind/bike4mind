@@ -8,6 +8,7 @@ import {
   gatedAverageSec,
   incompleteResult,
   isLatencyObservation,
+  latencyBreach,
   mergeResults,
   msToSec,
   StreamingTimeoutError,
@@ -88,6 +89,19 @@ describe('module boundary', () => {
     expect(workflow).not.toMatch(/repeat-each/);
     const config = fs.readFileSync(path.resolve(e2eDir, '../playwright.config.ts'), 'utf8');
     expect(config).not.toMatch(/repeatEach/);
+  });
+
+  it('keeps the latency gate title in sync with the workflow Quality filter', () => {
+    // The workflow excludes the gate from the Quality column by title; a rename on one side only
+    // would turn every slow-but-correct cell into a quality failure.
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    const title = factory.match(/const LATENCY_GATE_TITLE = '([^']+)'/)?.[1];
+    expect(title).toBeTruthy();
+    const workflow = fs.readFileSync(
+      path.resolve(path.dirname(FACTORY), '../../../.github/workflows/e2e-ai-latency.yml'),
+      'utf8'
+    );
+    expect(workflow).toContain(`--arg gate '${title}'`);
   });
 
   it('imports nothing that would drag in a Playwright runner', () => {
@@ -311,5 +325,37 @@ describe('gatedAverageSec', () => {
   it('returns 0 when no gated prompt is present', () => {
     expect(gatedAverageSec([])).toBe(0);
     expect(gatedAverageSec([incompleteResult(scenario({ id: 'img', expectsImage: true }), 1000)])).toBe(0);
+  });
+});
+
+describe('latencyBreach', () => {
+  const text = (id: string, sec: number): PromptResult =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0 });
+
+  it('passes a cell whose average is at or under the threshold', () => {
+    expect(latencyBreach([text('a', 5), text('b', 15)], 10)).toBeNull();
+  });
+
+  it('fails a cell whose average exceeds the threshold, even if one prompt was fast', () => {
+    const breach = latencyBreach([text('a', 2), text('b', 30)], 10);
+    expect(breach).toContain('average AI latency 16s exceeds the 10s threshold');
+    expect(breach).toContain('a=2s');
+  });
+
+  it('fails on an abandoned prompt even when the average stays under the threshold', () => {
+    const breach = latencyBreach([text('a', 1), text('b', 1), incompleteResult(scenario({ id: 'c' }), 5000)], 10);
+    expect(breach).toContain('1 prompt(s) never finished: c');
+    expect(breach).not.toContain('exceeds');
+  });
+
+  it('ignores deliverable prompts and reports no breach when nothing is gated', () => {
+    const slowImage = completedResult(scenario({ id: 'img', expectsImage: true }), {
+      response: '',
+      responseTimeMs: 600_000,
+      renderTimeMs: 0,
+    });
+    expect(latencyBreach([text('a', 5), slowImage], 10)).toBeNull();
+    expect(latencyBreach([slowImage], 10)).toBeNull();
+    expect(latencyBreach([], 10)).toBeNull();
   });
 });

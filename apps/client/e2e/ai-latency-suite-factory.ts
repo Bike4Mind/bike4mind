@@ -17,7 +17,12 @@ import {
   isLatencyObservation,
   mergeResults,
   gatedAverageSec,
+  latencyBreach,
 } from './ai-latency-budget';
+
+// Title of the per-cell latency gate. The workflow's Quality column excludes it by this exact
+// title so a slow-but-correct cell reads Quality=Pass, Latency=FAIL (e2e-ai-latency.yml).
+const LATENCY_GATE_TITLE = 'average AI latency is within the threshold';
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,
 // non-breaking spaces) before matching - innerText-scraped AI text can differ invisibly and break a plain .includes().
@@ -226,5 +231,24 @@ export function createAiLatencySuite({
     for (let i = 0; i < 3; i++) {
       prompt(i);
     }
+
+    // Runs last in this serial describe, so it judges every prompt including retries. Reads the
+    // merged file rather than collectedResults, which a worker recycle after a failed prompt resets.
+    test(LATENCY_GATE_TITLE, () => {
+      let results: PromptResult[] = [];
+      try {
+        const persisted = JSON.parse(fs.readFileSync(resultsPath, 'utf-8'));
+        if (Array.isArray(persisted.results)) results = persisted.results;
+      } catch {
+        // No file: no prompt recorded a timing, so there is nothing to judge.
+      }
+      test.skip(
+        results.every(r => r.measuresDeliverable),
+        'No text-streaming latency was recorded for this cell (No Data).'
+      );
+
+      const breach = latencyBreach(results, thresholdSec);
+      expect(breach, breach ?? undefined).toBeNull();
+    });
   });
 }
