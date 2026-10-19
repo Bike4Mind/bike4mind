@@ -76,6 +76,17 @@ export const CREDITS_PER_USD_COST = (() => {
 })();
 
 /**
+ * Lowest USD price a credit may be sold for: the provider cost one credit stands for, times the
+ * markup - the same sale price usage is billed at. The admin `pricePerCredit` save
+ * (apps/client/pages/api/settings/update.ts) refuses a price below it, and per-credit purchases
+ * re-check it at charge time (apps/client/lib/credits/utils.ts).
+ */
+export const MIN_PRICE_PER_CREDIT_USD = PRICE_MARGIN / CREDITS_PER_USD_COST;
+
+/** True when a per-credit price is below MIN_PRICE_PER_CREDIT_USD, ignoring float noise (and NaN). */
+export const isPricePerCreditBelowFloor = (usd: number): boolean => !(usd >= MIN_PRICE_PER_CREDIT_USD * (1 - 1e-9));
+
+/**
  * Converts a USD cost to credits, including markup, rounding UP (minimum 1).
  *
  * Use for reservations, eligibility checks, estimates, and display - anywhere

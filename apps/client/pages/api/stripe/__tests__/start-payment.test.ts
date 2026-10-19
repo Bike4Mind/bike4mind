@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError } from '@server/utils/errors';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
-import { CreditPurchaseEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, MIN_PRICE_PER_CREDIT_USD } from '@bike4mind/common';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -26,6 +26,13 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     update: (...args: unknown[]) => mockUserUpdate(...args),
   },
+  adminSettingsRepository: {},
+}));
+
+let storedSettings: Record<string, unknown> = {};
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: () => Promise.resolve(storedSettings),
 }));
 
 const mockCreateCustomer = vi.fn();
@@ -171,6 +178,24 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow('pricePerCredit setting missing');
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a per-credit purchase when the configured price is below the floor', async () => {
+    // Real pricing, not the mock: a stored price that predates the save-time floor must still be
+    // caught before any Stripe object exists.
+    const actual = await vi.importActual<typeof import('@client/lib/credits/utils')>('@client/lib/credits/utils');
+    mockHandlePerCredit.mockImplementation(actual.handlePerCreditTransaction);
+    storedSettings = { pricePerCredit: String(MIN_PRICE_PER_CREDIT_USD / 2) };
+    const { req, res } = makeReq(
+      { transactionType: TransactionType.PerCredit, credits: 100_000 },
+      { stripeCustomerId: null }
+    );
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 500 });
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+    const { logger } = req as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
+    expect(logger.error).toHaveBeenCalledWith(expect.any(String), { userId: 'user_1' });
   });
 
   it('records a PII-free checkout-started marker keyed by the payment intent id', async () => {

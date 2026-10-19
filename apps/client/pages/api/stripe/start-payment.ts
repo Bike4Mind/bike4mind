@@ -32,7 +32,7 @@ const handler = baseApi()
     let paymentDetails: PaymentDetails;
     switch (parsedBody.transactionType) {
       case TransactionType.PerCredit:
-        paymentDetails = await handlePerCreditTransaction(parsedBody);
+        paymentDetails = await handlePerCreditTransaction(parsedBody, { userId: req.user.id, logger: req.logger });
         break;
       case TransactionType.Package:
         paymentDetails = await handlePackageTransaction(parsedBody);

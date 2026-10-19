@@ -172,6 +172,28 @@ describe('pricing utils', () => {
     });
   });
 
+  describe('MIN_PRICE_PER_CREDIT_USD', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('is the per-credit sale price including markup', async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', undefined);
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', undefined);
+      const pricing = await importPricing();
+      expect(pricing.MIN_PRICE_PER_CREDIT_USD).toBe(0.0006);
+      expect(pricing.MIN_PRICE_PER_CREDIT_USD * pricing.CREDITS_PER_USD_COST).toBeCloseTo(pricing.getPriceMargin());
+    });
+
+    it('treats a price at the floor as allowed and anything lower as below it', async () => {
+      const pricing = await importPricing();
+      expect(pricing.isPricePerCreditBelowFloor(pricing.MIN_PRICE_PER_CREDIT_USD)).toBe(false);
+      expect(pricing.isPricePerCreditBelowFloor(pricing.MIN_PRICE_PER_CREDIT_USD * 0.99)).toBe(true);
+      expect(pricing.isPricePerCreditBelowFloor(Number.NaN)).toBe(true);
+    });
+  });
+
   describe('env-configured valuation', () => {
     afterEach(() => {
       vi.unstubAllEnvs();
