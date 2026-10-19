@@ -208,9 +208,6 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 
-// The rail viewer mounts KnowledgeViewer, which pulls in the websocket/session/artifact chain.
-// What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
-// the wrapper is stubbed with the same test ids it renders.
 // Wraps the real empty state so a test can read which props the Explorer forwards to it.
 const emptyStateProps = vi.hoisted(() => ({ last: undefined as { startChatForLake?: unknown } | undefined }));
 vi.mock('./DataLakeTreeEmptyState', async importOriginal => {
@@ -223,6 +220,9 @@ vi.mock('./DataLakeTreeEmptyState', async importOriginal => {
     },
   };
 });
+// The rail viewer mounts KnowledgeViewer, which pulls in the websocket/session/artifact chain.
+// What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
+// the wrapper is stubbed with the same test ids it renders.
 vi.mock('./DataLakeRailViewer', () => ({
   default: () => <div data-testid="datalake-rail-viewer" />,
 }));
@@ -415,6 +415,7 @@ beforeEach(() => {
   sessionState.currentSessionId = 'sess-1';
   sessionState.current = { id: 'sess-1', retrievalTags: [], lakeScopeExplicit: false };
   usePendingLakeScope.getState().setLakeTags([]);
+  emptyStateProps.last = undefined;
 });
 
 describe('DataLakeExplorer chat-first surface', () => {
