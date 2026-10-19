@@ -7,6 +7,7 @@ import type {
   IFabFileDocument,
   IFabFileRepository,
   ISessionRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { isLegalHoldError } from '@bike4mind/common';
@@ -34,6 +35,7 @@ export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
   | 'id'
   | 'userId'
+  | 'organizationId'
   | 'fileSize'
   | 'storageChargedAt'
   | 'status'
@@ -50,6 +52,8 @@ export interface PurgeDataLakeConnectionFilesAdapters {
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'clearRetrievalIndexConfirmedByFabFileIds'>;
     /** Optional, like the lake-wide sweeps: a caller with no reason to exercise quota accounting (a script, a test) simply gets no adjustment. */
     users?: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    /** Required: it arrived with owner billing, so every caller already wires it, and a purged org file left undebited holds the whole org's quota. */
+    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     /**
      * Optional, like `cleanupDeletedDataLake`'s own use of this port: a host that never ran
      * detection has no rows to sweep. Wired here for the same reason it is wired there - a
@@ -210,7 +214,12 @@ export const purgeDataLakeConnectionFiles = async (
             // shred or session unlink too.
             // Both guards: chargedBytes ignores deletedAt, so a stamped or legacy-complete tombstone
             // would still read as charged and be refunded a second time.
-            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.deletedAt ? 0 : chargedBytes(file) });
+            deletedFiles.push({
+              id: file.id,
+              userId: file.userId,
+              organizationId: file.organizationId,
+              fileSize: file.deletedAt ? 0 : chargedBytes(file),
+            });
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
               .filter((name): name is string => typeof name === 'string');
@@ -236,10 +245,10 @@ export const purgeDataLakeConnectionFiles = async (
       // Per chunk, not once per call: a run killed mid-sweep (a Lambda timeout) never reaches a
       // final refund, so each chunk refunds the rows it hard-deleted as soon as it settles.
       // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return),
-      // and a tombstone records 0 bytes: it is outside the counted set (sumFileSizeByUserId matches
+      // and a tombstone records 0 bytes: it is outside the counted set (the recalc sums match
       // deletedAt: null), so its refund belongs to its soft-delete path, not this sweep.
       filesPurged += deletedFiles.length;
-      await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
+      await bestEffortAdjustOwnerStorage(db, groupStorageDeltaByOwner(deletedFiles, -1), logger);
     }
   }
 

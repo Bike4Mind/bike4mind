@@ -8,6 +8,7 @@ import {
   FabFile,
   FabFileChunk,
   fabFileRepository,
+  organizationRepository,
   researchAgentRepository,
   researchDataRepository,
   Session,
@@ -58,6 +59,11 @@ const handler = baseApi({ auth: true }).delete(
               // Atomic $inc via the repository - never round-trips the whole (secret-less) user
               // doc, which would wipe the select:false MFA secrets. See UserModel's MFA update guard.
               await userRepository.incrementCurrentStorage(userId, count);
+            },
+          },
+          organizations: {
+            incrementCurrentStorage: async (organizationId: string, count: number) => {
+              await organizationRepository.incrementCurrentStorage(organizationId, count);
             },
           },
           sessions: {

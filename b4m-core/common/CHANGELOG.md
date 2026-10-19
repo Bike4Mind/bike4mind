@@ -1,5 +1,33 @@
 # @bike4mind/common
 
+## 16.0.0
+
+### Major Changes
+
+- [#4937](https://github.com/Bike4Mind/bike4mind/pull/4937) [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c) Thanks [@onoya](https://github.com/onoya)! - bill org-owned file storage to the organization
+
+### Minor Changes
+
+- [#4654](https://github.com/Bike4Mind/bike4mind/pull/4654) [`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498) Thanks [@jebie](https://github.com/jebie)! - native tool search on direct Anthropic
+
+- [#4966](https://github.com/Bike4Mind/bike4mind/pull/4966) [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f) Thanks [@onoya](https://github.com/onoya)! - typed response schemas for quest plans, quest timeout and groups
+
+- [#4970](https://github.com/Bike4Mind/bike4mind/pull/4970) [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5) Thanks [@erikbethke](https://github.com/erikbethke)! - let users hide workspace surfaces they don't use
+
+- [#4980](https://github.com/Bike4Mind/bike4mind/pull/4980) [`f33b246`](https://github.com/Bike4Mind/bike4mind/commit/f33b246c31f172ec274d965e4950856490f5c45b) Thanks [@erikbethke](https://github.com/erikbethke)! - pin message attachments to the session so they stay in context
+
+### Patch Changes
+
+- [#4973](https://github.com/Bike4Mind/bike4mind/pull/4973) [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661) Thanks [@erikbethke](https://github.com/erikbethke)! - keep the storage code on a share editor's quota refusal, without the owner's counts
+
+- [#4975](https://github.com/Bike4Mind/bike4mind/pull/4975) [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d) Thanks [@erikbethke](https://github.com/erikbethke)! - narrated tool-call strip on cut-off replies and notice count
+
+- [#4976](https://github.com/Bike4Mind/bike4mind/pull/4976) [`e774b4a`](https://github.com/Bike4Mind/bike4mind/commit/e774b4ab69877762a15cb7ac59edd082fdc93320) Thanks [@erikbethke](https://github.com/erikbethke)! - keep a disconnected OAuth connection out of the active list
+
+- [#4977](https://github.com/Bike4Mind/bike4mind/pull/4977) [`d42b0c6`](https://github.com/Bike4Mind/bike4mind/commit/d42b0c62ef7e22ea0c63cffb66ed05402a7d9178) Thanks [@erikbethke](https://github.com/erikbethke)! - share one list of unreachable networks between the settings check and the fetch path
+
+- [#4978](https://github.com/Bike4Mind/bike4mind/pull/4978) [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41) Thanks [@erikbethke](https://github.com/erikbethke)! - persist and show a warning when a re-crawl keeps its previous copy for storage quota
+
 ## 15.1.1
 
 ### Patch Changes

@@ -59,6 +59,28 @@ updates:
           - "mongoose"
           - "@typegoose/*"
 
+  # Public docs site: its own lockfile outside the pnpm workspace, deployed to production on merge.
+  - package-ecosystem: "npm"
+    directory: "/docs-site"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Security updates only, same as the root entry.
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      # The deployer requires one sst version across the app, overlays and docs site; bump it everywhere at once.
+      - dependency-name: "sst"
+
   # GitHub Actions - monthly to keep CI pipeline secure with minimal noise
   - package-ecosystem: "github-actions"
     directory: "/"

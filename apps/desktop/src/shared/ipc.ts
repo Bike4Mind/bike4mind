@@ -44,6 +44,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
@@ -489,8 +490,11 @@ export interface DesktopApi {
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
-    /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */
-    addContextDirectory(sessionId: string): Promise<ChatSessionSummary | null>;
+    /**
+     * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
+     * folder picker otherwise. Allowed at any point in the session, a running turn included.
+     */
+    addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;

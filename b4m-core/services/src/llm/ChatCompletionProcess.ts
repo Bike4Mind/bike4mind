@@ -1883,8 +1883,10 @@ export class ChatCompletionProcess {
         }
         // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
         // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
-        const result = await this.db.quests.update(quest);
-        return result;
+        // A mid-turn save must not put 'running' back over a user Stop (stopReply in
+        // sessionOperations.ts) before the cancellation watcher reads it.
+        if (quest.status === 'running') return await this.db.quests.updateIfUnfinished(quest);
+        return await this.db.quests.update(quest);
       });
     };
 
@@ -2231,7 +2233,7 @@ export class ChatCompletionProcess {
       // refresh shows an empty quest and the check-timeout endpoint falsely marks it as stuck.
       let heartbeatFailureStreak = 0;
       streamingHeartbeatInterval = setInterval(() => {
-        if (quest.status === 'done') return; // Final save handles this — avoid racing
+        if (quest.status !== 'running') return; // The terminal save owns the final write
         void saveQuest(quest)
           .then(() => {
             heartbeatFailureStreak = 0;

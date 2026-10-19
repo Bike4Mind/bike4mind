@@ -193,6 +193,10 @@ import SetUserAuthAuditLogRetention from './20260921235950_set-user-auth-audit-l
 import SetIntegrationAuditLogRetention from './20260921235951_set-integration-audit-log-retention';
 import SetSlackAuditLogRetention from './20260921235952_set-slack-audit-log-retention';
 import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveops-triage-config-audit-log-retention';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import ReconcileOrgStampedFileStorageOwners from './20260921235971_reconcile-org-stamped-file-storage-owners';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -342,6 +346,8 @@ const coreMigrations: MigrationFile[] = [
   SetIntegrationAuditLogRetention,
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
+  EnsureFabFileOwnerOrganizationIndex,
+  ReconcileOrgStampedFileStorageOwners,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

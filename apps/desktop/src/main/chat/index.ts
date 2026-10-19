@@ -29,6 +29,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
@@ -530,11 +531,15 @@ export function registerChat(
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.chatAddContextDirectory, async (event, sessionId: string) => {
-    const directory = await pickDirectory(event.sender);
-    if (!directory) return null;
-    return service.addContextDirectory(sessionId, directory);
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.chatAddContextDirectory,
+    async (event, sessionId: string, path?: unknown): Promise<ShareDirectoryResult> => {
+      if (typeof path === 'string') return service.shareDirectory(sessionId, path);
+      const directory = await pickDirectory(event.sender);
+      if (!directory) return { status: 'cancelled' };
+      return service.shareDirectory(sessionId, directory);
+    }
+  );
 
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)

@@ -1070,7 +1070,7 @@ async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBud
  * validates params, so whatever the model emits arrives here as-is and must be made safe at the
  * handler (the shape knowledgeBaseRetrieve, bashExecute and wolfram_alpha already use). The CLI's
  * tool_search takes the other route for the same problem - see ToolSearchParamsSchema in
- * packages/cli/src/tools/toolSearchTool.ts, which safeParses and REJECTS out-of-range rather than
+ * b4m-core/agents/src/toolSearch/toolSearchTool.ts, which safeParses and REJECTS out-of-range rather than
  * clamping; that stays out of the chat path, where a rejected search costs the turn. Both ends are clamped
  * because every out-of-range value fails SILENTLY otherwise: 0 serves no passages while telling
  * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons

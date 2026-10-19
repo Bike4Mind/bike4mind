@@ -8,6 +8,7 @@ import {
   adminSettingsRepository,
   dataLakeRepository,
   connectDB,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 // @ts-ignore - service may not be exported in types yet
@@ -227,6 +228,7 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
           {
             db: {
               users: userRepository,
+              organizations: organizationRepository,
               ingestedEmails: ingestedEmailRepository,
               fabFiles: fabFileRepository,
               adminSettings: adminSettingsRepository,

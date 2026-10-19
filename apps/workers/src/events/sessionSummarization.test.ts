@@ -45,6 +45,7 @@ vi.mock('@server/utils/eventBus', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   Session: { findById: vi.fn(async () => h.session) },
   User: { findById: h.userFindById },
   Quest: {

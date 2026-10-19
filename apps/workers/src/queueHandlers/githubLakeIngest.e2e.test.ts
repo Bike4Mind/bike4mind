@@ -10,6 +10,7 @@ import {
   DataLakeModel,
   FabFile,
   OrgGitHubLakeConnection,
+  Organization,
   User,
   buildLacksContentPrefixTagFilter,
   fabFileRepository,
@@ -88,9 +89,9 @@ const setRepo = (entries: [string, string][]) => {
   for (const [path, content] of entries) h.files.set(path, content);
 };
 
-const connect = (lakeId: string, userId: string) =>
+const connect = (lakeId: string, userId: string, organizationId: string) =>
   orgGitHubLakeConnectionRepository.create({
-    organizationId: 'org-gh-e2e',
+    organizationId,
     targetDataLakeId: lakeId,
     installationId: 111,
     accountLogin: 'acme',
@@ -103,19 +104,23 @@ const connect = (lakeId: string, userId: string) =>
 async function seed() {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const user = await User.create({ username: `gh-lake-e2e-${suffix}`, name: 'GitHub Lake E2E' });
+  // A real org: an org lake's files are billed to it, and the quota gate refuses an org that does not exist.
+  const organization = await Organization.create({ name: `GitHub Lake E2E ${suffix}`, userId: user.id });
+  const organizationId = String(organization._id);
   const lake = await DataLakeModel.create({
     name: `gh-lake-${suffix}`,
     slug: `gh-lake-${suffix}`,
     fileTagPrefix: `gh-${suffix}:`,
     datalakeTag: `datalake:gh-${suffix}`,
     createdByUserId: user.id,
-    organizationId: 'org-gh-e2e',
+    organizationId,
     origin: 'connector-fed',
     status: 'active',
   });
-  const connection = await connect(lake.id, user.id);
+  const connection = await connect(lake.id, user.id, organizationId);
   return {
     userId: user.id as string,
+    organizationId,
     lakeId: lake.id as string,
     datalakeTag: lake.datalakeTag as string,
     prefix: lake.fileTagPrefix as string,
@@ -342,7 +347,7 @@ describe('githubLakeIngest end to end', () => {
   });
 
   it('disconnect purges the connection s files, so a reconnect re-sync leaves no orphaned copy', async () => {
-    const { userId, lakeId, datalakeTag, connectionId } = await seed();
+    const { userId, organizationId, lakeId, datalakeTag, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
@@ -365,7 +370,7 @@ describe('githubLakeIngest end to end', () => {
     // which the reconnect's first sync can no longer see to retire.
     setRepo([['src/index.ts', 'export const a = 1;\n']]);
     h.headSha.value = 'commit-2';
-    const { id: reconnectedId } = await connect(lakeId, userId);
+    const { id: reconnectedId } = await connect(lakeId, userId, organizationId);
     await run({ connectionId: reconnectedId });
 
     const live = await FabFile.find({ tags: { $elemMatch: { name: datalakeTag } }, archivedAt: null });

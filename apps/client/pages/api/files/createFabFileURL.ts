@@ -6,6 +6,7 @@ import {
   scopedSettingsRepository,
   User,
   withTransaction,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Permission } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
@@ -43,6 +44,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
               users: User,
+              organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },
             storage: {

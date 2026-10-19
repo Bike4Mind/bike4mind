@@ -96,6 +96,7 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: {},
   fabFileRepository: { listOwnedBeforeId: mockListOwnedBeforeId },
   userRepository: {},
+  organizationRepository: {},
   withTransaction: (fn: () => unknown) => fn(),
 }));
 

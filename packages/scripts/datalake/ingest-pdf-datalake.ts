@@ -529,7 +529,6 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
               contentHash: file.contentHash,
               relativePath: file.relativePath,
               tags: [{ name: lake.datalakeTag, strength: 1 }],
-              ...(opts.organizationId && { organizationId: opts.organizationId }),
             },
             adapters
           );
@@ -662,7 +661,10 @@ if (isMainModule) {
     .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
     .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
     .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
-    .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
+    .option('organizationId', {
+      type: 'string',
+      describe: 'Resolve the lake within this org (storage is billed to the lake owner)',
+    })
     .option('concurrency', {
       type: 'number',
       default: 4,

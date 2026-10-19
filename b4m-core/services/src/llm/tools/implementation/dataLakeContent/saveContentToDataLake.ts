@@ -110,6 +110,7 @@ async function createUserFile(
         fabFiles: adapters.fabFiles,
         adminSettings: adapters.adminSettings,
         users: adapters.users,
+        organizations: adapters.organizations,
         dataLakes: adapters.dataLakes,
         dataLakeAccessGrants: adapters.dataLakeAccessGrants,
         scopedSettings: adapters.scopedSettings,

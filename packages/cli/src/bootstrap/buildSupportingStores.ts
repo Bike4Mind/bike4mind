@@ -153,7 +153,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
   // and "deferred" (rarely used - load on demand via tool_search). The
   // deferred set saves ~500-800 tokens of schema per turn for sessions
   // that don't use them. Same mechanism as MCP tools - see
-  // packages/cli/src/tools/deferredToolRegistry.ts.
+  // b4m-core/agents/src/toolSearch.
   const deferredB4mToolNames = new Set([
     'math_evaluate',
     'dice_roll',

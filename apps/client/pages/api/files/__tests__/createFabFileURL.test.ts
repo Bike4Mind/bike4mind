@@ -26,6 +26,7 @@ vi.mock('@server/utils/storage', () => ({
 // The spy that stands in for every FabFile write. The service is mocked below, so a call here can
 // only come from the route persisting a second time on its own.
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
   dataLakeRepository: {},

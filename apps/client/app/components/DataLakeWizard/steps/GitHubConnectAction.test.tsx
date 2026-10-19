@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { LakeGitHubConnection } from '@client/app/hooks/data/githubLake';
@@ -442,6 +442,16 @@ describe('GitHubConnectAction', () => {
 
       fireEvent.click(screen.getByTestId('github-ask-about-repo-btn'));
       expect(h.startChatWithLake).toHaveBeenCalledWith('lake1', { onCreated: onChatStarted });
+    });
+
+    it('hands the lake to a caller-owned creator instead of the generic chat hook', async () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT });
+      const startChatForLake = vi.fn().mockResolvedValue(undefined);
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} startChatForLake={startChatForLake} />);
+
+      fireEvent.click(screen.getByTestId('github-ask-about-repo-btn'));
+      await waitFor(() => expect(startChatForLake).toHaveBeenCalledWith('lake1'));
+      expect(h.startChatWithLake).not.toHaveBeenCalled();
     });
 
     it('is hidden during a first sync, which has not finished landing the repo', () => {

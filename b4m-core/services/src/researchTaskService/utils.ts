@@ -9,6 +9,7 @@ import {
   IResearchTask,
   IUserDocument,
   IUserRepository,
+  IOrganizationRepository,
   isImageServeable,
   isStorageLimitError,
 } from '@bike4mind/common';
@@ -73,6 +74,7 @@ export async function findOrUpdateExistingResearchData(
       researchDatas: IResearchDataRepository;
       fabFiles: Pick<IFabFileRepository, 'findById' | 'update' | 'commitContentRewrite' | 'findChargeState'>;
       users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
+      organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
     };
     storage: CreateFabFileAdapters['storage'];
   },

@@ -9,6 +9,7 @@ export * from './vectorize';
 export * from './stampChunkEmbeddingModel';
 export * from './create';
 export * from './resolveOwnerOrganization';
+export * from './ownerStorage';
 export * from './listBySession';
 export * from './listByQuest';
 export * from './createByUrl';

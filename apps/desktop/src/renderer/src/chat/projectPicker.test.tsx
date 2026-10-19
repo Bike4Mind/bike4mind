@@ -74,7 +74,7 @@ describe('cancelling the folder picker', () => {
   });
 
   it('shows no notice when the context-folder picker is dismissed', async () => {
-    addContextDirectory.mockResolvedValue(null);
+    addContextDirectory.mockResolvedValue({ status: 'cancelled' });
     await act(async () => binding.addContextDirectory());
 
     expect(binding.error).toBeNull();

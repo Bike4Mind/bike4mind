@@ -1271,15 +1271,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   async findPendingPlaceholderLake(
     userId: string,
-    organizationId: string,
+    organizationId: string | undefined,
     connector: DataLakePendingConnector,
     placeholder: string
   ): Promise<IDataLakeDocument | null> {
-    if (!userId || !organizationId) return null;
+    if (!userId) return null;
     return this.dataLakeModel
       .findOne({
         createdByUserId: userId,
-        organizationId,
+        organizationId: organizationId || { $in: [null, ''] },
         pendingConnector: connector,
         name: placeholder,
         status: 'draft',

@@ -1,9 +1,10 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { NotFoundError, QuestBlocker } from '@bike4mind/common';
+import { NotFoundError, QuestBlocker, questMasterPlanMutationResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { verifyQuestPlanWriteAccess, QUEST_ID_PATTERN } from '@server/utils/questMasterPlanAccess';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,6 +17,8 @@ const AddBlockerSchema = z.object({
   relatedQuestId: z.string().min(1).max(100).regex(QUEST_ID_PATTERN, 'Invalid questId format').optional(),
   relatedSubQuestId: z.string().min(1).max(100).regex(QUEST_ID_PATTERN, 'Invalid subQuestId format').optional(),
 });
+
+const blockerResponseSchema = questMasterPlanMutationResponseSchema.extend({ blockerId: z.string() });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))
@@ -35,7 +38,7 @@ const handler = baseApi()
 
     if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
-    res.json({ success: true, plan: updatedPlan, blockerId: blocker.id });
+    respond(res, blockerResponseSchema, { success: true, plan: updatedPlan, blockerId: blocker.id });
   });
 
 export default handler;

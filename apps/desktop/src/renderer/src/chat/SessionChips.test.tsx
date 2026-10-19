@@ -325,12 +325,12 @@ describe('the chip row once the session has run here', () => {
     expect(disabled('session-chip-add-context')).toBe(false);
   });
 
-  it('locks the folder, worktree and context controls once it has', async () => {
+  it('locks the folder and worktree controls once it has, but not adding a context folder', async () => {
     await show(true);
 
     expect(disabled('session-chip-project')).toBe(true);
     expect(disabled('session-chip-worktree-toggle')).toBe(true);
-    expect(disabled('session-chip-add-context')).toBe(true);
+    expect(disabled('session-chip-add-context')).toBe(false);
   });
 
   it('leaves the branch chip openable while nothing has run yet', async () => {

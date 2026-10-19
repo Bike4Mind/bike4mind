@@ -1,9 +1,10 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/common';
+import { NotFoundError, questMasterPlanMutationResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { verifyQuestPlanWriteAccess } from '@server/utils/questMasterPlanAccess';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
@@ -34,7 +35,7 @@ const handler = baseApi()
       throw new NotFoundError('Blocker not found or already resolved');
     }
 
-    res.json({ success: true, plan: updatedPlan });
+    respond(res, questMasterPlanMutationResponseSchema, { success: true, plan: updatedPlan });
   });
 
 export default handler;

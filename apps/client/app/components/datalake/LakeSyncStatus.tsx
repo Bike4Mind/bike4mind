@@ -20,7 +20,7 @@ export default function LakeSyncStatus({
   isCreator: boolean;
 }) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
-  const gitHubEnabled = !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
+  const gitHubEnabled = (!!organizationId || isCreator) && isAdminFeatureEnabled('EnableDataLakeGitHub');
   const { data: drive } = useLakeDriveConnection(lakeId, !!organizationId || isCreator);
   const { data: gitHub } = useLakeGitHubConnection(lakeId, gitHubEnabled);
 
