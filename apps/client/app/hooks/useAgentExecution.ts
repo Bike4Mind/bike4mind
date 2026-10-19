@@ -204,15 +204,15 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
 
 /**
  * Prompt-bubble text for a `failed` run. A `tool_denied` stop is a decision (the user
- * clicked Deny, or policy blocks the tool), not a crash, so it names the tool. Every
- * other reason stays generic - no internal details - mirroring persistRunAsQuest's
- * failure-path Quest body. Worded to fit both deny paths: the Deny click
- * (`server/websocket/agentExecute.ts`) and the executor's policy block
- * (`workers/.../agentExecutorUtils/toolPermissions.ts`).
+ * clicked Deny, or policy blocks the tool), not a crash, so it shows the server's denial
+ * text - the same text both deny paths persist on the Quest (`server/websocket/agentExecute.ts`
+ * and `workers/.../agentExecutorUtils/toolPermissions.ts`), so the bubble keeps its wording
+ * when the persisted Quest replaces it. Every other reason stays generic.
  */
-export function failedRunReply(reason?: string, toolName?: string): string {
+export function failedRunReply(reason?: string, toolName?: string, message?: string): string {
   if (reason !== 'tool_denied') return 'Agent execution failed.';
-  return toolName ? `Stopped: "${toolName}" was denied.` : 'Stopped: a tool call was denied.';
+  if (message) return message;
+  return toolName ? `Execution stopped: "${toolName}" was denied.` : 'Execution stopped: a tool call was denied.';
 }
 
 export function useAgentExecutionSubscriptions(): void {
@@ -393,7 +393,7 @@ export function useAgentExecutionSubscriptions(): void {
           appendReplyToLatestOptimisticBubble(
             queryClient,
             sessionId,
-            failedRunReply(msg.reason, msg.toolName),
+            failedRunReply(msg.reason, msg.toolName, msg.message),
             msg.executionId
           );
         }

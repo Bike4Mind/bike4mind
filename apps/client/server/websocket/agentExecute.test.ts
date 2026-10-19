@@ -101,6 +101,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -201,6 +202,7 @@ describe('handlePermissionResponse', () => {
       deniedTool: 'web_search',
       errorMessage: 'Execution stopped: you denied "web_search".',
     });
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
     expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
     const [sentCommand] = mockApiGwSend.mock.calls[0];
@@ -463,6 +465,7 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(persistRunAsQuest).not.toHaveBeenCalled();
     expect(mockRememberDecision).not.toHaveBeenCalled();
     expect(noopLogger.warn).toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();

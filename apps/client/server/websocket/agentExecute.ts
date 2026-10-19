@@ -607,6 +607,10 @@ export async function handlePermissionResponse(
       toolName: cmd.toolName,
       message: denialMessage,
     });
+    // Settle the dispatch-time Quest so chat history keeps the denial across a refresh
+    // instead of a permanently `pending` empty bubble - parity with the executor's
+    // policy-denied path (`agentExecutorUtils/toolPermissions.ts`).
+    await persistRunAsQuest(cmd.executionId, denialMessage, logger);
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,
       toolName: cmd.toolName,

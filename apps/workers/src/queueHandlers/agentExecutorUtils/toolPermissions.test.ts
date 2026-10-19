@@ -704,7 +704,9 @@ describe('settleGatedCall', () => {
       executionId: 'exec_1',
       reason: 'tool_denied',
       toolName: 'image_generation',
+      message: 'Execution stopped: tool "image_generation" is not permitted.',
     });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('Execution stopped: tool "image_generation" is not permitted.');
     expect(deps.updateStatus).not.toHaveBeenCalled();
     expect(deps.updatePermissionState).not.toHaveBeenCalled();
   });

@@ -429,8 +429,14 @@ const IterationStream: FC<IterationStreamProps> = ({
       ) : null}
       {execution.status === 'failed' && execution.failureReason ? (
         <Typography level="body-sm" sx={{ color: 'danger.softColor' }}>
-          Failed: {execution.failureReason}
-          {execution.errorMessage ? ` — ${execution.errorMessage}` : null}
+          {execution.failureReason === 'tool_denied' ? (
+            (execution.errorMessage ?? 'Execution stopped: a tool call was denied.')
+          ) : (
+            <>
+              Failed: {execution.failureReason}
+              {execution.errorMessage ? ` \u2014 ${execution.errorMessage}` : null}
+            </>
+          )}
         </Typography>
       ) : null}
       {execution.status === 'completed' && execution.answer && !hideFinalAnswer ? (
