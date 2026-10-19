@@ -17,9 +17,11 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
+import { dataLakeResponseSchema } from '@bike4mind/common';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
+import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { DataLakeCleanupMessage } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
@@ -33,6 +35,9 @@ import {
 const LifecycleInput = z.object({
   action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup', 'promote', 'demote']),
 });
+
+// unarchive and restore report what they brought back, not the lake (UnarchiveResult).
+const restoreResultResponseSchema = z.object({ restoredCount: z.number(), skippedDuplicates: z.number() });
 
 /**
  * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
@@ -101,7 +106,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           },
           logger: req.logger,
         });
-        return res.json(result);
+        return respond(res, dataLakeResponseSchema, result);
       }
       case 'unarchive': {
         const result = await dataLakeService.unarchiveDataLake(actor, lake.id, {
@@ -121,7 +126,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           },
           logger: req.logger,
         });
-        return res.json(result);
+        return respond(res, restoreResultResponseSchema, result);
       }
       case 'promote': {
         // Transactional so a concurrent grant revoke serializes against this lake-doc write and the
@@ -136,7 +141,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             logger: req.logger,
           })
         );
-        return res.json(result);
+        return respond(res, dataLakeResponseSchema, result);
       }
       case 'demote': {
         const result = await withTransaction(() =>
@@ -149,7 +154,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             logger: req.logger,
           })
         );
-        return res.json(result);
+        return respond(res, dataLakeResponseSchema, result);
       }
       case 'restore': {
         // Recover a soft-deleted (phase-1) lake back to active.
@@ -173,7 +178,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           },
           logger: req.logger,
         });
-        return res.json(result);
+        return respond(res, restoreResultResponseSchema, result);
       }
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
@@ -200,7 +205,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
           logger: req.logger,
         });
-        return res.json(result);
+        return respond(res, dataLakeResponseSchema, result);
       }
       case 'cleanup': {
         // Phase-2 hard delete can fan out over every file/chunk in the lake, which blows the

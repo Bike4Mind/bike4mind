@@ -13,12 +13,13 @@ import {
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { UpdateDataLakeRequestInput } from '@bike4mind/common';
+import { UpdateDataLakeRequestInput, dataLakeResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
@@ -79,7 +80,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     if (dataLakeService.isFallbackLake(dataLake)) {
       try {
         const stats = await fabFileRepository.computeDataLakeStats(dataLakeService.registryMembershipScope(dataLake));
-        return res.json({ ...redacted, fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes });
+        return respond(res, dataLakeResponseSchema, {
+          ...redacted,
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
+        });
       } catch (error) {
         // `.error` not `.warn`, since a stats-lookup failure here is worth surfacing at error
         // level even though the endpoint still succeeds. `err` is the message, not the raw
@@ -90,7 +95,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         });
       }
     }
-    return res.json(redacted);
+    return respond(res, dataLakeResponseSchema, redacted);
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {
@@ -135,7 +140,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       });
     });
 
-    return res.json(updated);
+    return respond(res, dataLakeResponseSchema, updated);
   })
   // DELETE /api/data-lakes/:id - archive a data lake (reversible; full teardown)
   .delete(async (req: Request, res) => {
@@ -170,7 +175,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       logger: req.logger,
     });
 
-    return res.json(archived);
+    return respond(res, dataLakeResponseSchema, archived);
   });
 
 export const config = {
