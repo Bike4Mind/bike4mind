@@ -59,6 +59,8 @@ export const mcpConnectionPatchBodySchema = z
         z
           .object({
             name: z.string().min(1).max(MCP_CONNECTION_LIMITS.toolNameLength),
+            /** The tool's `versionHash` as the reviewer saw it; a stale one is a 409. */
+            versionHash: z.string().min(1).max(128),
             enabled: z.boolean().optional(),
             approval: z.enum(MCP_TOOL_APPROVAL_MODES).optional(),
             state: z.enum(MCP_TOOL_STATES).optional(),

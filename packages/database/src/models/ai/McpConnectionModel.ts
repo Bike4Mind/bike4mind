@@ -13,6 +13,8 @@ import {
   McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
+  McpToolVersionConflictError,
+  McpConnectionSettingsUpdate,
   McpApiKeyUpdate,
   McpConnectionCapError,
   MCP_CONNECTION_LIMITS,
@@ -106,6 +108,7 @@ const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
       get: (value: unknown) => mapSchemaKeys(value, unescapeSchemaKey),
     },
     annotations: { type: Schema.Types.Mixed },
+    versionHash: { type: String },
     enabled: { type: Boolean, required: true },
     approval: { type: String, enum: MCP_TOOL_APPROVAL_MODES, default: 'default' },
     state: { type: String, enum: MCP_TOOL_STATES, required: true },
@@ -520,18 +523,28 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return this.updateForOwner(id, owner, { enabled });
   }
 
-  /**
-   * One `arrayFilters` update (identifier `t<i>` per tool name), so a partial failure cannot leave
-   * half a review applied. Duplicate names collapse to the last entry: two filters resolving to the
-   * same element would make the server reject the whole write as a path conflict.
-   */
   async setToolSettings(
     id: string,
     owner: McpConnectionOwner,
     settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null> {
+    return this.updateSettings(id, owner, { tools: settings });
+  }
+
+  /**
+   * One update: `arrayFilters` (identifier `t<i>` per tool) for the review, so a partial failure
+   * cannot leave half a review applied. A versioned entry is also an `$elemMatch` on the query, so
+   * a tool that changed since review makes the whole write match nothing. Duplicate names collapse
+   * to the last entry: two filters resolving to the same element would make the server reject the
+   * whole write as a path conflict.
+   */
+  async updateSettings(
+    id: string,
+    owner: McpConnectionOwner,
+    update: McpConnectionSettingsUpdate
+  ): Promise<IMcpConnectionDocument | null> {
     const byName = new Map<string, McpToolSettingsUpdate>();
-    for (const entry of settings) {
+    for (const entry of update.tools ?? []) {
       if (entry.approval !== undefined && !TOOL_APPROVAL_MODES.has(entry.approval)) {
         throw new Error(`Invalid tool approval mode: ${entry.approval}`);
       }
@@ -542,23 +555,35 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     }
 
     const set: Record<string, unknown> = {};
+    if (update.displayName !== undefined) set.displayName = update.displayName;
+    if (update.enabled !== undefined) set.enabled = update.enabled;
     const arrayFilters: Record<string, string>[] = [];
+    const versionGuards: Record<string, unknown>[] = [];
     for (const entry of byName.values()) {
+      if (entry.versionHash !== undefined) {
+        versionGuards.push({ tools: { $elemMatch: { name: entry.name, versionHash: entry.versionHash } } });
+      }
       const fields = (['enabled', 'approval', 'state'] as const).filter(field => entry[field] !== undefined);
       if (fields.length === 0) continue;
       const ident = `t${arrayFilters.length}`;
       arrayFilters.push({ [`${ident}.name`]: entry.name });
       for (const field of fields) set[`tools.$[${ident}].${field}`] = entry[field];
     }
-    if (arrayFilters.length === 0) return this.findByIdForOwner(id, owner);
-
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const result = await this.model.findOneAndUpdate(
-      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey },
-      { $set: set, $inc: { toolsRevision: 1 } },
-      { new: true, arrayFilters }
-    );
-    return result?.toJSON() ?? null;
+    const ownerFilter = { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey };
+    const filter = versionGuards.length > 0 ? { ...ownerFilter, $and: versionGuards } : ownerFilter;
+    const touchesTools = arrayFilters.length > 0;
+    const result =
+      Object.keys(set).length === 0
+        ? await this.model.findOne(filter)
+        : await this.model.findOneAndUpdate(
+            filter,
+            { $set: set, ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}) },
+            { new: true, runValidators: true, ...(touchesTools ? { arrayFilters } : {}) }
+          );
+    if (result) return result.toJSON();
+    if (versionGuards.length > 0 && (await this.findByIdForOwner(id, owner))) throw new McpToolVersionConflictError();
+    return null;
   }
 
   async updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null> {

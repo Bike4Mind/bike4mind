@@ -6,9 +6,10 @@ import {
   CustomMcpPolicySchema,
   McpConnectionCapError,
   McpConnectionSlugConflictError,
+  McpToolVersionConflictError,
   type IMcpConnectionDocument,
   type McpApiKeyUpdate,
-  type McpToolSettingsUpdate,
+  type McpConnectionSettingsUpdate,
 } from '@bike4mind/common';
 import { RemoteMcpTimeoutError } from '@bike4mind/mcp/remote';
 import type { CustomMcpContext } from '@server/mcpConnections/customMcpAccess';
@@ -35,6 +36,7 @@ const h = vi.hoisted(() => ({
   makeCapError: undefined as unknown as (cap: number) => Error,
   makeSlugError: undefined as unknown as (slug: string) => Error,
   makeTooMany: undefined as unknown as () => Error,
+  makeVersionConflict: undefined as unknown as () => Error,
 }));
 
 vi.mock('@server/middlewares/baseApi', async () => {
@@ -121,9 +123,7 @@ const repo = vi.hoisted(() => ({
   createWithinUserCap: vi.fn(),
   findByIdForOwner: vi.fn(),
   listAllForUser: vi.fn(),
-  rename: vi.fn(),
-  setEnabled: vi.fn(),
-  setToolSettings: vi.fn(),
+  updateSettings: vi.fn(),
   setApiKey: vi.fn(),
   deleteForOwner: vi.fn(),
 }));
@@ -152,21 +152,25 @@ function installRepo(): void {
     Object.assign(doc!, set);
     return defaultRead(doc);
   };
-  repo.rename.mockImplementation(async (id: string, owner: { ownerKey: string }, displayName: string) =>
-    patch(id, owner, { displayName })
-  );
-  repo.setEnabled.mockImplementation(async (id: string, owner: { ownerKey: string }, enabled: boolean) =>
-    patch(id, owner, { enabled })
-  );
-  repo.setToolSettings.mockImplementation(
-    async (id: string, owner: { ownerKey: string }, settings: McpToolSettingsUpdate[]) => {
+  // One write, refused whole when a reviewed version is stale, as the real repository does.
+  repo.updateSettings.mockImplementation(
+    async (id: string, owner: { ownerKey: string }, { tools: settings, ...rest }: McpConnectionSettingsUpdate) => {
       const doc = h.store.get(id);
       if (!ownerMatches(doc, owner)) return null;
-      const tools = (doc!.tools as Doc['tools']).map(tool => {
-        const entry = settings.find(s => s.name === tool.name);
-        return entry ? { ...tool, ...entry } : tool;
+      const stored = doc!.tools as Doc['tools'];
+      const stale = (settings ?? []).some(
+        entry =>
+          entry.versionHash !== undefined &&
+          !stored.some(t => t.name === entry.name && t.versionHash === entry.versionHash)
+      );
+      if (stale) throw h.makeVersionConflict();
+      const tools = stored.map(tool => {
+        const entry = settings?.find(s => s.name === tool.name);
+        if (!entry) return tool;
+        const { versionHash: _reviewed, ...choices } = entry;
+        return { ...tool, ...choices };
       });
-      return patch(id, owner, { tools });
+      return patch(id, owner, { ...rest, tools });
     }
   );
   repo.setApiKey.mockImplementation(async (id: string, owner: { ownerKey: string }, apiKey: McpApiKeyUpdate) => {
@@ -232,6 +236,7 @@ async function createConnection(overrides: Record<string, unknown> = {}, user: u
 beforeAll(async () => {
   h.makeCapError = cap => new McpConnectionCapError(cap);
   h.makeSlugError = slug => new McpConnectionSlugConflictError(slug);
+  h.makeVersionConflict = () => new McpToolVersionConflictError();
   const { TooManyRequestsError } = await import('@bike4mind/common');
   h.makeTooMany = () => new TooManyRequestsError('Rate limit exceeded');
   routes.collection = (await import('../index')).default as unknown as Handler;
@@ -257,6 +262,7 @@ beforeEach(() => {
           description: 'Lists issues',
           descriptionRawHash: 'h',
           inputSchema: { type: 'object' },
+          versionHash: 'v1',
           enabled: false,
           approval: 'default',
           state: 'pending_review',
@@ -472,7 +478,11 @@ describe('/api/mcp-connections/[id]', () => {
     const result = await call(routes.item, {
       method: 'PATCH',
       id,
-      body: { displayName: 'Linear (work)', enabled: false, tools: [{ name: 'list_issues', enabled: true }] },
+      body: {
+        displayName: 'Linear (work)',
+        enabled: false,
+        tools: [{ name: 'list_issues', versionHash: 'v1', enabled: true }],
+      },
     });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
@@ -480,10 +490,40 @@ describe('/api/mcp-connections/[id]', () => {
       enabled: false,
       tools: [{ name: 'list_issues', enabled: true, state: 'active' }],
     });
-    expect(repo.setToolSettings).toHaveBeenCalledWith(id, { ownerType: 'user', ownerKey: 'user-1' }, [
-      { name: 'list_issues', enabled: true, state: 'active' },
-    ]);
+    expect(repo.updateSettings).toHaveBeenCalledTimes(1);
+    expect(repo.updateSettings).toHaveBeenCalledWith(
+      id,
+      { ownerType: 'user', ownerKey: 'user-1' },
+      {
+        displayName: 'Linear (work)',
+        enabled: false,
+        tools: [{ name: 'list_issues', versionHash: 'v1', enabled: true, state: 'active' }],
+      }
+    );
     expect(h.audits).toContainEqual({ action: 'tool_review_saved', outcome: 'success' });
+  });
+
+  it('PATCH binds a review to the version reviewed: missing is 400, unknown tool is 400, stale is 409', async () => {
+    const id = ((await createConnection()).body as { id: string }).id;
+    const patchTools = (tools: unknown[], extra: Record<string, unknown> = {}) =>
+      call(routes.item, { method: 'PATCH', id, body: { ...extra, tools } });
+
+    expect((await patchTools([{ name: 'list_issues', enabled: true }])).status).toBe(400);
+
+    const unknown = await patchTools([{ name: 'not_a_tool', versionHash: 'v1', enabled: true }], {
+      displayName: 'Renamed',
+    });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body).toMatchObject({ code: 'unknown_tool' });
+
+    const stale = await patchTools([{ name: 'list_issues', versionHash: 'v0', enabled: true }], {
+      displayName: 'Renamed',
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ code: 'tool_version_conflict' });
+
+    expect(h.store.get(id)).toMatchObject({ displayName: 'Linear', tools: [{ enabled: false }] });
+    expect(h.audits).not.toContainEqual({ action: 'tool_review_saved', outcome: 'success' });
   });
 
   it('PATCH refuses an empty or unknown-field body and another owner', async () => {

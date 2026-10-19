@@ -274,6 +274,18 @@ describe('mergeDiscoveredTools', () => {
     expect(result.changed).toEqual([]);
   });
 
+  it('stamps each tool with a version hash that moves exactly when the tool needs review again', () => {
+    const first = mergeDiscoveredTools([], cleaned([{ name: 'a', description: 'A' }])).tools;
+    expect(first[0]?.versionHash).toMatch(/^[0-9a-f]{64}$/);
+    const same = mergeDiscoveredTools(first, cleaned([{ name: 'a', description: 'A' }])).tools;
+    expect(same[0]?.versionHash).toBe(first[0]?.versionHash);
+    const schemaOnly = mergeDiscoveredTools(
+      first,
+      cleaned([{ name: 'a', description: 'A', inputSchema: { type: 'object', properties: { x: {} } } }])
+    ).tools;
+    expect(schemaOnly[0]?.versionHash).not.toBe(first[0]?.versionHash);
+  });
+
   it('an unchanged list keeps the fingerprint the stored tools produce', () => {
     const result = mergeDiscoveredTools(existing, [keep!, change!, drop!], now);
     expect(computeMcpToolsFingerprint(result.tools)).toBe(computeMcpToolsFingerprint(existing));

@@ -233,6 +233,11 @@ function toolSignature(tool: ToolIdentity): string {
   ]);
 }
 
+/** The per-tool `versionHash` a review is bound to: sha256 of the same fields the fingerprint covers. */
+export function computeMcpToolVersionHash(tool: ToolIdentity): string {
+  return sha256(toolSignature(tool));
+}
+
 /**
  * sha256 over the tools sorted by name, each as (name, title, cleaned description, raw description
  * hash, schema hash, annotations). Independent of server order and key order. It covers the same
@@ -267,9 +272,11 @@ export function mergeDiscoveredTools(
   const changed: string[] = [];
   const tools = discovered.map((fresh): IMcpConnectionTool => {
     const stored = byName.get(fresh.name);
+    const versionHash = computeMcpToolVersionHash(fresh);
     if (stored && toolSignature(stored) === toolSignature(fresh)) {
       return {
         ...fresh,
+        versionHash,
         enabled: stored.enabled,
         approval: stored.approval,
         state: stored.state,
@@ -279,6 +286,7 @@ export function mergeDiscoveredTools(
     (stored ? changed : added).push(fresh.name);
     return {
       ...fresh,
+      versionHash,
       enabled: false,
       approval: 'default',
       state: 'pending_review',

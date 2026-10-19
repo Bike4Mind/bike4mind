@@ -7,6 +7,7 @@ import {
   McpConnectionCapError,
   McpConnectionProtectedFieldError,
   McpConnectionSlugConflictError,
+  McpToolVersionConflictError,
   toMcpConnectionPublic,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
@@ -576,6 +577,51 @@ describe('McpConnectionModel', () => {
         await mcpConnectionRepository.setToolSettings(created.id, { ownerType: 'user', ownerKey: 'user-2' }, [
           { name: 'a', enabled: false },
         ])
+      ).toBeNull();
+    });
+
+    it('updateSettings renames, toggles and reviews in one write, bound to the reviewed version', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { versionHash: 'v-a1' }), tool('b', { versionHash: 'v-b1' })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+      });
+
+      const updated = await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        displayName: 'Linear (work)',
+        enabled: false,
+        tools: [{ name: 'a', versionHash: 'v-a1', enabled: true, state: 'active' }],
+      });
+      expect(updated).toMatchObject({ displayName: 'Linear (work)', enabled: false, toolsRevision: 2 });
+      expect(updated?.tools.map(t => [t.name, t.enabled, t.state])).toEqual([
+        ['a', true, 'active'],
+        ['b', false, 'pending_review'],
+      ]);
+
+      // The server changed `b` after the reviewer loaded it: nothing in the write lands.
+      await expect(
+        mcpConnectionRepository.updateSettings(created.id, OWNER, {
+          displayName: 'Should not land',
+          tools: [
+            { name: 'a', versionHash: 'v-a1', approval: 'always_allow' },
+            { name: 'b', versionHash: 'v-b0', enabled: true, state: 'active' },
+          ],
+        })
+      ).rejects.toThrow(McpToolVersionConflictError);
+      const after = await mcpConnectionRepository.findById(created.id);
+      expect(after).toMatchObject({ displayName: 'Linear (work)', toolsRevision: 2 });
+      expect(after?.tools.map(t => [t.name, t.enabled, t.approval])).toEqual([
+        ['a', true, 'default'],
+        ['b', false, 'default'],
+      ]);
+
+      // Another owner reads as not found rather than as a conflict.
+      expect(
+        await mcpConnectionRepository.updateSettings(created.id, OTHER_USER_OWNER, {
+          tools: [{ name: 'a', versionHash: 'stale', enabled: false }],
+        })
       ).toBeNull();
     });
 

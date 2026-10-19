@@ -206,8 +206,10 @@ export async function getUserConnection(
 }
 
 /**
- * Rename, enable or disable, and save a tool review. Enabling a tool that is pending review counts
- * as reviewing it (it becomes `active`) unless the entry says otherwise.
+ * Rename, enable or disable, and save a tool review, in one write. Enabling a tool that is pending
+ * review counts as reviewing it (it becomes `active`) unless the entry says otherwise. Each tool
+ * entry names the `versionHash` it reviewed: an unknown tool is a 400 and a tool that changed
+ * since is a 409, and either way nothing is written.
  */
 export async function updateUserConnection(
   actor: ConnectionActor,
@@ -216,20 +218,30 @@ export async function updateUserConnection(
   body: McpConnectionPatchBody
 ): Promise<IMcpConnectionPublic> {
   const owner = userOwner(actor.id);
-  let connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
-  if (!connection) throw new NotFoundError('Connection not found');
+  const current = await mcpConnectionRepository.findByIdForOwner(id, owner);
+  if (!current) throw new NotFoundError('Connection not found');
 
-  if (body.displayName !== undefined) connection = await mcpConnectionRepository.rename(id, owner, body.displayName);
-  if (connection && body.enabled !== undefined)
-    connection = await mcpConnectionRepository.setEnabled(id, owner, body.enabled);
-  if (connection && body.tools !== undefined) {
-    const settings: McpToolSettingsUpdate[] = body.tools.map(entry =>
+  let settings: McpToolSettingsUpdate[] | undefined;
+  if (body.tools !== undefined) {
+    const known = new Set((current.tools ?? []).map(tool => tool.name));
+    const unknown = body.tools.filter(entry => !known.has(entry.name)).length;
+    if (unknown > 0) {
+      throw new BadRequestError(`${unknown} of the reviewed tools are not on this connection`, {
+        code: 'unknown_tool',
+      });
+    }
+    settings = body.tools.map(entry =>
       entry.enabled === true && entry.state === undefined ? { ...entry, state: 'active' } : entry
     );
-    connection = await mcpConnectionRepository.setToolSettings(id, owner, settings);
-    if (connection) audit(actor, 'tool_review_saved', connection, { toolCount: settings.length }).success();
   }
+
+  const connection = await mcpConnectionRepository.updateSettings(id, owner, {
+    ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+    ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+    ...(settings ? { tools: settings } : {}),
+  });
   if (!connection) throw new NotFoundError('Connection not found');
+  if (settings) audit(actor, 'tool_review_saved', connection, { toolCount: settings.length }).success();
   return toPublicView(context, connection);
 }
 

@@ -504,6 +504,96 @@ describe('invokeRemoteMcp - checks before any network', () => {
     expect(fixture.requests).toHaveLength(0);
   });
 
+  it('refuses a call to a tool that is unknown, disabled or still pending review', async () => {
+    const pending = {
+      name: 'echo',
+      description: 'Echoes',
+      descriptionRawHash: 'h',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+      enabled: true,
+      approval: 'default' as const,
+      state: 'pending_review' as const,
+      firstSeenAt: new Date(),
+    };
+    const cases: Array<[Partial<IMcpConnectionDocument>, string]> = [
+      [{}, 'not_listed'],
+      [{ tools: [{ ...pending, state: 'active', enabled: false }] }, 'echo'],
+      [{ tools: [pending] }, 'echo'],
+    ];
+    for (const [overrides, toolName] of cases) {
+      const id = seed('/mcp', overrides);
+      await expect(
+        invokeRemoteMcp(
+          { action: 'callTool', connectionId: id, userId: 'user-1', toolName },
+          { runner, context: context() }
+        )
+      ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'tool_not_approved' } });
+    }
+    expect(fixture.requests).toHaveLength(0);
+    expect(state.audits.map(a => a.errorCode)).toEqual(['tool_not_approved', 'tool_not_approved', 'tool_not_approved']);
+  });
+
+  it('with allowWriteTools off, refuses a tool not marked read-only (a missing hint counts as a write)', async () => {
+    const strict = context({ policies: [CustomMcpPolicySchema.parse({ mode: 'any', allowWriteTools: false })] });
+    const writeTool = seed('/mcp', {
+      tools: [
+        {
+          name: 'echo',
+          description: 'Echoes',
+          descriptionRawHash: 'h',
+          inputSchema: {},
+          enabled: true,
+          approval: 'default',
+          state: 'active',
+          firstSeenAt: new Date(),
+        },
+      ],
+    });
+    await expect(
+      invokeRemoteMcp(
+        { action: 'callTool', connectionId: writeTool, userId: 'user-1', toolName: 'echo' },
+        { runner, context: strict }
+      )
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { reason: 'write_tools_not_allowed' } });
+    expect(fixture.requests).toHaveLength(0);
+
+    const readOnly = seed('/mcp');
+    await expect(
+      invokeRemoteMcp(
+        { action: 'callTool', connectionId: readOnly, userId: 'user-1', toolName: 'echo', args: { text: 'x' } },
+        { runner, context: strict }
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it('with requireApprovalForAll on, refuses a call unless it carries an explicit approval', async () => {
+    const approvals = context({
+      policies: [CustomMcpPolicySchema.parse({ mode: 'any', requireApprovalForAll: true })],
+    });
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp(
+        { action: 'callTool', connectionId: id, userId: 'user-1', toolName: 'echo' },
+        { runner, context: approvals }
+      )
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'approval_required' } });
+    expect(fixture.requests).toHaveLength(0);
+    await expect(
+      invokeRemoteMcp(
+        {
+          action: 'callTool',
+          connectionId: id,
+          userId: 'user-1',
+          toolName: 'echo',
+          args: { text: 'x' },
+          approved: true,
+        },
+        { runner, context: approvals }
+      )
+    ).resolves.toBeDefined();
+  });
+
   it('holds each connection to 60 calls a minute', async () => {
     const id = seed('/mcp');
     state.allowCalls = false;

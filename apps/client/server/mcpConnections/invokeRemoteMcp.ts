@@ -8,6 +8,7 @@ import {
   TooManyRequestsError,
   mcpApiKeyHeaderNameProblem,
   type IMcpConnectionDocument,
+  type IMcpConnectionTool,
   type McpConnectionTransport,
 } from '@bike4mind/common';
 import { cacheRepository, mcpConnectionRepository, type CustomMcpAuditMetadata } from '@bike4mind/database';
@@ -124,6 +125,14 @@ export class CustomMcpPolicyBlockedError extends ForbiddenError {
   }
 }
 
+/** A policy requires the user to approve each call, and this one was not approved. */
+export class CustomMcpApprovalRequiredError extends ForbiddenError {
+  constructor() {
+    super('Your organization requires approval before each tool call', { code: 'approval_required' });
+    this.name = 'CustomMcpApprovalRequiredError';
+  }
+}
+
 /** The per-(user, connection) breaker is open after repeated outages. */
 export class CustomMcpUnavailableError extends BadGatewayError {
   constructor(displayName: string) {
@@ -149,6 +158,8 @@ export interface InvokeRemoteMcpCallTool extends InvokeRemoteMcpBase {
   action: 'callTool';
   toolName: string;
   args?: Record<string, unknown>;
+  /** The user approved this specific call; required while any policy sets `requireApprovalForAll`. */
+  approved?: boolean;
 }
 
 export type InvokeRemoteMcpRequest = InvokeRemoteMcpListTools | InvokeRemoteMcpCallTool;
@@ -270,10 +281,14 @@ function buildAuthHeaders(connection: IMcpConnectionDocument): Record<string, st
   throw new RemoteMcpAuthRequiredError({});
 }
 
+/** Read-only only when the server says so and does not also call it destructive; no hint is a write. */
+function isReadOnlyTool(tool: IMcpConnectionTool | undefined): boolean {
+  return tool?.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true;
+}
+
 function operationTypeFor(connection: IMcpConnectionDocument, request: InvokeRemoteMcpRequest): OperationType {
   if (request.action === 'listTools') return 'read';
-  const annotations = connection.tools.find(tool => tool.name === request.toolName)?.annotations;
-  return annotations?.readOnlyHint === true && annotations.destructiveHint !== true ? 'read' : 'write';
+  return isReadOnlyTool(connection.tools.find(tool => tool.name === request.toolName)) ? 'read' : 'write';
 }
 
 function transportFor(connection: IMcpConnectionDocument, action: RemoteMcpAction): McpConnectionTransport {
@@ -359,6 +374,24 @@ export async function invokeRemoteMcp(
       status: connection.status,
       enabled: connection.enabled,
     });
+  }
+  if (request.action === 'callTool') {
+    const tool = connection.tools.find(candidate => candidate.name === request.toolName);
+    if (!tool || !tool.enabled || tool.state !== 'active') {
+      audit.failure('tool_not_approved');
+      throw new ConflictError('This tool has not been reviewed and enabled', { code: 'tool_not_approved' });
+    }
+    if (!isReadOnlyTool(tool) && context.policies.some(policy => !policy.allowWriteTools)) {
+      audit.failure('policy_blocked', { policyVerdict: 'write_tools_not_allowed' });
+      throw new CustomMcpPolicyBlockedError(
+        'Your organization allows only read-only tools from custom connectors',
+        'write_tools_not_allowed'
+      );
+    }
+    if (request.approved !== true && context.policies.some(policy => policy.requireApprovalForAll)) {
+      audit.failure('approval_required');
+      throw new CustomMcpApprovalRequiredError();
+    }
   }
 
   const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(

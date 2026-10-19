@@ -130,6 +130,12 @@ export interface IMcpConnectionTool {
   descriptionRawHash: string;
   inputSchema: Record<string, unknown>;
   annotations?: IMcpConnectionToolAnnotations;
+  /**
+   * sha256 over everything that sends a tool back to review (name, title, description, raw
+   * description hash, schema, annotations), set by discovery. A review names the version it saw,
+   * so approving a tool the server changed in the meantime fails instead of approving the change.
+   */
+  versionHash?: string;
   enabled: boolean;
   approval: McpToolApprovalMode;
   state: McpToolState;
@@ -507,6 +513,14 @@ export class McpConnectionCapError extends ConflictError {
   }
 }
 
+/** A tool review named a version the stored tool no longer has (the server changed it); nothing was written. */
+export class McpToolVersionConflictError extends ConflictError {
+  constructor() {
+    super('A tool changed since it was reviewed; reload and review it again', { code: 'tool_version_conflict' });
+    this.name = 'McpToolVersionConflictError';
+  }
+}
+
 /** The slug is already taken for this owner (the `mcpconn_owner_slug` unique index). */
 export class McpConnectionSlugConflictError extends ConflictError {
   constructor(readonly slug: string) {
@@ -528,9 +542,21 @@ export type McpRefreshLeaseResult =
 /** One tool's review choices. Omitted fields are left as stored; unknown tool names are ignored. */
 export interface McpToolSettingsUpdate {
   name: string;
+  /**
+   * The `versionHash` the reviewer saw. When given, the whole write is refused (see
+   * McpToolVersionConflictError) unless the stored tool still carries it.
+   */
+  versionHash?: string;
   enabled?: boolean;
   approval?: McpToolApprovalMode;
   state?: McpToolState;
+}
+
+/** Rename, enable and tool review applied together; omitted parts are left as stored. */
+export interface McpConnectionSettingsUpdate {
+  displayName?: string;
+  enabled?: boolean;
+  tools?: McpToolSettingsUpdate[];
 }
 
 export interface McpDiscoveryUpdate {
@@ -594,11 +620,21 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   deleteAllForUser(userId: string): Promise<number>;
   rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
   setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
-  /** Applies every entry in one atomic write and bumps `toolsRevision`. */
+  /** Applies every entry in one atomic write and bumps `toolsRevision`. Same guards as `updateSettings`. */
   setToolSettings(
     id: string,
     owner: McpConnectionOwner,
     settings: McpToolSettingsUpdate[]
+  ): Promise<IMcpConnectionDocument | null>;
+  /**
+   * Rename, enable and tool review in one atomic write (bumping `toolsRevision` when tools are
+   * named). Null when not found or not the owner's; throws McpToolVersionConflictError, writing
+   * nothing, when a tool entry's `versionHash` no longer matches the stored tool.
+   */
+  updateSettings(
+    id: string,
+    owner: McpConnectionOwner,
+    update: McpConnectionSettingsUpdate
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Compare-and-set on `toolsFingerprint === expectedFingerprint` AND `toolsRevision ===
