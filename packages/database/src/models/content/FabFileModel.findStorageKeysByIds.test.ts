@@ -39,7 +39,12 @@ describe('FabFileRepository.findStorageKeysByIds', () => {
     expect(await fabFileRepository.findById(file._id.toString())).toBeNull();
 
     await expect(fabFileRepository.findStorageKeysByIds([file._id.toString()])).resolves.toEqual([
-      { id: file._id.toString(), filePath: 'org/doc-v2.txt', versions: [{ filePath: 'org/doc-v1.txt' }] },
+      {
+        id: file._id.toString(),
+        filePath: 'org/doc-v2.txt',
+        versions: [{ filePath: 'org/doc-v1.txt' }],
+        moderationStatus: 'pending',
+      },
     ]);
   });
 
