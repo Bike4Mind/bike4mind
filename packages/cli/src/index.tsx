@@ -45,7 +45,7 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent } from '@bike4mind/agents';
-import { isReadOnlyTool } from './config/toolSafety.js';
+import { ToolCatalog } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import {
@@ -245,6 +245,8 @@ interface CliState {
   agent: ReActAgent | null;
   mcpManager: McpManager | null;
   permissionManager: PermissionManager | null;
+  /** Tool descriptors for this process; the permission manager and the agent's read-only predicate share it. */
+  toolCatalog: ToolCatalog;
   permissionPrompt: PermissionPromptState | null;
   trustLocationSelector: TrustLocationSelectorState | null;
   /** Startup folder-trust prompt for an untrusted project shipping b4m files. */
@@ -308,6 +310,7 @@ function CliApp() {
     agent: null,
     mcpManager: null,
     permissionManager: null,
+    toolCatalog: new ToolCatalog(),
     permissionPrompt: null,
     trustLocationSelector: null,
     folderTrustPrompt: null,
@@ -761,8 +764,8 @@ function CliApp() {
 
       // Initialize permission manager with trusted tools and denied tools from config
       const permissionManager = new PermissionManager(
+        state.toolCatalog,
         config.trustedTools || [],
-        undefined, // customCategories (not used yet)
         config.tools.disabled || [] // denied tools from project config
       );
 
@@ -1427,7 +1430,7 @@ function CliApp() {
           previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
+          isReadOnlyTool: toolName => state.toolCatalog.isReadOnly(toolName),
           // Mid-loop recovery if a provider context-window error interrupts this
           // turn: compact the in-flight history once and retry, instead of
           // failing the turn and losing the user's work.
@@ -1619,6 +1622,7 @@ function CliApp() {
       additionalDirectories: state.additionalDirectories,
       featureRegistry: state.featureRegistry,
       backgroundManager: state.backgroundManager,
+      toolCatalog: state.toolCatalog,
       todoStore: todoStoreRef.current,
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
@@ -1709,7 +1713,7 @@ function CliApp() {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => state.toolCatalog.isReadOnly(toolName),
       });
 
       // Count successful tool calls

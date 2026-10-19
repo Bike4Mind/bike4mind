@@ -14,18 +14,10 @@ import type { Session } from '../storage';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
-import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import {
-  generateCliTools,
-  wrapTools,
-  buildCliToolList,
-  PermissionManager,
-  type AgentContext,
-  type PermissionPromptKind,
-  requireApiUrl,
-} from '../utils';
+import { generateCliTools, buildCliToolList, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
+import { ToolCatalog, wrapTools, type PermissionPromptKind } from '../tools/gateway/index.js';
 import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -258,7 +250,11 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     await logger.initialize(session.id);
 
     // Initialize permission manager
-    const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled);
+    const permissionManager = new PermissionManager(
+      new ToolCatalog(),
+      config.trustedTools ?? [],
+      config.tools.disabled
+    );
 
     // NDJSON emitter, stamped with schemaVersion + runId (see headlessProtocol.ts).
     // Shared by the permission protocol below and the step stream further down.
@@ -277,7 +273,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       _preview?: string,
       kind?: PermissionPromptKind
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
+      const risk = classifyToolRisk(permissionManager.catalog.resolve(toolName), args);
       if (streaming) {
         emit({ type: 'permission_request', toolName, risk });
       }
@@ -506,7 +502,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     try {
       result = await agent.run(fullPrompt, {
         parallelExecution: config.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => permissionManager.catalog.isReadOnly(toolName),
         maxHistoryIterations: 4,
       });
     } finally {
