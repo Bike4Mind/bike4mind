@@ -29,6 +29,23 @@ vi.mock('@server/utils/cloudwatch', () => ({
 
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn() }));
 
+// The model gate runs after the release-note fetch; stub the fetch so these cases isolate the gate.
+vi.mock('@server/whatsNew/releaseNoteHighlights', () => ({
+  loadHighlightsReleaseNotes: vi.fn().mockResolvedValue({
+    kind: 'ok',
+    truncated: false,
+    entries: [
+      {
+        _id: 'm1',
+        title: 'T',
+        subtitle: 'S',
+        description: 'D',
+        createdAt: new Date('2026-02-07T10:00:00Z'),
+      },
+    ],
+  }),
+}));
+
 describe('whatsNewHighlights configured model validation', () => {
   const context = {} as Parameters<typeof dispatch>[1];
   const event = {
@@ -36,7 +53,7 @@ describe('whatsNewHighlights configured model validation', () => {
   } as unknown as Parameters<typeof dispatch>[0];
 
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     (connectDB as any).mockResolvedValue(undefined);
   });
 
