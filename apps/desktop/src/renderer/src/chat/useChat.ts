@@ -17,6 +17,7 @@ import type {
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
+import { addDirPath } from './commands';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
@@ -747,8 +748,45 @@ export function useConversation(
     const result = await window.b4m.chat.continueReply(sessionId);
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
+  const applySummary = useCallback(
+    (updated: ChatSessionSummary) => {
+      setSession(current =>
+        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+      );
+      onSummaryChanged(updated);
+    },
+    [onSummaryChanged]
+  );
+
   /**
-   * Run `/clear` or `/compact`.
+   * The chip's picker when `path` is absent, `/add-dir <path>` when present. Both go through the
+   * one main-side share, so neither can grant what the other would refuse. A refusal lands in
+   * `sendError`; `confirm` adds a line for an addition the user typed, since a typed command has
+   * no button whose result they are already looking at.
+   */
+  const shareDirectory = useCallback(
+    async (path: string | undefined, confirm: boolean) => {
+      if (!sessionId) return;
+      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+      if (result.status === 'cancelled') return;
+      if (result.status === 'refused') {
+        setSendError(result.error);
+        return;
+      }
+      if (result.status === 'already') {
+        setNotice(`${result.path} is already shared with this conversation.`);
+        return;
+      }
+      applySummary(result.session);
+      if (confirm || result.warning) {
+        setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
+      }
+    },
+    [sessionId, applySummary]
+  );
+
+  /**
+   * Run `/clear`, `/compact`, `/pr` or `/add-dir`.
    *
    * Main owns both outcomes. The streaming check that refuses a compaction is made THERE for the
    * reason queueing is: a turn that ends between a renderer-side check and the IPC call would
@@ -773,6 +811,10 @@ export function useConversation(
         if (!bound.ok) setSendError(bound.error);
         return;
       }
+      if (name === 'add-dir') {
+        await shareDirectory(addDirPath(args), true);
+        return;
+      }
       setCommandProgress(name === 'compact' ? 'Summarising this conversation...' : null);
       try {
         const result =
@@ -789,7 +831,7 @@ export function useConversation(
         setCommandProgress(null);
       }
     },
-    [sessionId]
+    [sessionId, shareDirectory]
   );
 
   const cancelQueued = useCallback(
@@ -862,16 +904,6 @@ export function useConversation(
   const dismissNotice = useCallback(() => setNotice(null), []);
 
   // A summary main just wrote, folded into both the open conversation and the sidebar row.
-  const applySummary = useCallback(
-    (updated: ChatSessionSummary) => {
-      setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
-      );
-      onSummaryChanged(updated);
-    },
-    [onSummaryChanged]
-  );
-
   /** Resolves true when the session really moved, so a caller can report what happened after. */
   const changeProject = useCallback(
     async (change: Omit<UpdateProjectRequest, 'sessionId'>) => {
@@ -950,14 +982,11 @@ export function useConversation(
   );
 
   const addContextDirectory = useCallback(async () => {
-    if (!sessionId) return;
     setProjectError(null);
-    const updated = await window.b4m.chat.addContextDirectory(sessionId);
-    // Null is a dismissed picker, which is not an error: the button is disabled until the
-    // session has a project, so the other way main returns null is not reachable from here.
-    if (!updated) return;
-    applySummary(updated);
-  }, [sessionId, applySummary]);
+    setSendError(null);
+    setNotice(null);
+    await shareDirectory(undefined, false);
+  }, [shareDirectory]);
 
   const removeContextDirectory = useCallback(
     async (directory: string) => {
