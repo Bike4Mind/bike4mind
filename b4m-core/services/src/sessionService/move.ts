@@ -1,4 +1,9 @@
-import { ISessionRepository, surfaceOwnedFields, type WorkspaceSessionSettingsTable } from '@bike4mind/common';
+import {
+  ISessionRepository,
+  surfaceOwnedFields,
+  userSetSessionFields,
+  type WorkspaceSessionSettingsTable,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { assertSurfaceTransition, type ResolveSurfaceAccess } from './surfaceTransition';
@@ -36,12 +41,19 @@ export const moveSession = async (userId: string, parameters: MoveSessionParamet
 
   // The main list is "no surface": unset rather than store null, matching sessions that never had one.
   const ownedFields = surfaceOwnedFields(session, adapters.workspaceSessionSettings);
+  if (target === null) {
+    const updated = await db.sessions.update({ id }, { unset: ['surface', ...ownedFields] });
+    if (!updated) throw new NotFoundError('Session not found');
+    return updated;
+  }
+
+  // A session created before userSetFields existed carries none, so record what the source surface leaves
+  // to the user before entering a workspace; otherwise the move back out would unset those values as owned.
+  const userSetFields = userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields);
+  const recordUserSet = userSetFields.some(field => !session.userSetFields?.includes(field));
+  const data = { id, surface: target, ...(recordUserSet ? { userSetFields } : {}) };
   const updated =
-    target === null
-      ? await db.sessions.update({ id }, { unset: ['surface', ...ownedFields] })
-      : ownedFields.length > 0
-        ? await db.sessions.update({ id, surface: target }, { unset: ownedFields })
-        : await db.sessions.update({ id, surface: target });
+    ownedFields.length > 0 ? await db.sessions.update(data, { unset: ownedFields }) : await db.sessions.update(data);
   if (!updated) throw new NotFoundError('Session not found');
   return updated;
 };

@@ -232,9 +232,29 @@ describe('moveSession with contributed workspace session settings', () => {
   });
 
   it('sets no owned field when entering the workspace', async () => {
-    const { db, result } = move(sourceSession({ surface: undefined }), WORKSPACE);
+    const { db, result } = move(
+      sourceSession({ surface: undefined, userSetFields: Object.keys(OWNED_VALUES) }),
+      WORKSPACE
+    );
     await result;
 
     expect(db.sessions.update).toHaveBeenCalledWith({ id: 'session-1', surface: WORKSPACE });
+  });
+
+  // Sessions created before userSetFields existed carry none; the main list owns nothing, so their values are the user's.
+  it('keeps the values of a session without userSetFields across a round trip through the workspace', async () => {
+    const db = makeDb(sourceSession({ surface: undefined }));
+    const adapters = { db: db as any, workspaceSessionSettings: table };
+
+    const onWorkspace = await moveSession('caller-1', { id: 'session-1', targetSurface: WORKSPACE }, adapters);
+    expect(db.sessions.update).toHaveBeenCalledWith({
+      id: 'session-1',
+      surface: WORKSPACE,
+      userSetFields: Object.keys(OWNED_VALUES),
+    });
+    db.sessions.findByIdAndUserId.mockResolvedValue(onWorkspace);
+    await moveSession('caller-1', { id: 'session-1', targetSurface: null }, adapters);
+
+    expect(db.sessions.update.mock.calls[1][1]).toEqual({ unset: ['surface'] });
   });
 });
