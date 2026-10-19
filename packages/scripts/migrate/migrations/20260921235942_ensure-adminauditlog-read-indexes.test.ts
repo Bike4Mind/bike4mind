@@ -32,13 +32,13 @@ beforeEach(() => {
 });
 
 describe('ensure-adminauditlog-read-indexes', () => {
-  it('drops each superseded index that exists, then builds the schema indexes', async () => {
+  it('builds the schema indexes before dropping each superseded index that exists', async () => {
     mockListIndexes.mockResolvedValue([{ name: '_id_' }, { name: 'old_a' }, { name: 'old_c' }, { name: 'keep' }]);
 
     await migration.up();
 
     expect(mockDropIndex).toHaveBeenCalledTimes(2);
-    expect(callOrder).toEqual(['drop:old_a', 'drop:old_c', 'create']);
+    expect(callOrder).toEqual(['create', 'drop:old_a', 'drop:old_c']);
     expect(mockCreateIndexes).toHaveBeenCalledTimes(1);
   });
 

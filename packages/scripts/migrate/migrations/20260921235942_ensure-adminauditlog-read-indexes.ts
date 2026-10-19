@@ -18,8 +18,9 @@ const listExistingIndexNames = async (): Promise<string[]> => {
 };
 
 /**
- * Replace the AdminAuditLog indexes with the `_id`-suffixed keyset set. The superseded names are
- * dropped explicitly (not via syncIndexes) so only the named indexes are removed; `autoIndex` is
+ * Replace the AdminAuditLog indexes with the `_id`-suffixed keyset set. The new indexes are built
+ * before the superseded ones are dropped, so no filtered list query is left without a supporting
+ * index. Drops are explicit (not syncIndexes) so only the named indexes are removed; `autoIndex` is
  * off in the deployed environments, so createIndexes must run here. Idempotent.
  */
 const migration: MigrationFile = {
@@ -28,10 +29,10 @@ const migration: MigrationFile = {
 
   up: async () => {
     const existing = new Set(await listExistingIndexNames());
+    await AdminAuditLogModel.createIndexes();
     for (const name of SUPERSEDED_ADMIN_AUDIT_INDEX_NAMES) {
       if (existing.has(name)) await AdminAuditLogModel.collection.dropIndex(name);
     }
-    await AdminAuditLogModel.createIndexes();
   },
 
   down: async () => {
