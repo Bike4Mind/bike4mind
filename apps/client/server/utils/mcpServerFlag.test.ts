@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { ForbiddenError } from '@server/utils/errors';
 import { assertMcpServerEnabled } from './mcpServerFlag';
 

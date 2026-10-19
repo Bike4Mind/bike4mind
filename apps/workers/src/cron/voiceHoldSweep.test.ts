@@ -37,7 +37,7 @@ import {
   MAX_SESSION_SECONDS,
   REALTIME_VOICE_HOLD_SECONDS,
   realtimeCreditsFloor,
-} from '@server/voice/voiceSessionLimits';
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);

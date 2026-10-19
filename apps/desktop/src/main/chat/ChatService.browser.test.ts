@@ -327,13 +327,13 @@ describe('ChatService agent browser', () => {
   it('asks in "Approve for me" before a command that follows a page read', async () => {
     const id = await codeSession();
     await store.setApprovalMode(id, 'auto');
-    await service.send(id, 'read the page, then list files');
+    await service.send(id, 'read the page, then run the build');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
     streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'snap', name: 'browser_snapshot', arguments: '{}' }] }));
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
-    const ls = JSON.stringify({ command: 'ls', cwd: root });
-    streams[1].write(frame({ type: 'tool_use', tools: [{ id: 'ls', name: 'bash_execute', arguments: ls }] }));
+    const build = JSON.stringify({ command: 'node --version', cwd: root });
+    streams[1].write(frame({ type: 'tool_use', tools: [{ id: 'build', name: 'bash_execute', arguments: build }] }));
     streams[1].write(frame('[DONE]'));
 
     const card = await vi.waitUntil(

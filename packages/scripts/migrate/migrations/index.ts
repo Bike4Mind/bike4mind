@@ -190,6 +190,9 @@ import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-ans
 import EnsureMcpConnectionIndexes from './20260921235985_ensure-mcp-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import SetUserAuthAuditLogRetention from './20260921235950_set-user-auth-audit-log-retention';
+import SetIntegrationAuditLogRetention from './20260921235951_set-integration-audit-log-retention';
+import SetSlackAuditLogRetention from './20260921235952_set-slack-audit-log-retention';
+import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveops-triage-config-audit-log-retention';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
@@ -344,6 +347,9 @@ const coreMigrations: MigrationFile[] = [
   MoveQuestAnsweredByToRedirectedFrom,
   EnsureMcpConnectionIndexes,
   SetUserAuthAuditLogRetention,
+  SetIntegrationAuditLogRetention,
+  SetSlackAuditLogRetention,
+  SetLiveopsTriageConfigAuditLogRetention,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureFabFileOwnerOrganizationIndex,

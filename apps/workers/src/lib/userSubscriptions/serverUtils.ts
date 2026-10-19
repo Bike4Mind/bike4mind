@@ -17,7 +17,7 @@ import { sendToClient } from '@server/websocket/utils';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { organizationService, creditService } from '@bike4mind/services';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
 

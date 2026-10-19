@@ -405,6 +405,14 @@ describe('OllamaBackend thinking field', () => {
     expect((chat.mock.calls[0][0] as { think?: boolean }).think).toBe(true);
   });
 
+  it('passes think:false to Ollama when the thinking toggle is off', async () => {
+    const { backend, chat } = makeBackend([
+      { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 },
+    ]);
+    await run(backend, { tools: [], thinking: { enabled: false, budget_tokens: 0 } });
+    expect((chat.mock.calls[0][0] as { think?: boolean }).think).toBe(false);
+  });
+
   it('omits think entirely when no thinking option is provided', async () => {
     const { backend, chat } = makeBackend([
       { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 },

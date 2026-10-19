@@ -4,7 +4,7 @@ import { isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { postEmailMirrorToSlack } from '@server/integrations/slack/slack';
-import { extractBodyPreview, inferEmailType } from '@server/integrations/slack/emailMirror';
+import { extractBodyPreview, inferEmailType } from '@bike4mind/server-utils/integrations/slack/emailMirror';
 
 export interface EmailConfigStatus {
   configured: boolean;

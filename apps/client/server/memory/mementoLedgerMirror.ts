@@ -14,7 +14,7 @@ import {
   type EvidenceTier,
   type Principal,
 } from '@bike4mind/memory';
-import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
+import { appendMemoryEvent, createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 /**

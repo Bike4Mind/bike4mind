@@ -8,7 +8,7 @@ import { estimateElevenLabsConversationalCost } from '@bike4mind/voice';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUser } from '@client/app/contexts/UserContext';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
-import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { VoiceStatusPill, frequencyBars } from '@client/app/components/common/VoiceStatusPill';
 import {

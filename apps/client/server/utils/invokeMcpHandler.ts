@@ -1,7 +1,7 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { Buffer } from 'node:buffer';
 import { handler as localMcpHandler } from '@server/utils/mcpCall';
-import { isMcpServerAvailable } from '@server/services/integrationCircuitBreaker';
+import { isMcpServerAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { getBreaker, classifyOperation, CircuitBreakerError } from '@server/services/mcpCircuitBreakers';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';

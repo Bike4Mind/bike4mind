@@ -221,7 +221,7 @@ describe('moderateImportedKnowledgeFiles - ai:generate-only upload constraint', 
   });
 
   it('persists blocked for an oversized marked file end to end through the real verdict function', async () => {
-    const { moderateUploadedFile } = await import('./moderateUploadedFile');
+    const { moderateUploadedFile } = await import('@bike4mind/server-utils/s3/moderateUploadedFile');
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       'base64'

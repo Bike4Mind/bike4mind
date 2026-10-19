@@ -36,8 +36,8 @@ describe('appendMemoryEvent', () => {
       'u1',
       input({ subject: 'role', kind: 'affirm', at: '2026-07-02T00:00:00.000Z' })
     );
-    expect(a.prevHash).toBeNull();
-    expect(b.prevHash).toBe(a.hash);
+    expect(a!.prevHash).toBeNull();
+    expect(b!.prevHash).toBe(a!.hash);
     expect(store.map(e => e.seq)).toEqual([0, 1]);
     expect(store[1].ownerUserId).toBe('u1');
   });
@@ -114,7 +114,7 @@ describe('appendMemoryEvent', () => {
     const { repo, store } = makeFake({ failFirst: 2 });
     const { provider } = makeKeys();
     const a = await appendEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
-    expect(a.hash).toBeTruthy();
+    expect(a!.hash).toBeTruthy();
     expect(store).toHaveLength(1);
   });
 

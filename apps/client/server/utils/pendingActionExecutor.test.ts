@@ -17,8 +17,10 @@ vi.mock('@server/utils/storage', () => {
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
-vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
-vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/github/github-repo-helper', () => ({
+  getSelectedRepositoriesForMcp: vi.fn(),
+}));
 
 vi.mock('@bike4mind/slack', () => {
   class StubResource {
@@ -36,8 +38,8 @@ import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import {
   cancelPendingActionOnQuest,
   executePendingAction,

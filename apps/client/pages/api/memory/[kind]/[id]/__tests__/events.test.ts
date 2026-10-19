@@ -16,7 +16,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({ memoryLedgerRepository: {}, memoryPrincipalKeyRepository: {} }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({ appendMemoryEvent: h.appendMemoryEvent }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ appendMemoryEvent: h.appendMemoryEvent }));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: h.createKeyProvider }));
 
 import handler from '../events';

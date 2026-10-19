@@ -72,7 +72,7 @@ import ForumIcon from '@mui/icons-material/Forum';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 // Template variable docs
-import { TEMPLATE_VARIABLE_DOCS } from '@server/services/liveopsTriagePrompt';
+import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
 
 // Types
 interface LiveopsTriageConfig {

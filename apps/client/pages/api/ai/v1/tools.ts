@@ -1,5 +1,5 @@
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
+import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { executeToolContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 

@@ -7,7 +7,7 @@ vi.mock('@server/cli/auth', () => ({
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/cli/toolsHandler.shared', () => ({
+vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', () => ({
   validateToolRequest: vi.fn().mockReturnValue({ valid: true, data: { toolName: 'noop', input: {} } }),
   executeToolWithLogging: vi.fn().mockResolvedValue({ success: true, content: 'ok' }),
 }));
@@ -20,7 +20,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkRateLimit } from '@server/cli/auth';
-import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
+import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliToolExecution';
 

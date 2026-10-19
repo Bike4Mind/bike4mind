@@ -33,7 +33,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 vi.mock('@server/services/githubService', () => ({ GitHubService: { forOrganization: h.forOrganization } }));
 vi.mock('@bike4mind/database', () => ({ orgGitHubConnectionRepository: h.connectionRepo }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: h.encryptSecret,
   decryptSecret: h.decryptSecret,
   isEncrypted: () => false,

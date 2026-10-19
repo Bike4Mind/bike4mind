@@ -851,7 +851,7 @@ const storageReconciliationCron = new sst.aws.Cron('storageReconciliation', {
  * EnableDataLakeDrivePoll admin flags are on (the handler enforces the gate).
  *
  * Schedule: hourly (connections are re-polled at most every ~6h; see DRIVE_LAKE_POLL_INTERVAL_MS in
- * apps/client/server/integrations/google/drive/drivePollSchedule.ts)
+ * packages/server-utils/src/integrations/google/drive/drivePollSchedule.ts)
  * Enabled: production + dev
  */
 const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {

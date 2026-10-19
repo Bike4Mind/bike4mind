@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./listUsableVideoModels', () => ({ listUsableVideoModels: vi.fn() }));
+vi.mock('@bike4mind/server-utils/videoGenerations/listUsableVideoModels', () => ({ listUsableVideoModels: vi.fn() }));
 vi.mock('@bike4mind/services/videoJobs', () => ({ createVideoJob: vi.fn() }));
 
 import { createVideoJob } from '@bike4mind/services/videoJobs';
 import { isVideoToolConfig } from '@bike4mind/services/llm/tools';
 import { buildVideoToolConfig } from './buildVideoToolConfig';
-import { listUsableVideoModels } from './listUsableVideoModels';
+import { listUsableVideoModels } from '@bike4mind/server-utils/videoGenerations/listUsableVideoModels';
 
 const deps = { availability: {} as never, createDeps: { tag: 'create-deps' } as never };
 const input = {

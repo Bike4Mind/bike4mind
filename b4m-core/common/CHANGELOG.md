@@ -1,5 +1,21 @@
 # @bike4mind/common
 
+## 16.1.0
+
+### Minor Changes
+
+- [#5017](https://github.com/Bike4Mind/bike4mind/pull/5017) [`e421f9a`](https://github.com/Bike4Mind/bike4mind/commit/e421f9aab9419637a5baefcddf2ffc7d9725bb0b) Thanks [@onoya](https://github.com/onoya)! - let a personal data lake connect a GitHub repository
+
+- [#5027](https://github.com/Bike4Mind/bike4mind/pull/5027) [`2549cb9`](https://github.com/Bike4Mind/bike4mind/commit/2549cb91c4e7fb9064ed8db28bbaafc9b439bc61) Thanks [@onoya](https://github.com/onoya)! - add append-only admin audit log store and writer
+
+### Patch Changes
+
+- [#5006](https://github.com/Bike4Mind/bike4mind/pull/5006) [`b85ca8b`](https://github.com/Bike4Mind/bike4mind/commit/b85ca8bc9edddc0c85be7403d6c99a44b537a3d3) Thanks [@dea0030](https://github.com/dea0030)! - list the sources a reply cites before the ones it did not
+
+- [#5019](https://github.com/Bike4Mind/bike4mind/pull/5019) [`f144377`](https://github.com/Bike4Mind/bike4mind/commit/f144377e6e845c5e7c0e6d9787c4d5172f6ea3a1) Thanks [@vinchi777](https://github.com/vinchi777)! - keep the streaming heartbeat from overwriting a user Stop
+
+- [#5026](https://github.com/Bike4Mind/bike4mind/pull/5026) [`57b5c68`](https://github.com/Bike4Mind/bike4mind/commit/57b5c689bfcab1d87f40aed39b17cd0566694c8d) Thanks [@onoya](https://github.com/onoya)! - share the lyric line timing grammar from common
+
 ## 16.0.0
 
 ### Major Changes

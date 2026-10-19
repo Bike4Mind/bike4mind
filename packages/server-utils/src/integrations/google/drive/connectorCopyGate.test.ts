@@ -104,7 +104,7 @@ describe('evaluateConnectorCopyDeletion', () => {
   it('asks with the post-unpick tags and the row owner, and threads the candidate lakes through', async () => {
     const candidateLakes = [{ id: 'lake-b', createdByUserId: 'u1', fileTagPrefix: 'acme:' }];
     await evaluate(baseFile({ tags: [{ name: 'acme:q3', strength: 1 }] }), {
-      adapters: { db: { dataLakes: {} as never }, candidateLakes },
+      adapters: { db: { dataLakes: {} as never }, candidateLakes: candidateLakes as never },
     });
     expect(h.findOtherLakeClaims).toHaveBeenCalledWith(
       { userId: 'u1', tagNames: ['acme:q3'] },
