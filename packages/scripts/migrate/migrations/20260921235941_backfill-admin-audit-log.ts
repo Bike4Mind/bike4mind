@@ -203,7 +203,7 @@ const userEmailEvent =
   });
 
 const scanScheduleEvent =
-  (action: AdminAuditAction) =>
+  (action: AdminAuditAction, summaryOverride?: string) =>
   (flat: Metadata): ResolvedEvent | null => {
     const scanType = asString(flat.scanType);
     if (!scanType) return null;
@@ -214,7 +214,9 @@ const scanScheduleEvent =
         id: `security-scan-schedule:${scanType}`,
         displayName: `${scanType} scan schedule`,
       },
-      summary: action === 'settings.security_scan.enabled' ? 'enabled the weekly scan' : 'disabled the weekly scan',
+      summary:
+        summaryOverride ??
+        (action === 'settings.security_scan.enabled' ? 'enabled the weekly scan' : 'disabled the weekly scan'),
       consumed: ['scanType'],
     };
   };
@@ -398,7 +400,15 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
   },
   SECURITY_SCAN_SCHEDULE_ENABLED: {
     actorFromUserId: true,
-    resolve: scanScheduleEvent('settings.security_scan.enabled'),
+    // The create branch always logged ENABLED, even for a schedule created with enabled: false
+    // (no nextRunAt was computed); undo that mislabel.
+    resolve: flat => {
+      const createdDisabled = flat.newSchedule === true && (flat.nextRunAt === null || flat.nextRunAt === undefined);
+      return scanScheduleEvent(
+        createdDisabled ? 'settings.security_scan.disabled' : 'settings.security_scan.enabled',
+        createdDisabled ? 'created the weekly scan disabled' : undefined
+      )(flat);
+    },
   },
   SECURITY_SCAN_SCHEDULE_DISABLED: {
     actorFromUserId: true,

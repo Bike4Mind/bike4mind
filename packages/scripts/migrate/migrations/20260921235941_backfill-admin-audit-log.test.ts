@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   users: [] as Row[],
   seenIds: new Set<string>(),
   appendCalls: [] as Entry[][],
+  ledgerFilters: [] as unknown[],
   counterFilters: [] as unknown[],
   counterSorts: [] as unknown[],
 }));
@@ -55,7 +56,10 @@ const { sourceQuery } = vi.hoisted(() => {
 });
 
 vi.mock('@bike4mind/database', () => ({
-  CreditTransaction: sourceQuery(() => state.ledgerRows),
+  CreditTransaction: sourceQuery(
+    () => state.ledgerRows,
+    filter => state.ledgerFilters.push(filter)
+  ),
   CounterLog: sourceQuery(
     () => state.counterRows,
     (filter, sort) => {
@@ -443,6 +447,83 @@ describe('mapCounterLogRowToEntry', () => {
   });
 });
 
+describe('mapCounterLogRowToEntry counter specs', () => {
+  const org = { kind: 'organization', id: 'org-1' };
+  const system = { kind: 'system', id: 'system-health' };
+  const oauth = { kind: 'oauthClient', id: 'oc-1' };
+  const orgMeta = { organizationId: 'org-1' };
+  const oauthMeta = { oauthClientId: 'oc-1', name: 'Portal' };
+  const scanMeta = { scanType: 'security' };
+
+  const cases: Array<[string, Record<string, unknown>, string, string, Record<string, unknown>?]> = [
+    [
+      'ORG_SEATS_CHANGED',
+      { ...orgMeta, previousSeats: 5, seats: 8 },
+      'org.seats.changed',
+      'changed seats from 5 to 8',
+      org,
+    ],
+    ['ORG_REVOKED', orgMeta, 'org.revoked', 'revoked admin grant', org],
+    ['ORG_GROUP_TYPES_UPDATED', orgMeta, 'org.group_types.updated', 'updated allowed group types', org],
+    [
+      'ORG_ADMINS_UPDATED',
+      { ...orgMeta, adminUserIds: ['a', 'b'] },
+      'org.admins.updated',
+      'set 2 organization admins',
+      org,
+    ],
+    ['ORG_GROUP_MEMBER_UNASSIGNED', orgMeta, 'org.group_member.unassigned', 'removed a user from a group', org],
+    [
+      'ORG_MEMBER_CREDIT_BUDGET_UPDATED',
+      { ...orgMeta, memberUserId: 'u-2' },
+      'org.member_budget.updated',
+      'updated a member credit budget override',
+      org,
+    ],
+    [
+      'WHATS_NEW_SYNC_TRIGGERED',
+      {},
+      'settings.whats_new.synced',
+      'triggered a manual sync',
+      { kind: 'settings', id: 'whats-new-sync' },
+    ],
+    [
+      'SECURITY_SCAN_SCHEDULE_ENABLED',
+      { ...scanMeta, newSchedule: false, nextRunAt: '2026-01-01T00:00:00.000Z' },
+      'settings.security_scan.enabled',
+      'enabled the weekly scan',
+      { kind: 'settings', id: 'security-scan-schedule:security' },
+    ],
+    [
+      'SECURITY_SCAN_SCHEDULE_ENABLED',
+      { ...scanMeta, newSchedule: true, nextRunAt: null },
+      'settings.security_scan.disabled',
+      'created the weekly scan disabled',
+      { kind: 'settings', id: 'security-scan-schedule:security' },
+    ],
+    [
+      'SECURITY_SCAN_SCHEDULE_DISABLED',
+      scanMeta,
+      'settings.security_scan.disabled',
+      'disabled the weekly scan',
+      { kind: 'settings', id: 'security-scan-schedule:security' },
+    ],
+    ['ADMIN_TEST_EMAIL_SENT', {}, 'system_health.test_run', 'sent a test email', system],
+    ['ADMIN_OAUTH_TEST', { provider: 'github' }, 'system_health.test_run', 'tested the github OAuth provider', system],
+    ['OAUTH_CLIENT_ACTIVATED', oauthMeta, 'oauth_client.activated', 'activated the OAuth client', oauth],
+    ['OAUTH_CLIENT_DEACTIVATED', oauthMeta, 'oauth_client.deactivated', 'deactivated the OAuth client', oauth],
+    ['ADMIN_EMAIL_VERIFIED', {}, 'user.email.verified', 'verified email'],
+    ['ADMIN_EMAIL_UNVERIFIED', {}, 'user.email.unverified', 'unverified email'],
+    ['ADMIN_VERIFICATION_RESENT', {}, 'user.email.verification_resent', 'resent email verification'],
+  ];
+
+  it.each(cases)('maps %s', (counterName, metadata, action, summary, target) => {
+    const entry = mapCounterLogRowToEntry(counterRow(counterName, { adminUserId: ADMIN_ID, metadata }), admin);
+
+    expect(entry).toMatchObject({ action, summary, ...(target ? { target: expect.objectContaining(target) } : {}) });
+  });
+});
+
 describe('backfill-admin-audit-log up()', () => {
   beforeEach(() => {
     state.ledgerRows = [
@@ -458,12 +539,25 @@ describe('backfill-admin-audit-log up()', () => {
     state.users = [{ _id: ADMIN_ID, name: 'Ada Admin', isAdmin: true }];
     state.seenIds = new Set();
     state.appendCalls = [];
+    state.ledgerFilters = [];
     state.counterFilters = [];
     state.counterSorts = [];
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it('queries only admin credit adjustments from the ledger and the listed counters from the log', async () => {
+    await migration.up();
+
+    expect(state.ledgerFilters[0]).toMatchObject({
+      type: { $in: ['generic_add', 'generic_deduct'] },
+      reason: 'admin_adjustment',
+    });
+    expect(state.counterFilters[0]).toMatchObject({
+      counterName: { $in: expect.arrayContaining(['ORG_TOPPED_UP', 'OAUTH_CLIENT_CREATED']) },
+    });
+  });
 
   it('inserts mappable rows, skips the rest, and logs per-source counts', async () => {
     await migration.up();
