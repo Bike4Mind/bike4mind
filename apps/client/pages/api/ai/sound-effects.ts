@@ -10,6 +10,7 @@ import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from 
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
@@ -35,7 +36,8 @@ const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => 
 // generateSoundEffectContract (the same source of truth that drives the OpenAPI
 // spec); `req.validated` is the parsed, typed body.
 const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
-  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
+  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview, organization_id } =
+    req.validated;
   const userId = req.user?.id;
 
   // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
@@ -67,11 +69,16 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   // cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
+  // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any
+  // other target), so only the JWT caller's value changes the payer.
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
+
   const reservation = await reserveRequestCredits({
     req,
     requiredCredits,
     enforceCredits,
     featureLabel: 'sound generation',
+    billingOrganizationId,
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 

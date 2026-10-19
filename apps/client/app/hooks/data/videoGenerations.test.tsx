@@ -72,15 +72,19 @@ describe('videoGenerationPollInterval', () => {
   });
 
   it('polls a succeeded job without output every 15s even with the socket open', () => {
-    const noOutput = videoJob({ state: 'succeeded', output: null });
+    const noOutput = videoJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: null });
     expect(videoGenerationPollInterval(noOutput, false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
     expect(videoGenerationPollInterval(noOutput, true, NOW)).toBe(SOCKET_DOWN_POLL_MS);
-    const withOutput = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const withOutput = videoJob({
+      state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
+      output: readyOutput({ expires_at: EXPIRES }),
+    });
     expect(videoGenerationPollInterval(withOutput, false, NOW)).not.toBe(SOCKET_DOWN_POLL_MS);
   });
 
   it('stops polling for the output once the job has waited past the cap', () => {
-    const noOutput = videoJob({ state: 'succeeded', output: null });
+    const noOutput = videoJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: null });
     expect(videoGenerationPollInterval(noOutput, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS - 1)).toBe(
       SOCKET_DOWN_POLL_MS
     );
@@ -91,6 +95,7 @@ describe('videoGenerationPollInterval', () => {
     const scanning = (updated_at: string) =>
       videoJob({
         state: 'succeeded',
+        credits: { reserved: 10, settled: 10 },
         updated_at,
         output: readyOutput({ availability: 'pending_scan', url: null, expires_at: null }),
       });
@@ -110,12 +115,20 @@ describe('videoGenerationPollInterval', () => {
   });
 
   it('re-signs a ready URL shortly before it expires', () => {
-    const job = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const job = videoJob({
+      state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
+      output: readyOutput({ expires_at: EXPIRES }),
+    });
     expect(videoGenerationPollInterval(job, true, NOW)).toBe(Date.parse(EXPIRES) - DETAIL_URL_REFRESH_LEAD_MS - NOW);
   });
 
   it('falls back to the refresh floor when the refresh time is already past (fast client clock)', () => {
-    const job = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const job = videoJob({
+      state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
+      output: readyOutput({ expires_at: EXPIRES }),
+    });
     expect(videoGenerationPollInterval(job, true, Date.parse(EXPIRES) + 60_000)).toBe(URL_REFRESH_FLOOR_MS);
     expect(videoGenerationPollInterval(job, true, Date.parse(EXPIRES) - DETAIL_URL_REFRESH_LEAD_MS)).toBe(
       URL_REFRESH_FLOOR_MS
@@ -123,15 +136,22 @@ describe('videoGenerationPollInterval', () => {
   });
 
   it('floors a short positive delay too, so clock skew cannot cause a rapid loop', () => {
-    const job = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const job = videoJob({
+      state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
+      output: readyOutput({ expires_at: EXPIRES }),
+    });
     const fiveSecondsBeforeRefresh = Date.parse(EXPIRES) - DETAIL_URL_REFRESH_LEAD_MS - 5_000;
     expect(videoGenerationPollInterval(job, true, fiveSecondsBeforeRefresh)).toBe(URL_REFRESH_FLOOR_MS);
   });
 
   it('stops for a finished job with nothing left to refresh', () => {
-    expect(videoGenerationPollInterval(videoJob({ state: 'failed' }), false, NOW)).toBe(false);
+    expect(
+      videoGenerationPollInterval(videoJob({ state: 'failed', credits: { reserved: 10, settled: 0 } }), false, NOW)
+    ).toBe(false);
     const gone = videoJob({
       state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
       output: readyOutput({ availability: 'unavailable', url: null, expires_at: null }),
     });
     expect(videoGenerationPollInterval(gone, false, NOW)).toBe(false);
@@ -141,7 +161,11 @@ describe('videoGenerationPollInterval', () => {
 
 describe('videoListRefreshInterval', () => {
   it("the list refresh fires before any card's own refresh", () => {
-    const job = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const job = videoJob({
+      state: 'succeeded',
+      credits: { reserved: 10, settled: 10 },
+      output: readyOutput({ expires_at: EXPIRES }),
+    });
     const list = listOf([job, videoJob({ id: 'job-2' })]);
     const listDelay = videoListRefreshInterval(list, NOW);
     const cardDelay = videoGenerationPollInterval(job, true, NOW);
@@ -151,7 +175,7 @@ describe('videoListRefreshInterval', () => {
 
   it('fires at the earliest expiry among several ready jobs', () => {
     const readyAt = (id: string, expires_at: string) =>
-      videoJob({ id, state: 'succeeded', output: readyOutput({ expires_at }) });
+      videoJob({ id, state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: readyOutput({ expires_at }) });
     const list = listOf([
       readyAt('late', '2026-10-07T00:14:00.000Z'),
       readyAt('earliest', '2026-10-07T00:05:00.000Z'),
@@ -287,7 +311,8 @@ describe('useCreateVideoGeneration', () => {
     expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations', body);
     const list = queryClient.getQueryData<VideoGenerationList>(videoGenerationKeys.list);
     expect(list?.pages[0].data.map(job => job.id)).toEqual(['new', 'old']);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
     expect(h.toastSuccess).toHaveBeenCalled();
   });
 
@@ -359,4 +384,112 @@ describe('useCancelVideoGeneration', () => {
     });
     expect(h.toastError).toHaveBeenCalledWith('Too many requests. Wait a moment and try again.');
   });
+});
+
+describe('video generation balance settlement', () => {
+  let queryClient: QueryClient;
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+
+  beforeEach(() => {
+    h.get.mockReset();
+    h.post.mockReset();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  });
+
+  it.each(['succeeded', 'failed', 'cancelled'] as const)(
+    'refreshes balances once when detail polling observes %s settlement, with no websocket event',
+    async state => {
+      const job = videoJob({
+        id: 'balance-job',
+        state,
+        credits: { reserved: 10, settled: 0 },
+        updated_at: '2026-10-07T00:02:00.000Z',
+      });
+      queryClient.setQueryData(videoGenerationKeys.detail(job.id), videoJob({ id: job.id, state }));
+      h.get
+        .mockResolvedValueOnce({ data: { ...job, credits: { reserved: 10, settled: null } } })
+        .mockResolvedValue({ data: job });
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const { result } = renderHook(() => useVideoGeneration(job.id), { wrapper });
+
+      await act(() => result.current.refetch());
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+      await act(async () => {
+        const fetched = await result.current.refetch();
+        expect(fetched.error).toBeNull();
+      });
+      await act(() => result.current.refetch());
+
+      expect(queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(job.id))?.state).toBe(state);
+      expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'credits-balance')).toHaveLength(1);
+      expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations')).toHaveLength(1);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+    }
+  );
+
+  it('refreshes balances once when a gallery refetch discovers a completed job', async () => {
+    const previous = videoJob({ id: 'balance-job', state: 'running' });
+    const finished = videoJob({
+      id: previous.id,
+      state: 'failed',
+      credits: { reserved: 10, settled: 0 },
+      updated_at: '2026-10-07T00:02:00.000Z',
+    });
+    queryClient.setQueryData(videoGenerationKeys.detail(previous.id), previous);
+    queryClient.setQueryData(videoGenerationKeys.list, {
+      pages: [{ data: [previous], next_cursor: null }],
+      pageParams: [undefined],
+    });
+    h.get.mockResolvedValue({ data: { data: [finished], next_cursor: null } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useVideoGenerations(), { wrapper });
+    await waitFor(() => expect(result.current.data?.pages[0].data[0].state).toBe('failed'));
+
+    await act(() => result.current.refetch());
+
+    expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations')).toHaveLength(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+  });
+
+  it('does not refresh balances for an older terminal snapshot rejected by reconciliation', async () => {
+    const previous = videoJob({ id: 'balance-job', state: 'running', updated_at: '2026-10-07T00:02:00.000Z' });
+    queryClient.setQueryData(videoGenerationKeys.detail(previous.id), previous);
+    h.get.mockResolvedValue({
+      data: videoJob({
+        id: previous.id,
+        state: 'failed',
+        credits: { reserved: 10, settled: 0 },
+        updated_at: '2026-10-07T00:01:00.000Z',
+      }),
+    });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useVideoGeneration(previous.id), { wrapper });
+
+    await act(() => result.current.refetch());
+
+    expect(result.current.data?.state).toBe('running');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancelled', 'running'] as const)(
+    'refreshes cancellation balances only for a terminal response (%s)',
+    async state => {
+      h.post.mockResolvedValue({
+        data: videoJob({
+          id: 'balance-job',
+          state,
+          credits: { reserved: 10, settled: state === 'cancelled' ? 0 : null },
+        }),
+      });
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const { result } = renderHook(() => useCancelVideoGeneration(), { wrapper });
+
+      await act(() => result.current.mutateAsync('balance-job'));
+
+      const balanceRefreshes = invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === 'organizations');
+      expect(balanceRefreshes).toHaveLength(state === 'cancelled' ? 1 : 0);
+    }
+  );
 });

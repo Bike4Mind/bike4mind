@@ -452,4 +452,83 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
+
+  describe('organization_id (the snake_case alias)', () => {
+    const billedOrg = () => mockInvoke.mock.calls[0][0].body.organizationId;
+
+    it('maps organization_id onto the billing org and strips the alias from the queued body', async () => {
+      const { req, res } = fire({ apiKey: null, body: { organization_id: HOME_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), HOME_ORG);
+      expect(billedOrg()).toBe(HOME_ORG);
+      expect(mockInvoke.mock.calls[0][0].body).not.toHaveProperty('organization_id');
+    });
+
+    it('bills the personal account for organization_id: null', async () => {
+      const { req, res } = fire({ apiKey: null, body: { organization_id: null } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), null);
+      expect(billedOrg()).toBeNull();
+    });
+
+    it('accepts both keys when they agree', async () => {
+      const { req, res } = fire({ apiKey: null, body: { organizationId: HOME_ORG, organization_id: HOME_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(HOME_ORG);
+    });
+
+    it.each([
+      ['organizationId names one org and organization_id another', { organizationId: HOME_ORG, organization_id: null }],
+      ['the conflict points the other way', { organizationId: null, organization_id: HOME_ORG }],
+    ])('rejects a disagreement (422) before resolving billing or enqueuing: %s', async (_label, orgs) => {
+      const { req, res } = fire({ apiKey: null, body: orgs });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().error).toMatch(/organizationId and organization_id disagree/);
+      expect(mockResolveBillingOrgId).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personally', async blank => {
+      const { req, res } = fire({ apiKey: null, body: { organization_id: blank } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'organizationID',
+      'billing_org_id',
+      'orgId',
+      'billingOrganizationId',
+      'billingAccountId',
+      'billed_organization_id',
+      'payerOrgId',
+      'payer_org_id',
+    ])('rejects the unknown billing-shaped key %s (422) before resolving billing or enqueuing', async key => {
+      const { req, res } = fire({ apiKey: null, body: { [key]: 'orgA' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().error).toContain(key);
+      expect(mockResolveBillingOrgId).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('honours organization_id on an org-billed key that names its own org', async () => {
+      const KEY_ORG = 'd'.repeat(24);
+      validateWithScopes([ApiKeyScope.AI_GENERATE], {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: KEY_ORG,
+      });
+      const { req, res } = fire({ body: { organization_id: KEY_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      // An org-billed key follows the key: the mapper hands its org to resolveMediaBillingOrgId,
+      // which needs no membership lookup because the body agrees with the key.
+      expect(billedOrg()).toBe(KEY_ORG);
+    });
+  });
 });

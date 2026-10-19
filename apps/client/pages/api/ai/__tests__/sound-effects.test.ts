@@ -10,6 +10,7 @@ const {
   getSettingsValue,
   findById,
   orgFindById,
+  orgFindAccessibleById,
   userIncrement,
   orgIncrement,
   recordUsage,
@@ -23,6 +24,7 @@ const {
   getSettingsValue: vi.fn(),
   findById: vi.fn(),
   orgFindById: vi.fn(),
+  orgFindAccessibleById: vi.fn(),
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
@@ -68,6 +70,18 @@ vi.mock('@server/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
+  ForbiddenError: class ForbiddenError extends Error {
+    statusCode = 403;
+    constructor(
+      message?: string,
+      public additionalInfo?: Record<string, unknown>
+    ) {
+      super(message);
+    }
+  },
+  NotFoundError: class NotFoundError extends Error {
+    statusCode = 404;
+  },
 }));
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
@@ -76,6 +90,8 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {
     findById: (...a: unknown[]) => orgFindById(...a),
     incrementCredits: (...a: unknown[]) => orgIncrement(...a),
+    // resolveActiveOrg's membership gate for a JWT caller's org id (home or explicitly selected).
+    shareable: { findAccessibleById: (...a: unknown[]) => orgFindAccessibleById(...a) },
   },
   pendingCreditHoldRepository: {
     record: async (hold: object) => {
@@ -153,11 +169,12 @@ const run = (
   body: unknown,
   apiKeyInfo?: unknown,
   userOrganizationId?: string,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  user: Record<string, unknown> = {}
 ) => {
   const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, {
-    user: { id: 'u1', organizationId: userOrganizationId ?? null },
+    user: { id: 'u1', organizationId: userOrganizationId ?? null, ...user },
     apiKeyInfo,
     logger: { error: vi.fn(), warn: vi.fn() },
   });
@@ -174,6 +191,7 @@ beforeEach(() => {
     getSettingsValue,
     findById,
     orgFindById,
+    orgFindAccessibleById,
     userIncrement,
     orgIncrement,
     recordUsage,
@@ -191,6 +209,8 @@ beforeEach(() => {
   // Default reservation results (post-decrement balance, non-negative == funded).
   userIncrement.mockResolvedValue({ currentCredits: 88 });
   orgIncrement.mockResolvedValue({ currentCredits: 980 });
+  // A member of any org they name; tests that need the refusal override this with null.
+  orgFindAccessibleById.mockImplementation(async (_user: unknown, orgId: string) => ({ id: orgId }));
 });
 
 describe('POST /api/ai/sound-effects', () => {
@@ -569,7 +589,7 @@ describe('POST /api/ai/sound-effects', () => {
     findById.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true });
     orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
 
-    const { res, promise } = run({ text: 'boom' }, orgKey);
+    const { res, promise } = run({ text: 'boom' }, orgKey, undefined, {}, { isAdmin: true });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
@@ -589,6 +609,69 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(orgIncrement).toHaveBeenCalled();
+  });
+
+  it('bills the organization the switcher selected for a browser/JWT caller', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+    orgFindById.mockResolvedValue({ id: 'teamOrg', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });
+
+    // The home seat is a different org on purpose: the body's target must win.
+    const { res, promise } = run({ text: 'chime', organization_id: 'teamOrg' }, undefined, 'homeOrg');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'teamOrg');
+    expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -15);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization })
+    );
+  });
+
+  it('bills the personal balance for a browser/JWT caller whose switcher is on Personal', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+
+    // Explicit null = personal, even for a user who has an org seat.
+    const { res, promise } = run({ text: 'chime', organization_id: null }, undefined, 'homeOrg');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgFindAccessibleById).not.toHaveBeenCalled();
+    expect(orgIncrement).not.toHaveBeenCalled();
+    expect(userIncrement).toHaveBeenCalledWith('u1', -15);
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
+    );
+  });
+
+  it('refuses (403) an organization the browser caller does not belong to, before money moves', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+    orgFindAccessibleById.mockResolvedValue(null);
+
+    const { res, promise } = run({ text: 'chime', organization_id: 'otherOrg' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(orgIncrement).not.toHaveBeenCalled();
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('refuses (403) a user-billed API key that names an organization', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
+
+    const { res, promise } = run(
+      { text: 'chime', organization_id: 'teamOrg' },
+      { billingOwnerType: CreditHolderType.User }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(generate).not.toHaveBeenCalled();
   });
 
   it('bills the user pool for a user-billed API key (billingOwnerType User), ignoring the org seat', async () => {

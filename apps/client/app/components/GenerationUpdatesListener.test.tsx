@@ -82,7 +82,8 @@ describe('GenerationUpdatesListener', () => {
       exact: true,
       refetchType: 'all',
     });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
   });
 
   it('refreshes the gallery for a job started elsewhere', async () => {
@@ -183,7 +184,8 @@ describe('GenerationUpdatesListener music jobs', () => {
       exact: true,
       refetchType: 'all',
     });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
 

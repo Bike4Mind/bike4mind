@@ -466,6 +466,10 @@ export const web = new sst.aws.Nextjs(
       // API_KEY_SCOPE_STAGING: greppable from infra and flippable per stage without a code change.
       OAUTH_AI_TOKEN_ENFORCE_GRANT:
         process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || (PRODUCTION_STAGES.includes($app.stage) ? 'true' : ''),
+      // 'true' refuses the self-asserted 'identities' subject path (apps/client/server/auth/
+      // verifyFederatedIdToken.ts). Off on every stage, production included: set it per stage only
+      // once every live federated client uses subjectSource='sub'.
+      OAUTH_AI_TOKEN_REQUIRE_SUB: process.env.OAUTH_AI_TOKEN_REQUIRE_SUB || '',
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

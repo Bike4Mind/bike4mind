@@ -55,6 +55,12 @@ type ReserveRequestCreditsParams = {
   enforceCredits: boolean | undefined;
   /** Noun phrase for the insufficient-credits copy, e.g. "music generation". */
   featureLabel: string;
+  /**
+   * Route-resolved payer for a browser/JWT caller: an org id bills that org, `null` bills the user,
+   * `undefined` keeps the home-org fallback. Ignored for API-key callers, whose target is fixed on
+   * the key.
+   */
+  billingOrganizationId?: string | null;
 };
 
 /**
@@ -65,8 +71,9 @@ type ReserveRequestCreditsParams = {
  * Billing owner, in precedence order:
  *   1. Org-billed API key -> its organization (billingOwnerType invariant).
  *   2. User-billed API key -> the user (explicit intent; ignore the org seat).
- *   3. Browser/JWT caller -> the user's own organization seat if any, matching
- *      image/video generation; otherwise the user.
+ *   3. Browser/JWT caller -> the route-resolved `billingOrganizationId` when given (null = the
+ *      user); else the user's own organization seat if any, matching image/video generation;
+ *      otherwise the user.
  * The user always stays the actor for attribution + per-member usage tracking.
  *
  * Gated on enforceCredits, so self-host / credits-off deployments run free; the owner is still
@@ -78,6 +85,7 @@ export async function reserveRequestCredits({
   requiredCredits,
   enforceCredits,
   featureLabel,
+  billingOrganizationId: explicitBillingOrgId,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
@@ -85,7 +93,9 @@ export async function reserveRequestCredits({
     ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
       ? req.apiKeyInfo.organizationId
       : undefined
-    : (req.user.organizationId?.toString() ?? undefined);
+    : explicitBillingOrgId !== undefined
+      ? (explicitBillingOrgId ?? undefined)
+      : (req.user.organizationId?.toString() ?? undefined);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 
