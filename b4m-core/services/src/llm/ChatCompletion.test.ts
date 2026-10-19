@@ -42,6 +42,7 @@ import {
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
+  type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -56,6 +57,7 @@ import {
   NARRATED_TOOL_CALL_NOTICE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
+  type ModelInfo,
 } from '@bike4mind/common';
 import {
   ToolBuilder,
@@ -1897,6 +1899,81 @@ describe('ChatCompletionProcess', () => {
 
       expect(complete).toHaveBeenCalled();
       expect(complete.mock.calls[0][2].thinking).toEqual({ enabled: false, budget_tokens: 0 });
+    });
+
+    describe('Ollama thinking defaults across fallback', () => {
+      const modelInfo = (id: string, backend: ModelBackend): ModelInfo => ({
+        id,
+        type: 'text',
+        name: id,
+        backend,
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        can_think: true,
+        pricing: {},
+        supportsImageVariation: false,
+      });
+      const ollama = modelInfo('qwen3:8b', ModelBackend.Ollama);
+      const deepSeek = modelInfo(ChatModels.DEEPSEEK_FLASH, ModelBackend.DeepSeek);
+      const kimi = modelInfo(ChatModels.KIMI_K2_5, ModelBackend.Kimi);
+      const off = { enabled: false, budget_tokens: 0 };
+      const backend = (model: ModelInfo, complete: ICompletionBackend['complete']): ICompletionBackend => ({
+        currentModel: model.id,
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([model]),
+        pushToolMessages: vi.fn(),
+      });
+
+      it.each([
+        ['Ollama to DeepSeek', ollama, deepSeek, off, undefined],
+        ['Ollama to Kimi', ollama, kimi, off, undefined],
+        ['DeepSeek to Ollama', deepSeek, ollama, undefined, off],
+        ['Kimi to Ollama', kimi, ollama, undefined, off],
+      ] as const)(
+        '%s applies the thinking default to the current backend only',
+        async (_label, primary, fallback, primaryThinking, fallbackThinking) => {
+          mockQuest.promptMeta.model = { name: primary.id, backend: primary.backend };
+          const primaryComplete = vi
+            .fn<ICompletionBackend['complete']>()
+            .mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+          const fallbackComplete = vi
+            .fn<ICompletionBackend['complete']>()
+            .mockImplementation(async (_model, _messages, _options, callback) => {
+              await callback(['done']);
+            });
+          mockedGetLlmByModel.mockReturnValue(backend(primary, primaryComplete));
+          mockedShouldTriggerFallback.mockReturnValue(true);
+          mockedIsOverloadedError.mockReturnValue(false);
+          mockedGetLlmWithFallback
+            .mockResolvedValueOnce({ model: fallback, backend: backend(fallback, fallbackComplete), attempt: 1 })
+            .mockResolvedValue(null);
+          mockedGetAvailableModels.mockResolvedValue([primary, fallback]);
+          mockedBuildAndSortMessages.mockResolvedValue({
+            messages: [{ role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+          });
+          mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+          mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+          await service.process({
+            body: {
+              ...startQuestParams,
+              params: { ...startQuestParams.params, model: primary.id },
+              tools: [],
+              projectId: undefined,
+              organizationId: undefined,
+            },
+            logger: mockLogger,
+          });
+
+          expect(primaryComplete).toHaveBeenCalledTimes(1);
+          expect(primaryComplete.mock.calls[0][2].thinking).toEqual(primaryThinking);
+          expect(fallbackComplete).toHaveBeenCalledTimes(1);
+          expect(fallbackComplete.mock.calls[0][0]).toBe(fallback.id);
+          expect(fallbackComplete.mock.calls[0][2].thinking).toEqual(fallbackThinking);
+        }
+      );
     });
 
     it('should process a quest successfully', async () => {
