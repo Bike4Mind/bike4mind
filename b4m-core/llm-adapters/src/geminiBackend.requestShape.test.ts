@@ -171,7 +171,17 @@ describe.each([
     it.each<{ name: string; overrides: Partial<ModelInfo>; thinkingConfig?: object }>([
       { name: '2.5 id', overrides: { id: 'gemini-2.5-x' as ChatModels } },
       { name: '3.x id', overrides: { id: 'gemini-3-x' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
-      { name: 'unrecognised id', overrides: { id: 'gemini-flash-latest' as ChatModels } },
+      { name: 'unrecognised id', overrides: { id: 'gemini-4-argon' as ChatModels } },
+      {
+        name: 'gemini-flash-latest alias',
+        overrides: { id: 'gemini-flash-latest' as ChatModels },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
+      {
+        name: 'gemini-flash-lite-latest alias',
+        overrides: { id: 'gemini-flash-lite-latest' as ChatModels },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
       {
         name: 'missing max_tokens (no ceiling, so thinking is bounded)',
         overrides: { id: 'gemini-3-x' as ChatModels, max_tokens: undefined as unknown as number },

@@ -1648,8 +1648,9 @@ export class GeminiBackend implements ICompletionBackend {
     const maxOutputTokens = Math.min(ceiling, wanted);
     if (wanted >= ceiling) return { maxOutputTokens };
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
-    // Only 3.x takes thinkingLevel; other ids get the cap alone.
-    return isGemini3(model.id)
+    // Only 3.x takes thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
+    // Other ids get the cap alone.
+    return isGemini3(model.id) || /^gemini-flash(-lite)?-latest$/.test(model.id)
       ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       : { maxOutputTokens };
   }
