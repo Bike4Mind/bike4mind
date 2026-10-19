@@ -20,6 +20,7 @@
 //
 // Usage: SERVER_DOMAIN=<domain> node scripts/check-acm-validation-records.mjs [--domain <cert domain>]
 // Skips (exit 0) when APP_CERT_ARN is set (the operator owns that certificate) or no domain is set.
+// shared-dev's Router serves files.dev.<SERVER_DOMAIN>: pass `--domain files.dev.<SERVER_DOMAIN>`.
 // Pass APP_CERT_ARN to this step exactly as to the deploy step. ACM_VALIDATION_CHECK=warn reports
 // problems without failing, as an emergency bypass for a deploy that does not touch the cert.
 

@@ -189,14 +189,13 @@ jobs:
         env:
           SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}
           SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
-          # Pass the same APP_CERT_ARN as the deploy step (the check skips operator-managed certs).
-          APP_CERT_ARN: ${{ vars.APP_CERT_ARN }}
+          # Emergency bypass: set the repo variable to 'warn' to report without failing.
+          ACM_VALIDATION_CHECK: ${{ vars.ACM_VALIDATION_CHECK }}
         run: node scripts/check-acm-validation-records.mjs
 
       - name: Deploy to AWS
         env:
           CI: 'true'
-          APP_CERT_ARN: ${{ vars.APP_CERT_ARN }}
           SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
           SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
           SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}

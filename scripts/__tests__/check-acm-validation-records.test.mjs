@@ -230,6 +230,23 @@ describe('run', () => {
     expect(out.warn.join('\n')).toContain('1 issued certificate(s) for app.example.com are not in use');
   });
 
+  it('warns about PENDING_VALIDATION certs without failing', () => {
+    const { out, log } = capture();
+    const aws = fakeAws({ pending: ['arn:stuck'], records: [present] });
+    expect(run({ env: { SERVER_DOMAIN: 'example.com' }, argv: [], aws, log })).toBe(0);
+    expect(out.warn.join('\n')).toContain('1 certificate(s) for app.example.com are PENDING_VALIDATION');
+  });
+
+  it('does not accept a different record that Route53 returns as the next name', () => {
+    const { log } = capture();
+    const other = {
+      Name: '_zzz.app.example.com.',
+      Type: 'CNAME',
+      ResourceRecords: [{ Value: '_val1.acm-validations.aws.' }],
+    };
+    expect(run({ env: { SERVER_DOMAIN: 'example.com' }, argv: [], aws: fakeAws({ records: [other] }), log })).toBe(1);
+  });
+
   it('reports but does not fail with ACM_VALIDATION_CHECK=warn', () => {
     const { out, log } = capture();
     const env = { SERVER_DOMAIN: 'example.com', ACM_VALIDATION_CHECK: 'warn' };
