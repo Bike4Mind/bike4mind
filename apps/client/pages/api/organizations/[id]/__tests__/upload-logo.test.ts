@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 /**
  * POST /api/organizations/[id]/upload-logo. The real `verifyOrgAccess` runs here (only the repository
@@ -72,10 +73,10 @@ const ORG = {
 };
 const sessionChain = () => ({ session: vi.fn(async () => undefined) });
 
-const invoke = async (user: { id: string; isAdmin: boolean }) => {
+const invoke = async (user: { id: string; isAdmin: boolean }, orgId = ORG_ID) => {
   const { req, res } = createMocks({
     method: 'POST',
-    query: { id: ORG_ID },
+    query: { id: orgId },
     body: { fileName: 'logo.png', mimeType: 'image/png', fileSize: 1024 },
   });
   (req as unknown as { user: unknown }).user = user;
@@ -98,7 +99,8 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     ['a plain member', { id: MEMBER, isAdmin: false }],
     ['a non-member', { id: 'stranger1', isAdmin: false }],
   ])('refuses %s with a 404 and deletes nothing', async (_label, user) => {
-    await expect(invoke(user)).rejects.toThrow('Organization not found');
+    await expect(invoke(user)).rejects.toBeInstanceOf(NotFoundError);
+    expect(repoFindById).toHaveBeenLastCalledWith(ORG_ID);
     expect(orgFindById).not.toHaveBeenCalled();
     expect(storageDelete).not.toHaveBeenCalled();
     expect(appFileFindByIdAndDelete).not.toHaveBeenCalled();
@@ -111,6 +113,7 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
   ])('lets %s replace the logo', async (_label, user) => {
     const res = await invoke(user);
 
+    expect(repoFindById).toHaveBeenLastCalledWith(ORG_ID);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/put', fileId: 'newfile1' });
     expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
@@ -119,7 +122,13 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
   it('answers 404 when the org does not exist', async () => {
     repoFindById.mockResolvedValue(null);
 
-    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('Organization not found');
+    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toBeInstanceOf(NotFoundError);
     expect(storageDelete).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed org id before any lookup', async () => {
+    await expect(invoke({ id: OWNER, isAdmin: false }, 'not-an-id')).rejects.toBeInstanceOf(BadRequestError);
+    expect(repoFindById).not.toHaveBeenCalled();
+    expect(orgFindById).not.toHaveBeenCalled();
   });
 });
