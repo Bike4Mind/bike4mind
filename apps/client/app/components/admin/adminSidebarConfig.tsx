@@ -104,6 +104,7 @@ export enum AdminTab {
   OAuthClients = 63,
   GrowthPricing = 64,
   IntegrationDemand = 65,
+  AuditLog = 66,
 }
 
 /**
