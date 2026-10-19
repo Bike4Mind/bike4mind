@@ -5,7 +5,7 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -116,6 +116,14 @@ describe('POST /api/agents/create-from-context metering', () => {
     m.admissionAssert.mockRejectedValue(new ForbiddenError('Model "gpt-4-test" is not accessible'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('keeps the 400 when the model is unavailable, without reserving or calling the provider', async () => {
+    m.admissionAssert.mockRejectedValue(new BadRequestError('Model "gpt-4-test" is currently unavailable'));
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 400 });
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
   });

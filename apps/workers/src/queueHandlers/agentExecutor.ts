@@ -3477,7 +3477,7 @@ async function processSubagentDispatch(
     llm.currentModel = childModel;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
-    const refusal = await modelAdmission.assert(child.model).then(
+    const refusal = await modelAdmission.assert(childModel).then(
       () => null,
       (err: Error) => err
     );

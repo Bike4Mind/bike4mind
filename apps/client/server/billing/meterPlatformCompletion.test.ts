@@ -327,4 +327,17 @@ describe('assertRequestCanAfford', () => {
     ).rejects.toMatchObject({ statusCode: 422 });
     expect(m.orgFindById).not.toHaveBeenCalled();
   });
+
+  it("gates a JWT caller's org seat", async () => {
+    m.orgFindById.mockResolvedValue({ id: 'seat', currentCredits: 0, userDetails: [], users: [{ userId: 'u1' }] });
+    await expect(assertRequestCanAfford(keyReq(undefined))).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.orgFindById).toHaveBeenCalledWith('seat');
+  });
+
+  it('refuses an org-billed key whose holder has left the org with a 400, even when the org is funded', async () => {
+    m.orgFindById.mockResolvedValue({ id: 'key-org', currentCredits: 500, userDetails: [], users: [] });
+    await expect(
+      assertRequestCanAfford(keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }))
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
 });

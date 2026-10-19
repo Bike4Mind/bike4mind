@@ -24,6 +24,7 @@ import {
   type ModelAdmission,
 } from '@bike4mind/services/llm/modelAdmission';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
@@ -246,12 +247,19 @@ export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
  * key holder's org seat.
  */
 export async function assertRequestCanAfford(req: MeteredRequest): Promise<void> {
-  await assertCanAfford(req.user!, resolveRequestBillingOrgId(req));
+  await assertCanAfford(req.user!, resolveRequestBillingOrgId(req), Boolean(req.apiKeyInfo));
 }
 
-async function assertCanAfford(user: IUserDocument, organizationId: string | undefined): Promise<void> {
+async function assertCanAfford(
+  user: IUserDocument,
+  organizationId: string | undefined,
+  isApiKeyCaller = false
+): Promise<void> {
   if (!(await isCreditsEnforced())) return;
   const org = organizationId ? await organizationRepository.findById(organizationId) : null;
+  // Same refusal reserveRequestCredits' assertBillable raises at hold time; checked here so a departed
+  // key holder gets the 400 before the caller claims any work.
+  assertApiKeyOrgMembership({ billingOrg: org, billingUser: user, isApiKeyCaller });
   if (org && creditService.isMemberAtOrOverCap(org, user.id)) {
     throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
   }
