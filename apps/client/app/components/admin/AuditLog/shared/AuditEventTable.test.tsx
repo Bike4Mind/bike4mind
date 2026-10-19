@@ -80,6 +80,13 @@ describe('AuditEventTable', () => {
     expect(screen.getByTestId('audit-table-source-chip').textContent).toBe('apiKey');
   });
 
+  it('calls onLoadMore when the load-more button is clicked', () => {
+    const onLoadMore = vi.fn();
+    render(<AuditEventTable {...baseProps} onLoadMore={onLoadMore} />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('audit-table-load-more-btn'));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
   it('hides load more when hasMore is false', () => {
     const { rerender } = render(<AuditEventTable {...baseProps} />, { wrapper: TestWrapper });
     expect(screen.getByTestId('audit-table-load-more-btn')).toBeTruthy();
