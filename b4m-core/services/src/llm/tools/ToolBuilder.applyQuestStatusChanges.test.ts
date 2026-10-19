@@ -72,6 +72,22 @@ describe('registerQuestCitables', () => {
     expect(registerQuestCitables(quest, [source('a')], 'user-1')[0].metadata?.citationIndex).toBe(1);
   });
 
+  it('keeps the turn numbered when an identity-less source rides along in the batch', () => {
+    const quest = makeQuest({ promptMeta: { citables: [{ ...source('f1'), metadata: { citationIndex: 1 } }] } });
+    const keyless: CitableSource = { id: '', type: 'document', title: '' };
+
+    expect(registerQuestCitables(quest, [source('a'), keyless], 'user-1').map(c => c.metadata?.citationIndex)).toEqual([
+      2,
+      undefined,
+    ]);
+    // The keyless entry is dropped by the merge, so it must not demote the numbered ones.
+    expect(quest.promptMeta?.citables?.map(c => [c.id, c.metadata?.citationIndex])).toEqual([
+      ['f1', 1],
+      ['a', 2],
+    ]);
+    expect(registerQuestCitables(quest, [source('b')], 'user-1')[0].metadata?.citationIndex).toBe(3);
+  });
+
   it('returns sources unstamped once an existing entry no longer holds its position number', () => {
     const quest = makeQuest({
       promptMeta: { citables: [{ ...source('forced'), metadata: { citationIndex: 7 } }] },

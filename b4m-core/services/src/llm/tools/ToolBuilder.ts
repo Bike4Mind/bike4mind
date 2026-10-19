@@ -375,7 +375,11 @@ export function applyQuestStatusChanges(
         : winner;
     }
     // Legacy tools still use local numbering; a mixed turn must keep failing the client's link gate.
-    const finalCitables = changedPromptMeta.citables?.some(citable => citable.metadata?.citationIndex === undefined)
+    // Identity-less entries are ignored: the dedupe below drops them before they can be shown, so
+    // letting one demote an otherwise fully numbered turn would hide every marker for no reason.
+    const finalCitables = changedPromptMeta.citables?.some(
+      citable => (citable.id || citable.url || citable.title) && citable.metadata?.citationIndex === undefined
+    )
       ? dedupedCitables.map(citable => {
           if (citable.metadata?.citationIndex === undefined) return citable;
           const { citationIndex: _stamp, ...metadata } = citable.metadata;
