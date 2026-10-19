@@ -11,16 +11,10 @@ const web = read('infra/web.ts');
 const contract = JSON.parse(read('infra/deploy-contract.json')) as { deployEnv: string[] };
 
 describe('OAUTH_AI_TOKEN_REQUIRE_SUB wiring', () => {
-  it('forwards the var to the web server function, empty by default', () => {
+  // Pins the whole expression, so a PRODUCTION_STAGES default also fails: live federated
+  // clients still use the identities path and would 401.
+  it('forwards the var to the web server function, empty on every stage', () => {
     expect(web).toContain("OAUTH_AI_TOKEN_REQUIRE_SUB: process.env.OAUTH_AI_TOKEN_REQUIRE_SUB || '',");
-  });
-
-  // Live federated clients still use the identities path; a production default would 401 them.
-  it('has no stage-based default', () => {
-    const line = web.match(/^\s*OAUTH_AI_TOKEN_REQUIRE_SUB:.*$/m)?.[0] ?? '';
-    expect(line).not.toBe('');
-    expect(line).not.toContain('PRODUCTION_STAGES');
-    expect(line).not.toContain('$app.stage');
   });
 
   it('is listed in the deploy contract', () => {
