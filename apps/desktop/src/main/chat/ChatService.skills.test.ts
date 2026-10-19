@@ -144,30 +144,49 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
   });
 
-  it('asks in "Approve for me" before an outbound call that follows a skill', async () => {
+  /** Runs `skill`, then `next`, in one reply, and returns the first call that stopped to ask, if any. */
+  async function afterSkill(skillName: string, next: { name: string; input: Record<string, unknown> }) {
     const id = await session();
-    await catalog.setTrusted(project, true);
-    await service.send(id, 'release it');
+    await service.send(id, 'go');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
     streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: '{"skill":"ship-it"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
     );
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
     streams[1].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'web_fetch', arguments: '{"url":"https://example.com/"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: next.name, arguments: JSON.stringify(next.input) }] })
     );
     streams[1].write(frame('[DONE]'));
-
-    const asked = await vi.waitUntil(
+    await vi.waitUntil(
       () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find((call): call is ChatToolCall => call?.status === 'awaiting-approval'),
+        events.some(
+          event =>
+            (event.type === 'tool-start' && event.call.status === 'awaiting-approval') ||
+            (event.type === 'tool-end' && event.call.id === 'c2')
+        ),
       { timeout: 3000, interval: 5 }
     );
-    expect(asked.name).toBe('web_fetch');
-    expect(asked.approvalDetail).toContain('read content from a skill (skill)');
+    return events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+  }
+
+  it('asks in "Approve for me" before an outbound call that follows an account skill', async () => {
+    const asked = await afterSkill('web-summary', { name: 'web_fetch', input: { url: 'https://example.com/' } });
+
+    expect(asked?.name).toBe('web_fetch');
+    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
+  });
+
+  it('does not count a skill from a project the user trusted as untrusted content', async () => {
+    await catalog.setTrusted(project, true);
+    const asked = await afterSkill('ship-it', {
+      name: 'bash_execute',
+      input: { command: 'node --version', cwd: project },
+    });
+
+    expect(asked).toBeUndefined();
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {
