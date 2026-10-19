@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Jimp } from 'jimp';
 import type { DetectModerationLabelsCommand, RekognitionClient } from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
@@ -15,6 +15,16 @@ import {
 // frame each frame only covers the region that changed. Frames are white, then the top half red,
 // then the bottom half red, so only the composite of the last frame is fully red.
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url));
+
+// Newer Node versions pool Buffers up to 32 KiB, which puts the fixtures' 64x64 canvases in the
+// shared pool; pin that size so a pooled-buffer bug shows on every Node version.
+const originalPoolSize = Buffer.poolSize;
+beforeAll(() => {
+  Buffer.poolSize = 65536;
+});
+afterAll(() => {
+  Buffer.poolSize = originalPoolSize;
+});
 
 const isRed = (rgba: number) => {
   const { r, g, b } = { r: (rgba >>> 24) & 0xff, g: (rgba >>> 16) & 0xff, b: (rgba >>> 8) & 0xff };

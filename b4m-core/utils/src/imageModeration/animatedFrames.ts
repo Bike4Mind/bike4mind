@@ -37,7 +37,11 @@ const clearRect = (canvas: Uint8Array, canvasWidth: number, r: Rect) => {
 const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): Promise<Buffer> => {
   // Dynamic import for the same bundler reason as RekognitionImageModerationService's jimp use.
   const { Jimp } = await import('jimp');
-  return Buffer.from(await Jimp.fromBitmap({ data: Buffer.from(canvas), width, height }).getBuffer('image/jpeg'));
+  // Unpooled copy: jimp's fromBitmap re-reads a Buffer's whole backing ArrayBuffer from offset 0,
+  // so a pooled Buffer.from() slice would encode whatever sits at the start of the pool.
+  const data = Buffer.alloc(canvas.length);
+  data.set(canvas);
+  return Buffer.from(await Jimp.fromBitmap({ data, width, height }).getBuffer('image/jpeg'));
 };
 
 /**
