@@ -1,5 +1,14 @@
 import type { Request } from 'express';
-import type { AuditActor, AuditContext, AuditEntry } from '@bike4mind/common';
+import {
+  AdminActionReasonSchema,
+  BadRequestError,
+  ForbiddenError,
+  type AdminAuditAction,
+  type AuditActor,
+  type AuditContext,
+  type AuditEntry,
+  type AuditTarget,
+} from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
@@ -14,7 +23,7 @@ export type RecordAdminActionFromRequestInput = Omit<adminAuditService.RecordAdm
 
 type ActorIdentity = Pick<NonNullable<Request['user']>, 'id' | 'username' | 'name' | 'email' | 'isAdmin'>;
 
-const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActor => ({
+export const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActor => ({
   kind: 'user',
   scope,
   userId: user.id,
@@ -72,6 +81,46 @@ export const recordAdminActionFromRequest = async (
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
     { db: { adminAuditLog: adminAuditLogRepository }, logger: req.logger }
   );
+
+/** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
+export const recordAdminActionForActor = async (
+  req: AuditRequest,
+  actor: AuditActor,
+  input: Omit<adminAuditService.RecordAdminActionInput, 'actor' | 'context'>
+): Promise<AuditEntry | null> =>
+  adminAuditService.recordAdminAction(
+    { ...input, actor, context: buildContext(req) },
+    { db: { adminAuditLog: adminAuditLogRepository }, logger: req.logger }
+  );
+
+/** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
+export const parseAdminActionReason = (value: unknown): string => {
+  const parsed = AdminActionReasonSchema.safeParse(value);
+  if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
+  return parsed.data;
+};
+
+// Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
+export const isSameUserId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+
+type DeniedAction = Extract<AdminAuditAction, `${string}.denied`>;
+
+/**
+ * No self-service privilege: records the attempt as a critical `*.denied` entry, then throws a 403.
+ * The denied entry is best-effort, so a failed write never turns the 403 into a 500.
+ */
+export const denySelfAdminAction = async (
+  req: AuditRequest,
+  { action, attempted, target }: { action: DeniedAction; attempted: AdminAuditAction; target: AuditTarget }
+): Promise<never> => {
+  await recordAdminActionFromRequest(req, {
+    action,
+    target,
+    summary: `blocked ${attempted} on their own account`,
+    details: { attemptedAction: attempted },
+  });
+  throw new ForbiddenError('Admins cannot perform this action on their own account.');
+};
 
 export const systemAuditActor = (name: string): AuditActor => ({
   kind: 'system',

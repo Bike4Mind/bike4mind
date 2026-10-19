@@ -8,7 +8,6 @@ const updateSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   billingContact: z.string().optional(),
-  currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
@@ -60,10 +59,6 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // Managers can update systemPrompt intentionally - they customize org-wide AI
   // behavior. Authorization is already checked via findUpdateAccessById.
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
-
-  if (user.isAdmin && rest.currentCredits !== undefined) {
-    update.currentCredits = rest.currentCredits;
-  }
 
   // Platform-admin path only. Owners and appointed org admins set the default through
   // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),

@@ -4,13 +4,15 @@ import { IUserDocument } from '@bike4mind/common';
 import { Button, Checkbox, Input, Modal, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy';
 import React, { useState } from 'react';
 import { toast } from 'sonner';
+import { isValidAdminActionReason } from '@bike4mind/common';
+import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import DestructiveActionHelp from '@client/app/components/help/DestructiveActionHelp';
 
 interface SpicyUserActionsProps {
   user: AdminUserListItem;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
-  handleDeleteUser: (userId: string) => Promise<void>;
+  handleDeleteUser: (userId: string, reason: string) => Promise<void>;
 }
 
 const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
@@ -18,6 +20,7 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
     const [deleteInput, setDeleteInput] = useState('');
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteReason, setDeleteReason] = useState('');
 
     const handleBanChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newValue = e.target.checked;
@@ -33,8 +36,14 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
       setDeleteInput(e.target.value);
     };
 
+    const closeConfirm = () => {
+      setIsConfirmOpen(false);
+      setDeleteReason('');
+    };
+
     const handleDeleteButton = () => {
       if (deleteInput.toUpperCase() === 'DELETE') {
+        setDeleteReason('');
         setIsConfirmOpen(true);
       } else {
         toast('Please type DELETE to confirm deletion');
@@ -44,8 +53,8 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
     const confirmDelete = async () => {
       setIsDeleting(true);
       try {
-        await handleDeleteUser(user.id);
-        setIsConfirmOpen(false);
+        await handleDeleteUser(user.id, deleteReason.trim());
+        closeConfirm();
       } catch (error) {
         console.error('Failed to delete user:', error);
         toast.error('Failed to delete user');
@@ -125,13 +134,20 @@ const SpicyUserActions: React.FC<SpicyUserActionsProps> = React.memo(
             helpId="admin/user-management"
           />
         </Stack>
-        <Modal open={isConfirmOpen} onClose={() => setIsConfirmOpen(false)}>
+        <Modal open={isConfirmOpen} onClose={closeConfirm}>
           <ModalDialog>
             <Typography level="h4">Confirm Delete</Typography>
             <Typography>Are you sure you want to delete this user? This action cannot be undone.</Typography>
+            <AdminReasonField value={deleteReason} onChange={setDeleteReason} data-testid="user-delete-reason-input" />
             <Stack direction="row" spacing={2} justifyContent="flex-end">
-              <Button onClick={() => setIsConfirmOpen(false)}>Cancel</Button>
-              <Button color="danger" onClick={confirmDelete} loading={isDeleting} data-testid="confirm-delete-btn">
+              <Button onClick={closeConfirm}>Cancel</Button>
+              <Button
+                color="danger"
+                onClick={confirmDelete}
+                loading={isDeleting}
+                disabled={!isValidAdminActionReason(deleteReason)}
+                data-testid="confirm-delete-btn"
+              >
                 Delete
               </Button>
             </Stack>

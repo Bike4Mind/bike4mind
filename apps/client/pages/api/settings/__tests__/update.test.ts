@@ -15,6 +15,11 @@ vi.mock('@bike4mind/database/infra', () => ({
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => unknown) => fn() }));
+const recordAdminActionFromRequest = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => recordAdminActionFromRequest(...args),
+}));
 // Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
 // assert a value was encrypted at rest without depending on real AES output. update.ts pulls
 // encryptSecret/isEncrypted/isValidEncryptionKey through @bike4mind/server-utils/security/secretEncryption,
@@ -67,6 +72,7 @@ const runHandler = async (key: string, value: unknown, extra: Record<string, unk
 describe('settings/update sensitive value handling', () => {
   beforeEach(() => {
     stored = null;
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
     findOneAndUpdate.mockReset();
     vi.clearAllMocks();
   });
@@ -198,6 +204,8 @@ describe('settings/update sensitive value handling', () => {
 
 describe('settings/update cleared forced-retrieval absolute floor', () => {
   beforeEach(() => {
+    stored = null;
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
     findOneAndUpdate.mockReset();
     deleteOne.mockReset();
     vi.mocked(invalidateSettingsCache).mockClear();
@@ -330,5 +338,98 @@ describe('settings/update reviewer email list', () => {
       { $set: { settingValue: [] } },
       expect.anything()
     );
+  });
+});
+
+describe('settings/update admin audit trail', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    deleteOne.mockReset();
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
+  });
+
+  it('records the before and after of an upsert', async () => {
+    stored = { settingName: 'tagLineMain', settingValue: 'Old line' };
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'settings.admin_settings.updated',
+        target: { kind: 'settings', id: 'tagLineMain', displayName: 'tagLineMain' },
+        changes: [{ field: 'tagLineMain', before: 'Old line', after: 'Welcome aboard' }],
+      })
+    );
+  });
+
+  it('records a null before when the setting was never stored', async () => {
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'tagLineMain', before: null, after: 'Welcome aboard' }] })
+    );
+  });
+
+  it('records a clear that deletes the row with the old value and a null after', async () => {
+    stored = { settingName: 'forcedRetrievalMinSimilarityPct', settingValue: 60 };
+    await runHandler('forcedRetrievalMinSimilarityPct', '');
+
+    expect(deleteOne).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'settings.admin_settings.updated',
+        summary: 'cleared forcedRetrievalMinSimilarityPct',
+        changes: [{ field: 'forcedRetrievalMinSimilarityPct', before: 60, after: null }],
+      })
+    );
+  });
+
+  it('never records the value of a sensitive setting, before or after', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    stageWriteResult('anthropicDemoKey', 'enc:sk-ant-api03-brandnew');
+    await runHandler('anthropicDemoKey', 'sk-ant-api03-brandnew');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'anthropicDemoKey', before: '[REDACTED]', after: '[REDACTED]' }],
+      })
+    );
+    const serialized = JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, entry]) => entry));
+    expect(serialized).not.toContain('sk-ant-api03');
+  });
+
+  it('records a deliberate clear of a sensitive setting as redacted too', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    stageWriteResult('anthropicDemoKey', '');
+    await runHandler('anthropicDemoKey', '', { confirmClear: true });
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'anthropicDemoKey', before: '[REDACTED]', after: '[REDACTED]' }],
+      })
+    );
+  });
+
+  it('records nothing when a mask is written back and the stored secret is kept', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    await runHandler('anthropicDemoKey', `${SENSITIVE_SETTING_MASK}inal`);
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails the write when the audit entry cannot be written', async () => {
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
+
+    await expect(runHandler('tagLineMain', 'Welcome aboard')).rejects.toThrow('audit down');
   });
 });

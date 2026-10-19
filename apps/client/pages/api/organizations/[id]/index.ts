@@ -3,6 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
+  creditLotRepository,
+  creditTransactionRepository,
   integrationRequestRepository,
   partnerSignupRuleRepository,
   userRepository,
@@ -10,9 +12,10 @@ import {
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
-import { organizationService } from '@bike4mind/services';
-import { MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { creditService, organizationService } from '@bike4mind/services';
+import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
@@ -26,6 +29,51 @@ const updateOrgBodySchema = z.object({
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
+
+/**
+ * A platform admin's edit of the org balance, applied as a ledger row plus a strict audit
+ * entry in one transaction, so no admin balance change lands without either. The profile
+ * update never writes currentCredits itself.
+ */
+const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalance: number) => {
+  const organization = await organizationRepository.findById(orgId);
+  if (!organization) throw new NotFoundError('Organization not found');
+
+  const previousBalance = organization.currentCredits ?? 0;
+  const credits = requestedBalance - previousBalance;
+  if (credits === 0) return;
+
+  const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
+  const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
+  const creditAdapters = {
+    db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+    creditHolderMethods: organizationRepository,
+  };
+  const ledgerEntry = {
+    ownerId: organization.id,
+    ownerType: CreditHolderType.Organization,
+    credits: Math.abs(credits),
+    reason: 'admin_adjustment',
+    description: reason,
+    metadata,
+  } as const;
+
+  await withTransaction(async () => {
+    if (credits > 0) {
+      await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
+    } else {
+      await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
+    }
+    await recordAdminActionFromRequest(req, {
+      action: 'org.credits.adjusted',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+      reason,
+      changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
+      details: { credits, ownerId: organization.userId },
+    });
+  });
+};
 
 const handler = baseApi()
   .get(
@@ -54,10 +102,15 @@ const handler = baseApi()
         throw new BadRequestError('Invalid organization id');
       }
 
-      const body = updateOrgBodySchema.parse(req.body);
+      const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
+      // Non-admins cannot move credits here; their value is ignored, as before.
+      if (req.user!.isAdmin && currentCredits !== undefined) {
+        await applyAdminCreditEdit(req, orgId, currentCredits);
+      }
+
       const updatedOrganization = await organizationService.update(
         req.user!,
-        { ...body, id: orgId },
+        { ...profile, id: orgId },
         {
           db: {
             organizations: organizationRepository,

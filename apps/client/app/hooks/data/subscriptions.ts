@@ -287,6 +287,7 @@ export const useGrantSubscription = () => {
       durationMonths = 1,
       billingOwnerId,
       managerId,
+      reason,
     }: {
       userId: string;
       subscriptionType: 'individual' | 'team';
@@ -297,6 +298,7 @@ export const useGrantSubscription = () => {
       durationMonths?: number;
       billingOwnerId?: string;
       managerId?: string;
+      reason: string;
     }) => {
       const { data } = await api.post<{
         success: boolean;
@@ -313,6 +315,7 @@ export const useGrantSubscription = () => {
         durationMonths,
         billingOwnerId,
         managerId,
+        reason,
       });
       return data;
     },

@@ -16,7 +16,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
@@ -36,7 +36,6 @@ const GrantOrgSchema = z.object({
   // Absolute rail; the configured teamPlanMaxSeats ceiling is checked in the handler.
   seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
   initialCredits: z.number().int().min(0).max(MAX_INITIAL_CREDITS),
-  reason: z.string().min(1).max(500),
 });
 
 // requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
@@ -49,7 +48,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
-    const { name, ownerEmail, seats, initialCredits, reason } = GrantOrgSchema.parse(req.body);
+    const { name, ownerEmail, seats, initialCredits } = GrantOrgSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const { maxSeats } = await getTeamPlanSettings();
     if (seats > maxSeats) {
       throw new BadRequestError(`Seats cannot exceed ${maxSeats}`);
@@ -131,7 +131,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         target: { kind: 'organization', id: org.id, displayName: org.name },
         summary: `granted org with ${seats} seats and ${initialCredits} initial credits`,
         reason,
-        details: { ownerId: owner.id, seats, initialCredits },
+        details: { ownerId: owner.id, seats, initialCredits, credits: initialCredits },
       });
 
       return org;

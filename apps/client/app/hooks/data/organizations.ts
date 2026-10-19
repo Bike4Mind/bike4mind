@@ -170,7 +170,14 @@ export function useUpdateOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ orgId, data }: { orgId: string; data: Partial<IOrganizationDocument> }) => {
+    mutationFn: async ({
+      orgId,
+      data,
+    }: {
+      orgId: string;
+      // creditReason is required by the server whenever an admin changes currentCredits.
+      data: Partial<IOrganizationDocument> & { creditReason?: string };
+    }) => {
       const response = await api.put<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, data);
       return response.data;
     },
