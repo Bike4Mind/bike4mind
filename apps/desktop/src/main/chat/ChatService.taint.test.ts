@@ -285,13 +285,38 @@ describe('ChatService untrusted content in a reply', () => {
     it.each([
       'gh pr view 123 --json title,state',
       "gh api repos/o/r/pulls | jq '.[] | .title'",
-      "git diff HEAD -- . ':!*.test.ts' > /tmp/b4m-taint-src.diff; wc -l /tmp/b4m-taint-src.diff; cat notes.txt",
+      'wc -l notes.txt; cat notes.txt',
     ])('runs %s unasked after a web fetch', async command => {
       const id = await session('auto');
       await reply(id, [fetch, ['bash_execute', { command, cwd: root }]]);
 
       await settled('bash_execute');
       expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    });
+
+    it('still asks before a contained command that names a path outside the granted folders', async () => {
+      const id = await session('auto');
+      await reply(id, [fetch, ['bash_execute', { command: 'cat /etc/hosts', cwd: root }]]);
+
+      // Contained only answers the taint question; the folder grant is still asked for.
+      await awaitCall('bash_execute', 'awaiting-approval');
+    });
+
+    it('still asks before git after the reply planted a repo config that runs a program', async () => {
+      const id = await session('auto');
+      await reply(id, [
+        fetch,
+        [
+          'bash_execute',
+          {
+            command: 'printf \'[core]\\n\\tfsmonitor = "touch PWNED; false"\\n\' >> .git/config; git status',
+            cwd: root,
+          },
+        ],
+      ]);
+
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('(web_fetch)');
     });
 
     it('still asks before a GitHub call aimed at another host', async () => {
