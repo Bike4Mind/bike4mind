@@ -31,6 +31,15 @@ const MAX_PR_FILES = 3000;
 // compare/{base}...{head} returns at most 300 files.
 const MAX_COMPARE_FILES = 300;
 
+// Errors whose message this script wrote and knows to be safe to publish. Any
+// other error is reported by name only: a RegExp SyntaxError quotes the pattern
+// and a JSON SyntaxError quotes the body it failed on.
+class SafeError extends Error {}
+
+function safeMessage(err) {
+  return err instanceof SafeError ? err.message : `unexpected ${err?.name ?? 'error'}.`;
+}
+
 /**
  * Compiles the term list into a single matcher, or throws a message safe to print.
  * Word boundaries are letters and digits only, so `_`, `-`, `/` and `.` separate
@@ -44,12 +53,18 @@ export function compileTerms(raw) {
     try {
       new RegExp(fragment, 'iu');
     } catch {
-      throw new Error(`Line ${i + 1} of the restricted-term list is not a valid regular expression.`);
+      throw new SafeError(`Line ${i + 1} of the restricted-term list is not a valid regular expression.`);
     }
     fragments.push(`(?:${fragment})`);
   });
   if (fragments.length === 0) return null;
-  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragments.join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+  // Fragments that compile alone can still fail together (too large, clashing
+  // groups), and a RegExp SyntaxError quotes the whole pattern, so never let it out.
+  try {
+    return new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragments.join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+  } catch {
+    throw new SafeError('The restricted-term list is valid line by line but does not compile as one pattern.');
+  }
 }
 
 /** Returns the added lines of a unified diff as `{ line, text }`, numbered in the new file. */
@@ -86,7 +101,7 @@ function github(token, fetchImpl) {
       headers: accept ? { ...headers, Accept: accept } : headers,
     });
     if (!res.ok) {
-      const err = new Error(`GitHub API ${res.status} for ${url.split('?')[0]}`);
+      const err = new SafeError(`GitHub API ${res.status} for ${url.split('?')[0]}`);
       err.status = res.status;
       throw err;
     }
@@ -209,7 +224,7 @@ export async function run({
   try {
     matcher = compileTerms(env.RESTRICTED_TERMS);
   } catch (err) {
-    return fail(err.message);
+    return fail(safeMessage(err));
   }
   if (!matcher) {
     return fail(
@@ -230,13 +245,17 @@ export async function run({
   const ctx = { event, matcher, gh, repo, hit: where => hits.push(where), incomplete: why => gaps.push(why) };
 
   let summary;
-  if (eventName === 'pull_request_target' || eventName === 'pull_request') {
-    summary = await scanPullRequest(ctx);
-  } else if (eventName === 'push') {
-    summary = await scanPush(ctx);
-  } else {
-    log(`Nothing to check for ${eventName} events.`);
-    return 0;
+  try {
+    if (eventName === 'pull_request_target' || eventName === 'pull_request') {
+      summary = await scanPullRequest(ctx);
+    } else if (eventName === 'push') {
+      summary = await scanPush(ctx);
+    } else {
+      log(`Nothing to check for ${eventName} events.`);
+      return 0;
+    }
+  } catch (err) {
+    return fail(`Restricted-term check could not complete: ${safeMessage(err)}`);
   }
 
   log(`Checked ${summary}.`);
@@ -261,9 +280,8 @@ export async function run({
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   run().then(
     code => process.exit(code),
-    // API errors carry only a status and an endpoint path, never content.
     err => {
-      console.log(`::error::Restricted-term check could not complete: ${err.message}`);
+      console.log(`::error::Restricted-term check could not complete: ${safeMessage(err)}`);
       process.exit(1);
     }
   );

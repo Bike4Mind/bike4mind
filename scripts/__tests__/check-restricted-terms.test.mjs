@@ -101,6 +101,26 @@ describe('compileTerms', () => {
     expect(m.test('')).toBe(false);
   });
 
+  it('does not echo the list when the fragments fail to compile together', () => {
+    // Stand in for a combined-pattern failure (for example "too large"), whose
+    // SyntaxError quotes the full source.
+    const RealRegExp = RegExp;
+    globalThis.RegExp = function (source, flags) {
+      if (source.startsWith('(?<!')) throw new SyntaxError(`Invalid regular expression: /${source}/`);
+      return new RealRegExp(source, flags);
+    };
+    let message = '';
+    try {
+      compileTerms(TERMS);
+    } catch (err) {
+      message = err.message;
+    } finally {
+      globalThis.RegExp = RealRegExp;
+    }
+    expect(message).toMatch(/does not compile as one pattern/);
+    expect(message).not.toMatch(/zorblax/i);
+  });
+
   it('returns null for an empty list', () => {
     expect(compileTerms(undefined)).toBeNull();
     expect(compileTerms('\n  \n# only a comment\n')).toBeNull();
@@ -211,6 +231,18 @@ describe('run', () => {
     expect(code).toBe(1);
     expect(output).toContain('file big.txt line 2');
     expect(output).not.toContain('img.png');
+  });
+
+  it('fails without echoing the body when an API response is not JSON', async () => {
+    const routes = prRoutes();
+    routes['/repos/acme/widgets/pulls/7/files'] = {
+      ...response(null),
+      json: async () => JSON.parse('<html>zorblax</html>'),
+    };
+    const { code, output } = await check({ routes });
+    expect(code).toBe(1);
+    expect(output).toContain('could not complete: unexpected SyntaxError.');
+    expect(output.toLowerCase()).not.toContain('zorblax');
   });
 
   it('fails closed when the PR is too large to list completely', async () => {
