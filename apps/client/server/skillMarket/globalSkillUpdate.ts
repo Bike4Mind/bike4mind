@@ -25,8 +25,8 @@ const refuse = (lead: string, findings: ISkillScanFinding[]): never => {
  * mode). `content` runs the same Skill Market scan a listing version gets, held to the Public bar
  * since a global skill reaches everyone: only a result the market would publish to Public without a
  * human reviewer saves, and only from an account old enough to publish to Public. It shares the
- * market's submit rate limits, since each scan may cost a classifier call. `name` runs only the deterministic rules over the new name (no LLM call).
- * Throws on anything that may not save.
+ * market's submit rate limits, since each scan may cost a classifier call. `name` runs only the
+ * deterministic rules over the new name (no LLM call). Throws on anything that may not save.
  *
  * Global saves have no listing version, so they can't join the market's audit queue; every content
  * scan is logged instead, with `auditSample` drawn at the market's `auditSampleRate`.
@@ -74,10 +74,14 @@ export async function scanGlobalSkillUpdate(
   });
 
   if (scan.status === 'error') {
-    throw new HTTPError(
+    // Expected: a classifier outage is handled (fail closed) and already logged above with
+    // `status: 'error'`, so it should not page as a server fault.
+    const error = new HTTPError(
       HttpStatus.ServiceUnavailable,
       'The safety scan could not finish, so nothing was saved. Try again.'
     );
+    error.expected = true;
+    throw error;
   }
   if (saves) return;
   refuse(

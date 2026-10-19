@@ -228,6 +228,7 @@ describe('/api/skills/[id] PUT - global skill content changes go through the Ski
     );
     expect(error).toBeInstanceOf(HTTPError);
     expect((error as HTTPError).statusCode).toBe(503);
+    expect((error as HTTPError).expected).toBe(true);
     expect(mockUpdateGuarded).not.toHaveBeenCalled();
   });
 
