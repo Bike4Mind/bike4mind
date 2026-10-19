@@ -31,7 +31,9 @@ INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
 # not couple a fork to Bike4Mind infrastructure — the functional open-core risk is
 # in runtime/infra/CI code. Excluded here; branding-in-tests is a separate concern.
 EXCLUDE_FILES=(--exclude='*.test.ts' --exclude='*.test.tsx' --exclude='*.spec.ts'
-  --exclude='*.spec.tsx' --exclude='*.test.js' --exclude='*.spec.js')
+  --exclude='*.spec.tsx' --exclude='*.test.js' --exclude='*.spec.js'
+  --exclude='*.test.[cm]js' --exclude='*.spec.[cm]js'
+  --exclude=pnpm-lock.yaml)
 
 EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
   --exclude-dir=.next --exclude-dir=.turbo --exclude-dir=coverage --exclude-dir=__tests__
