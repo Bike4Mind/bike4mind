@@ -94,6 +94,7 @@ import {
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
+import { withOllamaThinkingDefault } from './ollamaThinkingDefault';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -4797,6 +4798,8 @@ export class ChatCompletionProcess {
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
                 reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
+                // Per attempt too: the explicit think-off is Ollama's alone, and a fallback can change backend.
+                thinking: withOllamaThinkingDefault(options.thinking, currentModel),
                 abortSignal: abortController.signal,
                 cacheStrategy,
                 _internal: {

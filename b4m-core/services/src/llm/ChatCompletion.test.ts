@@ -1854,6 +1854,51 @@ describe('ChatCompletionProcess', () => {
       expect(errors[7]).toContain('Not run: "math_evaluate"');
     });
 
+    // Ollama thinks by default on a thinking-capable model sent no think flag, so a turn with the
+    // Thinking toggle off must reach the backend as an explicit off (ollamaThinkingDefault.ts).
+    it('sends an explicit thinking off to an Ollama thinking model when the toggle is off', async () => {
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['done']);
+      });
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'qwen3:8b',
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: 'qwen3:8b',
+          type: 'text',
+          name: 'qwen3:8b',
+          backend: ModelBackend.Ollama,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          can_think: true,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: 'qwen3:8b' },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).toHaveBeenCalled();
+      expect(complete.mock.calls[0][2].thinking).toEqual({ enabled: false, budget_tokens: 0 });
+    });
+
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
