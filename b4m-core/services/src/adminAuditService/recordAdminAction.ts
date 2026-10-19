@@ -8,7 +8,7 @@ import {
   type AuditTarget,
   type IAdminAuditLogRepository,
 } from '@bike4mind/common';
-import { isSecretKey, redactAuditPayload, REDACTED_PLACEHOLDER } from './redactAuditPayload';
+import { redactAuditPayload, redactChange } from './redactAuditPayload';
 
 export type RecordAdminActionInput = {
   action: AdminAuditAction;
@@ -28,12 +28,6 @@ export type RecordAdminActionAdapters = {
   db: { adminAuditLog: Pick<IAdminAuditLogRepository, 'append'> };
   logger?: { error: (message: string, meta?: Record<string, unknown>) => void };
 };
-
-// A change row names its field in a value, so key-based redaction alone would miss it.
-const redactChange = (change: AuditChange): AuditChange =>
-  isSecretKey(change.field)
-    ? { field: change.field, before: REDACTED_PLACEHOLDER, after: REDACTED_PLACEHOLDER }
-    : redactAuditPayload(change);
 
 /**
  * Appends an admin audit entry. Category and severity come from the catalogue only.

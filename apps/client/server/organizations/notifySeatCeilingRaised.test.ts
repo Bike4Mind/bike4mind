@@ -75,7 +75,7 @@ describe('auditSeatCeilingRaised', () => {
   });
 
   it('falls back to an unknown-admin actor and logs when the admin lookup rejects', async () => {
-    mockFindUserById.mockRejectedValue(new Error('db down'));
+    mockFindUserById.mockRejectedValueOnce(new Error('db down'));
     await auditSeatCeilingRaised(
       {
         organizationId: 'org-1',
@@ -106,7 +106,7 @@ describe('auditSeatCeilingRaised', () => {
   });
 
   it('never throws when Slack fails - a signup already committed must not be broken', async () => {
-    mockPostToSlack.mockRejectedValue(new Error('slack down'));
+    mockPostToSlack.mockRejectedValueOnce(new Error('slack down'));
 
     await expect(
       notifySeatCeilingRaised(
@@ -137,7 +137,7 @@ describe('notifyPartnerSignupBlockedAtCapacity', () => {
   });
 
   it('never throws when Slack fails', async () => {
-    mockPostToSlack.mockRejectedValue(new Error('slack down'));
+    mockPostToSlack.mockRejectedValueOnce(new Error('slack down'));
 
     await expect(
       notifyPartnerSignupBlockedAtCapacity(

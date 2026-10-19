@@ -9,16 +9,44 @@ const state = vi.hoisted(() => ({
   users: [] as Row[],
   seenIds: new Set<string>(),
   appendCalls: [] as Entry[][],
+  counterFilters: [] as unknown[],
+  counterSorts: [] as unknown[],
 }));
 
+type Filter = {
+  _id?: { $gt: { toString(): string } };
+  datetime?: { $gte: Date };
+  $or?: Array<{ datetime: Date | { $gt: Date }; _id?: { $gt: { toString(): string } } }>;
+};
+
 const { sourceQuery } = vi.hoisted(() => {
-  const sourceQuery = (rows: () => Row[]) => ({
-    find: (filter: { _id?: { $gt: { toString(): string } } }) => {
-      const after = filter._id?.$gt.toString();
-      const page = () => rows().filter(row => after === undefined || row._id.toString() > after);
+  const time = (row: Row) => (row.datetime instanceof Date ? row.datetime.getTime() : 0);
+  const sourceQuery = (rows: () => Row[], record?: (filter: unknown, sort: unknown) => void) => ({
+    find: (filter: Filter) => {
+      let sortSpec: unknown;
+      const matches = (row: Row) => {
+        if (filter._id && row._id.toString() <= filter._id.$gt.toString()) return false;
+        if (filter.datetime && time(row) < filter.datetime.$gte.getTime()) return false;
+        if (!filter.$or) return true;
+        return filter.$or.some(clause => {
+          if ('$gt' in clause.datetime) return time(row) > clause.datetime.$gt.getTime();
+          return time(row) === clause.datetime.getTime() && row._id.toString() > String(clause._id?.$gt);
+        });
+      };
       const query = {
-        sort: () => query,
-        limit: (count: number) => ({ lean: async () => page().slice(0, count) }),
+        sort: (spec: unknown) => {
+          sortSpec = spec;
+          return query;
+        },
+        limit: (count: number) => ({
+          lean: async () => {
+            record?.(filter, sortSpec);
+            return rows()
+              .filter(matches)
+              .sort((a, b) => time(a) - time(b) || a._id.toString().localeCompare(b._id.toString()))
+              .slice(0, count);
+          },
+        }),
       };
       return query;
     },
@@ -28,7 +56,13 @@ const { sourceQuery } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   CreditTransaction: sourceQuery(() => state.ledgerRows),
-  CounterLog: sourceQuery(() => state.counterRows),
+  CounterLog: sourceQuery(
+    () => state.counterRows,
+    (filter, sort) => {
+      state.counterFilters.push(filter);
+      state.counterSorts.push(sort);
+    }
+  ),
   User: {
     find: (filter: { _id: { $in: string[] } }) => ({
       select: () => ({
@@ -288,38 +322,113 @@ describe('mapCounterLogRowToEntry', () => {
     });
   });
 
-  it('turns whats-new changedFields and old/new config into per-field changes', () => {
+  it('backfills a whats-new restore row under the restore target with one config change', () => {
+    const restore = counterRow(
+      'WHATS_NEW_CONFIG_UPDATED',
+      {
+        configType: 'whats-new-config',
+        oldConfig: { a: 1 },
+        newConfig: { a: 2 },
+        changedFields: ['restored_from_history'],
+        reason: 'Restored from history (index 0)',
+      },
+      { userId: ADMIN_ID }
+    );
+
+    const entry = mapCounterLogRowToEntry(restore, admin);
+
+    expect(entry).toMatchObject({
+      action: 'settings.whats_new.updated',
+      target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
+      summary: 'restored the configuration from history',
+      reason: 'Restored from history (index 0)',
+      changes: [{ field: 'config', before: { a: 1 }, after: { a: 2 } }],
+    });
+    expect(entry?.details).toBeUndefined();
+  });
+
+  it('backfills a whats-new sync-config row under the sync-config target with one syncConfig change', () => {
     const row = counterRow(
       'WHATS_NEW_CONFIG_UPDATED',
-      { oldConfig: { a: 1, b: 2 }, newConfig: { a: 1, b: 3 }, changedFields: ['b'] },
+      {
+        metadata: {
+          oldConfig: { autoSyncEnabled: true },
+          newConfig: { autoSyncEnabled: false },
+          changes: { autoSyncEnabled: true, distributionUrlOverride: false },
+        },
+      },
       { userId: ADMIN_ID }
     );
 
     const entry = mapCounterLogRowToEntry(row, admin);
 
-    expect(entry?.changes).toEqual([{ field: 'b', before: 2, after: 3 }]);
+    expect(entry).toMatchObject({
+      target: { kind: 'settings', id: 'whats-new-sync-config', displayName: "What's New sync configuration" },
+      summary: 'updated the sync configuration',
+      changes: [{ field: 'syncConfig', before: { autoSyncEnabled: true }, after: { autoSyncEnabled: false } }],
+    });
     expect(entry?.details).toBeUndefined();
   });
 
-  it('falls back to a single config change row for restores and rows without changedFields', () => {
-    const restore = counterRow(
+  it('keeps the configs in details when no change row could be built (first-ever config)', () => {
+    const row = counterRow(
       'WHATS_NEW_CONFIG_UPDATED',
-      { oldConfig: { a: 1 }, newConfig: { a: 2 }, changedFields: ['restored_from_history'] },
-      { userId: ADMIN_ID }
-    );
-    const nested = counterRow(
-      'WHATS_NEW_CONFIG_UPDATED',
-      { metadata: { oldConfig: { a: 1 }, newConfig: { a: 2 } } },
+      { metadata: { oldConfig: null, newConfig: { autoSyncEnabled: true } } },
       { userId: ADMIN_ID }
     );
 
-    expect(mapCounterLogRowToEntry(restore, admin)).toMatchObject({
-      summary: 'restored the configuration from history',
-      changes: [{ field: 'config', before: { a: 1 }, after: { a: 2 } }],
+    const entry = mapCounterLogRowToEntry(row, admin);
+
+    expect(entry?.changes).toBeUndefined();
+    expect(entry?.details).toEqual({ oldConfig: null, newConfig: { autoSyncEnabled: true } });
+  });
+
+  it('keeps oauth configs in details when no change row could be built', () => {
+    const row = counterRow('OAUTH_CLIENT_CREATED', {
+      adminUserId: ADMIN_ID,
+      newConfig: { redirectUris: ['a'] },
+      metadata: { oauthClientId: 'oc-1', name: 'Portal' },
     });
-    expect(mapCounterLogRowToEntry(nested, admin)?.changes).toEqual([
-      { field: 'config', before: { a: 1 }, after: { a: 2 } },
+
+    const entry = mapCounterLogRowToEntry(row, admin);
+
+    expect(entry?.changes).toBeUndefined();
+    expect(entry?.details).toEqual({ newConfig: { redirectUris: ['a'] } });
+  });
+
+  it('redacts secret-looking fields in changes but not look-alikes such as maxTokens', () => {
+    const row = counterRow('OAUTH_CLIENT_UPDATED', {
+      adminUserId: ADMIN_ID,
+      oldConfig: { clientSecret: 'old', maxTokens: 1 },
+      newConfig: { clientSecret: 'new', maxTokens: 2 },
+      metadata: { oauthClientId: 'oc-1', name: 'Portal' },
+    });
+
+    expect(mapCounterLogRowToEntry(row, admin)?.changes).toEqual([
+      { field: 'clientSecret', before: '[REDACTED]', after: '[REDACTED]' },
+      { field: 'maxTokens', before: 1, after: 2 },
     ]);
+  });
+
+  it('uses the same summaries and display names as the live routes', () => {
+    const summaryOf = (counterName: string, metadata: Record<string, unknown>) =>
+      mapCounterLogRowToEntry(counterRow(counterName, { adminUserId: ADMIN_ID, ...metadata }), admin)?.summary;
+
+    expect(summaryOf('ORG_CONVERT_INITIATED', { metadata: { organizationId: 'o' } })).toBe(
+      'initiated conversion to a paid subscription'
+    );
+    expect(summaryOf('OAUTH_CLIENT_CREATED', { metadata: { oauthClientId: 'c' } })).toBe('created an OAuth client');
+    expect(summaryOf('OAUTH_CLIENT_SECRET_ROTATED', { metadata: { oauthClientId: 'c' } })).toBe(
+      'rotated the client secret'
+    );
+    expect(summaryOf('ADMIN_EMAIL_CHANGE_RESENT', {})).toBe('resent email change verification');
+    expect(summaryOf('EMAIL_CHANGE_CANCELLED', {})).toBe('cancelled expired email change');
+
+    const invite = mapCounterLogRowToEntry(
+      counterRow('ORG_GROUP_INVITE_CREATED', { metadata: { groupId: 'g1' } }, { userId: ADMIN_ID }),
+      admin
+    );
+    expect(invite?.target).toEqual({ kind: 'system', id: 'g1', displayName: 'Group' });
   });
 
   it('builds before/after changes for an oauth client update', () => {
@@ -349,6 +458,8 @@ describe('backfill-admin-audit-log up()', () => {
     state.users = [{ _id: ADMIN_ID, name: 'Ada Admin', isAdmin: true }];
     state.seenIds = new Set();
     state.appendCalls = [];
+    state.counterFilters = [];
+    state.counterSorts = [];
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
@@ -393,5 +504,34 @@ describe('backfill-admin-audit-log up()', () => {
 
     expect(state.seenIds.size).toBe(1200);
     expect(state.appendCalls.map(call => call.length)).toEqual([500, 500, 200]);
+  });
+
+  it('pages counter logs by (datetime, _id) on the datetime index without skipping rows that share a timestamp', async () => {
+    const sameTime = new Date('2025-03-02T00:00:00Z');
+    state.ledgerRows = [];
+    state.counterRows = Array.from({ length: 1100 }, (_, index) =>
+      counterRow(
+        'ORG_TOPPED_UP',
+        { adminUserId: ADMIN_ID, metadata: { organizationId: 'org-1' } },
+        {
+          _id: `64c${String(index).padStart(21, '0')}`.slice(0, 24),
+          // The first 600 share one timestamp so a page boundary lands inside a tie.
+          datetime: index < 600 ? sameTime : new Date(sameTime.getTime() + index * 1000),
+        }
+      )
+    ) as unknown as Row[];
+
+    await migration.up();
+
+    expect(state.seenIds.size).toBe(1100);
+    expect(state.appendCalls.map(call => call.length)).toEqual([500, 500, 100]);
+    expect(state.counterSorts).toEqual([
+      { datetime: 1, _id: 1 },
+      { datetime: 1, _id: 1 },
+      { datetime: 1, _id: 1 },
+    ]);
+    expect(state.counterFilters[0]).toMatchObject({ datetime: { $gte: new Date(0) } });
+    expect(state.counterFilters[0]).not.toHaveProperty('$or');
+    expect(state.counterFilters[1]).toMatchObject({ datetime: { $gte: sameTime }, $or: expect.any(Array) });
   });
 });

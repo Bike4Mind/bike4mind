@@ -1,7 +1,13 @@
-const SECRET_KEY_PATTERN = /password|secret|token|apikey|hash|credential/i;
+import type { AuditChange } from '@bike4mind/common';
+
+// `token` alone over-matches (maxTokens, tokenEndpointAuthMethod), so it only counts as the whole key
+// or as a camelCase / snake / kebab suffix (accessToken, refresh_token, id-token).
+const SECRET_SUBSTRING_PATTERN = /password|secret|apikey|api_key|hash|credential/i;
+const TOKEN_KEY_PATTERNS = [/^token$/i, /Token$/, /[_-]token$/i];
 const REDACTED = '[REDACTED]';
 
-export const isSecretKey = (key: string): boolean => SECRET_KEY_PATTERN.test(key);
+export const isSecretKey = (key: string): boolean =>
+  SECRET_SUBSTRING_PATTERN.test(key) || TOKEN_KEY_PATTERNS.some(pattern => pattern.test(key));
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   if (typeof value !== 'object' || value === null) return false;
@@ -35,3 +41,7 @@ const redact = (value: unknown, ancestors: WeakSet<object>): unknown => {
 export const redactAuditPayload = <T>(value: T): T => redact(value, new WeakSet()) as T;
 
 export const REDACTED_PLACEHOLDER = REDACTED;
+
+// A change row names its field in a value, so key-based redaction alone would miss it.
+export const redactChange = (change: AuditChange): AuditChange =>
+  isSecretKey(change.field) ? { field: change.field, before: REDACTED, after: REDACTED } : redactAuditPayload(change);

@@ -184,12 +184,13 @@ const oauthEvent =
             .filter(field => JSON.stringify(oldConfig[field]) !== JSON.stringify(newConfig[field]))
             .map(field => ({ field, before: oldConfig[field], after: newConfig[field] }))
         : undefined;
+    // Configs stay in details unless the changes row carries them, so nothing is lost.
     return {
       action,
       target: { kind: 'oauthClient', id, displayName: asString(flat.name) ?? id },
       summary,
       changes,
-      consumed: ['oauthClientId', 'name', 'oldConfig', 'newConfig'],
+      consumed: ['oauthClientId', 'name', ...(changes?.length ? ['oldConfig', 'newConfig'] : [])],
     };
   };
 
@@ -250,18 +251,33 @@ const resolveOrgGranted = (flat: Metadata, row: CounterLogRow): ResolvedEvent =>
   };
 };
 
-// The old restore route listed this marker in `changedFields` instead of real field names.
-const RESTORE_SENTINEL_FIELD = 'restored_from_history';
+const RESTORE_CONFIG_TYPE = 'whats-new-config';
 
-const configChanges = (flat: Metadata): AuditChange[] | undefined => {
-  const { oldConfig, newConfig, changedFields } = flat;
-  if (!isRecord(oldConfig) || !isRecord(newConfig)) return undefined;
-  const fields = Array.isArray(changedFields)
-    ? changedFields.filter((field): field is string => typeof field === 'string' && field !== RESTORE_SENTINEL_FIELD)
-    : [];
-  return fields.length > 0
-    ? fields.map(field => ({ field, before: oldConfig[field], after: newConfig[field] }))
-    : [{ field: 'config', before: oldConfig, after: newConfig }];
+// Mirrors whats-new-config/restore.ts: one `config` change holding the whole before/after config.
+const resolveWhatsNewRestore = (flat: Metadata): ResolvedEvent => {
+  const { oldConfig, newConfig } = flat;
+  const hasConfigs = isRecord(oldConfig) && isRecord(newConfig);
+  return {
+    action: 'settings.whats_new.updated',
+    target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
+    summary: 'restored the configuration from history',
+    changes: hasConfigs ? [{ field: 'config', before: oldConfig, after: newConfig }] : undefined,
+    consumed: ['configType', ...(hasConfigs ? ['oldConfig', 'newConfig', 'changedFields'] : [])],
+  };
+};
+
+// Mirrors whats-new/config.ts: one `syncConfig` change. The old row's per-field `changes` flags are
+// derivable from before/after, so they are dropped only when that change is emitted.
+const resolveWhatsNewSyncConfig = (flat: Metadata): ResolvedEvent => {
+  const { oldConfig, newConfig } = flat;
+  const hasConfigs = isRecord(oldConfig) && isRecord(newConfig);
+  return {
+    action: 'settings.whats_new.updated',
+    target: { kind: 'settings', id: 'whats-new-sync-config', displayName: "What's New sync configuration" },
+    summary: 'updated the sync configuration',
+    changes: hasConfigs ? [{ field: 'syncConfig', before: oldConfig, after: newConfig }] : undefined,
+    consumed: hasConfigs ? ['oldConfig', 'newConfig', 'changes'] : [],
+  };
 };
 
 const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
@@ -312,7 +328,7 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
     ),
   },
   ORG_CONVERT_INITIATED: {
-    resolve: orgEvent('org.conversion.initiated', () => 'initiated conversion to a paid plan', {
+    resolve: orgEvent('org.conversion.initiated', () => 'initiated conversion to a paid subscription', {
       extra: row => ({ ownerId: row.userId }),
     }),
   },
@@ -351,7 +367,7 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
       return groupId
         ? {
             action: 'org.invite.created',
-            target: { kind: 'system', id: groupId, displayName: `Group ${groupId}` },
+            target: { kind: 'system', id: groupId, displayName: 'Group' },
             summary: 'created a group invite',
           }
         : null;
@@ -368,16 +384,8 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
   },
   WHATS_NEW_CONFIG_UPDATED: {
     actorFromUserId: true,
-    resolve: flat => {
-      const restored = Array.isArray(flat.changedFields) && flat.changedFields.includes(RESTORE_SENTINEL_FIELD);
-      return {
-        action: 'settings.whats_new.updated',
-        target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
-        summary: restored ? 'restored the configuration from history' : 'updated the configuration',
-        changes: configChanges(flat),
-        consumed: ['oldConfig', 'newConfig', 'changedFields'],
-      };
-    },
+    resolve: flat =>
+      flat.configType === RESTORE_CONFIG_TYPE ? resolveWhatsNewRestore(flat) : resolveWhatsNewSyncConfig(flat),
   },
   WHATS_NEW_SYNC_TRIGGERED: {
     actorFromUserId: true,
@@ -422,19 +430,25 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
       return provider ? `tested the ${provider} OAuth provider` : 'tested an OAuth provider';
     }),
   },
-  OAUTH_CLIENT_CREATED: { actorFromUserId: true, resolve: oauthEvent('oauth_client.created', 'created OAuth client') },
-  OAUTH_CLIENT_UPDATED: { actorFromUserId: true, resolve: oauthEvent('oauth_client.updated', 'updated OAuth client') },
+  OAUTH_CLIENT_CREATED: {
+    actorFromUserId: true,
+    resolve: oauthEvent('oauth_client.created', 'created an OAuth client'),
+  },
+  OAUTH_CLIENT_UPDATED: {
+    actorFromUserId: true,
+    resolve: oauthEvent('oauth_client.updated', 'updated the OAuth client'),
+  },
   OAUTH_CLIENT_ACTIVATED: {
     actorFromUserId: true,
-    resolve: oauthEvent('oauth_client.activated', 'activated OAuth client'),
+    resolve: oauthEvent('oauth_client.activated', 'activated the OAuth client'),
   },
   OAUTH_CLIENT_DEACTIVATED: {
     actorFromUserId: true,
-    resolve: oauthEvent('oauth_client.deactivated', 'deactivated OAuth client'),
+    resolve: oauthEvent('oauth_client.deactivated', 'deactivated the OAuth client'),
   },
   OAUTH_CLIENT_SECRET_ROTATED: {
     actorFromUserId: true,
-    resolve: oauthEvent('oauth_client.secret_rotated', 'rotated OAuth client secret'),
+    resolve: oauthEvent('oauth_client.secret_rotated', 'rotated the client secret'),
   },
   ADMIN_EMAIL_VERIFIED: { resolve: userEmailEvent('user.email.verified', 'verified email') },
   ADMIN_EMAIL_UNVERIFIED: { resolve: userEmailEvent('user.email.unverified', 'unverified email') },
@@ -442,11 +456,12 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
     resolve: userEmailEvent('user.email.verification_resent', 'resent email verification'),
   },
   ADMIN_EMAIL_CHANGE_RESENT: {
-    resolve: userEmailEvent('user.email.change_resent', 'resent the email change verification'),
+    resolve: userEmailEvent('user.email.change_resent', 'resent email change verification'),
   },
-  // Also written by the user-driven cancel route; those rows have no adminUserId and are skipped.
+  // Also written by the user-driven cancel route; those rows have no adminUserId and are skipped, so
+  // every backfilled row is the admin resend route's expired-change auto-cancel.
   EMAIL_CHANGE_CANCELLED: {
-    resolve: userEmailEvent('user.email.change_cancelled', 'cancelled the pending email change'),
+    resolve: userEmailEvent('user.email.change_cancelled', 'cancelled expired email change'),
   },
 };
 
@@ -509,7 +524,7 @@ export const mapCounterLogRowToEntry = (row: CounterLogRow, actorUser: ActorUser
     ...(organizationId ? { organizationId } : {}),
     summary: resolved.summary,
     ...(reason ? { reason } : {}),
-    ...(resolved.changes?.length ? { changes: resolved.changes } : {}),
+    ...(resolved.changes?.length ? { changes: resolved.changes.map(adminAuditService.redactChange) } : {}),
     ...(Object.keys(details).length ? { details: adminAuditService.redactAuditPayload(details) } : {}),
     context: { source, ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) },
     backfilled: true,
@@ -520,7 +535,8 @@ type SourceRow = { _id: Types.ObjectId };
 
 type SourceDefinition<Row extends SourceRow> = {
   source: string;
-  fetchPage: (afterId: Types.ObjectId | null) => Promise<Row[]>;
+  /** Returns the next page after `last` (the final row of the previous page, null for the first page). */
+  fetchPage: (last: Row | null) => Promise<Row[]>;
   actorIdOf: (row: Row) => string | undefined;
   mapRow: (row: Row, actorUser: ActorUser | null) => BackfillEntry | null;
 };
@@ -541,10 +557,10 @@ const backfillSource = async <Row extends SourceRow>({
   mapRow,
 }: SourceDefinition<Row>): Promise<void> => {
   const totals = { source, scanned: 0, inserted: 0, duplicates: 0, skipped: 0 };
-  let cursor: Types.ObjectId | null = null;
+  let last: Row | null = null;
 
   for (;;) {
-    const rows: Row[] = await fetchPage(cursor);
+    const rows: Row[] = await fetchPage(last);
     if (rows.length === 0) break;
 
     const actorIds = new Set(rows.map(actorIdOf).filter((id): id is string => id !== undefined));
@@ -561,7 +577,7 @@ const backfillSource = async <Row extends SourceRow>({
     totals.duplicates += duplicates;
     totals.skipped += rows.length - entries.length;
 
-    cursor = rows[rows.length - 1]._id;
+    last = rows[rows.length - 1];
     if (rows.length < BATCH_SIZE) break;
   }
 
@@ -576,11 +592,13 @@ const migration: MigrationFile = {
   up: async () => {
     await backfillSource<LedgerRow & SourceRow>({
       source: 'creditTransactions',
-      fetchPage: afterId =>
+      // No CreditTransaction index leads with type/reason (all start with userId/ownerId/stripe ids), so
+      // this is an ordered _id-index walk with the filter applied per document.
+      fetchPage: last =>
         CreditTransaction.find({
           type: { $in: ['generic_add', 'generic_deduct'] },
           reason: 'admin_adjustment',
-          ...(afterId ? { _id: { $gt: afterId } } : {}),
+          ...(last ? { _id: { $gt: last._id } } : {}),
         })
           .sort({ _id: 1 })
           .limit(BATCH_SIZE)
@@ -591,12 +609,17 @@ const migration: MigrationFile = {
 
     await backfillSource<CounterLogRow & SourceRow>({
       source: 'counterLogs',
-      fetchPage: afterId =>
+      // Uses the { datetime, counterName, userOrganization } index: range on datetime, then counterName.
+      // Keyset-paginates on (datetime, _id); rows sharing the last datetime resume after the last _id.
+      fetchPage: last =>
         CounterLog.find({
+          datetime: { $gte: last?.datetime ?? new Date(0) },
           counterName: { $in: BACKFILLED_COUNTER_NAMES },
-          ...(afterId ? { _id: { $gt: afterId } } : {}),
+          ...(last
+            ? { $or: [{ datetime: { $gt: last.datetime } }, { datetime: last.datetime, _id: { $gt: last._id } }] }
+            : {}),
         })
-          .sort({ _id: 1 })
+          .sort({ datetime: 1, _id: 1 })
           .limit(BATCH_SIZE)
           .lean<Array<CounterLogRow & SourceRow>>(),
       actorIdOf: resolveCounterLogActorId,
