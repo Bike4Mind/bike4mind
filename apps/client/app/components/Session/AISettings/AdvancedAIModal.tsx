@@ -52,6 +52,7 @@ import {
   REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
   isKontextModel as isKontextImageModel,
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
 } from '@bike4mind/common';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
@@ -713,6 +714,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
   // still state the budget, so nothing is lost by omitting the track.
   const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
+  // Adaptive models reason inside this budget, and the server lifts anything below the reasoning
+  // floor (resolveOutputMaxTokens), so a lower value here has no effect - say so rather than let a
+  // stale setting look like a cap that applies.
+  const reasoningFloor = Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, outputCeiling);
+  const isBelowReasoningFloor = !readOnly && modelInfo.thinkingStyle === 'adaptive' && outputTokens < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps
@@ -1110,6 +1116,17 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
                 {formatTokenCount(inputTokens)} for input.
               </Typography>
+              {isBelowReasoningFloor && (
+                <Typography
+                  level="body-sm"
+                  color="warning"
+                  data-testid="token-allocation-reasoning-floor-warning"
+                  sx={{ fontSize: '12px', lineHeight: 1.4 }}
+                >
+                  This model reasons inside its output budget, so values below {formatTokenCount(reasoningFloor)} are
+                  raised to {formatTokenCount(reasoningFloor)} when sent.
+                </Typography>
+              )}
             </Box>
           )}
 
