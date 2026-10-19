@@ -176,6 +176,21 @@ describe('reconcileFetchedMusicGenerationPage', () => {
     expect(page.data[0].state).toBe('succeeded');
   });
 
+  it('compares the fetch with the newer of the detail entry and the list row', () => {
+    const finished = musicJob({ state: 'succeeded', updated_at: LATER });
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), finished);
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'succeeded' })));
+    expect(reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' }))).data[0]).toEqual(
+      finished
+    );
+
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(finished));
+    expect(reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' }))).data[0]).toEqual(
+      finished
+    );
+  });
+
   it('takes newer rows, seeds them, and keeps the cursor', () => {
     queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'running' })));
     const fresh = musicJob({ state: 'succeeded', updated_at: LATER });
