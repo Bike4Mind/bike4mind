@@ -21,6 +21,12 @@ export async function regenerateBackupCodes(
   if (!user.mfa || !user.mfa.totpEnabled) {
     throw new Error('MFA is not enabled for this user.');
   }
+  // An empty secret means the stored one could not be decrypted (findByIdWithMfaSecrets). The
+  // secret-less write guard would then drop the whole mfa write, so the new codes would be shown
+  // to the user without ever being saved. Refuse instead.
+  if (!user.mfa.totpSecret) {
+    throw new Error('MFA secret is unavailable; backup codes cannot be regenerated.');
+  }
 
   const newBackupCodes = generateBackupCodes();
   const hashedBackupCodes = newBackupCodes.map(hashBackupCode);

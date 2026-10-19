@@ -677,6 +677,77 @@ describe('ServerSubagentOrchestrator', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(BEDROCK_ID));
     });
 
+    it('runs an agent pinned to a retired model id on its successor', async () => {
+      stubAgentRun();
+      const RETIRED_ID = 'anthropic.claude-3-haiku-20240307-v1:0';
+      const SUCCESSOR_ID = 'global.anthropic.claude-haiku-5-5';
+      const resolveBackend = makeResolver([SUCCESSOR_ID]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: RETIRED_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).toHaveBeenCalledWith(SUCCESSOR_ID);
+      expect(resolveBackend).not.toHaveBeenCalledWith(RETIRED_ID);
+      expect(result.model).toBe(SUCCESSOR_ID);
+    });
+
+    it("reuses the parent's backend when a retired pinned id resolves to the parent's model", async () => {
+      stubAgentRun();
+      const parentLlm = makeLlm('global.anthropic.claude-haiku-5-5');
+      const resolveBackend = makeResolver([]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: parentLlm,
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: 'anthropic.claude-3-haiku-20240307-v1:0' }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).not.toHaveBeenCalled();
+      expect(result.model).toBe('global.anthropic.claude-haiku-5-5');
+    });
+
+    it('resolves retired fallback model ids to their successors', async () => {
+      stubAgentRun();
+      const SUCCESSOR_ID = 'global.anthropic.claude-haiku-5-5';
+      const resolveBackend = makeResolver([SUCCESSOR_ID]);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(PARENT_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        resolveBackend,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: BEDROCK_ID, fallbackModels: ['anthropic.claude-3-haiku-20240307-v1:0'] }),
+        thoroughness: 'medium',
+      });
+
+      expect(resolveBackend).not.toHaveBeenCalledWith('anthropic.claude-3-haiku-20240307-v1:0');
+      expect(result.model).toBe(SUCCESSOR_ID);
+    });
+
     it("degrades to the parent's model when no candidate is serviceable", async () => {
       stubAgentRun();
       const resolveBackend = makeResolver([]);

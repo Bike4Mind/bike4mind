@@ -217,7 +217,7 @@ describe('JWT rate limiting', () => {
 
   it("attributes a b4m-desktop client as source 'desktop' on the completion and its analytics", async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
-    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop', userId: 'u1' }));
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
@@ -289,6 +289,23 @@ describe('POST /api/ai/v1/completions - stream', () => {
       .map(f => f.text)
       .join('');
     expect(text).toBe('hello');
+  });
+
+  it('sends a provider block as its own provider_block frame, in order with content', async () => {
+    const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'searching'], {});
+      await params.onChunk([], { providerBlock: { provider: 'anthropic', block } });
+      await params.onChunk(['', 'found it'], { outputTokens: 5 });
+    });
+    const sent = frames(await (await post()).text()).filter(f => f.type !== 'meta');
+    expect(sent.map(f => f.type)).toEqual(['content', 'provider_block', 'content']);
+    expect(CompletionStreamEventSchema.parse(sent[1])).toEqual({
+      type: 'provider_block',
+      provider: 'anthropic',
+      block,
+    });
   });
 
   it('streams content and terminates with [DONE]', async () => {
@@ -514,6 +531,14 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     const body = await expectJsonError(await post(), 400);
     expect(body.error).toBe("Unknown model 'gpt-9000'. List the models you can call with GET /api/v1/models.");
     expect(body.errorCode).toBe('unknown_model');
+  });
+
+  it('answers a refused tool search request with 400 and its errorCode', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('no tool search here', { errorCode: 'tool_search_unsupported' })
+    );
+    const body = await expectJsonError(await post(), 400);
+    expect(body.errorCode).toBe('tool_search_unsupported');
   });
 
   it('answers a refused credit hold with 422 insufficient_credits', async () => {

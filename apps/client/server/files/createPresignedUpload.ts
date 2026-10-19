@@ -14,9 +14,15 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
+  organizationRepository,
 } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
-import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import {
+  checkStorageLimitForOwner,
+  getSettingsMap,
+  getSettingsValue,
+  resolveSupportedMimeType,
+} from '@bike4mind/utils';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -32,6 +38,8 @@ const s3Client = createS3Client();
 
 /** Seconds. */
 export const PRESIGNED_UPLOAD_EXPIRES_IN = 600;
+// A bare generate upload is one small PNG PUT straight away; a short window limits how long the URL can be replayed after the scan.
+export const BARE_PRESIGNED_UPLOAD_EXPIRES_IN = 60;
 
 export type PresignedUpload = {
   url: string;
@@ -50,7 +58,8 @@ export type PresignedUpload = {
  */
 export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   req: Request<Params, ResBody, ReqBody, Query>,
-  data: FileGeneratePresignedUrlRequestInputType
+  data: FileGeneratePresignedUrlRequestInputType,
+  provenance?: { sourceMetadata: Record<string, unknown>; contentType: string }
 ): Promise<PresignedUpload> {
   const userId = req.user.id;
 
@@ -79,8 +88,6 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     });
   }
 
-  await checkStorageLimit(req.user, data.fileSize);
-
   // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
   // presign door can't be used to inject files into a lake the caller only reads. Full actor
   // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
@@ -92,7 +99,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // file does not exist yet, so it can only ever be a JOIN.
   await assertDataLakeTagWriteScope(req, requestedTagNames, { userId, db: { dataLakes: dataLakeRepository } });
   const ctx = await toAccessContext(req);
-  await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+  const targetLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
     db: {
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -108,6 +115,13 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // fabFileService.createFabFile door that gates the static-registry namespace centrally -
   // so it needs its own check, same as the meta-tag one above.
   dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames);
+
+  // Same owner rule as fabFileService.createFabFile, which this direct create bypasses. Resolved
+  // before the quota gate so the bytes are checked against the pool they will be billed to.
+  const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+  await checkStorageLimitForOwner({ user: req.user, organizationId: ownerOrganizationId }, data.fileSize, id =>
+    organizationRepository.findById(id)
+  );
 
   // A file joining a lake must also land under that lake's content prefix, or it is
   // invisible to tag-counts and to the Explorer's tag tree.
@@ -139,6 +153,14 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const command = new PutObjectCommand({
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
+    // Bound only for the narrow ai:generate upload: S3 then rejects a PUT whose type or length
+    // differs from what was validated. Every other caller keeps the unbound presign.
+    ...(provenance && {
+      ContentType: provenance.contentType,
+      ContentLength: data.fileSize,
+      // Create-only: the PUT fails if the key exists, so a scanned object cannot be overwritten.
+      IfNoneMatch: '*',
+    }),
   });
 
   // Create File metadata, status will be set to `pending` by default
@@ -153,6 +175,8 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       // Admission provenance (#1679): stamp the door - the web upload path the lake previously
       // could not identify. Mirrors the batch door and the connector/chat-platform doors.
       sourceType: FabFileSourceType.MANUAL_UPLOAD,
+      ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
+      ...(provenance && { sourceMetadata: provenance.sourceMetadata }),
       ...(data.contentHash && { contentHash: data.contentHash }),
       ...(data.batchId && { batchId: data.batchId }),
       ...(data.relativePath && { relativePath: data.relativePath }),
@@ -163,15 +187,20 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     req.ability!
   );
 
-  const url = await getSignedUrl(s3Client, command, {
-    expiresIn: PRESIGNED_UPLOAD_EXPIRES_IN,
-  });
+  const expiresIn = provenance ? BARE_PRESIGNED_UPLOAD_EXPIRES_IN : PRESIGNED_UPLOAD_EXPIRES_IN;
+  // The presigner leaves content-type unsigned by default, so it must be opted in for the bound
+  // type above to hold.
+  const url = await getSignedUrl(
+    s3Client,
+    command,
+    provenance ? { expiresIn, signableHeaders: new Set(['content-type']) } : { expiresIn }
+  );
 
   await logEvent(
     {
       userId,
       type: FileEvents.GENERATE_FILE_PRESIGNED_URL,
-      metadata: { id: file.id, url, expiry: PRESIGNED_UPLOAD_EXPIRES_IN },
+      metadata: { id: file.id, url, expiry: expiresIn },
     },
     { ability: req.ability }
   );

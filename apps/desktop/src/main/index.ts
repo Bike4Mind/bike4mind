@@ -1,3 +1,5 @@
+// First, before any module that could read userData or touch safeStorage; see appIdentity.ts.
+import './bootstrapIdentity';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
@@ -7,9 +9,11 @@ import { registerAccount } from './account';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
+import { registerFleet } from './fleet';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
+import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
@@ -100,6 +104,10 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
 });
 
 void app.whenReady().then(async () => {
+  // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
+  // warnings before app ready are not persisted.
+  persistConsoleWarnings(console, app.getPath('logs'));
+
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(macAppIcon);
@@ -109,6 +117,7 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   registerAccount(auth);
   registerUsage(auth);
+  const fleet = registerFleet();
   const {
     service: chat,
     background,
@@ -117,7 +126,13 @@ void app.whenReady().then(async () => {
     pullRequests,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
+    observeStream: event => fleet.observe(event),
   });
+  fleet.setDirectoryResolver(async sessionId => {
+    const session = await chat.getSession(sessionId);
+    return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
+  });
+  fleet.setModelResolver(async sessionId => (await chat.getSession(sessionId))?.model ?? null);
   closeAgentBrowsers = () => browser.closeAll();
   const terminals = registerTerminals(async sessionId => {
     const session = await chat.getSession(sessionId);
@@ -183,6 +198,7 @@ void app.whenReady().then(async () => {
 
   app.once('will-quit', () => {
     auth.dispose();
+    fleet.dispose();
     chat.dispose();
     pullRequests.dispose();
     updates.dispose();

@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 
 /**
- * The verified email's domain grant (credits, partner org membership) for a brand-new OAuth account.
+ * The verified email's domain grant (credits, partner org membership, tags) for a brand-new OAuth account.
  * Best-effort and never throws: a grant failure must never fail a login. The grants an account link
  * earns when it promotes emailVerified come straight from server/auth/emailVerifiedGrants.ts.
  */

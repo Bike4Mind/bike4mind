@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/common';
 import {
   BadRequestError,
-  checkStorageLimitForFile,
+  checkStorageLimitForOwner,
   getFileExtension,
   getSettingsMap,
   getSettingsValue,
@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
+import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -40,7 +41,6 @@ export const createFabFileSchema = z.object({
   fileSize: z.number(),
   type: z.enum(KnowledgeType),
   content: z.union([z.string(), z.instanceof(Buffer)]).optional(),
-  organizationId: z.string().optional(),
   /**
    * Content type of the file
    * @example 'text/markdown'
@@ -77,7 +77,8 @@ export interface CreateFabFileAdapters {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
-    organizations?: {
+    // Required: a file created into an org lake is billed to, and quota-checked against, that org.
+    organizations: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
     // 'find' is for the fallback tagger's prefix-overlap check (decideStampPrefix), not the write
@@ -182,7 +183,8 @@ export const prepareFabFile = async (
   const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
-  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it
@@ -220,12 +222,14 @@ export const prepareFabFile = async (
     });
   }
 
-  // Check storage limit - use organization limit if organizationId is provided
-  await checkStorageLimitForFile(user, params.fileSize, params.organizationId, db.organizations?.findById);
+  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
+    db.organizations.findById(id)
+  );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
     ...(provenance && {
       sourceType: provenance.sourceType,

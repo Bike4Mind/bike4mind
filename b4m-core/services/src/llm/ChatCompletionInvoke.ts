@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
 import { filterBuiltInTools } from './tools/toolManager';
 
@@ -226,22 +227,20 @@ export class ChatCompletionInvoke {
       : [];
     for (const researchModelId of researchModelIds) availableModel(researchModelId, researchModelId);
 
-    // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
-    // cast. A completion legitimately resolves to text, image or video - the media backends run
-    // through this same path - and speech-to-text is the one catalog type it cannot: that is served
-    // by the transcription route, and dispatching it here would fail at the provider with a raw
-    // error, so reject it up front like a disabled model. An ABSENT type is a separate case and
-    // must not fail the turn: the field is declared required but assembled from discovery feeds and
-    // cached catalog rows, so it degrades to unrecorded and resolveQuestModelType falls back.
-    const modelType = isPromptMetaModelType(model.type) ? model.type : undefined;
-    if (model.type && !modelType) {
+    // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text,
+    // image or video - the media backends run through this same path - and speech-to-text is the
+    // one catalog type it cannot: that is served by the transcription route, and dispatching it
+    // here would fail at the provider with a raw error, so reject it up front like a disabled model.
+    // An ABSENT type is a separate case and must not fail the turn: the field is declared required
+    // but assembled from discovery feeds and cached catalog rows, so it degrades to unrecorded and
+    // resolveQuestModelType falls back.
+    if (model.type && !isPromptMetaModelType(model.type)) {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
     }
 
     // Start sessions.update early (will await later in parallel with admin settings)
     const sessionUpdatePromise = this.db.sessions.update({
       id: sessionId,
-      lastUsedModel: model.id,
       lastUpdated: now,
       updatedAt: now,
     });
@@ -249,22 +248,7 @@ export class ChatCompletionInvoke {
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
-        // A redirect resolved above keeps the requested id in `name` and the successor in
-        // `answeredBy`, matching what ChatCompletionProcess records for a redirect it resolves
-        // itself; the remaining fields describe the model that runs.
-        name: params.model,
-        ...(model.id !== params.model ? { answeredBy: model.id } : {}),
-        type: modelType,
-        backend: model?.backend,
-        contextWindow: model?.contextWindow,
-        maxTokens: model?.max_tokens,
-        canStream: model?.can_stream,
-        canThink: model?.can_think,
-        supportsVision: model?.supportsVision,
-        supportsTools: model?.supportsTools,
-        supportsImageVariation: model?.supportsImageVariation,
-        supportsSafetyTolerance: model?.supportsSafetyTolerance,
-        trainingCutoff: model?.trainingCutoff,
+        ...buildPromptMetaModel(model),
         parameters: {
           temperature: params.temperature,
           topP: params.top_p,
@@ -325,6 +309,8 @@ export class ChatCompletionInvoke {
         { status: 'Received by backend', timestamp: now },
       ],
       ...(toolMode ? { toolMode } : {}),
+      // Drives the "is unavailable; answering with" status line in ChatCompletionProcess.
+      ...(model.id !== params.model ? { redirectedFrom: params.model } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is
@@ -538,6 +524,12 @@ export class ChatCompletionInvoke {
       if (this.invokeLambda && this.questStartParams) {
         this.logger.info('🌍 [SERVER] invokeLambda start:', new Date().toISOString());
         await this.invokeLambda(this.questStartParams);
+        // Pinned only after the access check and dispatch: a model that cannot run must not stick to the session.
+        if (session.lastUsedModel !== model.id) {
+          await this.db.sessions
+            .update({ id: sessionId, lastUsedModel: model.id })
+            .catch(error => this.logger.warn(`Failed to pin ${model.id} to session ${sessionId}`, error));
+        }
       } else {
         throw new InternalServerError('No invokeLambda function provided');
       }
@@ -555,11 +547,13 @@ export class ChatCompletionInvoke {
       };
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       await this.db.quests.update({
         id: quest.id,
         promptMeta: quest.promptMeta,
         type: quest.type,
+        status: quest.status,
         reply: quest.reply,
       });
     }

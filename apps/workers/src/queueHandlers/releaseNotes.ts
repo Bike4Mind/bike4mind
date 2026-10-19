@@ -17,6 +17,7 @@ import {
   createReleaseNotesCompleter,
   triageReleaseNotes,
   writeReleaseNotes,
+  type ReleaseNoteDraft,
   type TokenUsage,
 } from './releaseNotes/generate';
 import { finalizeReleaseNote } from './releaseNotes/finalize';
@@ -28,6 +29,8 @@ const TOKENS_PER_MILLION = 1_000_000;
 export const GENERATION_BUDGET_MS = 4 * 60 * 1000;
 // Leaves the post inside the Lambda timeout after a full generation budget; a hang would retry and re-announce.
 const SLACK_TIMEOUT_MS = 15_000;
+// The first editorial draft plus one rewrite.
+const MAX_EDITORIAL_ATTEMPTS = 2;
 
 // USD per 1M tokens. Unknown models price high on purpose so the EstimatedCost alarm notices them.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -118,8 +121,10 @@ async function postToSlack(
 }
 
 /**
- * Generates, finalizes and stores the note. A denylist hit in the headline or summary gets one editorial
- * rewrite; triage is not repeated.
+ * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
+ * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the previous draft
+ * did not have, in which case the previous draft is finalized instead (with its generic headline replaced).
+ * Fails only when both the rewrite and the previous draft hit the denylist.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
@@ -132,17 +137,31 @@ async function generateAndStore(
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback);
+  let previousDraft: ReleaseNoteDraft | undefined;
+  for (let attempt = 0; attempt < MAX_EDITORIAL_ATTEMPTS; attempt++) {
+    const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, {
+      editorialFeedback: feedback,
+      logger,
+    });
     usage.inputTokens += generated.usage.inputTokens;
     usage.outputTokens += generated.usage.outputTokens;
 
-    const result = finalizeReleaseNote(generated.draft, payload, config, logger);
+    const lastAttempt = attempt === MAX_EDITORIAL_ATTEMPTS - 1;
+    let result = finalizeReleaseNote(generated.draft, payload, config, logger, { lastAttempt });
+    feedback = result.kind === 'repair' ? result.reasons : [];
+    // The rewrite can hit the denylist even though the earlier draft did not. Keep the earlier draft
+    // (finalized with the generic-headline fallback) rather than losing the note it could have produced.
+    if (result.kind === 'repair' && lastAttempt && previousDraft) {
+      const rewriteReasons = result.reasons;
+      result = finalizeReleaseNote(previousDraft, payload, config, logger, { lastAttempt: true });
+      // Name both drafts' hits: the rewrite's are what sent us back to the earlier one.
+      if (result.kind === 'repair') feedback = [...rewriteReasons, ...result.reasons];
+    }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
       return { note: preserved ? note : result.note, preserved, usage, modelId };
     }
-    feedback = result.reasons;
+    previousDraft = generated.draft;
   }
   throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
 }

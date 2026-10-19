@@ -68,6 +68,7 @@ export const updateUserSchema = z.object({
       language: z.string().optional(),
       favoriteTags: z.array(z.string()).optional(),
       favoriteModelIds: z.array(z.string()).optional(),
+      hiddenSurfaces: z.array(z.string().max(64)).max(32).optional(),
       fileBrowserViewMode: z.enum(['home', 'list', 'grid', 'tags']).optional(),
       optiSessionId: z.string().nullable().optional(),
       lastUsedTextModel: z.string().nullable().optional(),

@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context } from 'aws-lambda';
+import type { Logger } from '@bike4mind/observability';
 
 const mockListUserIdsAfter = vi.fn();
 const mockFindCurrentStorageSize = vi.fn();
 const mockLatestByUserIds = vi.fn();
 const mockSetCurrentStorageIfUnchanged = vi.fn();
 const mockSumFileSizeByUserId = vi.fn();
+const mockListOrganizationIdsAfter = vi.fn();
+const mockFindOrgCurrentStorageSize = vi.fn();
+const mockSetOrgCurrentStorageIfUnchanged = vi.fn();
+const mockSumFileSizeByOrganizationId = vi.fn();
+const mockLatestByOrganizationIds = vi.fn();
 const mockAppendMany = vi.fn();
 const mockFindByKey = vi.fn();
 const mockCreateOrUpdate = vi.fn();
@@ -16,10 +22,19 @@ vi.mock('@bike4mind/database', () => ({
     findCurrentStorageSize: (...args: unknown[]) => mockFindCurrentStorageSize(...args),
     setCurrentStorageIfUnchanged: (...args: unknown[]) => mockSetCurrentStorageIfUnchanged(...args),
   },
-  fabFileRepository: { sumFileSizeByUserId: (...args: unknown[]) => mockSumFileSizeByUserId(...args) },
+  organizationRepository: {
+    listOrganizationIdsAfter: (...args: unknown[]) => mockListOrganizationIdsAfter(...args),
+    findCurrentStorageSize: (...args: unknown[]) => mockFindOrgCurrentStorageSize(...args),
+    setCurrentStorageIfUnchanged: (...args: unknown[]) => mockSetOrgCurrentStorageIfUnchanged(...args),
+  },
+  fabFileRepository: {
+    sumFileSizeByUserId: (...args: unknown[]) => mockSumFileSizeByUserId(...args),
+    sumFileSizeByOrganizationId: (...args: unknown[]) => mockSumFileSizeByOrganizationId(...args),
+  },
   storageDriftRecordRepository: {
     appendMany: (...args: unknown[]) => mockAppendMany(...args),
     latestByUserIds: (...args: unknown[]) => mockLatestByUserIds(...args),
+    latestByOrganizationIds: (...args: unknown[]) => mockLatestByOrganizationIds(...args),
   },
   cacheRepository: {
     findByKey: (...args: unknown[]) => mockFindByKey(...args),
@@ -70,11 +85,18 @@ const metric = (name: string) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations; a leftover paging mock from an earlier test would loop forever.
+  mockListUserIdsAfter.mockReset().mockResolvedValue([]);
   mockFindByKey.mockResolvedValue(null);
   mockSumFileSizeByUserId.mockResolvedValue(1000);
   mockSetCurrentStorageIfUnchanged.mockResolvedValue(true);
   mockFindCurrentStorageSize.mockResolvedValue(1000);
   mockLatestByUserIds.mockResolvedValue(new Map());
+  mockListOrganizationIdsAfter.mockResolvedValue([]);
+  mockFindOrgCurrentStorageSize.mockResolvedValue(1000);
+  mockSumFileSizeByOrganizationId.mockResolvedValue(1000);
+  mockSetOrgCurrentStorageIfUnchanged.mockResolvedValue(true);
+  mockLatestByOrganizationIds.mockResolvedValue(new Map());
   mockPostMessageToSlack.mockResolvedValue(true);
 });
 
@@ -332,6 +354,154 @@ describe('runStorageReconciliation', () => {
 
     expect(result).toMatchObject({ checked: 1, failed: 1, passCompleted: true });
     expect(metric('StorageReconciliationFailures')).toBe(1);
+  });
+
+  it('advances the cursor past a chunk whose drift records fail to append', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(2));
+    mockAppendMany.mockRejectedValueOnce(new Error('validation failed'));
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const result = await runStorageReconciliation(options(), logger as unknown as Logger);
+
+    expect(result).toMatchObject({ checked: 2, passCompleted: true });
+    expect(savedState()).toMatchObject({ afterId: 'u0001' });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('2 user drift record(s)'), expect.any(Error));
+  });
+});
+
+describe('organization phase', () => {
+  const orgs = (n: number, offset = 0) =>
+    Array.from({ length: n }, (_, i) => `o${String(offset + i).padStart(4, '0')}`);
+  const stableOrgPrevious = (organizationId: string, counter: number, truth: number, ageMs = 24 * 60 * 60 * 1000) =>
+    new Map([
+      [organizationId, { organizationId, counter, truth, drift: counter - truth, checkedAt: new Date(NOW - ageMs) }],
+    ]);
+
+  it('runs after the user phase in the same pass and completes the pass only then', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(2));
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(3));
+
+    const result = await runStorageReconciliation(options());
+
+    expect(mockListOrganizationIdsAfter).toHaveBeenCalledWith(null, BATCH_SIZE);
+    expect(mockListUserIdsAfter.mock.invocationCallOrder[0]).toBeLessThan(
+      mockListOrganizationIdsAfter.mock.invocationCallOrder[0]
+    );
+    expect(result).toMatchObject({ checked: 2, orgsChecked: 3, passCompleted: true });
+    expect(savedState()).toMatchObject({
+      phase: 'organizations',
+      afterId: 'u0001',
+      organizationAfterId: 'o0002',
+      checked: 5,
+      passCompletedAt: new Date(NOW).toISOString(),
+    });
+    expect(metric('StorageOrgsChecked')).toBe(3);
+    expect(metric('StorageUsersChecked')).toBe(2);
+  });
+
+  it('does not complete the pass while the organization phase is unfinished', async () => {
+    let clock = NOW;
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1));
+    mockListOrganizationIdsAfter.mockImplementation(async () => {
+      clock += 60_000;
+      return orgs(BATCH_SIZE);
+    });
+
+    const result = await runStorageReconciliation(options({ now: () => clock, timeBudgetMs: 90_000 }));
+
+    expect(result.passCompleted).toBe(false);
+    expect(savedState()).toMatchObject({ phase: 'organizations', passCompletedAt: null });
+  });
+
+  it('reads each org counter and truth by the org id', async () => {
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(1));
+
+    await runStorageReconciliation(options());
+
+    expect(mockFindOrgCurrentStorageSize).toHaveBeenCalledWith('o0000');
+    expect(mockSumFileSizeByOrganizationId).toHaveBeenCalledWith('o0000');
+    expect(mockFindCurrentStorageSize).not.toHaveBeenCalled();
+    expect(mockSumFileSizeByUserId).not.toHaveBeenCalled();
+  });
+
+  it('writes org drift records carrying organizationId and no userId', async () => {
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(2));
+    mockSumFileSizeByOrganizationId.mockResolvedValueOnce(1000).mockResolvedValueOnce(400);
+
+    const result = await runStorageReconciliation(options());
+
+    const records = mockAppendMany.mock.calls.at(-1)?.[0];
+    expect(records[1]).toMatchObject({ organizationId: 'o0001', counter: 1000, truth: 400, drift: 600 });
+    expect(records[1]).not.toHaveProperty('userId');
+    expect(result).toMatchObject({ orgsChecked: 2, orgsDrifted: 1 });
+    expect(metric('StorageOrgsDrifted')).toBe(1);
+  });
+
+  it('repairs an org only when its drift held still, by compare-and-set', async () => {
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(2));
+    mockSumFileSizeByOrganizationId.mockResolvedValue(400);
+    mockLatestByOrganizationIds.mockResolvedValueOnce(stableOrgPrevious('o0001', 1000, 400));
+
+    const result = await runStorageReconciliation(options({ repair: true }));
+
+    expect(mockSetOrgCurrentStorageIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(mockSetOrgCurrentStorageIfUnchanged).toHaveBeenCalledWith('o0001', 1000, 400);
+    expect(mockSetCurrentStorageIfUnchanged).not.toHaveBeenCalled();
+    expect(result.repaired).toBe(1);
+  });
+
+  it('labels org alert lines distinctly from user lines', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1));
+    mockSumFileSizeByUserId.mockResolvedValueOnce(1000 + 200 * MB);
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(1));
+    mockSumFileSizeByOrganizationId.mockResolvedValueOnce(1000 + 300 * MB);
+
+    await runStorageReconciliation(options());
+
+    const message = mockPostMessageToSlack.mock.calls[0][0];
+    expect(message).toContain('org o0000');
+    expect(message).toContain('user u0000');
+  });
+
+  it('resumes a state stored before the phase existed as the user phase', async () => {
+    mockFindByKey.mockResolvedValue({
+      result: {
+        afterId: 'u0199',
+        passStartedAt: new Date(NOW - 60_000).toISOString(),
+        passCompletedAt: null,
+        checked: 200,
+        drifted: 0,
+        ceilingAlerted: false,
+      },
+    });
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1, 200));
+
+    const result = await runStorageReconciliation(options());
+
+    expect(mockListUserIdsAfter).toHaveBeenCalledWith('u0199', BATCH_SIZE);
+    expect(mockListOrganizationIdsAfter).toHaveBeenCalledWith(null, BATCH_SIZE);
+    expect(result.passCompleted).toBe(true);
+  });
+
+  it('resumes the organization phase from its own cursor without revisiting users', async () => {
+    mockFindByKey.mockResolvedValue({
+      result: {
+        phase: 'organizations',
+        afterId: 'u0001',
+        organizationAfterId: 'o0099',
+        passStartedAt: new Date(NOW - 60_000).toISOString(),
+        passCompletedAt: null,
+        checked: 102,
+        drifted: 0,
+        ceilingAlerted: false,
+      },
+    });
+    mockListOrganizationIdsAfter.mockResolvedValueOnce(orgs(1, 100));
+
+    await runStorageReconciliation(options());
+
+    expect(mockListUserIdsAfter).not.toHaveBeenCalled();
+    expect(mockListOrganizationIdsAfter).toHaveBeenCalledWith('o0099', BATCH_SIZE);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   IFabFileRepository,
   ICreditTransactionRepository,
   IUserRepository,
+  IOrganizationRepository,
   IAdminSettingsRepository,
   ISessionDocument,
   IChatHistoryItem,
@@ -41,6 +42,7 @@ export interface NotebookCurationAdapters {
   fileStorageService: CreateFabFileAdapters['storage'];
   creditTransactionRepository: ICreditTransactionRepository;
   userRepository: IUserRepository;
+  organizationRepository: Pick<IOrganizationRepository, 'findById'>;
   /**
    * Required, not optional: backs the MaxFileSize check createFabFile runs on the write below.
    * Optional would let a caller silently admit a file the direct upload door refuses.
@@ -591,6 +593,7 @@ export class NotebookCurationService {
             // doors use).
             adminSettings: this.adapters.adminSettingsRepository,
             users: this.adapters.userRepository,
+            organizations: this.adapters.organizationRepository,
             // Minimal stub: the tag here is always the literal 'curated-notebook', never a lake
             // meta-tag or a registry prefix, so neither this gate nor the fallback tagger's
             // overlap check can ever actually fire, and a real lookup would be dead weight.

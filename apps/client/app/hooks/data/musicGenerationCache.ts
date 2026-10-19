@@ -1,30 +1,25 @@
-/**
- * Writes into the music-generation cache. There is no list cache yet, so the detail entry is the only target; it
- * follows the same ordering rules as videoGenerationCache.ts (see generationJobPolling.ts).
- */
-import type { QueryClient } from '@tanstack/react-query';
-import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
-import { isTerminalGenerationState, movesLiveStateBackwards, shouldReplaceGenerationJob } from './generationJobPolling';
+/** Every write into the music-generation cache; the ordering rules live in generationJobCache.ts, shared with video. */
+import type { MusicGeneration } from '@bike4mind/common';
+import {
+  createGenerationJobCache,
+  type GenerationJobList,
+  type GenerationJobLiveUpdate,
+  type GenerationJobPage,
+} from './generationJobCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
 
-export type MusicJobLiveUpdate = { id: string; state: GenerationJobState };
+export type MusicGenerationPage = GenerationJobPage<MusicGeneration>;
+export type MusicGenerationList = GenerationJobList<MusicGeneration>;
+export type MusicJobLiveUpdate = GenerationJobLiveUpdate;
 
-/** Writes an authoritative server response (the cancel mutation) unless the cache already holds something newer. */
-export function upsertMusicGeneration(queryClient: QueryClient, job: MusicGeneration): void {
-  const key = musicGenerationKeys.detail(job.id);
-  if (shouldReplaceGenerationJob(queryClient.getQueryData<MusicGeneration>(key), job)) {
-    queryClient.setQueryData(key, job);
-  }
-}
+const musicCache = createGenerationJobCache<MusicGeneration, MusicJobLiveUpdate>(
+  musicGenerationKeys,
+  (cached, update) => ({ ...cached, state: update.state })
+);
 
-/** Applies a websocket frame's state. Returns whether the job was cached. */
-export function patchMusicGeneration(queryClient: QueryClient, update: MusicJobLiveUpdate): boolean {
-  const key = musicGenerationKeys.detail(update.id);
-  const cached = queryClient.getQueryData<MusicGeneration>(key);
-  if (!cached) return false;
-  // Frames can arrive out of order; a finished job stays finished and a live one never steps back.
-  if (!isTerminalGenerationState(cached.state) && !movesLiveStateBackwards(cached.state, update.state)) {
-    queryClient.setQueryData<MusicGeneration>(key, { ...cached, state: update.state });
-  }
-  return true;
-}
+export const seedMusicGeneration = musicCache.seed;
+export const prependMusicGeneration = musicCache.prepend;
+export const upsertMusicGeneration = musicCache.upsert;
+export const reconcileFetchedMusicGeneration = musicCache.reconcileFetched;
+export const reconcileFetchedMusicGenerationPage = musicCache.reconcileFetchedPage;
+export const patchMusicGeneration = musicCache.patch;

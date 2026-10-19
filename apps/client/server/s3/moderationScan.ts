@@ -3,6 +3,7 @@ import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGat
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
+import { generateUploadConstraintFor } from '@server/files/generateUploadMarker';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';
 
@@ -78,7 +79,7 @@ export const releaseModerationClaim = (fabFileId: FabFileKey, claimedAt: Date) =
 
 /** Runs the byte scan for an uploaded object with the production detector and storage wiring. */
 export const scanUploadedObject = async (args: {
-  fabFile: { id: string; userId: string; mimeType?: string | null };
+  fabFile: { id: string; userId: string; mimeType?: string | null; sourceMetadata?: unknown };
   objectKey: string;
   logger: Parameters<typeof moderateUploadedFile>[0]['logger'];
 }) => {
@@ -91,6 +92,10 @@ export const scanUploadedObject = async (args: {
     enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
     service: new RekognitionImageModerationService(logger),
     incidents: imageModerationIncidentRepository,
+    generateUpload: generateUploadConstraintFor(fabFile.sourceMetadata, async () => {
+      const { size } = await getFilesStorage().getMetadata(objectKey);
+      return size ?? Number.POSITIVE_INFINITY;
+    }),
     downloadBytes: () => getFilesStorage().download(objectKey),
     downloadPartialBytes: length => getFilesStorage().downloadRange(objectKey, length),
     moderateImageOrThrow,

@@ -20,10 +20,16 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
+  organizationRepository,
 } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import {
+  checkStorageLimitForOwner,
+  getSettingsMap,
+  getSettingsValue,
+  resolveSupportedMimeType,
+} from '@bike4mind/utils';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
@@ -93,7 +99,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
     userId,
     db: { dataLakes: dataLakeRepository },
   });
-  await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
+  const clientTagLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -186,9 +192,47 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       );
   }
 
-  // Check total batch size against user storage limit (throws BadRequestError if exceeded)
-  const totalBatchSize = data.files.reduce((sum, f) => sum + (f.fileSize || 0), 0);
-  await checkStorageLimit(req.user, totalBatchSize);
+  // Deduped by name: a client may smuggle the same meta-tag the server injects, and there is
+  // no reason to persist it twice. The server's copy is spread FIRST and first occurrence
+  // wins, so a client-supplied strength on the meta-tag cannot override it.
+  //
+  // Folded for the meta namespace only, because that is the one namespace whose consumers
+  // fold: the write gate and the reconciler both lowercase, so `DataLake:acme` and
+  // `datalake:acme` are one tag to them, and persisting both leaves a case-variant ghost that
+  // removal (an exact-match pull) would not clear. Content tags stay case-sensitive - the
+  // read arms and counters build unflagged regexes, so `Acme:x` and `acme:x` really are two.
+  const dedupeKey = (name: string) => (name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) ? name.toLowerCase() : name);
+  const mergeFileTags = (fileItem: (typeof data.files)[number]) =>
+    [...(datalakeTag ? [{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }] : []), ...(fileItem.tags || [])].filter(
+      (tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i
+    );
+  // Same owner rule as fabFileService.createFabFile, over the authorized lakes THIS file joins
+  // (client tags differ per file). Folded like the dedupe above.
+  const ownerOrganizationIdFor = (tags: ReadonlyArray<{ name: string }>) => {
+    const fileTagNames = new Set(tags.map(tag => tag.name.toLowerCase()));
+    return fabFilesService.pickOwnerOrganizationId(
+      [...(dataLake ? [dataLake] : []), ...clientTagLakes].filter(lake =>
+        fileTagNames.has(lake.datalakeTag.toLowerCase())
+      )
+    );
+  };
+
+  // Check the batch against each owner's pool before anything is created: files bound for an org
+  // lake count against that org, the rest against the caller. Owners are read from the merged
+  // tags, before fallback tagging, which only adds content-prefix tags and so cannot move one.
+  const bytesByOwnerOrganization = new Map<string | undefined, number>();
+  for (const fileItem of data.files) {
+    const ownerOrganizationId = ownerOrganizationIdFor(mergeFileTags(fileItem));
+    bytesByOwnerOrganization.set(
+      ownerOrganizationId,
+      (bytesByOwnerOrganization.get(ownerOrganizationId) ?? 0) + (fileItem.fileSize || 0)
+    );
+  }
+  for (const [organizationId, bytes] of bytesByOwnerOrganization) {
+    await checkStorageLimitForOwner({ user: req.user, organizationId }, bytes, id =>
+      organizationRepository.findById(id)
+    );
+  }
 
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a batch of
   // hundreds of files into one lake costs a single read.
@@ -219,22 +263,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       // This is the flat-upload path. The wizard derives content tags from folder structure, so
       // a file picked through "Upload Files..." (relativePath with no separator) contributes
       // none, and append mode has no taxonomy step to supply them either.
-      // Deduped by name: a client may smuggle the same meta-tag the server injects, and there is
-      // no reason to persist it twice. The server's copy is spread FIRST and first occurrence
-      // wins, so a client-supplied strength on the meta-tag cannot override it.
-      //
-      // Folded for the meta namespace only, because that is the one namespace whose consumers
-      // fold: the write gate and the reconciler both lowercase, so `DataLake:acme` and
-      // `datalake:acme` are one tag to them, and persisting both leaves a case-variant ghost that
-      // removal (an exact-match pull) would not clear. Content tags stay case-sensitive - the
-      // read arms and counters build unflagged regexes, so `Acme:x` and `acme:x` really are two.
-      const dedupeKey = (name: string) =>
-        name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) ? name.toLowerCase() : name;
-      const merged = [
-        ...(datalakeTag ? [{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }] : []),
-        ...(fileItem.tags || []),
-      ].filter((tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i);
+      const merged = mergeFileTags(fileItem);
       const tags = await applyFallbackTags(merged);
+      const ownerOrganizationId = ownerOrganizationIdFor(tags);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
       // correlates the file to its batch and updates batch progress. Without this the
@@ -255,6 +286,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
           // through. This web upload door is the common case the lake previously could not identify
           // (sourceType left unset); the connector and chat-platform doors already stamp their own.
           sourceType: FabFileSourceType.MANUAL_UPLOAD,
+          ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
           ...(fileItem.contentHash && { contentHash: fileItem.contentHash }),
           ...(fileItem.relativePath && { relativePath: fileItem.relativePath }),
           ...(data.batchId && { batchId: data.batchId }),

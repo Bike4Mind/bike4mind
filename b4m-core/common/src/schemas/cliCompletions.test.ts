@@ -8,7 +8,9 @@ import {
   COMPLETION_SSE_ERROR_CODES,
   CompletionRequestSchema,
   CompletionSseErrorEventSchema,
+  CompletionStreamEventSchema,
   CompletionToolSchema,
+  isCompletionServerTool,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
@@ -75,6 +77,82 @@ describe('CompletionToolSchema', () => {
         toolSchema: { name: 'add', description: '', parameters: { type: 'string' } },
       })
     ).toThrow();
+  });
+});
+
+describe('CompletionToolSchema tool search', () => {
+  const customTool = {
+    toolSchema: { name: 'get_weather', description: 'Weather', parameters: { type: 'object' } },
+  };
+
+  it('keeps defer_loading and cache_control on a custom tool', () => {
+    const parsed = CompletionToolSchema.parse({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(parsed).toEqual({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(isCompletionServerTool(parsed)).toBe(false);
+  });
+
+  it('parses a plain custom tool to the same shape as before', () => {
+    expect(CompletionToolSchema.parse(customTool)).toEqual(customTool);
+  });
+
+  it.each([
+    ['tool_search_tool_regex_20251119', 'tool_search_tool_regex'],
+    ['tool_search_tool_bm25_20251119', 'tool_search_tool_bm25'],
+  ])('accepts the %s server tool', (type, name) => {
+    const parsed = CompletionToolSchema.parse({ serverTool: { type, name } });
+    expect(parsed).toEqual({ serverTool: { type, name } });
+    expect(isCompletionServerTool(parsed)).toBe(true);
+  });
+
+  it.each([
+    ['an unknown server tool type', { type: 'web_search_20260209', name: 'web_search' }],
+    ['a name that does not match the type', { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_bm25' }],
+    ['a missing name', { type: 'tool_search_tool_bm25_20251119' }],
+  ])('rejects %s', (_label, serverTool) => {
+    expect(CompletionToolSchema.safeParse({ serverTool }).success).toBe(false);
+  });
+
+  it('rejects a non-boolean defer_loading', () => {
+    expect(
+      CompletionToolSchema.safeParse({ toolSchema: { ...customTool.toolSchema, defer_loading: 'yes' } }).success
+    ).toBe(false);
+  });
+
+  it('accepts a mixed tools[] in the request body', () => {
+    const out = CompletionRequestSchema.parse({
+      model: 'claude-opus-5-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [
+        { toolSchema: { ...customTool.toolSchema, defer_loading: true } },
+        { serverTool: { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' } },
+      ],
+    });
+    expect(out.tools).toHaveLength(2);
+  });
+});
+
+describe('CompletionStreamEventSchema provider_block', () => {
+  const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+
+  it('accepts a provider_block frame', () => {
+    expect(CompletionStreamEventSchema.parse({ type: 'provider_block', provider: 'anthropic', block })).toEqual({
+      type: 'provider_block',
+      provider: 'anthropic',
+      block,
+    });
+  });
+
+  it('rejects a provider_block frame from an unknown provider or without a block', () => {
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'openai', block }).success).toBe(
+      false
+    );
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'anthropic' }).success).toBe(
+      false
+    );
   });
 });
 

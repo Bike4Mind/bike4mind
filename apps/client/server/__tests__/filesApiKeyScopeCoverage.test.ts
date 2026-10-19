@@ -35,13 +35,13 @@ const EXPECTED_GATES: Record<string, string> = {
   'copy-generated-image.ts': 'FILES_WRITE_SCOPES',
   'createFabFile.ts': 'FILES_WRITE_SCOPES',
   'createFabFileURL.ts': 'FILES_WRITE_SCOPES',
-  'generate-presigned-url.ts': 'FILES_WRITE_SCOPES',
+  'generate-presigned-url.ts': 'FILES_WRITE_OR_GENERATE_SCOPES',
   'generate-presigned-urls-batch.ts': 'FILES_WRITE_SCOPES',
   'generate-smart-name.ts': 'FILES_WRITE_SCOPES',
   'reprocess.ts': 'FILES_WRITE_SCOPES',
   'tags/[id].ts': 'FILES_WRITE_SCOPES',
   'tags/toggle.ts': 'FILES_WRITE_SCOPES',
-  '[id]/index.ts': 'FILES_READ_OR_WRITE_SCOPES',
+  '[id]/index.ts': 'FILES_READ_OR_WRITE_OR_GENERATE_SCOPES',
   'index.ts': 'FILES_READ_OR_WRITE_SCOPES',
   'tags/index.ts': 'FILES_READ_OR_WRITE_SCOPES',
 };
@@ -69,7 +69,7 @@ describe('every /api/files door gates API keys on a files scope', () => {
     ).toBeDefined();
     expect(gate, `${relPath} must stay pinned to ${expectedGate}`).toBe(expectedGate);
 
-    if (gate !== 'FILES_READ_OR_WRITE_SCOPES') return;
+    if (gate !== 'FILES_READ_OR_WRITE_SCOPES' && gate !== 'FILES_READ_OR_WRITE_OR_GENERATE_SCOPES') return;
     // The route gate admits either scope, so each method must narrow to its own - a
     // presence-only check ("assertFilesWriteScope appears somewhere in the file") would still
     // pass a route where a later mutating method forgot its own assert.

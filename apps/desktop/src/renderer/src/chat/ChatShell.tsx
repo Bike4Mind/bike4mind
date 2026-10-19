@@ -56,6 +56,7 @@ import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { WebLinkContext } from './WebResults';
 import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
+import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
@@ -161,6 +162,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     clearRenameError,
     apply,
   } = useSessions();
+  const {
+    sections: userSections,
+    actions: sectionActions,
+    error: sectionError,
+    dismissError: dismissSectionError,
+  } = useSidebarSections();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [remembered] = useState(readLastSession);
   const [mode, setMode] = useState<ChatSessionMode>(remembered?.mode ?? 'chat');
@@ -533,6 +540,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onRename={(session, title) => void rename(session, title)}
         renameError={renameError}
         onDismissRenameError={clearRenameError}
+        userSections={userSections}
+        sectionActions={sectionActions}
+        sectionError={sectionError}
+        onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
           <TurnDot

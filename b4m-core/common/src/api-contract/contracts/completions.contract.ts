@@ -7,7 +7,7 @@ import {
   ApiErrorSchema,
   InsufficientCreditsErrorSchema,
   ProviderNotConfiguredErrorSchema,
-  UnknownModelErrorSchema,
+  CompletionsBadRequestErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -37,6 +37,18 @@ export const createCompletionContract = defineEndpoint({
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, ' +
+    'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
+    '"tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds ' +
+    "Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then " +
+    'carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each ' +
+    'block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a ' +
+    '`tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: ' +
+    '"pause_turn"`; continue by re-sending the conversation with that assistant turn\'s provider blocks echoed. ' +
+    'A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside ' +
+    "a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every " +
+    'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
+    '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
     'a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
@@ -74,8 +86,12 @@ export const createCompletionContract = defineEndpoint({
     400: {
       description:
         'Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
-        'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`.',
-      schema: UnknownModelErrorSchema,
+        'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests ' +
+        'are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model ' +
+        'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +
+        '`deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` ' +
+        'naming a tool not in `tools`, or carrying no string `tool_name`).',
+      schema: CompletionsBadRequestErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
     422: {

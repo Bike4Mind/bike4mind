@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import bcrypt from 'bcryptjs';
 import type { IAuthSessionStepUpEmailChallenge } from '@bike4mind/common';
+import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -122,6 +123,8 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  const { isMfaAttemptRejectedError, recordFailedMfaAttempt } =
+    await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
     userService: {
@@ -136,6 +139,8 @@ vi.mock('@bike4mind/services', async () => {
       getLockoutTimeRemaining: () => 15,
       MAX_FAILED_ATTEMPTS: 3,
       resolvePasskeyRelyingParty: () => ({ rpID: 'app.example.com', rpName: 'Example', origin: 'https://x' }),
+      isMfaAttemptRejectedError,
+      recordFailedMfaAttempt,
       verifyMFA: h.verifyMFA,
       finishPasskeyAuthentication: h.finishPasskeyAuthentication,
       startPasskeyAuthentication: h.startPasskeyAuthentication,
@@ -236,7 +241,7 @@ describe('POST /api/auth/step-up - totp', () => {
     expect(h.logAuthAudit.mock.calls[0][1]).toMatchObject({ event: 'step_up_success', metadata: { method: 'totp' } });
   });
 
-  it('answers a wrong code with 400 step_up_failed, counting it toward the shared MFA lockout', async () => {
+  it('answers an unexpected verifier error with 400 step_up_failed, counting it toward the shared MFA lockout', async () => {
     h.verifyMFA.mockRejectedValue(new Error('Invalid TOTP or backup code.'));
     const res = await call(stepUpHandler, { body: { method: 'totp', code: '000000' } });
 
@@ -247,7 +252,30 @@ describe('POST /api/auth/step-up - totp', () => {
     expect(h.logAuthAudit.mock.calls[0][1]).toMatchObject({ event: 'step_up_failed' });
   });
 
-  it('locks out when the miss reaches the limit, and refuses a locked-out user up front', async () => {
+  it('answers a rejected code (already counted by reserve) from attemptState without counting again', async () => {
+    h.verifyMFA.mockRejectedValue(
+      new MfaAttemptRejectedError('Invalid TOTP or backup code.', { id: 'user-1', mfa: { failedAttempts: 1 } } as never)
+    );
+    const res = await call(stepUpHandler, { body: { method: 'totp', code: '000000' } });
+
+    expectStepUpFailed(res);
+    expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 2 });
+    expect(h.recordFailedAttempt).not.toHaveBeenCalled();
+    expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
+  });
+
+  it('answers 423 from attemptState when the reserved attempt hit the lockout, without counting again', async () => {
+    h.verifyMFA.mockRejectedValue(
+      new MfaAttemptRejectedError('Too many failed attempts.', {
+        id: 'user-1',
+        mfa: { failedAttempts: 3, lockedUntil: new Date(Date.now() + 60_000) },
+      } as never)
+    );
+    expect((await call(stepUpHandler, { body: { method: 'totp', code: '000000' } }))._getStatusCode()).toBe(423);
+    expect(h.recordFailedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('locks out when a non-rejection failure reaches the limit, and refuses a locked-out user up front', async () => {
     h.verifyMFA.mockRejectedValue(new Error('Invalid TOTP or backup code.'));
     h.recordFailedAttempt.mockResolvedValue({ id: 'user-1', mfa: { lockedUntil: new Date(Date.now() + 60_000) } });
     expect((await call(stepUpHandler, { body: { method: 'totp', code: '000000' } }))._getStatusCode()).toBe(423);

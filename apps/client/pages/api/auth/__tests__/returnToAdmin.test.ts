@@ -62,6 +62,53 @@ vi.mock('@bike4mind/database', () => ({
 
 import handler from '../returnToAdmin';
 
+// Secrets the user document can carry. The redactor is stubbed to identity at the top of this file, so the
+// response schema alone is what has to drop them.
+const SECRET_USER_FIELDS = {
+  password: 'bcrypt_secret_value',
+  passwordHash: 'hash_secret_value',
+  oauthCredentials: { github: 'ghp_secret_value' },
+  securityQuestions: [{ question: 'first pet', answer: 'mittens' }],
+  loginRecords: [{ ip: '203.0.113.7' }],
+  authProviders: [{ id: 'goog-sub-1', strategy: 'google', accessToken: 'ya29.secret_value' }],
+  googleDrive: { accessToken: 'gd_secret_value', refreshToken: 'gd_refresh_value', expiresAt: 123 },
+  mfa: { totpEnabled: true, secret: 'totp_secret_value', backupCodes: ['backup_secret_value'] },
+  notInSchema: 'undeclared_secret_value',
+};
+const SECRET_VALUES = [
+  'bcrypt_secret_value',
+  'hash_secret_value',
+  'ghp_secret_value',
+  'mittens',
+  '203.0.113.7',
+  'ya29.secret_value',
+  'gd_secret_value',
+  'gd_refresh_value',
+  'totp_secret_value',
+  'backup_secret_value',
+  'undeclared_secret_value',
+];
+
+function expectUserStrippedOfSecrets(responseBody: { user: Record<string, unknown> }) {
+  const { user } = responseBody;
+  expect(user).toMatchObject({ id: 'user-1' });
+  for (const key of [
+    'password',
+    'passwordHash',
+    'oauthCredentials',
+    'securityQuestions',
+    'loginRecords',
+    'notInSchema',
+  ]) {
+    expect(user).not.toHaveProperty(key);
+  }
+  expect(user.authProviders).toEqual([{ id: 'goog-sub-1', strategy: 'google' }]);
+  expect(user.googleDrive).toEqual({ expiresAt: 123 });
+  expect(user.mfa).toEqual({ totpEnabled: true });
+  const serialized = JSON.stringify(responseBody);
+  for (const secret of SECRET_VALUES) expect(serialized).not.toContain(secret);
+}
+
 /** baseApi normally attaches req.logger; the mocked builder skips its middleware chain. */
 const post = (cookie: string) => {
   const { req, res } = createMocks({ method: 'POST', headers: { cookie } });
@@ -100,6 +147,24 @@ describe('POST /api/auth/returnToAdmin', () => {
     expect(cookies.some(c => c.startsWith('b4m_rt_admin=;') && c.includes('Max-Age=0'))).toBe(true);
 
     expect(res._getJSONData()).toMatchObject({ accessToken: 'admin-access', impersonating: false });
+  });
+
+  it('returns a user stripped of every secret and undeclared field', async () => {
+    mockRotateSession.mockResolvedValue({
+      status: 'rotated',
+      user: { id: 'user-1', ...SECRET_USER_FIELDS },
+      userId: 'admin-1',
+      accessToken: 'admin-access',
+      refreshToken: 'admin-refresh-rotated',
+      sid: 'admin-sid',
+      impersonatedBy: null,
+    });
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expectUserStrippedOfSecrets(res._getJSONData());
   });
 
   it('revokes the impersonation session so the abandoned customer token cannot be refreshed later', async () => {

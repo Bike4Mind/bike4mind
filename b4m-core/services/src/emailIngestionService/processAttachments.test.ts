@@ -28,6 +28,7 @@ describe('emailIngestionService - processAttachments', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn(),
           findByThreadId: vi.fn(),
@@ -334,7 +335,7 @@ describe('emailIngestionService - processAttachments', () => {
     expect(result[0].filename).toBe('doc.pdf');
   });
 
-  it('should pass organizationId to createFabFile when provided', async () => {
+  it('should never put an organizationId on fabFileData (ownership derives from the lake)', async () => {
     const email = {
       ...mockParsedEmail,
       attachments: [
@@ -347,37 +348,11 @@ describe('emailIngestionService - processAttachments', () => {
       ],
     };
 
-    await processAttachments(email, 'user123', 'Test Email', mockAdapters, 'org456');
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
 
     expect(createFabFile).toHaveBeenCalledWith(
       'user123',
-      expect.objectContaining({
-        organizationId: 'org456',
-      }),
-      expect.anything()
-    );
-  });
-
-  it('should not include organizationId in fabFileData when not provided', async () => {
-    const email = {
-      ...mockParsedEmail,
-      attachments: [
-        {
-          filename: 'doc.pdf',
-          contentType: 'application/pdf',
-          size: 5000, // Increased to avoid being filtered out (> 2KB minimum)
-          content: Buffer.from('PDF'),
-        },
-      ],
-    };
-
-    await processAttachments(email, 'user123', 'Test Email', mockAdapters, undefined);
-
-    expect(createFabFile).toHaveBeenCalledWith(
-      'user123',
-      expect.objectContaining({
-        organizationId: undefined,
-      }),
+      expect.not.objectContaining({ organizationId: expect.anything() }),
       expect.anything()
     );
   });

@@ -106,7 +106,7 @@ describe('saveGeneratedAssetFromTool', () => {
     expect(userId).toBe('u1');
     expect(adapters.provenance).toEqual({
       sourceType: FabFileSourceType.TOOL_GENERATED,
-      sourceMetadata: { sessionId: 's1', questId: 'q1', generation },
+      sourceMetadata: { sessionId: 's1', questId: 'q1', generation: { ...generation, promptTruncated: false } },
     });
   });
 

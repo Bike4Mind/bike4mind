@@ -84,6 +84,28 @@ describe.each(routes)('POST /api/quest-master-plans/[id]/%s', (route, method, bo
     expect(h.repo[method].mock.calls[0].slice(0, 2)).toEqual([PLAN_ID, USER]);
   });
 
+  it('strips fields the plan schema does not declare and keeps the route envelope', async () => {
+    h.repo[method].mockResolvedValue({
+      id: PLAN_ID,
+      _id: 'raw-object-id',
+      __v: 4,
+      notInSchema: 'x',
+      metrics: { completionRate: 10 },
+    });
+
+    const res = await call();
+
+    const responseBody = res._getJSONData();
+    expect(responseBody.success).toBe(true);
+    expect(responseBody.plan.id).toBe(PLAN_ID);
+    for (const key of ['_id', '__v', 'notInSchema']) {
+      expect(responseBody.plan).not.toHaveProperty(key);
+    }
+    if (route === 'blockers') expect(typeof responseBody.blockerId).toBe('string');
+    if (route === 'decisions') expect(typeof responseBody.decisionId).toBe('string');
+    if (route === 'subquest-progress') expect(responseBody.metrics).toEqual({ completionRate: 10 });
+  });
+
   it('answers 404 when the gated write matches nothing', async () => {
     h.repo[method].mockResolvedValue(null);
 

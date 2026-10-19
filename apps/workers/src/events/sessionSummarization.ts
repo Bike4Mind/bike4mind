@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
@@ -10,6 +10,7 @@ import {
   sessionRepository,
   User,
   userRepository,
+  organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -259,6 +260,8 @@ export const handler = withEventContext(async (event, logger) => {
           {
             db: {
               fabFiles: fabFileRepository,
+              users: userRepository,
+              organizations: organizationRepository,
               dataLakes: dataLakeRepository,
               adminSettings: adminSettingsRepository,
               scopedSettings: scopedSettingsRepository,
@@ -346,6 +349,7 @@ export const handler = withEventContext(async (event, logger) => {
             // #1658 forbids. Same store the updateFabFile adapter above wires.
             scopedSettings: scopedSettingsRepository,
             users: userRepository,
+            organizations: organizationRepository,
             dataLakes: dataLakeRepository,
           },
           storage: {
@@ -373,7 +377,7 @@ export const handler = withEventContext(async (event, logger) => {
   } catch (error) {
     if (isStorageLimitError(error) && error.info.errorCode !== 'file_too_large') {
       logger.warn(
-        `Storage limit exceeded for user ${user.id} — summary saved to session but FabFile not created for RAG indexing`
+        `Storage limit exceeded for user ${user.id} - summary saved to session; knowledge file not created or updated for RAG indexing`
       );
     } else {
       throw error;

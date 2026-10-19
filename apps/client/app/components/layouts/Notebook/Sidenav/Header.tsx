@@ -1,13 +1,17 @@
 import { useModalTrigger } from '@client/app/contexts/ModalTriggerContext';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
-import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useTheme } from '@mui/joy/styles';
 import { gray } from '@client/app/utils/themes/colors';
 import CloseIcon from '@mui/icons-material/Close';
 import FirstPageIcon from '@mui/icons-material/FirstPage';
 import KeyboardTabIcon from '@mui/icons-material/KeyboardTab';
 import NewspaperIcon from '@mui/icons-material/Newspaper';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import InboxBadge, { useInboxHasUnread } from '@client/app/components/inbox/Badge';
+import { InboxTabList } from '@client/app/components/inbox/InboxTabs';
+import { useInbox } from '@client/app/contexts/InboxContext';
 import { AspectRatio, Box, IconButton, Tooltip } from '@mui/joy';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useTranslation } from 'react-i18next';
@@ -28,7 +32,11 @@ const SideNavHeader = () => {
   const navigate = useNavigate();
   // Entitlement-aware (admin/developer/OptiHashi Pro entitlement): the logo click
   // routes tag-less email-domain grantees to /opti too, not just `Opti`-tagged users.
-  const isOptiUser = useOptiAccess();
+  const isOptiUser = useOptiVisible();
+  const hasUnreadInbox = useInboxHasUnread();
+  const setInboxOpen = useInbox(s => s.setOpen);
+  const setInboxIndex = useInbox(s => s.setInboxIndex);
+  const inboxLabel = hasUnreadInbox ? t('inbox.title_unread', 'Inbox, unread items') : t('inbox.title', 'Inbox');
 
   const handleLogoClick = () => {
     if (isOptiUser) {
@@ -84,6 +92,26 @@ const SideNavHeader = () => {
         </Tooltip>
       </AspectRatio>
       <Box className="notebook-sidenav-header-actions" display="flex" gap="10px">
+        <Tooltip title={t('inbox.title', 'Inbox')}>
+          <IconButton
+            aria-label={inboxLabel}
+            data-testid="sidenav-header-inbox-btn"
+            className="notebook-sidenav-header-inbox-button"
+            sx={{ width: '36px', height: '36px', borderRadius: '8px' }}
+            variant={'outlined'}
+            color={'neutral'}
+            onClick={() => {
+              // The bell is about messages, so it always opens on Messages, not wherever the inbox was left.
+              setInboxIndex(InboxTabList.Messages);
+              setInboxOpen(true);
+            }}
+          >
+            <InboxBadge>
+              <MailOutlineIcon sx={{ fontSize: '18px' }} />
+            </InboxBadge>
+          </IconButton>
+        </Tooltip>
+
         <Tooltip title={t('whatsNew')}>
           <IconButton
             aria-label={t('whatsNew')}

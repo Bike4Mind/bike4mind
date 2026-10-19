@@ -131,7 +131,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => unde
 vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
   notifySlackIndexingComplete: (...a: unknown[]) => h.notifySlackIndexingComplete(...a),
 }));
-vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
+vi.mock('@workers/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.

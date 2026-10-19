@@ -76,6 +76,7 @@ export function saveContentAdapters(db: ToolDb) {
     dataLakeAccessGrants,
     fabFiles: fabfiles,
     users,
+    organizations: db.organizations,
     adminSettings: db.adminSettings,
     scopedSettings: db.scopedSettings,
     lakeMembershipRemovals,

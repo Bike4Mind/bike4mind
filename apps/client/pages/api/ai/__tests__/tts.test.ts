@@ -351,11 +351,28 @@ describe('POST /api/ai/tts', () => {
         userId: 'u1',
         bytes: expect.any(Buffer),
         contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello' },
+        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
       },
       expect.anything()
     );
     expect(res._getJSONData()).toMatchObject({ saved: true, fabFileId: 'fab-1', fileUrl: 'https://s3/get' });
+  });
+
+  it('records the requested voice and language so the settings can be reused', async () => {
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1', languageCode: 'ja' });
+    await promise;
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ voice: 'v-1', languageCode: 'ja' }) }),
+      expect.anything()
+    );
+  });
+
+  it('drops the requested voice when another provider stood in', async () => {
+    okSynthesis('openai', 'elevenlabs');
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1' });
+    await promise;
+    const [{ generation }] = mocks.saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('voice');
   });
 
   it('records the vendor that actually produced the audio when a fallback was used', async () => {

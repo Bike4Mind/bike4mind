@@ -36,7 +36,7 @@ export const CompletionReasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
  * z.array(z.any()) so client-side bugs (typos in name, missing type) surface
  * at parse time instead of failing silently inside the backend.
  */
-export const CompletionToolSchema = z.object({
+export const CompletionCustomToolSchema = z.object({
   toolSchema: z.object({
     name: z.string(),
     description: z.string(),
@@ -49,11 +49,65 @@ export const CompletionToolSchema = z.object({
       })
       .passthrough(),
     strict: z.boolean().optional(),
+    defer_loading: z
+      .boolean()
+      .optional()
+      .describe(
+        'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
+          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
+          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
+      ),
+    cache_control: z
+      .unknown()
+      .optional()
+      .describe(
+        'Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`).'
+      ),
   }),
   _isMcpTool: z.boolean().optional(),
 });
 
+export type CompletionCustomTool = z.infer<typeof CompletionCustomToolSchema>;
+
+/** Anthropic's tool search server tools; `name` is fixed by `type`. */
+export const ToolSearchServerToolSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('tool_search_tool_regex_20251119'), name: z.literal('tool_search_tool_regex') }),
+  z.object({ type: z.literal('tool_search_tool_bm25_20251119'), name: z.literal('tool_search_tool_bm25') }),
+]);
+
+export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
+
+export const CompletionServerToolSchema = z.object({
+  serverTool: ToolSearchServerToolSchema.describe(
+    'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
+      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
+      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+  ),
+});
+
+export type CompletionServerTool = z.infer<typeof CompletionServerToolSchema>;
+
+/** One `tools[]` entry: a caller-defined tool, or a provider-run server tool. */
+export const CompletionToolSchema = z.union([CompletionCustomToolSchema, CompletionServerToolSchema]);
+
 export type CompletionTool = z.infer<typeof CompletionToolSchema>;
+
+export function isCompletionServerTool(tool: CompletionTool): tool is CompletionServerTool {
+  return 'serverTool' in tool;
+}
+
+/**
+ * The `errorCode`s of the completions 400s for tool search requests (CONVENTIONS.md section 1).
+ * Assigned in services/cliCompletionsToolSearch.ts.
+ */
+export const COMPLETION_TOOL_ERROR_CODES = [
+  'tool_search_unsupported',
+  'all_tools_deferred',
+  'deferred_tool_cache_control',
+  'unknown_tool_reference',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
 
 /**
  * JSON Schema definition for structured output. The `schema` field is a full
@@ -240,10 +294,25 @@ export const CompletionSseErrorEventSchema = z.object({
   code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
 });
 
+/** Anthropic content block types the provider runs itself; surfaced as `provider_block` frames and echoed back. */
+export const TOOL_SEARCH_BLOCK_TYPES: ReadonlySet<string> = new Set(['server_tool_use', 'tool_search_tool_result']);
+
+/**
+ * A provider content block the caller must echo back verbatim, in stream order, in the assistant
+ * `messages` content of the next request: today the Anthropic tool search `server_tool_use` and
+ * `tool_search_tool_result` blocks. Never executed by the caller and never answered with a tool_result.
+ */
+export const CompletionProviderBlockEventSchema = z.object({
+  type: z.literal('provider_block'),
+  provider: z.literal('anthropic'),
+  block: z.record(z.string(), z.unknown()),
+});
+
 /** One `data:` event in the `text/event-stream` completions response. */
 export const CompletionStreamEventSchema = z.union([
   CompletionMetaEventSchema,
   CompletionContentEventSchema,
+  CompletionProviderBlockEventSchema,
   CompletionSseErrorEventSchema,
 ]);
 

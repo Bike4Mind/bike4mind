@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -392,6 +393,11 @@ export const SettingKeySchema = z.enum([
   'atlassianClientSecret',
   'notionClientId',
   'notionClientSecret',
+  'EnableCustomMcpConnectors',
+  'customMcpPolicy',
+  'customMcpBlockedHosts',
+  'customMcpPresetClients',
+  'customMcpAllowPrivateNetworks',
   'qWorkUrl',
   'qWorkToken',
 
@@ -462,6 +468,17 @@ export const SettingKeySchema = z.enum([
 
   // Knowledge
   'enableAutoChunk',
+
+  // Skill Market moderation
+  'SkillMarketHighRiskTools',
+  'SkillMarketUrlAllowlist',
+  'SkillMarketClassifierMinConfidence',
+  'SkillMarketAuditSampleRate',
+  'SkillMarketReviewSlaHours',
+  'SkillMarketDailySubmitLimit',
+  'SkillMarketMaxListingsPerUser',
+  'SkillMarketPublicMinAccountAgeDays',
+  'SkillMarketReportAutoHideThreshold',
 
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
@@ -1099,6 +1116,111 @@ export enum ServerStatusEnum {
   Live = 'live',
   Maintenance = 'maintenance',
   Offline = 'offline',
+}
+
+/** Platform cap on custom MCP connections per user (design #4845). */
+export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
+export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
+
+/**
+ * Org policy for custom remote MCP connectors, evaluated on create, OAuth start, offering and every
+ * call (design #4845 section 8). The platform row is the default for users with no org override,
+ * so `presets_only` keeps arbitrary URLs closed until an operator or org opts in to `allowlist`/`any`.
+ */
+export const CustomMcpPolicySchema = z.object({
+  mode: z.enum(CUSTOM_MCP_POLICY_MODES).default('presets_only'),
+  /** Host patterns (`example.com`, `*.example.com`) a URL must match when `mode` is `allowlist`. */
+  allowedHostPatterns: McpHostPatternListSchema.default([]),
+  /** Checked in every mode, after the platform `customMcpBlockedHosts`. */
+  blockedHostPatterns: McpHostPatternListSchema.default([]),
+  allowUnauthenticated: z.boolean().default(true),
+  /** false drops every tool not annotated read-only at offering time. */
+  allowWriteTools: z.boolean().default(true),
+  requireApprovalForAll: z.boolean().default(false),
+  /** Capped at the platform limit; an org can only lower it. */
+  maxConnectionsPerUser: z
+    .number()
+    .int()
+    .min(0)
+    .max(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER)
+    .default(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER),
+});
+
+export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
+
+/**
+ * Effective enablement: the platform `EnableCustomMcpConnectors` flag (operator master switch, never
+ * org-settable) AND the resolved org `customMcpPolicy.mode` not being `off`. An org can only close
+ * custom connectors for its members, never open them past a platform off.
+ */
+export function isCustomMcpEnabled(
+  platformFlag: boolean | undefined,
+  orgPolicy: Pick<CustomMcpPolicy, 'mode'> | undefined
+): boolean {
+  return platformFlag === true && orgPolicy?.mode !== 'off';
+}
+
+export const CustomMcpBlockedHostsSchema = z.object({
+  hosts: McpHostPatternListSchema.default([]),
+});
+
+export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
+
+/**
+ * Self-host only; hosted deployments never reach private networks regardless of this value. Each
+ * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never overlaps a network the fetch
+ * path refuses anyway (NEVER_ADMITTED_NETWORKS in customMcpHosts.ts).
+ */
+export const CustomMcpAllowPrivateNetworksSchema = z.object({
+  cidrs: z.array(CustomMcpPrivateCidrSchema).max(100).default([]),
+  allowHttp: z.boolean().default(false),
+});
+
+export type CustomMcpAllowPrivateNetworks = z.infer<typeof CustomMcpAllowPrivateNetworksSchema>;
+
+/**
+ * Shape of the `customMcpPresetClients` value: `{ [presetId]: { clientId, clientSecret? } }`. The
+ * setting itself is a sensitive plain string (the masking protocol only supports strings), so the
+ * JSON is parsed here at the point of use.
+ */
+export const CustomMcpPresetClientsSchema = z.record(
+  z.string(),
+  z.object({ clientId: z.string().min(1), clientSecret: z.string().optional() })
+);
+
+export type CustomMcpPresetClients = z.infer<typeof CustomMcpPresetClientsSchema>;
+
+export type CustomMcpPresetClientsParse =
+  { ok: true; clients: CustomMcpPresetClients } | { ok: false; clients: CustomMcpPresetClients; error: string };
+
+/**
+ * Parse the stored `customMcpPresetClients` string. Blank is `ok` with no clients. Malformed JSON or
+ * a wrong shape is `ok: false` with an empty map and a reason: common has no logger, so the caller
+ * logs it (otherwise every preset OAuth flow fails with no diagnostic).
+ */
+export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClientsParse {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return { ok: true, clients: {} };
+  }
+  if (typeof raw !== 'string') return { ok: false, clients: {}, error: `Expected a JSON string, got ${typeof raw}` };
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, clients: {}, error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = CustomMcpPresetClientsSchema.safeParse(json);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      clients: {},
+      error: `Invalid shape at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`,
+    };
+  }
+  return { ok: true, clients: parsed.data };
 }
 
 // Logo Settings Schema
@@ -1794,6 +1916,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'atlassianClientSecret', order: 5 },
       { key: 'notionClientId', order: 6 },
       { key: 'notionClientSecret', order: 7 },
+      { key: 'EnableCustomMcpConnectors', order: 8 },
+      { key: 'customMcpPolicy', order: 9 },
+      { key: 'customMcpBlockedHosts', order: 10 },
+      { key: 'customMcpPresetClients', order: 11 },
+      { key: 'customMcpAllowPrivateNetworks', order: 12 },
     ],
   },
   Q_WORK: {
@@ -2736,6 +2863,86 @@ export const settingsMap = {
     defaultValue: true,
     description:
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketHighRiskTools: makeStringSetting({
+    key: 'SkillMarketHighRiskTools',
+    name: 'Skill Market High-Risk Tools',
+    defaultValue: '',
+    description:
+      'Comma-separated tool names that force a Skill Market listing into human review, in addition to the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketUrlAllowlist: makeStringSetting({
+    key: 'SkillMarketUrlAllowlist',
+    name: 'Skill Market URL Allowlist',
+    defaultValue: '',
+    description:
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketClassifierMinConfidence: makeNumberSetting({
+    key: 'SkillMarketClassifierMinConfidence',
+    name: 'Skill Market Classifier Min Confidence',
+    defaultValue: 0.8,
+    min: 0,
+    max: 1,
+    description: 'Below this classifier confidence a passing skill lands in the review tier instead of clean.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketAuditSampleRate: makeNumberSetting({
+    key: 'SkillMarketAuditSampleRate',
+    name: 'Skill Market Audit Sample Rate',
+    defaultValue: 0.1,
+    min: 0,
+    max: 1,
+    description: 'Share of auto-approved Skill Market versions sent to the admin audit queue.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReviewSlaHours: makeNumberSetting({
+    key: 'SkillMarketReviewSlaHours',
+    name: 'Skill Market Review SLA (hours)',
+    defaultValue: 72,
+    min: 1,
+    int: true,
+    description:
+      'A held Skill Market version waiting longer than this triggers a daily reminder to the author and reviewers. It is never auto-approved.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketDailySubmitLimit: makeNumberSetting({
+    key: 'SkillMarketDailySubmitLimit',
+    name: 'Skill Market Daily Submit Limit',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Max Skill Market submissions (new listings plus new versions) per user per 24 hours.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketMaxListingsPerUser: makeNumberSetting({
+    key: 'SkillMarketMaxListingsPerUser',
+    name: 'Skill Market Max Listings Per User',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'Max live (not withdrawn or delisted) Skill Market listings one author may hold.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketPublicMinAccountAgeDays: makeNumberSetting({
+    key: 'SkillMarketPublicMinAccountAgeDays',
+    name: 'Skill Market Public Min Account Age (days)',
+    defaultValue: 3,
+    min: 0,
+    description: 'Accounts younger than this cannot publish Public listings (Organization and Unlisted are allowed).',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReportAutoHideThreshold: makeNumberSetting({
+    key: 'SkillMarketReportAutoHideThreshold',
+    name: 'Skill Market Report Auto-Hide Threshold',
+    defaultValue: 3,
+    min: 1,
+    int: true,
+    description:
+      'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
     category: 'AI Moderation',
   }),
   FormatPromptTemplate: makeStringSetting({
@@ -3688,6 +3895,77 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MCP.id,
     order: 7,
     isSensitive: true,
+  }),
+  EnableCustomMcpConnectors: makeBooleanSetting({
+    key: 'EnableCustomMcpConnectors',
+    name: 'Enable Custom MCP Connectors',
+    defaultValue: false,
+    description:
+      'Platform master switch for custom remote MCP connectors (beta). Off: no custom connector tools ' +
+      'are offered and new connections cannot be created; existing ones can still be disconnected. ' +
+      'Orgs cannot override it; an org closes connectors for its members with customMcpPolicy mode off.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 8,
+    dependsOn: 'EnableMCPServer',
+    // The Integrations page derives the custom connector card's status from it.
+    userReadable: true,
+  }),
+  customMcpPolicy: makeObjectSetting({
+    key: 'customMcpPolicy',
+    name: 'Custom MCP Connector Policy',
+    defaultValue: CustomMcpPolicySchema.parse({}),
+    description:
+      'Which custom MCP servers members may connect. mode: off (org kill switch; ANDed with the platform ' +
+      'flag), presets_only (catalog presets only), ' +
+      'allowlist (allowedHostPatterns only) or any. blockedHostPatterns apply in every mode. ' +
+      'allowUnauthenticated permits servers with no sign-in; allowWriteTools false hides tools not ' +
+      'marked read-only; requireApprovalForAll asks before every tool call. Overridable per org.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 9,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpPolicySchema,
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  customMcpBlockedHosts: makeObjectSetting({
+    key: 'customMcpBlockedHosts',
+    name: 'Custom MCP Blocked Hosts',
+    defaultValue: CustomMcpBlockedHostsSchema.parse({}),
+    description:
+      'Platform kill switch per host: custom MCP connections to these hosts are blocked for every ' +
+      'org and user on their next use. Exact hosts or *.example.com patterns.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 10,
+    // No dependsOn: the operator kill switch must stay visible and editable while the flag is off.
+    schema: CustomMcpBlockedHostsSchema,
+  }),
+  customMcpPresetClients: makeStringSetting({
+    key: 'customMcpPresetClients',
+    name: 'Custom MCP Preset OAuth Clients',
+    defaultValue: '',
+    description:
+      'JSON map of pre-registered OAuth clients for connector presets whose vendor offers no dynamic ' +
+      'registration: {"<presetId>": {"clientId": "...", "clientSecret": "..."}}.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 11,
+    isSensitive: true,
+  }),
+  customMcpAllowPrivateNetworks: makeObjectSetting({
+    key: 'customMcpAllowPrivateNetworks',
+    name: 'Custom MCP Private Networks (self-host)',
+    defaultValue: CustomMcpAllowPrivateNetworksSchema.parse({}),
+    description:
+      'Self-host only, ignored on hosted deployments. CIDRs that custom MCP connections may reach even ' +
+      'though they are private, and whether plain http is allowed. Empty (the default) blocks every ' +
+      'private address.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 12,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpAllowPrivateNetworksSchema,
   }),
   qWorkUrl: makeStringSetting({
     key: 'qWorkUrl',

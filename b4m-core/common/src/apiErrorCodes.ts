@@ -2,6 +2,7 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
+export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -36,6 +37,8 @@ export const API_ERROR_CODES = [
   UNKNOWN_MODEL_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */
+  REQUEST_TIMEOUT_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
@@ -81,6 +84,15 @@ export const API_ERROR_CODES = [
   'org_storage_limit_exceeded',
   /** The file is larger than the platform's per-file size limit. */
   'file_too_large',
+  // Completions tool search (POST /api/ai/v1/completions); see COMPLETION_TOOL_ERROR_CODES.
+  /** A tool search server tool, `tool_reference` or tool search block was sent for a model that cannot serve it here. */
+  'tool_search_unsupported',
+  /** Every tool had `defer_loading: true` and no server tool was sent, so nothing would be loaded. */
+  'all_tools_deferred',
+  /** A deferred tool also carried `cache_control`, which the provider rejects. */
+  'deferred_tool_cache_control',
+  /** A `tool_reference` named a tool that is not in the request's `tools`. */
+  'unknown_tool_reference',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

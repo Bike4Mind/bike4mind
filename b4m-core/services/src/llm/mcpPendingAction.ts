@@ -25,7 +25,10 @@ export type McpPendingActionExtraction =
   | { kind: 'rejected'; reason: 'malformed' | 'untrusted-emitter' | 'unparseable'; result: string };
 
 /** Per confirming server, the write tools that gate on a confirm button. The host executors route by
- * the same sets (apps/client/server/utils/pendingActionTarget.ts). */
+ * the same sets (apps/client/server/utils/pendingActionTarget.ts). The subagent permission gate also
+ * trusts these servers' tools (confirmingServerOf), so a server belongs here only if every one of its
+ * write tools previews instead of executing (pinned by
+ * b4m-core/mcp/src/shared/confirmingServers.previewGate.test.ts). */
 const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['github', GITHUB_CONFIRMABLE_TOOLS],
   ['atlassian', ATLASSIAN_CONFIRMABLE_TOOLS],
@@ -33,7 +36,17 @@ const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = ne
 
 const MCP_NAMESPACE_SEPARATOR = '__';
 
+/** The confirming server a namespaced `server__tool` id belongs to, or undefined for any other tool. */
+export function confirmingServerOf(toolName: string): string | undefined {
+  const separatorIndex = toolName.indexOf(MCP_NAMESPACE_SEPARATOR);
+  if (separatorIndex <= 0) return undefined;
+  const server = toolName.slice(0, separatorIndex);
+  return CONFIRMABLE_TOOLS_BY_SERVER.has(server) ? server : undefined;
+}
+
 const CONFIRM_NEXT_STEP = 'Click the Confirm or Cancel button below to proceed.';
+const NO_CONFIRM_NEXT_STEP =
+  'Not executed: this change needs a Confirm click that this run cannot show. Tell the user what would change; do not ask them to click a button.';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -96,4 +109,18 @@ export function extractMcpPendingAction(emittingTool: string, result: unknown): 
 
   const forModel = 'next_step' in parsed ? { ...parsed, next_step: CONFIRM_NEXT_STEP } : parsed;
   return { kind: 'accepted', action, result: withoutToken(forModel) };
+}
+
+/** For a run that renders no Confirm card (gated subagents): strips a preview's token and rewrites its
+ * `next_step` so the model does not send the user to a button. Any other result passes through. */
+export function withoutConfirmPrompt<T>(result: T): T | string {
+  if (typeof result !== 'string' || !result.includes('_confirmToken')) return result;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return result;
+  }
+  if (!isRecord(parsed) || !('_confirmToken' in parsed)) return result;
+  return withoutToken('next_step' in parsed ? { ...parsed, next_step: NO_CONFIRM_NEXT_STEP } : parsed);
 }

@@ -309,7 +309,7 @@ export type Handoff = z.infer<typeof HandoffSchema>;
 
 /** Full quest plan response from GET /api/quest-master-plans/[id] */
 export const QuestPlanResponseSchema = z.object({
-  _id: z.string(),
+  id: z.string(),
   notebookId: z.string(),
   goal: z.string(),
   quests: z.array(QuestDataSchema),

@@ -1,5 +1,6 @@
 import { IUserDocument, IUserRepository } from '@bike4mind/common';
-import { verifyTOTPToken, verifyBackupCode, clearFailedAttempts } from './utils';
+import { verifyBackupCode } from './utils';
+import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface VerifyMFARequest {
   user: IUserDocument;
@@ -13,63 +14,55 @@ export interface VerifyMFAResponse {
 }
 
 /**
- * Verify MFA token (TOTP or backup code) for a user during login
+ * Verify MFA token (TOTP or backup code) for a user during login. The attempt is counted toward
+ * the lockout before the code is compared; a refusal throws MfaAttemptRejectedError.
  */
 export async function verifyMFA(
   { user, token }: VerifyMFARequest,
-  userRepository: Pick<IUserRepository, 'update'>
+  userRepository: Pick<IUserRepository, 'update'> & MfaAttemptRepository
 ): Promise<VerifyMFAResponse> {
   if (!user.mfa || !user.mfa.totpEnabled) {
     throw new Error('MFA is not enabled for this user.');
   }
 
-  let usedBackupCode: string | undefined;
-  let isValid = false;
-
-  // Try TOTP first
-  if (verifyTOTPToken(user.mfa.totpSecret, token)) {
-    isValid = true;
-  } else {
-    // Try backup codes
-    const backupResult = verifyBackupCode(user.mfa.backupCodes, token);
-    if (backupResult.isValid) {
-      isValid = true;
+  const mfa = user.mfa;
+  return withReservedMfaAttempt(user.id, userRepository, async attemptState => {
+    let usedBackupCode: string | undefined;
+    const totpStep = await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository);
+    if (totpStep === null) {
+      const backupResult = verifyBackupCode(mfa.backupCodes, token);
+      if (!backupResult.isValid || !backupResult.usedBackupCode) {
+        throw new MfaAttemptRejectedError('Invalid TOTP or backup code.', attemptState);
+      }
+      // Consume the matched code atomically: only the request that pulls it from the stored set
+      // accepts it, so one code cannot sign in twice and a code spent by a concurrent request is
+      // not re-accepted from this pre-reservation snapshot.
+      const consumed = await userRepository.atomicConsumeBackupCode(user.id, backupResult.usedBackupCode);
+      if (!consumed) {
+        throw new MfaAttemptRejectedError('Invalid TOTP or backup code.', attemptState);
+      }
       usedBackupCode = backupResult.usedBackupCode;
     }
-  }
 
-  if (!isValid) {
-    throw new Error('Invalid TOTP or backup code.');
-  }
+    // Field-level write, NOT a whole-`mfa` `$set`. Replacing the subdocument would rebuild
+    // `backupCodes` from this pre-reservation snapshot - restoring a code a concurrent request
+    // just spent - and erase attempts reserved since the snapshot; it would also risk writing a
+    // secret-less `mfa` and wiping the select:false totpSecret/backupCodes. Touching only the
+    // attempt/lockout fields leaves both the secrets and concurrent claims untouched.
+    const updatedUser = await userRepository.update(
+      {
+        id: user.id,
+        'mfa.failedAttempts': 0,
+        'mfa.lastUsedAt': new Date(),
+        updatedAt: new Date(),
+      },
+      { unset: ['mfa.lastFailedAttempt', 'mfa.lockedUntil'] }
+    );
 
-  // Build the write from `user` (loaded via findByIdWithMfaSecrets, so it carries the
-  // select:false totpSecret + backupCodes) and clear the failed-attempt/lockout state in
-  // this SAME write. Clearing must happen here, not from this function's return value: the
-  // repository echo is not +selected, so a caller-side `update({ mfa })` built from it would
-  // omit - and thus `$set`-replace-wipe - the plaintext secrets, permanently bricking MFA.
-  const updatedMFA = clearFailedAttempts(user.mfa);
-  updatedMFA.lastUsedAt = new Date();
+    if (!updatedUser) {
+      throw new Error('Failed to update user MFA data');
+    }
 
-  // Remove used backup code if applicable
-  if (usedBackupCode) {
-    updatedMFA.backupCodes = user.mfa.backupCodes.filter(code => code !== usedBackupCode);
-  }
-
-  const updateData = {
-    id: user.id,
-    mfa: updatedMFA,
-    updatedAt: new Date(),
-  };
-
-  const updatedUser = await userRepository.update(updateData);
-
-  if (!updatedUser) {
-    throw new Error('Failed to update user MFA data');
-  }
-
-  return {
-    verified: true,
-    usedBackupCode,
-    user: updatedUser,
-  };
+    return { verified: true, usedBackupCode, user: updatedUser };
+  });
 }

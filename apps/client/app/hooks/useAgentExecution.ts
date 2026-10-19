@@ -20,6 +20,7 @@
  * first events. Subscriptions live at the WebsocketProvider scope now.
  */
 
+import { settleMirroredPinsOnAgentStart } from '@client/app/utils/messageFilePins';
 import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,7 +38,12 @@ import {
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
-import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
+import {
+  addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
+  appendReplyToLatestOptimisticBubble,
+  swapOptimisticPromptBubbleId,
+} from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
@@ -69,6 +75,8 @@ interface AgentExecuteStart {
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];
+  /** The subset of `messageFileIds` scoped to this message only; the rest are pinned to the session. */
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   // LLM runtime knobs.
   temperature?: number;
@@ -256,6 +264,7 @@ export function useAgentExecutionSubscriptions(): void {
         // Pair this execution with the sessionId the dispatcher enqueued.
         // FIFO match works because WS preserves emit order per connection.
         const sessionId = store().consumePendingDispatch();
+        settleMirroredPinsOnAgentStart(sessionId, true);
         store().startExecution(msg.executionId, sessionId);
         // Swap the optimistic prompt bubble's fake id for the real persisted
         // Quest id so the bubble survives a mid-run reload. Only
@@ -309,6 +318,14 @@ export function useAgentExecutionSubscriptions(): void {
           // tool callbacks). Guard at the client so a typo or new upstream
           // value can't silently corrupt store state.
           store().setStatus(msg.executionId, msg.status as AgentExecutionStatus);
+        }
+        // sessionId is set by `execution_started`, which the worker sends before any tool can start a job.
+        const sessionId = store().executions[msg.executionId]?.sessionId;
+        if (sessionId && msg.questId && msg.generationJobs?.length) {
+          addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
+        }
+        if (sessionId && msg.questId && msg.pendingAction) {
+          setPendingActionOnRunBubble(queryClient, sessionId, msg.questId, msg.pendingAction);
         }
       })
     );
@@ -386,8 +403,9 @@ export function useAgentExecutionSubscriptions(): void {
           store().markFailed(msg.executionId, 'agent_error', msg.message);
         } else {
           // Pre-creation rejection - drain the orphaned sessionId so the next
-          // `execution_started` pairs with the correct session, not this stale one.
-          store().consumePendingDispatch();
+          // `execution_started` pairs with the correct session, not this stale one. The server
+          // pinned nothing for a refused start, so the send's workbench mirror goes too.
+          settleMirroredPinsOnAgentStart(store().consumePendingDispatch(), false);
         }
       })
     );

@@ -30,7 +30,8 @@
     "title": "चेंज लॉग"
   },
   "feedback": {
-    "send": "फीडबैक भेजें"
+    "send": "फीडबैक भेजें",
+    "rollupTitle": "आपका फ़ीडबैक"
   },
   "terms_policies": "शर्तें और नीतियाँ",
   "login": "लॉग इन करें",
@@ -166,7 +167,8 @@
     "messages": "संदेश",
     "invites": "निमंत्रण",
     "sendMessage": "संदेश भेजें",
-    "noMessages": "कोई संदेश नहीं"
+    "noMessages": "कोई संदेश नहीं",
+    "title_unread": "इनबॉक्स, बिना पढ़े आइटम"
   },
   "addSomething": "{{ name }} जोड़ें",
   "deleteAllSomething": "सभी {{ name }} हटाएं",
@@ -286,7 +288,30 @@
     "renews_on": "नवीकरण होगा {{ date }} पर"
   },
   "billing": {
-    "title": "बिलिंग"
+    "title": "बिलिंग",
+    "balance": "बैलेंस",
+    "credits_heading": "क्रेडिट टॉप अप करें",
+    "credits_sub": "एक बार के पैक, आपके बैलेंस में जुड़ते हैं। सदस्यता की ज़रूरत नहीं।",
+    "credits_sub_with_plan": "एक बार के पैक, आपके मासिक कोटे के ऊपर जुड़ते हैं।",
+    "free_plan": "मुफ़्त",
+    "free_plan_detail": "क्रेडिट पैक से जितना इस्तेमाल, उतना भुगतान",
+    "low_org": "संगठन का कोई एडमिन इस खाते में क्रेडिट जोड़ सकता है।",
+    "low_with_plan": "कोटा रिन्यू होने तक काम जारी रखने के लिए टॉप अप करें।",
+    "low_without_plan": "प्लान हर महीने क्रेडिट जोड़ता है; पैक अभी टॉप अप करता है।",
+    "payment_failed": "भुगतान विफल रहा",
+    "plan": "प्लान",
+    "plan_fallback": "सदस्यता",
+    "plan_unavailable": "उपलब्ध नहीं",
+    "plan_unavailable_detail": "हम आपका प्लान लोड नहीं कर सके।",
+    "plans_change": "आपका प्लान",
+    "plans_change_sub": "अपनी सदस्यता प्रबंधित करें, बदलें या रद्द करें।",
+    "plans_heading": "प्लान",
+    "plans_heading_sub": "क्रेडिट कोटे वाले मासिक प्लान।",
+    "plans_upgrade": "अपग्रेड करें",
+    "plans_upgrade_sub": "हाथ से टॉप अप करने के बजाय हर महीने क्रेडिट कोटा पाएँ।",
+    "retry": "फिर से कोशिश करें",
+    "see_plans": "प्लान देखें",
+    "top_up": "टॉप अप करें"
   },
   "credits": {
     "title": "क्रेडिट",
@@ -314,7 +339,8 @@
     "usage_pattern": "आपके पिछले {{days}} दिनों के उपयोग पैटर्न के अनुसार",
     "credits_used": "उपयोग किए गए क्रेडिट",
     "credits_purchased": "खरीदे गए क्रेडिट",
-    "net_credits": "नेट क्रेडिट"
+    "net_credits": "नेट क्रेडिट",
+    "unit": "क्रेडिट"
   },
   "time": {
     "last_7_days": "पिछले 7 दिन",
@@ -362,7 +388,15 @@
       "completed": "पूरा हुआ",
       "pending": "लंबित",
       "failed": "असफल"
-    }
+    },
+    "buy_pack": "{{price}} में {{credits}} क्रेडिट खरीदें",
+    "choose_pack": "क्रेडिट पैक चुनें",
+    "history_usage_hint": "यहाँ सिर्फ़ खरीदारियाँ दिखती हैं।",
+    "organization_credits_active": "संगठन के क्रेडिट सक्रिय हैं",
+    "rate_per_thousand": "प्रति 1,000 क्रेडिट {{rate}}",
+    "see_usage": "उपयोग देखें",
+    "shared_rate": "हर पैक की दर एक जैसी है: प्रति 1,000 क्रेडिट {{rate}}।",
+    "switch_to_personal": "निजी उपयोग के लिए क्रेडिट खरीदने हेतु अपने निजी खाते पर जाएँ।"
   },
   "settings": {
     "title": "सेटिंग्स",
@@ -543,7 +577,9 @@
     "personal": "व्यक्तिगत",
     "business": "व्यापार",
     "team": "टीम",
-    "enterprise": "एंटरप्राइज"
+    "enterprise": "एंटरप्राइज",
+    "audience_label": "प्लान का प्रकार",
+    "includes": "शामिल है"
   },
   "agents": {
     "title": "एजेंट",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "कौशल",
     "command_palette_description": "पुनः उपयोगी निर्देश टेम्पलेट प्रबंधित करें"
+  },
+  "apiKeys": {
+    "title": "API कुंजियाँ"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive और Slack जैसे इंटीग्रेशन, साथ ही आपके अपने कोड के लिए API कुंजियाँ",
+    "sections": "कनेक्शन के सेक्शन",
+    "title": "कनेक्शन"
   }
 }

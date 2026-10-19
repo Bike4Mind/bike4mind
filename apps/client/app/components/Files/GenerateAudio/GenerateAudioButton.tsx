@@ -1,30 +1,33 @@
-import { useState } from 'react';
 import { Button } from '@mui/joy';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
-import GenerateAudioModal from './GenerateAudioModal';
+import { useNavigate } from '@tanstack/react-router';
+import { useFileBrowserInstance } from '@client/app/components/Files/Browser/instanceContext';
 
 /**
- * Files Manager entry point for the in-app audio generator (#1055), sitting
- * beside Upload. Owns its own modal-open state so it can drop into the toolbar
- * as a single self-contained affordance.
+ * Audio is made in Studio now. Kept for one release so the old entry point still leads there, then removed along with
+ * this folder.
  */
 const GenerateAudioButton: React.FC = () => {
-  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const { setOpen } = useFileBrowserInstance();
+
+  const openSpeechStudio = () => {
+    // The file browser is a modal over the page, so it has to close or it would cover Studio.
+    setOpen(false);
+    void navigate({ to: '/studio/$modality', params: { modality: 'speech' } });
+  };
 
   return (
-    <>
-      <Button
-        variant="outlined"
-        color="neutral"
-        size="sm"
-        startDecorator={<GraphicEqIcon />}
-        onClick={() => setOpen(true)}
-        data-testid="file-browser-generate-audio-btn"
-      >
-        Generate Audio
-      </Button>
-      <GenerateAudioModal open={open} onClose={() => setOpen(false)} />
-    </>
+    <Button
+      variant="outlined"
+      color="neutral"
+      size="sm"
+      startDecorator={<GraphicEqIcon />}
+      onClick={openSpeechStudio}
+      data-testid="file-browser-generate-audio-btn"
+    >
+      Generate Audio
+    </Button>
   );
 };
 

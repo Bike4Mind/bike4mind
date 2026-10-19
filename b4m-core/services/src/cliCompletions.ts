@@ -29,6 +29,7 @@ import {
   UNKNOWN_MODEL_ERROR_CODE,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
+  completionsSupportsToolSearch,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -55,6 +56,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { prepareWireTools } from './cliCompletionsToolSearch';
 
 export interface CompletionParams {
   userId: string;
@@ -180,6 +182,22 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * Same heuristic as estimateInputTokens, over the tool schemas the provider is sent (wire or
+ * server-executed). A deferred tool is left out only where `deferralHonoured`: native tool search
+ * keeps it out of the prompt until it is referenced, and anywhere else the flag is ignored and
+ * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
+ * the flag, because `serverTools` never pass through it.
+ */
+function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+  const totalChars = tools.reduce(
+    (sum, tool) =>
+      deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
+    0
+  );
+  return Math.ceil(totalChars / 2.5);
+}
+
+/**
  * Backends whose server caches prompt prefixes without a client flag; they only get the cache
  * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
@@ -228,7 +246,8 @@ function estimateReservationUsd(
   modelInfo: ModelInfo,
   messages: IMessage[],
   estimatedInputTokens: number,
-  estimatedOutputTokens: number
+  estimatedOutputTokens: number,
+  estimatedToolTokens: number
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
   if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
@@ -261,7 +280,8 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  let plainTokens = 0;
+  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
@@ -448,6 +468,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+  // Before any credit reservation, so a refused tool search request costs nothing.
+  const wireTools = prepareWireTools(options?.tools, messages, modelInfo);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -455,7 +477,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // ICompletionOptionTools requires a stricter property shape - the backend's
   // formatTools() coerces both shapes correctly.
   const noopToolFn: ICompletionOptionTools['toolFn'] = async () => '';
-  const promotedTools: ICompletionOptionTools[] | undefined = options?.tools?.map(t => ({
+  const promotedTools: ICompletionOptionTools[] | undefined = wireTools.tools.map(t => ({
     ...t,
     toolFn: (t as { toolFn?: ICompletionOptionTools['toolFn'] }).toolFn ?? noopToolFn,
   })) as ICompletionOptionTools[] | undefined;
@@ -471,6 +493,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     maxTokens,
     stream: options?.stream ?? true,
     tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
     executeTools: useServerTools,
     ...(useServerTools && params.maxToolCalls !== undefined
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
@@ -520,13 +543,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // through - 8x what this keeps - and reject short prompts outright for anyone near their
     // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
     // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
-    const estimatedInputTokens = estimateInputTokens(messages);
+    const estimatedToolTokens = estimateToolTokens(
+      completionOptions.tools ?? [],
+      completionsSupportsToolSearch(modelInfo)
+    );
+    const estimatedInputTokens = estimateInputTokens(messages) + estimatedToolTokens;
     const estimatedOutputTokens = Math.min(
       maxTokens,
       options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS,
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
-    const estimatedUsdCost = estimateReservationUsd(modelInfo, messages, estimatedInputTokens, estimatedOutputTokens);
+    const estimatedUsdCost = estimateReservationUsd(
+      modelInfo,
+      messages,
+      estimatedInputTokens,
+      estimatedOutputTokens,
+      estimatedToolTokens
+    );
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     // Rail the money path independently of whatever sized it. A non-finite estimate must

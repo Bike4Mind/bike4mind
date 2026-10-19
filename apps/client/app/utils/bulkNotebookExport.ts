@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { visibleReplyForExport } from '@client/shared/replyUtils';
-import { answeringModelId } from '@client/app/utils/answeringModel';
+import { requestedModelId } from '@client/app/utils/answeringModel';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
   DocxColors,
@@ -33,7 +33,8 @@ export interface ExportedChatMessage {
   prompt: string;
   replies?: string[];
   promptMeta?: {
-    model?: { name: string; answeredBy?: string };
+    model?: { name: string };
+    redirectedFrom?: string;
     tokenUsage?: {
       inputTokens?: number;
       outputTokens?: number;
@@ -78,7 +79,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
           Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
           Role: msg.type === 'system' ? 'System' : 'User',
           Content: msg.prompt,
-          Model: msg.promptMeta?.model?.name || '',
+          Model: requestedModelId(msg.promptMeta) ?? '',
           Tokens: msg.promptMeta?.tokenUsage?.inputTokens || '',
         });
       }
@@ -91,7 +92,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
           Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
           Role: 'Assistant',
           Content: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
-          Model: answeringModelId(msg.promptMeta) || '',
+          Model: msg.promptMeta?.model?.name || '',
           Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
         });
       }

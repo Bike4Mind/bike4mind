@@ -17,6 +17,10 @@ const h = vi.hoisted(() => ({
   find: vi.fn(),
   setStats: vi.fn(),
   activateIfDraft: vi.fn(),
+  // A fileContent PUT runs the rewrite-storage path. No stored charge row means no quota check, and a
+  // missed commit leaves the owner's counter alone, so userRepository can stay empty.
+  findChargeState: vi.fn().mockResolvedValue(null),
+  commitContentRewrite: vi.fn().mockResolvedValue(null),
   // The config-audit half. Stubbed because this spec spreads the REAL @bike4mind/database, so an
   // un-overridden repository here is a Mongo-backed call with no connection behind it.
   recordConfigChange: vi.fn().mockResolvedValue({}),
@@ -86,6 +90,8 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     pullTagsByFabFileId: h.pullTagsByFabFileId,
     pushTagsByFabFileId: h.pushTagsByFabFileId,
     computeDataLakeStats: h.computeDataLakeStats,
+    findChargeState: h.findChargeState,
+    commitContentRewrite: h.commitContentRewrite,
   },
   fileTagRepository: {},
   // Retention lookup for the config-audit event. Present as real stubs rather than `{}` so the
@@ -488,6 +494,8 @@ describe('PUT response file-read scope', () => {
       expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
       expect(json.mock.calls[0][0].fileUrlExpireAt).toBeUndefined();
       expect(h.signUrl.mock.calls.some(call => call[2].audience === 'browser')).toBe(false);
+      if ('fileContent' in body)
+        expect(h.commitContentRewrite).toHaveBeenCalledWith(FILE_ID, expect.anything(), undefined);
     }
   );
 

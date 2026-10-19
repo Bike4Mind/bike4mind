@@ -20,6 +20,13 @@ export interface TokenStore {
   setAuthTokens(tokens: AuthTokens): Promise<void>;
   clearAuthTokens(): Promise<void>;
   isAuthenticated(): Promise<boolean>;
+  /**
+   * Read the tokens straight from durable storage, bypassing any in-memory cache. Optional: a
+   * store whose reads already hit storage needs none. A store that caches, and whose storage
+   * another process can rewrite, should implement it - a refresh reads through it so it never
+   * presents a refresh token that process has already rotated.
+   */
+  reloadAuthTokens?(): Promise<AuthTokens | null>;
 }
 
 /**

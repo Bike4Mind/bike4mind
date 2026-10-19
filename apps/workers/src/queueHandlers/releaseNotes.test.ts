@@ -170,7 +170,7 @@ describe('releaseNotes queue handler', () => {
     h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft());
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
-    expect(h.writeReleaseNotes.mock.calls[1][3]).toEqual([expect.stringContaining('acme')]);
+    expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual([expect.stringContaining('acme')]);
     expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
@@ -183,13 +183,72 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).toEqual(['Failure']);
   });
 
+  it('rewrites once when the headline is generic, feeding the reason back', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes
+      .mockResolvedValueOnce(draft('Exciting New Features and Important Fixes in Your AI Workspace'))
+      .mockResolvedValueOnce(draft());
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual(
+      expect.arrayContaining([expect.stringContaining('Exciting'), expect.stringContaining('most important change')])
+    );
+    expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
+  });
+
+  it('stores the note with the top item as headline when the rewrite is still generic', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes.mockResolvedValue(draft('Exciting Updates and Fixes in Your AI Workspace'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', status: 'scheduled' })
+    );
+    expect(metricNames()).not.toContain('Failure');
+  });
+
+  it('names both drafts denylist hits when the rewrite and the earlier draft both fail', async () => {
+    setConfig({ ...enabledConfig, denylist: ['acme', 'globex'] });
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft('Built for Globex'));
+    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(
+      /the headline must not mention "globex"; the headline must not mention "acme"/
+    );
+    expect(h.upsertGenerated).not.toHaveBeenCalled();
+    expect(metricNames()).toEqual(['Failure']);
+  });
+
+  it('keeps the earlier generic draft when the rewrite introduces a denylist hit', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes
+      .mockResolvedValueOnce(draft('Exciting New Features and Fixes in Your AI Workspace'))
+      .mockResolvedValueOnce(draft('Built for Acme'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', status: 'scheduled' })
+    );
+    expect(metricNames()).not.toContain('Failure');
+  });
+
   it('escapes Slack control characters in generated copy', async () => {
     setConfig(enabledConfig);
-    h.writeReleaseNotes.mockResolvedValue(draft('Hi <!channel> & <https://evil.example|click>'));
+    // In an item, because a "!" in the headline is rejected as generic copy before Slack sees it.
+    const injected = draft();
+    injected.draft.items[0].text = 'Hi <!channel> & <https://evil.example|click>';
+    h.writeReleaseNotes.mockResolvedValue(injected);
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     const { text } = JSON.parse(slackPosts()[0][1].body);
     expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');
     expect(text).not.toContain('<!channel>');
+  });
+
+  it('escapes Slack control characters in the headline', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes.mockResolvedValue(draft('Search for <@U1> & <https://evil.example|x>'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('*Search for &lt;@U1&gt; &amp; &lt;https://evil.example|x&gt;*');
+    expect(text).not.toContain('<@U1>');
   });
 
   it('leaves the headline and summary out of the Slack post for a hidden note', async () => {

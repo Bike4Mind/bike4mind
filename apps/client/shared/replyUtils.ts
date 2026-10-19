@@ -3,10 +3,17 @@ import {
   THINK_OPEN_TAG,
   joinReplySlots,
   stripChoicesFromReplies,
+  stripNarratedToolCallsFromReplies,
   visibleReplyText,
 } from '@bike4mind/common';
 
-type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
+type ReplyBearingMessage = {
+  reply?: string | null;
+  replies?: string[] | undefined;
+  status?: string;
+  // The index signature keeps this from being a weak type that other promptMeta shapes fail to match.
+  promptMeta?: { narratedToolCall?: { toolNames?: string[] }; [key: string]: unknown } | null;
+};
 
 export function extractReplies(messageData: ReplyBearingMessage) {
   // Prefer the authoritative array when present, because the server streams into replies[0]
@@ -18,7 +25,17 @@ export function extractReplies(messageData: ReplyBearingMessage) {
         : [];
   // The server strips the choices block on finalize; this hides it while it streams. Same rule as
   // the server: every slot's block is hidden, options come only from the answer slot.
-  const sourceReplies = stripChoicesFromReplies(rawReplies).replies;
+  // A tool call written as text: while streaming, any well-formed or partial block is hidden; once
+  // finished, only blocks naming a tool finalize stripped, so a finished reply shows what was stored
+  // (a docs example of the syntax stays visible) - see narratedToolCalls in @bike4mind/common.
+  const narrated =
+    messageData.status === 'running'
+      ? {}
+      : { offeredToolNames: messageData.promptMeta?.narratedToolCall?.toolNames ?? [] };
+  const sourceReplies = stripNarratedToolCallsFromReplies(
+    stripChoicesFromReplies(rawReplies).replies,
+    narrated
+  ).replies;
 
   // Process and deduplicate short repeated segments that can occur during streaming
   const processedParts: string[] = [];

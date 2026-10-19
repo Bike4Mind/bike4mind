@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
@@ -76,6 +77,8 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onRename={(session, title) => void rename(session, title)}
       renameError={renameError}
       onDismissRenameError={clearRenameError}
+      userSections={EMPTY_SIDEBAR_SECTIONS}
+      sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
     />
   );
 }

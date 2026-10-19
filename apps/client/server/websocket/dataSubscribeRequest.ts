@@ -55,9 +55,9 @@ function extractRawSubscriptionId(rawBody: unknown): string | undefined {
  * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
  * aborted - the two failure modes on this path that are content-dependent rather than auth- or
  * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
- * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
- * reaches the client as a frame; without this, the caller sees silence and the surface just
- * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * throws an UnauthorizedError/JsonWebTokenError/ForbiddenError, so withWebSocketContext's status
+ * code never reaches the client as a frame; without this, the caller sees silence and the surface
+ * just never updates. Deliberately not used for auth failures - those keep their existing behavior.
  * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
  */
 async function notifySubscribeError(

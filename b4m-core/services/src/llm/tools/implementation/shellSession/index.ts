@@ -51,7 +51,7 @@ export function checkShellOutput(manager: ShellSessionManager, sessionId: string
 // initial command. Stdin written here goes straight to a live process with NO
 // pattern filtering - a backgrounded shell/REPL could be driven to run anything.
 // This is gated instead by write_shell_stdin being permission-prompted on every
-// call (see toolSafety: 'prompt_always') plus the CLI sandbox wrapping.
+// call (prompt_always in the CLI's tools/gateway/coreToolDescriptors.ts) plus the CLI sandbox wrapping.
 export function writeShellStdin(manager: ShellSessionManager, sessionId: string, chars: string): string {
   const session = manager.get(sessionId);
   if (!session) return `No background shell found with id: ${sessionId}`;

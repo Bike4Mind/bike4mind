@@ -25,7 +25,8 @@ describe('answerCostBreakdown', () => {
   it('prices the chat share against the model that answered a redirected turn', () => {
     const parts = answerCostBreakdown(
       meta({
-        model: { name: 'requested-model', answeredBy: 'successor-model' },
+        model: { name: 'successor-model' },
+        redirectedFrom: 'requested-model',
         tokenUsage: { creditsUsed: 64 },
         functionCalls: [{ name: 'image_generation', creditsUsed: 120, parameters: {} }],
       }),

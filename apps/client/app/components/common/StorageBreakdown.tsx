@@ -3,7 +3,7 @@ import { useGetStorageBreakdown } from '@client/app/hooks/data/storageBreakdown'
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { Box, Button, CircularProgress, LinearProgress, Link, Stack, Typography } from '@mui/joy';
 import prettyBytes from 'pretty-bytes';
-import { FC, useState } from 'react';
+import { FC, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type Translate = ReturnType<typeof useTranslation>['t'];
@@ -28,19 +28,42 @@ const ShareBar: FC<{ bytes: number; totalBytes: number }> = ({ bytes, totalBytes
 
 /**
  * Collapsible "what is using my storage" list under a usage figure. Fetches only once opened, so
- * the aggregate never runs for a user who does not ask. `overlay` floats the list over what follows
- * instead of pushing it down - for headers inside a fixed-height dialog.
+ * the aggregate never runs for a user who does not ask. Takes space in the layout rather than
+ * floating, so it never covers controls after it; click-away and Escape still close it.
  */
-const StorageBreakdown: FC<{ overlay?: boolean }> = ({ overlay = false }) => {
+const StorageBreakdown: FC = () => {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const { data, isLoading, isError, refetch } = useGetStorageBreakdown({ enabled: open });
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocumentClick = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    // Bubble-phase click, not pointerdown: collapsing on press shifts the layout and loses the click.
+    // Portaled children (a Tooltip or Menu) would count as outside clicks if ever added here.
+    // Capture phase + stopPropagation so Escape from inside closes only the panel, not an enclosing modal.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !rootRef.current?.contains(event.target as Node)) return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('click', onDocumentClick);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('click', onDocumentClick);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [open]);
+
   const denominator = data ? Math.max(data.totalBytes, data.accountedBytes) : 0;
 
   return (
-    <Box data-testid="storage-breakdown" sx={{ position: 'relative' }}>
+    <Box ref={rootRef} data-testid="storage-breakdown">
       <Link
         component="button"
         level="body-sm"
@@ -56,22 +79,9 @@ const StorageBreakdown: FC<{ overlay?: boolean }> = ({ overlay = false }) => {
           data-testid="storage-breakdown-panel"
           sx={{
             mt: 1,
-            maxHeight: 280,
+            maxHeight: { xs: 200, md: 280 },
             overflowY: 'auto',
             pr: 0.5,
-            ...(overlay && {
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              right: 0,
-              zIndex: 'var(--joy-zIndex-popup)',
-              p: 1.5,
-              bgcolor: 'background.surface',
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 'sm',
-              boxShadow: 'md',
-            }),
           }}
         >
           {isLoading && (

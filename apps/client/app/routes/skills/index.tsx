@@ -1,6 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import { Box, Button, Card, CircularProgress, IconButton, Input, Stack, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
+import StorefrontIcon from '@mui/icons-material/Storefront';
 import SearchIcon from '@mui/icons-material/Search';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -9,6 +10,7 @@ import { ISkill } from '@bike4mind/common';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useDeleteSkill, useGetSkills } from '@client/app/hooks/data/skills';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
 
 const SkillsListPage: FC = () => {
   useDocumentTitle('Skills');
@@ -48,13 +50,23 @@ const SkillsListPage: FC = () => {
             Reusable instruction templates you can invoke with <code>/name</code> in chat.
           </Typography>
         </Box>
-        <Button
-          startDecorator={<AddIcon />}
-          onClick={() => navigate({ to: '/skills/new' })}
-          data-testid="skills-create-button"
-        >
-          New skill
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            startDecorator={<StorefrontIcon />}
+            onClick={() => navigate({ to: '/skills/market' })}
+            data-testid="skills-market-link"
+          >
+            Skill Market
+          </Button>
+          <Button
+            startDecorator={<AddIcon />}
+            onClick={() => navigate({ to: '/skills/new' })}
+            data-testid="skills-create-button"
+          >
+            New skill
+          </Button>
+        </Stack>
       </Stack>
 
       <Input
@@ -101,6 +113,11 @@ const SkillsListPage: FC = () => {
                   <Typography level="body-sm" textColor="text.tertiary">
                     {skill.description}
                   </Typography>
+                  {skill.marketStatus ? (
+                    <Box sx={{ mt: 0.75 }}>
+                      <MarketStatusBadge status={skill.marketStatus} />
+                    </Box>
+                  ) : null}
                 </Box>
                 <Stack direction="row" spacing={0.5}>
                   <IconButton

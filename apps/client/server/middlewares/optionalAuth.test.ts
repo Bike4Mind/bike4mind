@@ -10,6 +10,21 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
   apiKeyAuth: () => (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
+// The real admission (middlewares/oauthRouteGate.ts) runs; only its leaf reads are stubbed. `enforced`
+// is the admin's enforceMFA toggle.
+const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/services', () => ({
+  mfaService: { userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled },
+}));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: async () => {
+    if (enforcement.readFails) throw new Error('settings read failed');
+    return {};
+  },
+  getSettingsValue: (name: string) => name === 'enforceMFA' && enforcement.enforced,
+}));
+
 import { optionalAuth } from './optionalAuth';
 
 const make = (headers: Record<string, string> = {}) => {
@@ -26,7 +41,11 @@ const queueAuthResult = (err: unknown, user: unknown) => {
   });
 };
 
-beforeEach(() => mockAuthenticate.mockReset());
+beforeEach(() => {
+  mockAuthenticate.mockReset();
+  enforcement.enforced = false;
+  enforcement.readFails = false;
+});
 
 describe('optionalAuth', () => {
   it('sets req.user from a valid first-party Bearer token', async () => {
@@ -62,5 +81,36 @@ describe('optionalAuth', () => {
     expect(req.user).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
     expect(mockAuthenticate).not.toHaveBeenCalled();
+  });
+
+  it('degrades a session that owes MFA enrollment to anonymous', async () => {
+    enforcement.enforced = true;
+    queueAuthResult(null, { id: 'u1' });
+    const { req, res, next } = make({ authorization: 'Bearer owing.token' });
+    await optionalAuth(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('admits an enrolled session, and an impersonation session, under enforcement', async () => {
+    enforcement.enforced = true;
+    for (const user of [
+      { id: 'u1', mfa: { totpEnabled: true } },
+      { id: 'u1', impersonatedBy: 'admin-1' },
+    ]) {
+      queueAuthResult(null, user);
+      const { req, res, next } = make({ authorization: 'Bearer good.token' });
+      await optionalAuth(req, res, next);
+      expect(req.user).toEqual(user);
+    }
+  });
+
+  it('degrades to anonymous when the enforcement read fails', async () => {
+    enforcement.readFails = true;
+    queueAuthResult(null, { id: 'u1' });
+    const { req, res, next } = make({ authorization: 'Bearer good.token' });
+    await optionalAuth(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
   });
 });

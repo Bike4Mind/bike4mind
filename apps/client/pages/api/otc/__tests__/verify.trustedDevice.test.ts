@@ -32,6 +32,10 @@ vi.mock('@server/auth/trustedDevice', () => ({
 
 // Settings are read through getSettingsValue; drive both flags from one map.
 const settingsValues: Record<string, unknown> = {};
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(() => Promise.resolve({})),
   getSettingsValue: (key: string) => settingsValues[key],

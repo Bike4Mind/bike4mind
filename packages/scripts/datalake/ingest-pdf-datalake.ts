@@ -87,10 +87,10 @@ import {
 const PDF_MIME = 'application/pdf';
 /** Default max per-file size (MB) when the MaxFileSize admin setting is unset; parity with fabFileService. */
 const DEFAULT_MAX_FILE_MB = 20;
-/** Only rescue files older than this - keep in sync with apps/client/server/s3/chunkScan.ts. */
+/** Only rescue files older than this - keep in sync with apps/workers/src/s3/chunkScan.ts. */
 const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
 /** A claim held longer than this is treated as stranded (a worker hard-killed before its finally).
- * Keep in sync with CHUNK_CLAIM_STALE_MS in apps/client/server/s3/chunkScan.ts. */
+ * Keep in sync with CHUNK_CLAIM_STALE_MS in apps/workers/src/s3/chunkScan.ts. */
 const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 export interface Options {
@@ -150,7 +150,7 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
 
 /** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
  * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
- * apps/client/server/s3/chunkScan.ts - including its stale-claim arm (a claim older than
+ * apps/workers/src/s3/chunkScan.ts - including its stale-claim arm (a claim older than
  * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
  *
  * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes a
@@ -529,7 +529,6 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
               contentHash: file.contentHash,
               relativePath: file.relativePath,
               tags: [{ name: lake.datalakeTag, strength: 1 }],
-              ...(opts.organizationId && { organizationId: opts.organizationId }),
             },
             adapters
           );
@@ -662,7 +661,10 @@ if (isMainModule) {
     .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
     .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
     .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
-    .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
+    .option('organizationId', {
+      type: 'string',
+      describe: 'Resolve the lake within this org (storage is billed to the lake owner)',
+    })
     .option('concurrency', {
       type: 'number',
       default: 4,

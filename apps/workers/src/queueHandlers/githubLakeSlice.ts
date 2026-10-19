@@ -7,6 +7,7 @@ import {
   dataLakeRepository,
   fabFileRepository,
   lakeSkippedFileRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -16,6 +17,7 @@ import {
   GITHUB_LAKE_FILE_RULES,
   isStorageLimitError,
   KnowledgeType,
+  storageOwnerOf,
   type GitHubLakeTreeCounts,
   type IFabFileDocument,
   type IOrgGitHubLakeConnectionDocument,
@@ -23,7 +25,7 @@ import {
   type LakeSkippedFileReason,
   UNCATEGORIZED_TAG_SUFFIX,
 } from '@bike4mind/common';
-import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
@@ -38,7 +40,7 @@ import {
   lakeFileMimeType,
   type GitHubLakeCandidate,
 } from '@server/integrations/github/dataLake/lakeFileFilter';
-import { diffGitHubLakeTree } from '@server/integrations/github/dataLake/githubLakeTreeDiff';
+import { diffGitHubLakeTree } from '@workers/integrations/github/dataLake/githubLakeTreeDiff';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -323,6 +325,11 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       logger,
     });
     let acceptedBytes = 0;
+    // Same owner rule as driveLakeIngest: an org lake's files are billed to, and gated on, its org.
+    const quotaOwner = { user, organizationId: lake.organizationId || undefined };
+    const reclaimOwner = storageOwnerOf({ userId: user.id, organizationId: quotaOwner.organizationId });
+    let quotaOrganizationOnce: ReturnType<typeof organizationRepository.findById> | undefined;
+    const loadQuotaOrganization = (id: string) => (quotaOrganizationOnce ??= organizationRepository.findById(id));
     let transientSkips = 0;
     const skip = async (githubPath: string, reason: LakeSkippedFileReason, size?: number) => {
       await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, githubPath);
@@ -361,7 +368,11 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         continue;
       }
       try {
-        await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - retirer.stagedReclaimFor(user.id)));
+        await checkStorageLimitForOwner(
+          quotaOwner,
+          Math.max(0, acceptedBytes + bytes.length - retirer.stagedReclaimFor(reclaimOwner)),
+          loadQuotaOrganization
+        );
       } catch (error) {
         if (!isStorageLimitError(error)) throw error;
         // Not a chain skip: freeing space makes it ingestable, so later slices and the next sync retry it.

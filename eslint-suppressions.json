@@ -114,11 +114,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/organizations/grants.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -519,11 +514,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/groups/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/help/my-feedback.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
@@ -594,16 +584,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/organizations/[id]/groups/[groupId]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/organizations/[id]/groups/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/projects/[id]/files.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
@@ -659,71 +639,6 @@
       "count": 6
     }
   },
-  "apps/client/pages/api/quest-master-plans/[id]/blockers.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/decisions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/handoff.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/resolve-blocker.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/review-gate.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-master-plans/[id]/subquest-progress.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-plans/[id]/clone.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-plans/[id]/continue.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-plans/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/quest-plans/[id]/progress.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/quest-plans/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/quests/[id]/check-timeout.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/reg-invites/create.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -760,21 +675,6 @@
     }
   },
   "apps/client/pages/api/security/user-summary.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/sessions/[id]/chat/[messageId]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/sessions/[id]/chat/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/sessions/[id]/questmaster-plans/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }

@@ -488,6 +488,24 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     });
   }
 
+  it('persists a retired pinned model id as its successor', async () => {
+    createMock.mockClear();
+    const dispatcher = makeDagDispatcher({
+      connectionId: 'c1',
+      nodeDefaults: nodeDefaultsBase,
+      logger: silentLogger,
+    });
+    await dispatcher.createNode({
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick',
+      agentName: 'worker',
+      model: 'anthropic.claude-3-haiku-20240307-v1:0',
+      maxIterations: 3,
+    });
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ model: 'global.anthropic.claude-haiku-5-5' }));
+  });
+
   it('passes the parent artifact opt-out down to each DAG node', async () => {
     // The PR's headline design claim: the flag is a caller opt-OUT, not a grant, so a delegating
     // agent must not be able to route around it by fanning out.
