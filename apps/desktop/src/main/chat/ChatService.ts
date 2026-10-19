@@ -4594,12 +4594,6 @@ function roundSignature(requested: readonly RequestedTool[]): string {
   return requested.map(tool => `${tool.name}(${tool.arguments ?? ''})`).join('\n');
 }
 
-/**
- * Hang a line on the newest user turn, in place.
- *
- * Only the last one, and only on the wire: everything before it is the cached prefix, and an
- * edit there would cost every later turn its cache hit.
- */
 interface RootChange {
   path: string;
   shared: boolean;
@@ -4612,6 +4606,12 @@ function describeRootChange(before: readonly string[], after: readonly string[])
   ];
 }
 
+/**
+ * Hang a line on the newest user turn, in place.
+ *
+ * Only the last one, and only on the wire: everything before it is the cached prefix, and an
+ * edit there would cost every later turn its cache hit.
+ */
 function appendToLastUserTurn(wire: CompletionMessage[], text: string): void {
   for (let i = wire.length - 1; i >= 0; i -= 1) {
     const message = wire[i];

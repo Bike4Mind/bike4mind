@@ -748,6 +748,8 @@ export function useConversation(
     const result = await window.b4m.chat.continueReply(sessionId);
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
+
+  // A summary main just wrote, folded into both the open conversation and the sidebar row.
   const applySummary = useCallback(
     (updated: ChatSessionSummary) => {
       setSession(current =>
@@ -903,7 +905,6 @@ export function useConversation(
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
   /** Resolves true when the session really moved, so a caller can report what happened after. */
   const changeProject = useCallback(
     async (change: Omit<UpdateProjectRequest, 'sessionId'>) => {
