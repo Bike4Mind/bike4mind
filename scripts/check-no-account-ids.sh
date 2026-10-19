@@ -21,8 +21,8 @@ set -euo pipefail
 
 ALLOWLIST="scripts/account-ids-allowlist.txt"
 
-# Shippable code only. Docs-site branding is a separate milestone decision.
-SCAN_DIRS=(apps b4m-core packages infra .github/workflows)
+# Shippable code only. docs-site deploys from main, so its non-markdown files are scanned too.
+SCAN_DIRS=(apps b4m-core packages infra docs-site .github/workflows)
 
 INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
   --include='*.mjs' --include='*.cjs' --include='*.json' --include='*.yml' --include='*.yaml')

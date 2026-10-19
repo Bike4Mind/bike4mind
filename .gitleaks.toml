@@ -22,12 +22,13 @@ paths = [
   ".*\\.test\\.[tj]sx?$",
   ".*\\.spec\\.[tj]sx?$",
   ".*/__tests__/.*",
+  # Synthetic positive/negative cases for the docs content scanner
+  "docs-site/scripts/.*\\.test\\.mjs$",
   # Python test file naming convention (pytest discovery: test_*.py / *_test.py)
   ".*/test_[^/]*\\.py$",
   ".*_test\\.py$",
   # Documentation - placeholder strings are expected here
   ".*docs/.*",
-  ".*docs-site/.*",
   ".*README\\.md$",
   # Environment example files - values here are intentional placeholders
   "\\.env\\.example$",

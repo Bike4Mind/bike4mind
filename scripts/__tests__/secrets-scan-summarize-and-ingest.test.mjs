@@ -127,6 +127,11 @@ describe('isPlaceholderLeak', () => {
     expect(isPlaceholderLeak({ File: 'src/__tests__/auth.ts', Secret: 'sk-ant-abc123' })).toBe(true);
   });
 
+  it('returns true for docs-site markdown content but not docs-site code', () => {
+    expect(isPlaceholderLeak({ File: 'docs-site/docs/guide/setup.md', Secret: 'some-key' })).toBe(true);
+    expect(isPlaceholderLeak({ File: 'docs-site/src/config.ts', Secret: 'some-key' })).toBe(false);
+  });
+
   it('returns true for a .env.example file', () => {
     expect(isPlaceholderLeak({ File: '.env.example', Secret: 'some-key' })).toBe(true);
   });

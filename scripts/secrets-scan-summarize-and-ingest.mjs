@@ -56,7 +56,6 @@ const PLACEHOLDER_PATH_PATTERNS = [
   /\.env\.example$/i,
   /README\.md$/i,
   /docs\//,
-  /docs-site\//,
 ];
 
 // Exact or pattern-matched values that are canonical placeholders / fake credentials
