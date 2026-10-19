@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { deferredToolRegistry } from './deferredToolRegistry.js';
-import { createToolSearchTool } from './toolSearchTool.js';
+import { DeferredToolRegistry } from './DeferredToolRegistry';
+import { createToolSearchTool } from './toolSearchTool';
 
 const makeTool = (name: string, description = ''): ICompletionOptionTools => ({
   toolSchema: {
@@ -22,31 +22,32 @@ const run = async (
 
 describe('toolSearchTool', () => {
   let liveTools: ICompletionOptionTools[];
+  let deferredToolRegistry: DeferredToolRegistry;
 
   beforeEach(() => {
-    deferredToolRegistry.clear();
+    deferredToolRegistry = new DeferredToolRegistry();
     liveTools = [];
   });
 
   it('returns error for empty query', async () => {
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     expect(await run(search, { query: '' })).toMatch(/non-empty/);
   });
 
   it('whitespace-only query falls through to no-match (Zod min(1) only checks length)', async () => {
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     expect(await run(search, { query: '   ' })).toMatch(/no deferred tools matched/i);
   });
 
   it('returns error for invalid max_results (negative)', async () => {
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     const result = await run(search, { query: 'foo', max_results: -1 });
     expect(result).toMatch(/invalid parameters/i);
   });
 
   it('coerces string max_results to number', async () => {
     deferredToolRegistry.register([makeTool('foo', 'desc')]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     // LLMs occasionally emit numeric-looking strings; verify coercion.
     const result = await search.toolFn({ query: 'foo', max_results: '1' });
     expect(typeof result === 'string' ? result : '').toContain('Loaded 1 new tool schema(s)');
@@ -54,7 +55,7 @@ describe('toolSearchTool', () => {
 
   it('select: form loads exact tools into the live tools array', async () => {
     deferredToolRegistry.register([makeTool('alpha'), makeTool('beta'), makeTool('gamma')]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
 
     const out = await run(search, { query: 'select:alpha,gamma' });
     expect(liveTools.map(t => t.toolSchema.name).sort()).toEqual(['alpha', 'gamma']);
@@ -64,15 +65,15 @@ describe('toolSearchTool', () => {
 
   it('select: form reports unmatched names', async () => {
     deferredToolRegistry.register([makeTool('alpha')]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     const out = await run(search, { query: 'select:alpha,bogus' });
     expect(out).toContain('Not found: bogus');
     expect(liveTools.map(t => t.toolSchema.name)).toEqual(['alpha']);
   });
 
-  it('select: form is idempotent — loading a tool twice does not duplicate it', async () => {
+  it('select: form is idempotent - loading a tool twice does not duplicate it', async () => {
     deferredToolRegistry.register([makeTool('alpha')]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     await run(search, { query: 'select:alpha' });
     const out = await run(search, { query: 'select:alpha' });
     expect(liveTools.length).toBe(1);
@@ -86,7 +87,7 @@ describe('toolSearchTool', () => {
       makeTool('mcp__github__list_issues', 'lists issues'),
       makeTool('mcp__github__merge_pull_request', 'merges a PR'),
     ]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     const out = await run(search, { query: 'pull request', max_results: 2 });
     expect(liveTools.length).toBe(2);
     expect(out).toContain('mcp__github__create_pull_request');
@@ -94,9 +95,29 @@ describe('toolSearchTool', () => {
 
   it('returns hint string when no results match', async () => {
     deferredToolRegistry.register([makeTool('foo')]);
-    const search = createToolSearchTool(() => liveTools);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, toolListAccessor: () => liveTools });
     expect(await run(search, { query: 'nothing matches' })).toMatch(/no deferred tools matched/i);
     expect(await run(search, { query: 'select:none' })).toMatch(/no deferred tools matched/i);
     expect(liveTools).toEqual([]);
+  });
+
+  it('toolReference strategy returns tool_reference blocks and leaves the live tool list alone', async () => {
+    deferredToolRegistry.register([makeTool('alpha'), makeTool('beta')]);
+    const search = createToolSearchTool({ registry: deferredToolRegistry, loadStrategy: 'toolReference' });
+    const out = await run(search, { query: 'select:alpha,bogus' });
+    expect(JSON.parse(out)).toEqual([{ type: 'tool_reference', tool_name: 'alpha' }]);
+    expect(liveTools).toEqual([]);
+  });
+
+  it('logs the load through the injected logger', async () => {
+    deferredToolRegistry.register([makeTool('alpha')]);
+    const debug = vi.fn();
+    const search = createToolSearchTool({
+      registry: deferredToolRegistry,
+      logger: { debug },
+      toolListAccessor: () => liveTools,
+    });
+    await run(search, { query: 'select:alpha' });
+    expect(debug).toHaveBeenCalledWith(expect.stringContaining('added=1'));
   });
 });

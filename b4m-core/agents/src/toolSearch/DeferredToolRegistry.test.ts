@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { deferredToolRegistry } from './deferredToolRegistry.js';
+import { DeferredToolRegistry } from './DeferredToolRegistry';
 
 const makeTool = (name: string, description = ''): ICompletionOptionTools => ({
   toolSchema: {
@@ -11,9 +11,11 @@ const makeTool = (name: string, description = ''): ICompletionOptionTools => ({
   toolFn: async () => 'noop',
 });
 
-describe('deferredToolRegistry', () => {
+describe('DeferredToolRegistry', () => {
+  let deferredToolRegistry: DeferredToolRegistry;
+
   beforeEach(() => {
-    deferredToolRegistry.clear();
+    deferredToolRegistry = new DeferredToolRegistry();
   });
 
   it('register replaces previous contents and tracks size', () => {
@@ -65,7 +67,7 @@ describe('deferredToolRegistry', () => {
     expect(deferredToolRegistry.getDirectoryNames()).toEqual(['alpha', 'bravo']);
   });
 
-  // #213: the directory is a frozen snapshot from register(), decoupled from
+  // The directory is a frozen snapshot from register(), decoupled from
   // the live tool map. If a tool is evicted from `byName` mid-session (e.g. a
   // future load-eviction optimization), the cache-stamped system-prompt
   // directory must NOT change a byte. Simulate eviction via the private map.
@@ -77,5 +79,17 @@ describe('deferredToolRegistry', () => {
 
     expect(deferredToolRegistry.has('bravo')).toBe(false);
     expect(deferredToolRegistry.getDirectoryNames()).toEqual(before);
+  });
+
+  it('instances do not share tools', () => {
+    const other = new DeferredToolRegistry();
+    deferredToolRegistry.register([makeTool('alpha')]);
+    expect(other.size()).toBe(0);
+  });
+
+  it('logs registration through the injected logger', () => {
+    const debug = vi.fn();
+    new DeferredToolRegistry({ logger: { debug } }).register([makeTool('alpha')]);
+    expect(debug).toHaveBeenCalledWith('[DeferredToolRegistry] Registered 1 deferred tool(s)');
   });
 });

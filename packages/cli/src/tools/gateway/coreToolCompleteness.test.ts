@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
+import { DeferredToolRegistry, createToolSearchTool } from '@bike4mind/agents';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { ConfigStore } from '../../storage/ConfigStore.js';
@@ -26,7 +27,6 @@ import { createFindDefinitionTool } from '../findDefinitionTool.js';
 import { createGetFileStructureTool } from '../getFileStructure/index.js';
 import { createWorkItemTools } from '../workItemTools.js';
 import { createSkillTool } from '../skillTool.js';
-import { createToolSearchTool } from '../toolSearchTool.js';
 import { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 import { ToolCatalog } from './toolCatalog.js';
 
@@ -72,7 +72,7 @@ describe('core descriptor completeness', () => {
     const agentStore = { getAllAgents: () => [], getAgentNames: () => [] } as never;
     const wrapped = buildCliToolList(
       {
-        toolSearchTool: createToolSearchTool(() => []),
+        toolSearchTool: createToolSearchTool({ registry: new DeferredToolRegistry(), toolListAccessor: () => [] }),
         agentDelegateTool: createAgentDelegateTool(orchestrator, agentStore, 'session-1'),
         backgroundTools: createBackgroundAgentTools({} as never),
         resumeAgentTool: createResumeAgentTool(orchestrator, {} as never),
