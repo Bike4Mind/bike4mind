@@ -957,13 +957,10 @@ export class ChatService {
         name,
         onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
       });
-      const moved: ChatProject = {
-        ...project,
-        workspaceBranch: resolved.branch,
-        workingDirectory: resolved.workingDirectory,
-      };
-      await this.deps.store.setProject(session.id, moved);
-      session.project = moved;
+      const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
+      await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      // Re-read: a folder shared while the worktree was being cut lives in the store, not in `project`.
+      session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, ...workspace };
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
       return null;
     } catch (err) {
@@ -1040,10 +1037,9 @@ export class ChatService {
         );
       }
     }
-    const repaired = { ...project, workingDirectory };
-    await this.deps.store.setProject(session.id, repaired);
-    session.project = repaired;
-    return repaired;
+    await this.deps.store.updateProjectWorkspace(session.id, { workingDirectory });
+    session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, workingDirectory };
+    return session.project;
   }
 
   /**
@@ -1935,10 +1931,11 @@ export class ChatService {
     const produced: RawRound[] = [];
 
     try {
+      // Read before any await: a folder changed while the config loads must still reach the first refresh.
+      let scopeVersion = this.scopeVersion(sessionId);
       const serverConfig = await this.resolveServerConfig(api);
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
-      let scopeVersion = this.scopeVersion(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2210,28 +2207,49 @@ export class ChatService {
           tools = toolsFor(roots);
           return describeRootChange(before, roots);
         };
+        const baseBefore = roots[0];
         const changedBefore = await refreshScope();
-        const settled = await this.runTools(
-          requested,
-          {
-            roots,
-            workingDirectory,
-            media,
-            host,
-            explore,
-            browser,
-            memory,
-            skills,
-            web,
-            patchEdits,
-            ask,
-            title: session.title,
-            directories: directoryTurn,
-          },
-          sessionId,
-          replyId,
-          controller.signal
-        );
+        // With no working directory a command defaults to the first root, so a call the model wrote
+        // for the old first root must not run in whichever folder is now first.
+        const baseMoved = !workingDirectory && baseBefore !== undefined && roots[0] !== baseBefore;
+        const settled = baseMoved
+          ? requested.map((request): ChatToolCall => {
+              const call: ChatToolCall = {
+                id: request.id ?? randomUUID(),
+                name: request.name,
+                input: parseArguments(request.arguments),
+                status: 'running',
+              };
+              const refused: ChatToolCall = {
+                ...call,
+                status: 'denied',
+                error: `Not run: the shared folders changed while this call was being written, and ${baseBefore} was the folder it would have run in. Ask again.`,
+              };
+              this.emit({ type: 'tool-start', sessionId, messageId: replyId, call });
+              this.emit({ type: 'tool-end', sessionId, messageId: replyId, call: refused });
+              return refused;
+            })
+          : await this.runTools(
+              requested,
+              {
+                roots,
+                workingDirectory,
+                media,
+                host,
+                explore,
+                browser,
+                memory,
+                skills,
+                web,
+                patchEdits,
+                ask,
+                title: session.title,
+                directories: directoryTurn,
+              },
+              sessionId,
+              replyId,
+              controller.signal
+            );
         toolCalls.push(...settled);
 
         // The system message is left as it was, so the cached prefix survives: a card's own result
@@ -2864,7 +2882,7 @@ export class ChatService {
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
-      // A spawned session has nobody to click a card, so it keeps the approval-gated start.
+      // A spawned session has no suggestion tray, so it keeps the approval-gated start.
       ...(session.origin ? {} : { suggestions: this.suggestionHost(session.id, project) }),
     };
   }
@@ -4194,6 +4212,7 @@ export function buildSystemMessage(
               'tell the user you have no filesystem access, and do not ask them to share it themselves.',
             ]
           : [
+              // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
               'If asked about local files, say plainly that you have no access and ask the user to share',
               'the folder by typing /add-dir followed by its path in this conversation.',
             ]),
@@ -4232,6 +4251,7 @@ export function buildSystemMessage(
             'never ask them to share it themselves.',
           ]
         : [
+            // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
             'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
             'path in this conversation. No typed message grants access on its own.',
           ]),
