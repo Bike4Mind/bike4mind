@@ -229,7 +229,7 @@ const McpSection = () => {
                           </Box>
                         ) : (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                            <IconButton onClick={() => handleEdit(server)} size="sm">
+                            <IconButton onClick={() => handleEdit(server)} size="sm" data-testid="mcp-server-edit-btn">
                               <EditIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                             <IconButton onClick={() => handleDelete(server.id)} size="sm">
@@ -317,6 +317,7 @@ const McpSection = () => {
                       onChange={e => handleEnvVariableChange(index, 'value', e.target.value)}
                       placeholder={storedKeys.has(envVar.key) ? 'Unchanged' : undefined}
                       required={!storedKeys.has(envVar.key)}
+                      data-testid="mcp-env-value-input"
                     />
                   </FormControl>
                   <Button color="danger" variant="soft" onClick={() => handleRemoveEnvVariable(index)} sx={{ mt: 2 }}>
@@ -325,7 +326,13 @@ const McpSection = () => {
                 </Stack>
               ))}
 
-              <Button variant="outlined" color="neutral" onClick={handleAddEnvVariable} type="button">
+              <Button
+                variant="outlined"
+                color="neutral"
+                onClick={handleAddEnvVariable}
+                type="button"
+                data-testid="mcp-env-add-btn"
+              >
                 Add Environment Variable
               </Button>
 
