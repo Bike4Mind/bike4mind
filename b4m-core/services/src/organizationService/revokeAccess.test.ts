@@ -250,6 +250,38 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
   });
 
+  it('lets a platform admin remove a manager', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['user1', 'user2'],
+    });
+
+    await revokeAccess(
+      { id: 'platform-admin', isAdmin: true } as IUserDocument,
+      { id: 'org1', userId: 'user1' },
+      mockAdapters
+    );
+
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+  });
+
+  it('refuses a manager who is no longer on the roster, and removes nothing', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['stale-manager'],
+    });
+
+    await expect(
+      revokeAccess({ id: 'stale-manager' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters)
+    ).rejects.toThrow(NotFoundError);
+
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
+  });
+
   it('should throw NotFoundError when the user is not owner or manager', async () => {
     const revokeParams = {
       id: 'org1',

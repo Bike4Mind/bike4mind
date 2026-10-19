@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { canAdministerOrganization, canManageMemberCreditBudgets, isOrgOwnerOrCurrentAdmin } from './organization';
+import {
+  canAdministerOrganization,
+  canManageMemberCreditBudgets,
+  canRevokeOrgMember,
+  isOrgOwnerOrCurrentAdmin,
+} from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
   const org = {
@@ -109,5 +114,33 @@ describe('canAdministerOrganization', () => {
     expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, roster)).toBe(false);
     expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(true);
     expect(isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, roster)).toBe(true);
+  });
+});
+
+describe('canRevokeOrgMember', () => {
+  const org = {
+    userId: 'owner-id',
+    managerId: 'legacy-id',
+    adminUserIds: ['mgr-id'],
+    users: [{ userId: 'mgr-id' }, { userId: 'member-id' }],
+  };
+
+  it.each([
+    ['platform admin', { id: 'root', isAdmin: true }, 'mgr-id', true],
+    ['owner', { id: 'owner-id' }, 'legacy-id', true],
+    ['owner', { id: 'owner-id' }, 'mgr-id', true],
+    ['roster manager', { id: 'mgr-id' }, 'legacy-id', false],
+    ['roster manager', { id: 'mgr-id' }, 'mgr-id', false],
+    ['roster manager', { id: 'mgr-id' }, 'member-id', true],
+    ['legacy manager', { id: 'legacy-id' }, 'mgr-id', false],
+    ['legacy manager', { id: 'legacy-id' }, 'member-id', true],
+    ['plain member', { id: 'member-id' }, 'member-id', false],
+  ])('%s revoking %s target %s -> %s', (_label, actor, target, expected) => {
+    expect(canRevokeOrgMember(actor, org, target)).toBe(expected);
+  });
+
+  it('refuses a manager who is no longer on the roster, whoever the target is', () => {
+    const stale = { ...org, users: [{ userId: 'member-id' }] };
+    expect(canRevokeOrgMember({ id: 'mgr-id' }, stale, 'member-id')).toBe(false);
   });
 });
