@@ -255,6 +255,73 @@ describe('mapCounterLogRowToEntry', () => {
     });
   });
 
+  it('backfills a system-raised seat ceiling under the live path system actor with worker source', () => {
+    const row = counterRow(
+      'ORG_SEAT_CEILING_RAISED',
+      {
+        reason: 'partner-rule domain signup (signup)',
+        metadata: { organizationId: 'org-1', previousSeats: 5, newSeats: 6, trigger: 'signup' },
+      },
+      { userId: 'admitted-user' }
+    );
+
+    expect(resolveCounterLogActorId(row)).toBeUndefined();
+    expect(mapCounterLogRowToEntry(row, null)).toMatchObject({
+      action: 'org.seats.ceiling_raised',
+      actor: { kind: 'system', scope: 'platform', name: 'Seat ceiling', wasAdmin: false },
+      context: { source: 'worker' },
+      target: { kind: 'organization', id: 'org-1' },
+      summary: 'raised seat ceiling from 5 to 6',
+      details: { userId: 'admitted-user', trigger: 'signup' },
+    });
+  });
+
+  it('backfills an admin-attributed seat ceiling raise with the admin actor and script source', () => {
+    const row = counterRow('ORG_SEAT_CEILING_RAISED', {
+      adminUserId: ADMIN_ID,
+      metadata: { organizationId: 'org-1', previousSeats: 5, newSeats: 6, trigger: 'backfill' },
+    });
+
+    expect(mapCounterLogRowToEntry(row, admin)).toMatchObject({
+      actor: { kind: 'user', userId: ADMIN_ID },
+      context: { source: 'script' },
+    });
+  });
+
+  it('turns whats-new changedFields and old/new config into per-field changes', () => {
+    const row = counterRow(
+      'WHATS_NEW_CONFIG_UPDATED',
+      { oldConfig: { a: 1, b: 2 }, newConfig: { a: 1, b: 3 }, changedFields: ['b'] },
+      { userId: ADMIN_ID }
+    );
+
+    const entry = mapCounterLogRowToEntry(row, admin);
+
+    expect(entry?.changes).toEqual([{ field: 'b', before: 2, after: 3 }]);
+    expect(entry?.details).toBeUndefined();
+  });
+
+  it('falls back to a single config change row for restores and rows without changedFields', () => {
+    const restore = counterRow(
+      'WHATS_NEW_CONFIG_UPDATED',
+      { oldConfig: { a: 1 }, newConfig: { a: 2 }, changedFields: ['restored_from_history'] },
+      { userId: ADMIN_ID }
+    );
+    const nested = counterRow(
+      'WHATS_NEW_CONFIG_UPDATED',
+      { metadata: { oldConfig: { a: 1 }, newConfig: { a: 2 } } },
+      { userId: ADMIN_ID }
+    );
+
+    expect(mapCounterLogRowToEntry(restore, admin)).toMatchObject({
+      summary: 'restored the configuration from history',
+      changes: [{ field: 'config', before: { a: 1 }, after: { a: 2 } }],
+    });
+    expect(mapCounterLogRowToEntry(nested, admin)?.changes).toEqual([
+      { field: 'config', before: { a: 1 }, after: { a: 2 } },
+    ]);
+  });
+
   it('builds before/after changes for an oauth client update', () => {
     const row = counterRow('OAUTH_CLIENT_UPDATED', {
       adminUserId: ADMIN_ID,

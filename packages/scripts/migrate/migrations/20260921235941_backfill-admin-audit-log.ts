@@ -3,6 +3,7 @@ import {
   ADMIN_AUDIT_CATALOGUE,
   type AdminAuditAction,
   type AuditActor,
+  type AuditContext,
   type AuditChange,
   type AuditTarget,
   type NewAdminAuditEntry,
@@ -51,6 +52,9 @@ const asString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
 const asNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+// Same shape as systemAuditActor() in apps/client/server/utils/adminAudit.ts (scripts cannot import apps/client).
+const systemActorNamed = (name: string): AuditActor => ({ kind: 'system', scope: 'platform', name, wasAdmin: false });
 
 const UNKNOWN_ACTOR: AuditActor = {
   kind: 'system',
@@ -118,6 +122,11 @@ type CounterEventSpec = {
   /** Old call wrote no `adminUserId`; the acting admin was the row's own `userId`. */
   actorFromUserId?: boolean;
   actorScope?: AuditActor['scope'];
+  /**
+   * For events the live path also records without an acting admin: rows lacking `adminUserId`
+   * are backfilled under this actor and `source`, and `adminSource` applies to rows that have one.
+   */
+  systemActor?: { actor: AuditActor; source: AuditContext['source']; adminSource: AuditContext['source'] };
   resolve: (flat: Metadata, row: CounterLogRow) => ResolvedEvent | null;
 };
 
@@ -241,6 +250,20 @@ const resolveOrgGranted = (flat: Metadata, row: CounterLogRow): ResolvedEvent =>
   };
 };
 
+// The old restore route listed this marker in `changedFields` instead of real field names.
+const RESTORE_SENTINEL_FIELD = 'restored_from_history';
+
+const configChanges = (flat: Metadata): AuditChange[] | undefined => {
+  const { oldConfig, newConfig, changedFields } = flat;
+  if (!isRecord(oldConfig) || !isRecord(newConfig)) return undefined;
+  const fields = Array.isArray(changedFields)
+    ? changedFields.filter((field): field is string => typeof field === 'string' && field !== RESTORE_SENTINEL_FIELD)
+    : [];
+  return fields.length > 0
+    ? fields.map(field => ({ field, before: oldConfig[field], after: newConfig[field] }))
+    : [{ field: 'config', before: oldConfig, after: newConfig }];
+};
+
 const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
   ORG_GRANTED: { resolve: resolveOrgGranted },
   ORG_TOPPED_UP: {
@@ -275,6 +298,7 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
     ),
   },
   ORG_SEAT_CEILING_RAISED: {
+    systemActor: { actor: systemActorNamed('Seat ceiling'), source: 'worker', adminSource: 'script' },
     resolve: orgEvent(
       'org.seats.ceiling_raised',
       flat => {
@@ -344,14 +368,16 @@ const COUNTER_EVENT_SPECS: Record<string, CounterEventSpec> = {
   },
   WHATS_NEW_CONFIG_UPDATED: {
     actorFromUserId: true,
-    resolve: flat =>
-      settingsEvent(
-        'settings.whats_new.updated',
-        { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
-        Array.isArray(flat.changedFields) && flat.changedFields.includes('restored_from_history')
-          ? 'restored the configuration from history'
-          : 'updated the configuration'
-      )(flat),
+    resolve: flat => {
+      const restored = Array.isArray(flat.changedFields) && flat.changedFields.includes(RESTORE_SENTINEL_FIELD);
+      return {
+        action: 'settings.whats_new.updated',
+        target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
+        summary: restored ? 'restored the configuration from history' : 'updated the configuration',
+        changes: configChanges(flat),
+        consumed: ['oldConfig', 'newConfig', 'changedFields'],
+      };
+    },
   },
   WHATS_NEW_SYNC_TRIGGERED: {
     actorFromUserId: true,
@@ -445,9 +471,10 @@ export const resolveCounterLogActorId = (row: CounterLogRow): string | undefined
 
 export const mapCounterLogRowToEntry = (row: CounterLogRow, actorUser: ActorUser | null): BackfillEntry | null => {
   const spec = COUNTER_EVENT_SPECS[row.counterName];
-  if (!spec || !resolveCounterLogActorId(row)) return null;
+  if (!spec || (!resolveCounterLogActorId(row) && !spec.systemActor)) return null;
 
   const raw = isRecord(row.metadata) ? row.metadata : {};
+  const hasActingUser = resolveCounterLogActorId(row) !== undefined;
   const flat = flattenMetadata(raw);
   const resolved = spec.resolve(flat, row);
   if (!resolved) return null;
@@ -461,6 +488,11 @@ export const mapCounterLogRowToEntry = (row: CounterLogRow, actorUser: ActorUser
   const reason = asString(raw.reason);
   const ip = asString(raw.ip);
   const userAgent = asString(raw.userAgent);
+  const source = spec.systemActor
+    ? hasActingUser
+      ? spec.systemActor.adminSource
+      : spec.systemActor.source
+    : 'admin_ui';
 
   return {
     id: row._id.toString(),
@@ -468,14 +500,18 @@ export const mapCounterLogRowToEntry = (row: CounterLogRow, actorUser: ActorUser
     action: resolved.action,
     category,
     severity,
-    actor: actorUser ? toUserActor(actorUser, spec.actorScope ?? 'platform') : UNKNOWN_ACTOR,
+    actor: hasActingUser
+      ? actorUser
+        ? toUserActor(actorUser, spec.actorScope ?? 'platform')
+        : UNKNOWN_ACTOR
+      : (spec.systemActor?.actor ?? UNKNOWN_ACTOR),
     target: resolved.target,
     ...(organizationId ? { organizationId } : {}),
     summary: resolved.summary,
     ...(reason ? { reason } : {}),
     ...(resolved.changes?.length ? { changes: resolved.changes } : {}),
     ...(Object.keys(details).length ? { details: adminAuditService.redactAuditPayload(details) } : {}),
-    context: { source: 'admin_ui', ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) },
+    context: { source, ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) },
     backfilled: true,
   };
 };
