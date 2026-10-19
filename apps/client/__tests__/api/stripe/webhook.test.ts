@@ -27,6 +27,8 @@ const mockStampCreditLot = vi.fn();
 const mockClawbackCreditLotsByStripeRef = vi.fn();
 const mockUpdateTransactionStatus = vi.fn();
 const mockUpdateByStripeSubscriptionId = vi.fn();
+const mockMarkPastDue = vi.fn();
+const mockNotifyPaymentFailed = vi.fn();
 const mockPostMessageToSlack = vi.fn();
 const mockSendToClient = vi.fn();
 const mockStripeChargesRetrieve = vi.fn();
@@ -74,7 +76,14 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionId: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
+    markPastDue: (...args: unknown[]) => mockMarkPastDue(...args),
   },
+}));
+
+// The notices have their own suite (server/billing/paymentFailureNotice.test.ts).
+vi.mock('@server/billing/paymentFailureNotice', () => ({
+  notifyPaymentFailed: (...args: unknown[]) => mockNotifyPaymentFailed(...args),
+  notifyCanceledForNonPayment: vi.fn(),
 }));
 
 vi.mock('@server/integrations/slack/slack', () => ({
@@ -859,7 +868,10 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
   });
 
   describe('invoice.payment_failed', () => {
-    it('sets subscription to past_due and invalidates client query cache', async () => {
+    it('sets subscription to past_due and invalidates the owner client query cache', async () => {
+      const row = { ownerType: 'User', ownerId: 'user_xyz', subscriptionId: 'sub_123', status: 'past_due' };
+      mockMarkPastDue.mockResolvedValue(row);
+      // No metadata.userId: Stripe never copies it onto the invoice, so the owner comes from the row.
       const invoiceFailedEvent = {
         type: 'invoice.payment_failed',
         data: {
@@ -867,14 +879,19 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
             id: 'in_fail',
             subscription: 'sub_123',
             parent: null,
-            metadata: { userId: 'user_xyz' },
+            metadata: {},
           },
         },
       };
 
       await invokeWebhookWithEvent(invoiceFailedEvent);
 
-      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith('sub_123', { status: 'past_due' });
+      expect(mockMarkPastDue).toHaveBeenCalledWith('sub_123');
+      expect(mockNotifyPaymentFailed).toHaveBeenCalledWith(
+        row,
+        expect.objectContaining({ id: 'in_fail' }),
+        expect.anything()
+      );
       expect(mockSendToClient).toHaveBeenCalledWith(
         'user_xyz',
         expect.anything(),
@@ -897,7 +914,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       };
 
       await invokeWebhookWithEvent(invoiceNoSubEvent);
-      expect(mockUpdateByStripeSubscriptionId).not.toHaveBeenCalled();
+      expect(mockMarkPastDue).not.toHaveBeenCalled();
     });
   });
 
