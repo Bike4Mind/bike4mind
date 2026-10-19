@@ -4,8 +4,10 @@ import {
   ISessionRepository,
   IUserRepository,
   rebindPromptMetaSession,
+  stripSurfaceOwnedFields,
   toPersistedSummaryTrigger,
   MAX_TOOL_CALLS_CEILING,
+  type WorkspaceSessionSettingsTable,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -33,6 +35,8 @@ type ForkSessionAdapters = {
   };
   /** Required to honor `targetSurface`; without it a targeted fork is refused. */
   resolveSurfaceAccess?: ResolveSurfaceAccess;
+  /** Fields the source's workspace owns, dropped from the copy; absent = none. */
+  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const forkSession = async (userId: string, parameters: ForkSessionParameters, adapters: ForkSessionAdapters) => {
@@ -52,46 +56,50 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
 
   const newSession = await createSession(
     user,
-    {
-      name: `Forked ${session.name}`,
-      knowledgeIds: session.knowledgeIds,
-      tags: session.tags,
-      summary: session.summary,
-      summaryAt: session.summaryAt,
-      summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
-      taggedAt: session.taggedAt,
-      forkedSourceId: session.id,
-      // The session's home: without it a fork made inside a product surface lands in the main list.
-      surface,
-      // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
-      // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
-      // threaded to this path), which cannot see a teammate-authored organization-lake file. That
-      // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
-      // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
-      // takes createSession's "explicit wins" arm, so it costs no DB read.
-      retrievalTags: session.retrievalTags,
-      lakeScopeExplicit: session.lakeScopeExplicit,
-      includeLibraryFiles: session.includeLibraryFiles,
-      // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
-      // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
-      // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
-      // copy of a lake session predating it picks up the corrected behavior; the copy then forces
-      // retrieval where its source does not, until the source is itself updated.
-      forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
-      // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
-      citationStyle: session.citationStyle,
-      systemPromptText: session.systemPromptText,
-      temperature: session.temperature,
-      // A stored value can predate MAX_TOOL_CALLS_CEILING, which createSession enforces.
-      maxToolCalls: session.maxToolCalls && Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING),
-      corpusGroundingMode: session.corpusGroundingMode,
-      retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
-      retrievalVectorizedOnly: session.retrievalVectorizedOnly,
-      enabledTools: session.enabledTools,
-      disabledTools: session.disabledTools,
-      disableUserIntegrations: session.disableUserIntegrations,
-      systemPromptId: session.systemPromptId,
-    },
+    stripSurfaceOwnedFields(
+      {
+        name: `Forked ${session.name}`,
+        knowledgeIds: session.knowledgeIds,
+        tags: session.tags,
+        summary: session.summary,
+        summaryAt: session.summaryAt,
+        summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
+        taggedAt: session.taggedAt,
+        forkedSourceId: session.id,
+        // The session's home: without it a fork made inside a product surface lands in the main list.
+        surface,
+        // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
+        // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
+        // threaded to this path), which cannot see a teammate-authored organization-lake file. That
+        // derives an EMPTY list, and an empty list is not a narrow scope - fabFileSearchQuery skips its
+        // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
+        // takes createSession's "explicit wins" arm, so it costs no DB read.
+        retrievalTags: session.retrievalTags,
+        lakeScopeExplicit: session.lakeScopeExplicit,
+        includeLibraryFiles: session.includeLibraryFiles,
+        // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
+        // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
+        // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a
+        // copy of a lake session predating it picks up the corrected behavior; the copy then forces
+        // retrieval where its source does not, until the source is itself updated.
+        forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+        // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
+        citationStyle: session.citationStyle,
+        systemPromptText: session.systemPromptText,
+        temperature: session.temperature,
+        // A stored value can predate MAX_TOOL_CALLS_CEILING, which createSession enforces.
+        maxToolCalls: session.maxToolCalls && Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING),
+        corpusGroundingMode: session.corpusGroundingMode,
+        retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+        retrievalVectorizedOnly: session.retrievalVectorizedOnly,
+        enabledTools: session.enabledTools,
+        disabledTools: session.disabledTools,
+        disableUserIntegrations: session.disableUserIntegrations,
+        systemPromptId: session.systemPromptId,
+      },
+      adapters.workspaceSessionSettings,
+      session
+    ),
     adapters,
     { knowledgeIdsFromSourceSession: true }
   );
