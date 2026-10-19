@@ -390,7 +390,12 @@ describe('whatsNewGeneration queue handler', () => {
 
       await dispatch(createMockEvent(createMockPayload()), mockContext);
 
-      expect(mockLLM.complete).toHaveBeenCalledWith(expected, expect.anything(), expect.anything(), expect.any(Function));
+      expect(mockLLM.complete).toHaveBeenCalledWith(
+        expected,
+        expect.anything(),
+        expect.anything(),
+        expect.any(Function)
+      );
     });
 
     // Skipping timeout test due to fake timer complexity causing unhandled rejections in CI

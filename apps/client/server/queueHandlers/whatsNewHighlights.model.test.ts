@@ -48,9 +48,11 @@ describe('whatsNewHighlights configured model validation', () => {
     (ModalModel.find as any).mockReturnValue({
       sort: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
-      lean: vi.fn().mockResolvedValue([
-        { _id: 'm1', title: 'T', subtitle: 'S', description: 'D', createdAt: new Date('2026-02-07T10:00:00Z') },
-      ]),
+      lean: vi
+        .fn()
+        .mockResolvedValue([
+          { _id: 'm1', title: 'T', subtitle: 'S', description: 'D', createdAt: new Date('2026-02-07T10:00:00Z') },
+        ]),
     });
     (apiKeyService.getEffectiveLLMApiKeys as any).mockResolvedValue({});
     // Both ids are listed, so only the servable-model check can send the snapshot to the default.
