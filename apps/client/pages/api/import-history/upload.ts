@@ -27,6 +27,12 @@ export const MAX_HISTORY_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1 GB
 const isKnownSource = (source: string): boolean =>
   source === importHistoryService.ImportSource.OPENAI || source === importHistoryService.ImportSource.CLAUDE;
 
+/** The declared upload byte length, or null when it is not a positive integer within the ceiling. */
+const parseDeclaredSize = (raw: unknown): number | null => {
+  const bytes = Number(raw);
+  return Number.isInteger(bytes) && bytes > 0 && bytes <= MAX_HISTORY_UPLOAD_BYTES ? bytes : null;
+};
+
 /**
  * The storage key IS the identity record for this upload: server/s3/historyUploadComplete.ts
  * splits userId and source back out of it to decide whose history is being imported. It is
@@ -45,16 +51,16 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
 
       if (!req.ability?.can(Permission.create, Session)) throw new Error('Cannot create session');
 
+      // Both PUT targets are bound to the declared size: the hosted presign's signature, and the
+      // proxy URL the self-host PUT below checks the body against.
+      const bytes = parseDeclaredSize(size);
+      if (bytes === null) throw new BadRequestError('size must be the upload byte length, at most 1 GB');
+
       // Self-host gets the same-origin proxy below; hosted keeps the presign untouched. Minting
       // one on self-host would be discarded local signing work: the resolver discards it, and the
       // key it burns is not the key the PUT handler lands the bytes under.
       let url = '';
       if (process.env.B4M_SELF_HOST !== 'true') {
-        // The hosted PUT is bound to the declared size and held to the self-host proxy's ceiling.
-        const bytes = Number(size);
-        if (!Number.isInteger(bytes) || bytes <= 0 || bytes > MAX_HISTORY_UPLOAD_BYTES) {
-          throw new BadRequestError('size must be the upload byte length, at most 1 GB');
-        }
         const s3 = new S3Storage(Resource.historyImportBucket.name);
         url = await s3.getSignedUrl(historyImportKey(String(req.user?.id), source), 'put', {
           expiresIn: 600,
@@ -62,7 +68,7 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
         });
       }
 
-      return res.json({ success: true, url: resolveBrowserHistoryImportUploadUrl(source, url) });
+      return res.json({ success: true, url: resolveBrowserHistoryImportUploadUrl(source, bytes, url) });
     })
   )
   /**
@@ -82,9 +88,14 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
         return res.status(404).json({ error: 'Not found' });
       }
 
-      const source = String((req.query as { source?: string }).source ?? '');
+      const { source: rawSource, size } = req.query as { source?: string; size?: string };
+      const source = String(rawSource ?? '');
       if (!isKnownSource(source)) {
         return res.status(400).json({ error: 'Invalid source' });
+      }
+      const declaredBytes = parseDeclaredSize(size);
+      if (declaredBytes === null) {
+        return res.status(400).json({ error: 'size must be the upload byte length, at most 1 GB' });
       }
       // Same gate the GET applies, re-checked here: this route accepts bytes on its own, so it
       // cannot rely on the presign step having happened.
@@ -110,6 +121,10 @@ const handler = baseApi({ maxBodySize: MAX_HISTORY_UPLOAD_BYTES })
       }
 
       try {
+        // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+        if (spooled.bytes !== declaredBytes) {
+          return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+        }
         const key = historyImportKey(String(req.user.id), source);
         await new S3Storage(Resource.historyImportBucket.name).uploadFile(spooled.path, key);
         req.logger?.info(`[import-history] proxied upload user=${req.user.id} source=${source} bytes=${spooled.bytes}`);

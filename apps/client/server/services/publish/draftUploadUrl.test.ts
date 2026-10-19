@@ -17,19 +17,19 @@ afterEach(() => {
 
 describe('signDraftUploadToken / verifyDraftUploadToken', () => {
   it('round-trips the pinned claims', () => {
-    const token = signDraftUploadToken({ draftId: 'd1', path: 'index.html' });
-    expect(verifyDraftUploadToken(token)).toEqual({ draftId: 'd1', path: 'index.html' });
+    const token = signDraftUploadToken({ draftId: 'd1', path: 'index.html', size: 12 });
+    expect(verifyDraftUploadToken(token)).toEqual({ draftId: 'd1', path: 'index.html', size: 12 });
   });
 
   it('rejects a tampered token', () => {
-    const token = signDraftUploadToken({ draftId: 'd1', path: 'index.html' });
+    const token = signDraftUploadToken({ draftId: 'd1', path: 'index.html', size: 12 });
     // Flip the final character of the signature segment.
     const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a');
     expect(verifyDraftUploadToken(tampered)).toBeNull();
   });
 
   it('rejects an expired token', () => {
-    const expired = jwt.sign({ draftId: 'd1', path: 'index.html' }, Config.JWT_SECRET, {
+    const expired = jwt.sign({ draftId: 'd1', path: 'index.html', size: 12 }, Config.JWT_SECRET, {
       audience: AUDIENCE,
       expiresIn: '-10s',
     });
@@ -37,7 +37,7 @@ describe('signDraftUploadToken / verifyDraftUploadToken', () => {
   });
 
   it('rejects a token minted for a different audience', () => {
-    const wrongAud = jwt.sign({ draftId: 'd1', path: 'index.html' }, Config.JWT_SECRET, {
+    const wrongAud = jwt.sign({ draftId: 'd1', path: 'index.html', size: 12 }, Config.JWT_SECRET, {
       audience: 'some-other-audience',
       expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
     });
@@ -60,8 +60,10 @@ describe('signDraftUploadToken / verifyDraftUploadToken', () => {
       const decoded = jwt.decode(token) as { iat: number; exp: number };
       return decoded.exp - decoded.iat;
     };
-    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html' }))).toBe(DRAFT_UPLOAD_EXPIRY_SECONDS);
-    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html' }, 120))).toBe(120);
+    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html', size: 12 }))).toBe(
+      DRAFT_UPLOAD_EXPIRY_SECONDS
+    );
+    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html', size: 12 }, 120))).toBe(120);
   });
 });
 
@@ -109,7 +111,12 @@ describe('mintDraftUploadUrl', () => {
     const params = new URLSearchParams(url.split('?')[1]);
     expect(params.get('draftId')).toBe('d1');
     expect(params.get('path')).toBe('assets/app.js');
-    expect(verifyDraftUploadToken(params.get('token') ?? '')).toEqual({ draftId: 'd1', path: 'assets/app.js' });
+    // The declared size rides in the signed claims, so the proxy can hold the body to it.
+    expect(verifyDraftUploadToken(params.get('token') ?? '')).toEqual({
+      draftId: 'd1',
+      path: 'assets/app.js',
+      size: 12,
+    });
   });
 
   it('self-host: the proxy token TTL matches the expiresIn threaded through mint', async () => {

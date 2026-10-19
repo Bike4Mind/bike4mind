@@ -60,10 +60,12 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[]; apiKeyIn
   } as unknown as Request;
 };
 
-const makePendingFile = () => ({
+const makePendingFile = (fileSize = 5) => ({
   id: 'ff1',
   userId: 'u1',
   status: 'pending' as string,
+  clientUpload: true as boolean | undefined,
+  fileSize,
   filePath: 'uploads/abc.txt',
   mimeType: 'text/plain',
   save: vi.fn(async function (this: { status: string }) {
@@ -116,7 +118,37 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
+  // A row created by a server-side door is not judged by the size gate, so it must not take client bytes.
+  it('returns 400 for a pending row that was not minted for a client upload', async () => {
+    findByIdMock.mockResolvedValue({ ...makePendingFile(), clientUpload: undefined });
+    const res = makeRes();
+    await handler(makeReq({}), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it both ways.
+  it('returns 403 and aborts mid-stream when the body outgrows the declared size', async () => {
+    const req = makeReq({ body: [Buffer.from('hello'), Buffer.from('!')] });
+    const res = makeRes();
+    await handler(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect((req as unknown as { destroy: ReturnType<typeof vi.fn> }).destroy).toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when the body is shorter than the declared size', async () => {
+    const fabFile = makePendingFile(6);
+    findByIdMock.mockResolvedValue(fabFile);
+    const res = makeRes();
+    await handler(makeReq({}), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(fabFile.status).toBe('pending');
+  });
+
   it('returns 413 and aborts mid-stream when the body exceeds the size cap', async () => {
+    findByIdMock.mockResolvedValue(makePendingFile(100));
     getSettingsValueMock.mockReturnValue(0.00001); // ~10 bytes cap
     const req = makeReq({ body: [Buffer.alloc(50), Buffer.alloc(50)] });
     const res = makeRes();
@@ -139,6 +171,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
   });
 
   it('writes the body to the file own storage key and returns 200 on success', async () => {
+    findByIdMock.mockResolvedValue(makePendingFile(11));
     const res = makeRes();
     await handler(makeReq({ body: [Buffer.from('hello '), Buffer.from('world')] }), res);
 
@@ -153,7 +186,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
 
   // The row goes complete here, which the webhook's size gate skips, so the proxy must judge the body.
   it('runs the landed-size gate on the body and writes nothing when it rejects', async () => {
-    const fabFile = makePendingFile();
+    const fabFile = makePendingFile(11);
     findByIdMock.mockResolvedValue(fabFile);
     admitMock.mockResolvedValue(false);
     const res = makeRes();

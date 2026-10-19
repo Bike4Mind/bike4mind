@@ -81,6 +81,10 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
       chunks.push(buf);
     }
     const body = Buffer.concat(chunks, total);
+    // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+    if (total !== claims.size) {
+      return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes: claims.size });
+    }
 
     // The stored draft-object Content-Type is NOT authoritative: finalize.ts
     // re-uploads each promoted file with the manifest-validated file.mimeType, so

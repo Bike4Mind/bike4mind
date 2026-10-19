@@ -39,7 +39,8 @@ const handler = baseApi().post(
     }
 
     const options = ImportOptionsSchema.parse(req.body);
-    // The upload's byte length: the hosted PUT is bound to it (S3 refuses any other length).
+    // The upload's byte length: the hosted PUT is bound to it (S3 refuses any other length), and the
+    // self-host proxy checks the body against it.
     const { size } = z.object({ size: z.number().int().positive().max(MAX_NOTEBOOK_IMPORT_BYTES) }).parse(req.body);
 
     const bucket = Resource.historyImportBucket.name; // reuses the history-import bucket
@@ -66,7 +67,7 @@ const handler = baseApi().post(
     // Self-host gets the same-origin proxy below; hosted keeps the presign untouched.
     return res.json({
       success: true,
-      uploadUrl: resolveBrowserNotebookImportUploadUrl(String(timestamp), uploadUrl),
+      uploadUrl: resolveBrowserNotebookImportUploadUrl(String(timestamp), size, uploadUrl),
       importId: timestamp,
     });
   })

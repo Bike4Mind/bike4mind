@@ -43,13 +43,15 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
     if (!fabFile || fabFile.userId !== req.user.id) {
       return res.status(404).json({ error: 'File not found' });
     }
-    if (fabFile.status !== 'pending') {
+    // A server-written row is never a client upload: accepting bytes for one would skip the size gate.
+    if (fabFile.status !== 'pending' || !fabFile.clientUpload) {
       return res.status(400).json({ error: 'File is not awaiting upload' });
     }
     if (!fabFile.filePath) {
       return res.status(400).json({ error: 'File has no storage path' });
     }
     const filePath = fabFile.filePath;
+    const declaredBytes = fabFile.fileSize ?? 0;
 
     const maxBytes =
       getSettingsValue(
@@ -67,6 +69,11 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
     for await (const chunk of req) {
       const buf = chunk as Buffer;
       received += buf.length;
+      // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+      if (received > declaredBytes) {
+        req.destroy();
+        return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+      }
       if (received > maxBytes) {
         req.destroy();
         return res.status(413).json({ error: 'File size exceeds maximum file size', maxBytes });
@@ -74,8 +81,12 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
       chunks.push(buf);
     }
     const body = Buffer.concat(chunks);
+    if (body.length !== declaredBytes) {
+      return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+    }
 
-    // The row goes complete below, which the webhook's size gate skips, so the proxy runs it itself.
+    // The row goes complete below, which the webhook's size gate skips, so the proxy runs it itself
+    // for the MaxFileSize and quota arms.
     if (!(await admitLandedUpload(fabFile, body.length, filePath, req.logger))) {
       return res.status(413).json({ error: 'File is larger than declared or exceeds your storage limit' });
     }

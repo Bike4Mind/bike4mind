@@ -64,7 +64,7 @@ describe('POST /api/notebooks/import', () => {
       success: true,
       importId: 1700000000000,
       uploadUrl: selfHost
-        ? '/api/notebooks/import/upload?importId=1700000000000'
+        ? '/api/notebooks/import/upload?importId=1700000000000&size=4096'
         : 'https://storage.example/signed-upload',
     });
   });

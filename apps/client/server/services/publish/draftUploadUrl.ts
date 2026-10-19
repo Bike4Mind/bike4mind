@@ -29,6 +29,8 @@ export const DRAFT_UPLOAD_EXPIRY_SECONDS = 600;
 const DraftUploadClaimsSchema = z.object({
   draftId: z.string().min(1),
   path: z.string().min(1),
+  // Declared byte length: the proxy holds the body to it, as the hosted presign's signature does.
+  size: z.number().int().nonnegative(),
 });
 
 export type DraftUploadClaims = z.infer<typeof DraftUploadClaimsSchema>;
@@ -94,7 +96,7 @@ export interface MintDraftUploadUrlInput {
  */
 export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<string> {
   if (process.env.B4M_SELF_HOST === 'true') {
-    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path }, input.expiresIn);
+    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path, size: input.size }, input.expiresIn);
     const params = new URLSearchParams({ draftId: input.draftId, path: input.path, token });
     return `/api/publish/artifact/draft-upload?${params.toString()}`;
   }

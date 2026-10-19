@@ -34,6 +34,10 @@ const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
       if (!isValidNotebookImportId(importId)) {
         return res.status(400).json({ error: 'Invalid importId' });
       }
+      const declaredBytes = Number((req.query as { size?: string }).size);
+      if (!Number.isInteger(declaredBytes) || declaredBytes <= 0 || declaredBytes > MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES) {
+        return res.status(400).json({ error: 'Invalid size' });
+      }
       // Same gate the POST applies, re-checked here: this route accepts bytes on its own, so it
       // cannot rely on the presign step having happened.
       if (!req.ability?.can(Permission.create, Session)) {
@@ -55,6 +59,10 @@ const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
       }
 
       try {
+        // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+        if (spooled.bytes !== declaredBytes) {
+          return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+        }
         const { dataKey } = buildNotebookImportKeys(String(req.user.id), importId);
         await new S3Storage(Resource.historyImportBucket.name).uploadFile(spooled.path, dataKey);
         req.logger?.info(
