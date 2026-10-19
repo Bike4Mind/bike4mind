@@ -1,11 +1,11 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { OAuthClientModel } from '@bike4mind/database';
+import { OAuthClientModel, type IOAuthClientDocument } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { fetchSeederPassword } from './UserSeeder';
 
 /**
- * Seeds two OAuth clients so QA can exercise the "Sign in with B4M" token
+ * Seeds three OAuth clients so QA can exercise the "Sign in with B4M" token
  * endpoints on a PREVIEW with no manual setup. Preview-only (seedDatabase.ts
  * hard-refuses any other stage). Registered LAST and never throws out of seed(),
  * so a failure here cannot abort the users/agents seeded before it
@@ -15,6 +15,18 @@ import { fetchSeederPassword } from './UserSeeder';
  * - PREVIEW_CONFIDENTIAL_CLIENT_ID: confidential client; its secret is the shared
  *   seeder password (SSM /b4m/ci/seeder-default-password) - the same one the user
  *   accounts use, retrievable by the team, never hardcoded in source.
+ * - PREVIEW_FEDERATED_CLIENT_ID: confidential client (same secret) federated on B4M's
+ *   own id_tokens (`subjectSource: 'sub'`), so /api/oauth/ai-token and
+ *   /api/oauth/federated-admin are testable. B4M signs id_tokens with iss=APP_URL and
+ *   aud=clientId (oauthServer.ts generateIdToken), so the seeder Lambda needs APP_URL
+ *   (infra/database.ts); without it only this client is skipped.
+ *
+ * Upsert, not create-if-absent: the seeder Lambda re-runs on every preview deploy, and
+ * every seeded field is re-asserted each run so seeder changes reach existing previews
+ * (isActive included). The public client's throwaway hash is set on insert only. Uses
+ * findOne + save() rather than findOneAndUpdate so full-document validation runs: the
+ * federatedIdp subschema validators read `this.subjectSource`, which update validators
+ * do not bind to the subdocument.
  *
  * redirectUris are placeholder strings: the token endpoints only string-match
  * redirect_uri and /code returns the code in its JSON body, so no callback host is
@@ -22,35 +34,35 @@ import { fetchSeederPassword } from './UserSeeder';
  */
 export const PREVIEW_PUBLIC_CLIENT_ID = 'b4m_preview_public';
 export const PREVIEW_CONFIDENTIAL_CLIENT_ID = 'b4m_preview_confidential';
+export const PREVIEW_FEDERATED_CLIENT_ID = 'b4m_preview_federated';
 const PREVIEW_REDIRECT_URI = 'https://example.com/cb';
+
+type SeededClientFields = Pick<IOAuthClientDocument, 'name' | 'tokenEndpointAuthMethod'> &
+  Partial<Pick<IOAuthClientDocument, 'clientSecretHash' | 'allowedScopes' | 'federatedIdp'>>;
 
 export class OAuthClientSeeder {
   constructor(private readonly logger: Logger) {}
 
-  private async createIfAbsent(
+  private async upsert(
     clientId: string,
-    fields: {
-      name: string;
-      tokenEndpointAuthMethod: 'none' | 'client_secret_post';
-      clientSecretHash: string;
-    }
+    fields: SeededClientFields,
+    insertOnly: Partial<Pick<IOAuthClientDocument, 'clientSecretHash'>> = {}
   ): Promise<void> {
-    const existing = await OAuthClientModel.findOne({ clientId }).exec();
-    if (existing) {
-      this.logger.info(`OAuth client already exists: ${clientId}, skipping...`);
-      return;
-    }
-    await OAuthClientModel.create({
-      clientId,
+    const seeded = {
       redirectUris: [PREVIEW_REDIRECT_URI],
       allowedScopes: ['openid', 'email', 'profile'],
       // Preview clients are relying parties so QA exercises the real scope/audience-bound token +
       // consent path, not a full first-party session (the model default). Never left implicit.
-      clientType: 'relying-party',
+      clientType: 'relying-party' as const,
       isActive: true,
       ...fields,
-    });
-    this.logger.info(`Created OAuth client: ${clientId} (${fields.tokenEndpointAuthMethod})`);
+    };
+    const existing = await OAuthClientModel.findOne({ clientId }).exec();
+    const doc = existing ? existing.set(seeded) : new OAuthClientModel({ clientId, ...seeded, ...insertOnly });
+    await doc.save();
+    this.logger.info(
+      `${existing ? 'Updated' : 'Created'} OAuth client: ${clientId} (${fields.tokenEndpointAuthMethod})`
+    );
   }
 
   async seed(): Promise<void> {
@@ -66,18 +78,38 @@ export class OAuthClientSeeder {
       // Public client: auth is via PKCE, so the required secret hash is a random,
       // never-exposed value.
       const throwawayHash = await bcrypt.hash(crypto.randomBytes(32).toString('base64url'), 10);
-      await this.createIfAbsent(PREVIEW_PUBLIC_CLIENT_ID, {
-        name: 'Preview Public Client',
-        tokenEndpointAuthMethod: 'none',
-        clientSecretHash: throwawayHash,
-      });
+      await this.upsert(
+        PREVIEW_PUBLIC_CLIENT_ID,
+        { name: 'Preview Public Client', tokenEndpointAuthMethod: 'none' },
+        { clientSecretHash: throwawayHash }
+      );
 
-      // Confidential client: its secret is the shared seeder password.
+      // Confidential + federated clients: their secret is the shared seeder password, re-hashed
+      // each run so a rotated SSM value reaches existing previews.
       const secretHash = await bcrypt.hash(await fetchSeederPassword(), 10);
-      await this.createIfAbsent(PREVIEW_CONFIDENTIAL_CLIENT_ID, {
+      await this.upsert(PREVIEW_CONFIDENTIAL_CLIENT_ID, {
         name: 'Preview Confidential Client',
         tokenEndpointAuthMethod: 'client_secret_post',
         clientSecretHash: secretHash,
+      });
+
+      // Bare origin, matching appUrlForLambdaEnv, so iss compares equal to the id_token's.
+      const appUrl = process.env.APP_URL?.replace(/\/+$/, '');
+      if (!appUrl) {
+        this.logger.error(`OAuthClientSeeder: APP_URL unset, skipping ${PREVIEW_FEDERATED_CLIENT_ID}`);
+        return;
+      }
+      await this.upsert(PREVIEW_FEDERATED_CLIENT_ID, {
+        name: 'Preview Federated Client',
+        tokenEndpointAuthMethod: 'client_secret_post',
+        clientSecretHash: secretHash,
+        allowedScopes: ['openid', 'email', 'profile', 'ai:generate'],
+        federatedIdp: {
+          issuer: appUrl,
+          audience: PREVIEW_FEDERATED_CLIENT_ID,
+          jwksUri: `${appUrl}/api/oauth/jwks`,
+          subjectSource: 'sub',
+        },
       });
     } catch (e: unknown) {
       this.logger.error(
