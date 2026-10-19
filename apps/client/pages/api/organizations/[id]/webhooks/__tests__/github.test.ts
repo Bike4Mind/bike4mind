@@ -41,7 +41,7 @@ vi.mock('@server/integrations/github/webhookUtils', () => ({
   generateWebhookToken: () => 'token',
   generateWebhookSecret: () => 'secret',
 }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (s: string) => s,
   decryptSecret: (s: string) => s,
 }));

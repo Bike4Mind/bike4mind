@@ -20,7 +20,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: unknown[]) => mockIssueSession(...a),
 }));
-vi.mock('@server/auth/refreshCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   readRefreshCookie: () => 'admin-refresh',
   setAdminReturnCookie: vi.fn(),
 }));

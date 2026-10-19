@@ -11,7 +11,7 @@ import {
 } from './serverUtils';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
 vi.mock('@server/models/Subscription', () => ({
@@ -60,7 +60,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 // Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
-vi.mock('@server/services/teamPlanSettings', () => ({
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
 vi.mock('@server/utils/cloudwatch', () => ({

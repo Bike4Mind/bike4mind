@@ -20,7 +20,7 @@ import {
   subjectHmac,
   type KeyProvider,
   type SealedFact,
-} from '@bike4mind/server-utils/memory/factCipher';
+} from './factCipher';
 
 /**
  * The app-server seam between the pure memory core (sealing + fold) and the persisted ledger

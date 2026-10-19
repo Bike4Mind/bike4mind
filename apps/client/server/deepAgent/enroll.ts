@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import { sendToQueue } from '@server/utils/sqs';
-import { MongoDeepAgentStore } from './store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 
 /**
  * Deep-agent enrollment: the birth of an agent.

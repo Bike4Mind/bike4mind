@@ -7,7 +7,7 @@
  */
 
 import { NotifyResult } from '@bike4mind/slack';
-import { GitHubHandlerResult } from '@server/integrations/github/types';
+import { GitHubHandlerResult } from '@bike4mind/server-utils/integrations/github/types';
 
 // Factory rather than a shared const - returns fresh arrays so a future `.push()`
 // on a caller's reference can't bleed into other invocations.

@@ -39,7 +39,7 @@ import {
   classifyTreeEntry,
   lakeFileMimeType,
   type GitHubLakeCandidate,
-} from '@server/integrations/github/dataLake/lakeFileFilter';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeFileFilter';
 import { diffGitHubLakeTree } from '@workers/integrations/github/dataLake/githubLakeTreeDiff';
 import {
   assertConnectorLakeWrite,

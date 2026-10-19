@@ -58,7 +58,7 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 // Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
-vi.mock('@server/services/teamPlanSettings', () => ({
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));

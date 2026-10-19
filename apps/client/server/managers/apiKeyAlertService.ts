@@ -1,6 +1,6 @@
 import { apiKeyAlertRepository } from '@bike4mind/database/auth';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { ApiKeyUsageManager } from './apiKeyUsageManager';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { IUserApiKeyBaseline } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 

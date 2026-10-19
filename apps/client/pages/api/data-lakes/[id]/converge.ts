@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
 import { dataLakeService } from '@bike4mind/services';
@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
+import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/converge                     -> the plan (a preview; writes nothing)

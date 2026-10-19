@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';

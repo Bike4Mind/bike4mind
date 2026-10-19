@@ -17,7 +17,7 @@ import { connectDB, sessionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { lastSeenAt, settleVoiceHold } from '@server/voice/settleVoiceHold';
-import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'voiceHoldSweep' } });

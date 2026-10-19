@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   orgWebhookConfigRepository: { findByOrganizationId: h.findByOrganizationId },
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
-vi.mock('@server/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
 vi.mock('@server/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@server/utils/cloudwatch', () => ({

@@ -46,7 +46,7 @@ import {
 } from '@workers/s3/chunkScan';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 

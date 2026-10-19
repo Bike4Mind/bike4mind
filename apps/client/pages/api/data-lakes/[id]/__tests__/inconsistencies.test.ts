@@ -69,7 +69,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@server/utils/config', () => ({ isDevelopment: h.isDevelopment }));
 // Configurable so the model-only feature gate (EnableLakeModelInconsistencyDetection) can be tested
 // without also disabling EnableDataLakes, which every request passes through first.
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled:
     (key: string) =>
     (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => unknown } }, next: () => unknown) =>

@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({ getGitHubLakeAppConfig: vi.fn() }));

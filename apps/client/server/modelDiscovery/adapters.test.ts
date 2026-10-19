@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn(), findBySettingName: vi.fn() },
   apiKeyRepository: { find: vi.fn() },
 }));
-vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/bedrockControlPlane', () => ({ createBedrockControlPlane }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {

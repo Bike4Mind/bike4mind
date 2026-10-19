@@ -1,8 +1,8 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
-import { generateUploadConstraintFor } from '@server/files/generateUploadMarker';
-import type { moderateUploadedFile as ModerateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
+import type { moderateUploadedFile as ModerateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 
 /**
  * Minimal FabFile row shape the moderation loop needs back from the atomic claim.

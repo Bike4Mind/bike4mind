@@ -3,7 +3,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardSnapshotDocument } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
-import { computeDeterministicStatus, computeSecretsScoreFromFindings } from '@server/security/securityDashboardScoring';
+import {
+  computeDeterministicStatus,
+  computeSecretsScoreFromFindings,
+} from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';

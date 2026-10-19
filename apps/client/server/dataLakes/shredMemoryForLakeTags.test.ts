@@ -28,7 +28,7 @@ vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return { dataLakeService: actual.dataLakeService };
 });
-vi.mock('@server/memory/ledgerMemoryStore', () => ({
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   shredMemoryFromSource: h.shredMemoryFromSource,
 }));
 

@@ -29,7 +29,7 @@ import {
   getSeverityEmoji,
   formatPrimaryAnomaly,
 } from '@server/services/telemetryFingerprint';
-import { checkFingerprintDedup, type IssueForDedup } from '@server/services/issueDedup';
+import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,

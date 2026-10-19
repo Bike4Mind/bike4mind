@@ -5,7 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import type { Response } from 'express';
 import { authTokenGenerator } from './tokenGenerator';
 import { buildSessionDevice } from './sessionDevice';
-import { setRefreshCookie } from './refreshCookie';
+import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 interface RequestLike {
   headers: Record<string, string | string[] | undefined>;

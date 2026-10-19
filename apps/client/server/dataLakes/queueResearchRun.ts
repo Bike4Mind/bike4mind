@@ -2,7 +2,7 @@ import type { IDataLakeDocument, IDataLakeResearchRunDocument } from '@bike4mind
 import { dataLakeResearchRunRepository } from '@bike4mind/database';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { sendToQueue } from '@server/utils/sqs';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
  * Hand a freshly started run to the research worker. Shared by Run now

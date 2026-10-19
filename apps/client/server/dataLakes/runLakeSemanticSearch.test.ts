@@ -63,7 +63,7 @@ vi.mock('@bike4mind/utils', () => ({
   normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
-vi.mock('@server/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
+vi.mock('@bike4mind/server-utils/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: async () => [] }));
 vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: () => ({}) }));
 
 import {

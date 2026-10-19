@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import {
@@ -22,7 +22,7 @@ import {
 } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { serializeError } from '@server/utils/serializeError';

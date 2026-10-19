@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { encryptSecret } from '@server/security/secretEncryption';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@server/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';

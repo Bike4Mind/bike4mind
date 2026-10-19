@@ -20,7 +20,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
-import { encryptSecret, decryptSecret } from '@server/security/secretEncryption';
+import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';

@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -18,9 +18,9 @@ import { Request } from 'express';
 import { createHmac } from 'crypto';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
-import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
+import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { storageOwnerOf } from '@bike4mind/common';
 import { isValidObjectId } from '@server/utils/objectId';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
