@@ -33,16 +33,29 @@ import handler from '../revoke';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
+let transactionActive = false;
+
 describe('POST /api/admin/organizations/[id]/revoke', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Acme' });
     mockFindActiveByOwner.mockResolvedValue([{ id: 'sub-1' }]);
-    mockWithTransaction.mockImplementation(fn => fn());
+    transactionActive = false;
+    mockWithTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+      transactionActive = true;
+      try {
+        return await fn();
+      } finally {
+        transactionActive = false;
+      }
+    });
   });
 
   it('fails the request without notifying when the strict audit write fails', async () => {
-    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    vi.mocked(recordAdminActionFromRequest).mockImplementationOnce(async () => {
+      expect(transactionActive).toBe(true);
+      throw new Error('audit down');
+    });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: {} });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
 
@@ -53,6 +66,10 @@ describe('POST /api/admin/organizations/[id]/revoke', () => {
   });
 
   it('records org.revoked against the organization after cancelling the grant', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockImplementationOnce(async () => {
+      expect(transactionActive).toBe(true);
+      return null;
+    });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: { reason: 'contract ended' } });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
 
