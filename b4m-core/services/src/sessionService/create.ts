@@ -14,6 +14,8 @@ import {
   ISessionRepository,
   IUserDocument,
   MAX_TOOL_CALLS_CEILING,
+  userSetSessionFields,
+  type WorkspaceSessionSettingsTable,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -114,6 +116,11 @@ export interface CreateSessionAdapters {
   resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
   /** Lets a supplied lake-only file pass the access check - see filterAccessibleKnowledgeIds. */
   resolveAttachmentLakeAccess?: FilterAccessibleKnowledgeIdsAdapters['resolveAttachmentLakeAccess'];
+  /**
+   * Decides which workspace-ownable settings the new session records as the user's own. Without it a
+   * session created on a workspace records none, leaving every such value to that workspace.
+   */
+  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
 }
 
 export interface CreateSessionOptions {
@@ -130,6 +137,8 @@ export interface CreateSessionOptions {
    * (clone/fork/snip) leave it unset, so a copy carries no origin.
    */
   origin?: ISessionOrigin;
+  /** A copy's source's user-set fields; kept for those the copy still sets. Never from a request body. */
+  userSetFields?: readonly string[];
 }
 
 export const createSession = async (
@@ -184,6 +193,8 @@ export const createSession = async (
     : null;
   const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
 
+  const userSetFields = userSetSessionFields(rest, adapters.workspaceSessionSettings, options.userSetFields);
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -201,6 +212,7 @@ export const createSession = async (
     // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
     taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
     ...(options.origin ? { origin: options.origin } : {}),
+    ...(userSetFields.length ? { userSetFields } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

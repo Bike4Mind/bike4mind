@@ -51,7 +51,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
@@ -73,7 +73,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -100,7 +100,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ systemPromptText: 'Answer like a pirate.', temperature: 0.2, maxToolCalls: 7 })
@@ -138,7 +138,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -170,7 +170,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(findAccessibleInIds).not.toHaveBeenCalled();
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ knowledgeIds: [FILE_ID] }));
@@ -193,7 +193,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     const persisted = db.sessions.create.mock.calls[0][0];
     expect(persisted.taggedAt).toBeUndefined();
@@ -224,7 +224,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
     expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
@@ -244,7 +244,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'contentGrowth' })
@@ -264,7 +264,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
   });
@@ -305,7 +305,7 @@ describe('snipSession', () => {
     await snipSession(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
-      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+      { db, workspaceSessionSettings: {}, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
     );
 
     expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
@@ -315,7 +315,7 @@ describe('snipSession', () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
   });
@@ -340,7 +340,7 @@ describe('snipSession', () => {
       const run = snipSession(
         'caller-1',
         { sessionId: 'session-1', messageId: 'm1', targetSurface },
-        { db, resolveSurfaceAccess }
+        { db, resolveSurfaceAccess, workspaceSessionSettings: {} }
       );
       return { db, run };
     };
@@ -397,7 +397,11 @@ describe('snipSession', () => {
       { id: 'm2', sessionId: 'session-1', prompt: 'later' },
     ]);
 
-    const newSession = await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    const newSession = await snipSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, workspaceSessionSettings: {} }
+    );
 
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'm1');
     expect(newSession).toEqual({ id: 'snip-1' });
@@ -414,7 +418,7 @@ describe('snipSession', () => {
       { id: 'm2', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
     ]);
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0]).not.toHaveProperty('correctsQuestId');
     expect(created[0]).toEqual({ sessionId: 'snip-1', prompt: 'a correction' });
@@ -435,7 +439,7 @@ describe('snipSession', () => {
       },
     ]);
 
-    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(created[0].promptMeta).toEqual({
       warnings: ['partial coverage'],
@@ -451,9 +455,9 @@ describe('snipSession', () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);
 
-    await expect(snipSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db })).rejects.toThrow(
-      'Message not found'
-    );
+    await expect(
+      snipSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db, workspaceSessionSettings: {} })
+    ).rejects.toThrow('Message not found');
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'missing');
   });
 });

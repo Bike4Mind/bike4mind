@@ -15,13 +15,14 @@ type MoveSessionAdapters = {
     sessions: Pick<ISessionRepository, 'findByIdAndUserId' | 'update'>;
   };
   resolveSurfaceAccess?: ResolveSurfaceAccess;
-  /** Fields the source workspace owns, unset on the way out; absent = none. */
-  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  /** Fields the source workspace owns, unset on the way out. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 };
 
 /**
  * Moves the caller's own session into another registered workspace by rewriting `surface` and
- * unsetting the fields the source workspace owns (`workspaceSessionSettings`). Owner only: a share grant does not let you relocate someone else's notebook.
+ * unsetting the fields the source workspace owns (`workspaceSessionSettings`). Owner only: a share grant
+ * does not let you relocate someone else's notebook.
  */
 export const moveSession = async (userId: string, parameters: MoveSessionParameters, adapters: MoveSessionAdapters) => {
   const { db } = adapters;

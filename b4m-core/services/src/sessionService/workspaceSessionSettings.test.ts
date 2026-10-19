@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import { cloneSession } from './clone';
+import { createSession } from './create';
 import { forkSession } from './fork';
 import { moveSession } from './move';
 import { snipSession } from './snip';
@@ -66,19 +67,19 @@ const makeDb = (session: Record<string, unknown>) => ({
 const createdCopy = (db: ReturnType<typeof makeDb>) => db.sessions.create.mock.calls[0][0] as Record<string, unknown>;
 
 const copies = {
-  fork: (db: ReturnType<typeof makeDb>, settings?: WorkspaceSessionSettingsTable) =>
+  fork: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
     forkSession(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
       { db: db as any, workspaceSessionSettings: settings }
     ),
-  snip: (db: ReturnType<typeof makeDb>, settings?: WorkspaceSessionSettingsTable) =>
+  snip: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
     snipSession(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
       { db: db as any, workspaceSessionSettings: settings }
     ),
-  clone: (db: ReturnType<typeof makeDb>, settings?: WorkspaceSessionSettingsTable) =>
+  clone: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
     cloneSession('caller-1', { id: 'session-1' }, { db: db as any, workspaceSessionSettings: settings }),
 };
@@ -100,14 +101,14 @@ describe.each(Object.entries(copies))('%s with contributed workspace session set
 
     await copy(db, table);
 
-    expect(createdCopy(db)).toEqual(expect.objectContaining({ temperature: 0.2 }));
+    expect(createdCopy(db)).toEqual(expect.objectContaining({ temperature: 0.2, userSetFields: ['temperature'] }));
     expect(createdCopy(db).systemPromptText).toBeUndefined();
   });
 
-  it('copies everything when no table is threaded', async () => {
+  it('copies everything when no workspace contributes settings', async () => {
     const db = makeDb(sourceSession());
 
-    await copy(db);
+    await copy(db, {});
 
     expect(createdCopy(db)).toEqual(expect.objectContaining({ temperature: 0.2, enabledTools: ['tool_a'] }));
   });
@@ -129,6 +130,62 @@ describe('cloneSession by a share holder with contributed workspace session sett
 
     const created = createdCopy(db);
     for (const field of Object.keys(OWNED_VALUES)) expect(created[field]).toBeUndefined();
+    expect(created.userSetFields).toBeUndefined();
+  });
+});
+
+describe('createSession records the owned fields the user set', () => {
+  const create = (params: Record<string, unknown>, settings?: WorkspaceSessionSettingsTable) => {
+    const db = makeDb({});
+    return createSession({ id: 'caller-1' } as any, { name: 'New', ...params } as any, {
+      db: db as any,
+      workspaceSessionSettings: settings,
+    }) as Promise<Record<string, any>>;
+  };
+
+  const roundTrip = async (session: Record<string, unknown>) => {
+    const db = makeDb(session);
+    const adapters = { db: db as any, workspaceSessionSettings: table };
+    const onWorkspace = await moveSession('caller-1', { id: 'session-1', targetSurface: WORKSPACE }, adapters);
+    db.sessions.findByIdAndUserId.mockResolvedValue(onWorkspace);
+    await moveSession('caller-1', { id: 'session-1', targetSurface: null }, adapters);
+    return db.sessions.update.mock.calls.flatMap(call => (call[1] as { unset?: string[] } | undefined)?.unset ?? []);
+  };
+
+  it('keeps a restriction set off any workspace through a round trip onto the owning workspace', async () => {
+    const created = await create({ disableUserIntegrations: true, enabledTools: ['tool_a'] }, table);
+
+    expect(created.userSetFields).toEqual(['enabledTools', 'disableUserIntegrations']);
+    const unset = await roundTrip({ ...created, id: 'session-1', userId: 'caller-1' });
+    expect(unset).not.toContain('enabledTools');
+    expect(unset).not.toContain('disableUserIntegrations');
+  });
+
+  it('leaves values baked in on the owning workspace to it, so a move out strips them', async () => {
+    const created = await create({ surface: WORKSPACE, ...OWNED_VALUES }, table);
+
+    expect(created.userSetFields).toBeUndefined();
+    const db = makeDb({ ...created, id: 'session-1', userId: 'caller-1' });
+    await moveSession(
+      'caller-1',
+      { id: 'session-1', targetSurface: null },
+      { db: db as any, workspaceSessionSettings: table }
+    );
+    expect(db.sessions.update.mock.calls[0][1].unset).toEqual(['surface', ...Object.keys(OWNED_VALUES)]);
+  });
+
+  it('records a field set on a workspace that does not own it', async () => {
+    const narrow = { [WORKSPACE]: { ownedFields: ['systemPromptText'] as const, resolve: async () => ({}) } };
+
+    const created = await create({ surface: WORKSPACE, systemPromptText: 'p', temperature: 0.5 }, narrow);
+
+    expect(created.userSetFields).toEqual(['temperature']);
+  });
+
+  it('records nothing on a workspace when no table is threaded', async () => {
+    const created = await create({ surface: WORKSPACE, temperature: 0.5 });
+
+    expect(created.userSetFields).toBeUndefined();
   });
 });
 

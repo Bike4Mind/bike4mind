@@ -37,8 +37,8 @@ type CloneSessionAdapters = {
   };
   /** Required to honor `targetSurface`; without it a targeted clone is refused. */
   resolveSurfaceAccess?: ResolveSurfaceAccess;
-  /** Fields the source's workspace owns, dropped from the copy; absent = none. */
-  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  /** Fields the source's workspace owns, dropped from the copy. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const cloneSession = async (
@@ -140,6 +140,7 @@ export const cloneSession = async (
   const cloneParams = stripSurfaceOwnedFields(buildCloneSession, adapters.workspaceSessionSettings, ownedFieldsSource);
   const clonedSession = await createSession(user, cloneParams, adapters, {
     knowledgeIdsFromSourceSession: true,
+    userSetFields: isOwner ? session.userSetFields : undefined,
   });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);

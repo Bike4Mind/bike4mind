@@ -35,8 +35,8 @@ type SnipSessionAdapters = {
   };
   /** Required to honor `targetSurface`; without it a targeted snip is refused. */
   resolveSurfaceAccess?: ResolveSurfaceAccess;
-  /** Fields the source's workspace owns, dropped from the copy; absent = none. */
-  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  /** Fields the source's workspace owns, dropped from the copy. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const snipSession = async (userId: string, parameters: SnipSessionParameters, adapters: SnipSessionAdapters) => {
@@ -103,7 +103,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       session
     ),
     adapters,
-    { knowledgeIdsFromSourceSession: true }
+    { knowledgeIdsFromSourceSession: true, userSetFields: session.userSetFields }
   );
 
   const messagesToSnip = await db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(

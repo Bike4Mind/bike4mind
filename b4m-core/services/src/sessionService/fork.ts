@@ -35,8 +35,8 @@ type ForkSessionAdapters = {
   };
   /** Required to honor `targetSurface`; without it a targeted fork is refused. */
   resolveSurfaceAccess?: ResolveSurfaceAccess;
-  /** Fields the source's workspace owns, dropped from the copy; absent = none. */
-  workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  /** Fields the source's workspace owns, dropped from the copy. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const forkSession = async (userId: string, parameters: ForkSessionParameters, adapters: ForkSessionAdapters) => {
@@ -101,7 +101,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       session
     ),
     adapters,
-    { knowledgeIdsFromSourceSession: true }
+    { knowledgeIdsFromSourceSession: true, userSetFields: session.userSetFields }
   );
 
   const messagesToFork = await db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp(

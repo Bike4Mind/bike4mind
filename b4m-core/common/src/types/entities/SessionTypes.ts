@@ -794,8 +794,8 @@ export interface ISession {
   maxToolCalls?: number;
   /**
    * Fields the user set explicitly that a contributed workspace would otherwise own; the workspace
-   * neither overrides nor strips them (see `WorkspaceSessionSettingsTable` in surfaces.ts). No user edit
-   * route writes these fields today, so nothing records into this yet.
+   * neither overrides nor strips them (see `WorkspaceSessionSettingsTable` in surfaces.ts). Recorded at
+   * create for each such field set where the session's workspace does not own it; copies carry it.
    */
   userSetFields?: string[];
   /**
