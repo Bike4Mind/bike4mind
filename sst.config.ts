@@ -84,11 +84,12 @@ export default $config({
       args.logging = $output(args.logging).apply(logging => resolveDefaultLogging(logging, $app.stage));
     });
 
-    // Fail fast when a Router certificate cannot validate (usually a DNS validation record
-    // deleted outside SST; scripts/check-acm-validation-records.mjs catches that before deploy).
-    // The provider default wait is 75 minutes, longer than the deploy job, which then gets killed
-    // with no ACM error and leaves the state lock held. customTimeouts is a resource option, not
-    // an input, so this causes no diff or replacement. Keep it below the deploy job timeout.
+    // Fail fast when an ACM certificate cannot validate (today only the Router's; usually a DNS
+    // validation record deleted outside SST, which scripts/check-acm-validation-records.mjs
+    // catches before deploy). The provider default wait is 75 minutes; a deploy job killed before
+    // that gives no ACM error and leaves the state lock held. Keep this below the time left in
+    // the deploy job when the certificate starts validating. customTimeouts is a resource option,
+    // not an input, so it causes no diff or replacement.
     $transform(aws.acm.CertificateValidation, (_args, opts) => {
       opts.customTimeouts = { ...opts.customTimeouts, create: '15m' };
     });
