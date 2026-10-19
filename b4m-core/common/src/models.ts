@@ -172,6 +172,7 @@ export enum ChatModels {
   // GPT 5.4
   GPT5_4 = 'gpt-5.4',
   GPT5_4_MINI = 'gpt-5.4-mini',
+  GPT5_4_MINI_2026_03_17 = 'gpt-5.4-mini-2026-03-17',
   GPT5_4_NANO = 'gpt-5.4-nano',
 
   // GPT 5.5
