@@ -15,17 +15,23 @@ const DENY_AUDIT_WINDOW_MS = 60 * 60 * 1000;
 
 // Anyone can reach the deny path, so denials fold into one row per hour (counterValue is the
 // attempt count) rather than one per request, keeping CounterLog growth independent of traffic.
-async function auditDenial() {
+// The row carries only the latest request id, so a caller's id remains traceable without unbounded growth.
+async function auditDenial(requestId: string) {
   const windowStart = new Date(Math.floor(Date.now() / DENY_AUDIT_WINDOW_MS) * DENY_AUDIT_WINDOW_MS);
   await CounterLog.updateOne(
     { counterName: AUDIT_COUNTER_NAME, datetime: windowStart, 'metadata.outcome': 'deny' },
-    { $inc: { counterValue: 1 }, $setOnInsert: AUDIT_PRINCIPAL },
+    { $inc: { counterValue: 1 }, $set: { 'metadata.lastRequestId': requestId }, $setOnInsert: AUDIT_PRINCIPAL },
     { upsert: true }
   );
 }
 
 // Once per cold start, so a provisioned-but-broken stage is visible without logging per request.
 let warnedMisconfigured = false;
+
+/** Test hook: the warning is per process, so a suite that asserts it needs a clean slate. */
+export function __resetMisconfiguredWarning() {
+  warnedMisconfigured = false;
+}
 
 // Dedicated machine auth only: sessions and general API keys cannot enter this route.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     };
     if (authorization.status === 'denied') {
-      await auditDenial();
+      await auditDenial(requestId);
       return res.status(401).json({ error: 'Invalid export credential', request_id: requestId });
     }
     const { scope } = authorization;

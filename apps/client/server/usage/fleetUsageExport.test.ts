@@ -21,6 +21,8 @@ describe('Fleet export dedicated authorization', () => {
       {},
       { ...configured, FLEET_USAGE_EXPORT_TOKEN: '' },
       { ...configured, FLEET_USAGE_EXPORT_TOKEN: 'short' },
+      { ...configured, FLEET_USAGE_EXPORT_TOKEN: ` ${token}` },
+      { ...configured, FLEET_USAGE_EXPORT_TOKEN: `${token}\t` },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: '' },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: 'null' },
       { ...configured, FLEET_USAGE_EXPORT_SCOPE: '{}' },
