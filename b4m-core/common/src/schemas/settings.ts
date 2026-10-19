@@ -1163,8 +1163,8 @@ export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
 
 /**
  * Self-host only; hosted deployments never reach private networks regardless of this value. Each
- * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never covers a cloud metadata
- * address (see customMcpHosts.ts).
+ * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never overlaps a network the fetch
+ * path refuses anyway (NEVER_ADMITTED_NETWORKS in customMcpHosts.ts).
  */
 export const CustomMcpAllowPrivateNetworksSchema = z.object({
   cidrs: z.array(CustomMcpPrivateCidrSchema).max(100).default([]),

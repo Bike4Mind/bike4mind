@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   dataLakeFindingRepository: {},
   dataLakeRepository: {},
   fabFileChunkRepository: {},

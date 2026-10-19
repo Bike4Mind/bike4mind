@@ -8,7 +8,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
   normalizeCompletionRequest,
@@ -302,7 +302,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
-          write(serializeSSEEvent(buildSSEEvent(text, info)));
+          write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
         },
       });
 

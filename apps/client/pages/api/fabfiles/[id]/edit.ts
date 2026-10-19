@@ -14,6 +14,7 @@ import {
   adminSettingsRepository,
   fabFileRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -44,7 +45,11 @@ import {
   type CompletionUsage,
 } from '@server/billing/meterPlatformCompletion';
 
-const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
+const rewriteStorageDb = {
+  fabFiles: fabFileRepository,
+  users: userRepository,
+  organizations: organizationRepository,
+};
 /** Generous UTF-8 bound for one output token, for the pre-call storage check. */
 const MAX_OUTPUT_BYTES_PER_TOKEN = 4;
 

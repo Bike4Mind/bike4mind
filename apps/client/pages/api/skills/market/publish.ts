@@ -5,6 +5,7 @@ import { SkillListing, SkillListingVersion, skillRepository } from '@bike4mind/d
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, type ISkillListing } from '@bike4mind/common';
 import {
   loadMarketSettings,
+  meetsPublicAccountAge,
   memberOrgIdsFor,
   serializeListing,
   submitRateLimits,
@@ -21,7 +22,6 @@ const bodySchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const ALREADY_LISTED = 'This skill already has a listing. Submit a new version from My listings instead.';
 
 /**
@@ -51,13 +51,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         throw new ForbiddenError('You can only publish to organizations you belong to');
       }
     }
-    if (body.visibility === 'public' && !user.isAdmin) {
-      const ageDays = (Date.now() - new Date(user.createdAt).getTime()) / DAY_MS;
-      if (!(ageDays >= settings.publicMinAccountAgeDays)) {
-        throw new ForbiddenError(
-          `New accounts can publish Public listings after ${settings.publicMinAccountAgeDays} days. Organization and unlisted listings are available now.`
-        );
-      }
+    if (body.visibility === 'public' && !meetsPublicAccountAge(user, settings)) {
+      throw new ForbiddenError(
+        `New accounts can publish Public listings after ${settings.publicMinAccountAgeDays} days. Organization and unlisted listings are available now.`
+      );
     }
 
     // A moderator takedown is not the author's to undo by publishing the same skill again.

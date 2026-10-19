@@ -2574,6 +2574,31 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
       });
 
+      it('does not add the try-again notice when a real answer follows the last tool call', async () => {
+        const buildToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildTools')
+          .mockReturnValue([{ toolSchema: { name: 'web_search', description: 'search', parameters: {} } }] as any);
+        setupTurn(async cb => {
+          const toolsUsed: Array<Record<string, unknown>> = [];
+          await cb(['Checking.'], { toolsUsed });
+          toolsUsed.push({ name: 'web_search', arguments: '{"q":"figures"}', id: 't1' });
+          await cb(['\n<tool_call>{"name":"web_search","arguments":{"query":"more figures"}}</tool_call>\n'], {
+            toolsUsed,
+          });
+          toolsUsed.push({ name: 'web_fetch', arguments: '{"url":"x"}', id: 't2' });
+          await cb(['Done.'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+        buildToolsSpy.mockRestore();
+
+        expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+        expect(mockQuest.replies.join('')).toContain('Done.');
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        expect(mockQuest.replies.join('')).not.toContain(NARRATED_TOOL_CALL_NOTICE);
+      });
+
       it('adds no notice when the tool loop ends with a real answer', async () => {
         setupTurn(cb => toolLoop(cb, ['<think>ok</think>', 'Here are the figures.']));
 
@@ -7089,6 +7114,33 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
       expect(mockQuest.reply).not.toContain('<tool_call>');
       expect(mockQuest.reply).toContain('Let me check.');
+    });
+
+    const cutOffCall = 'Let me check.\n\n<tool_call>\n{"name": "web_search", "arguments": {"query": "ti';
+
+    it.each(['stop-resolves', 'stop-rejects'] as const)(
+      'removes a cut-off narrated call when the turn is stopped (%s)',
+      async mode => {
+        await runWithTools([webSearchTool], undefined, {}, cutOffCall, mode);
+        expect(mockQuest.status).toBe('stopped');
+        expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+        expect(mockQuest.replies.join('')).not.toContain('<tool_call>');
+        expect(mockQuest.replies.join('')).toContain('Let me check.');
+      }
+    );
+
+    it('removes a cut-off narrated call ahead of an error reply', async () => {
+      await runWithTools([webSearchTool], undefined, {}, cutOffCall, 'error');
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.promptMeta.narratedToolCall).toEqual({ toolNames: ['web_search'] });
+      expect(mockQuest.reply).not.toContain('<tool_call>');
+      expect(mockQuest.reply).toContain('Let me check.');
+    });
+
+    it('keeps an unclosed call on a turn that finished normally', async () => {
+      await runWithTools([webSearchTool], undefined, {}, cutOffCall);
+      expect(mockQuest.promptMeta.narratedToolCall).toBeUndefined();
+      expect(mockQuest.replies.join('')).toContain('<tool_call>');
     });
 
     it('keeps an answer written after a stripped call, with no retry notice', async () => {

@@ -44,7 +44,7 @@ describe('SpeechGallery', () => {
     renderGallery(<SpeechGallery />);
 
     expect(h.search).toHaveBeenCalledWith({
-      filters: { generated: true, tags: ['speech'] },
+      filters: { generated: true, owned: true, tags: ['speech'] },
       order: { by: 'createdAt', direction: 'desc' },
     });
     expect(screen.getAllByTestId('audio-card').map(node => node.textContent)).toEqual(['tts:new', 'tts:old']);
@@ -62,7 +62,7 @@ describe('SoundEffectsGallery', () => {
     renderGallery(<SoundEffectsGallery />);
 
     expect(h.search).toHaveBeenCalledWith({
-      filters: { generated: true, tags: ['sound-effect'] },
+      filters: { generated: true, owned: true, tags: ['sound-effect'] },
       order: { by: 'createdAt', direction: 'desc' },
     });
     expect(screen.getByTestId('audio-card')).toHaveTextContent('sound-effects:a');

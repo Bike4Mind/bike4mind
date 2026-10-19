@@ -134,6 +134,8 @@ export interface IUserPreferences {
   language?: string;
   favoriteTags?: string[];
   favoriteModelIds?: string[];
+  /** Workspace surface ids the user hid from their own UI; display only, access is unchanged (see surfaces.ts). */
+  hiddenSurfaces?: string[];
   fileBrowserViewMode?: 'home' | 'list' | 'grid' | 'tags';
   optiSessionId?: string | null;
   lastUsedTextModel?: string | null;

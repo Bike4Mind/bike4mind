@@ -111,9 +111,11 @@ interface PurgeDataLakeDocumentAdapters {
    * writes; a throw propagates, so keep it best-effort at the call site.
    */
   onPurged?: (purged: {
-    /** The file's owner - NOT the actor, who may be an admin destroying someone else's document. */
+    /** The file's uploader - NOT the actor, who may be an admin destroying someone else's document. */
     ownerUserId: string;
-    /** Bytes to return to that owner's quota; 0 unless the stored object was actually deleted. */
+    /** The org that owns the file (FabFile.organizationId), whose quota the bytes return to; absent = personal. */
+    ownerOrganizationId?: string;
+    /** Bytes to return to the owner's quota (storageOwnerOf); 0 unless the stored object was actually deleted. */
     fileSize: number;
     /** Every tag the file carried, pre-delete - the input to the other lakes' stats rebuild. */
     tagNames: string[];
@@ -437,6 +439,7 @@ export const purgeDataLakeDocument = async (
 
   await onPurged?.({
     ownerUserId: file.userId,
+    ownerOrganizationId: file.organizationId,
     // Gated on this call having removed the row, not merely on the object delete succeeding:
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.

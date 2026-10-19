@@ -551,7 +551,10 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * overwriting the review choices that discovery merged.
    */
   updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
-  /** `connected` clears any stale `lastError`; `pending_auth` leaves it as the reason to reconnect. */
+  /**
+   * `connected` clears any stale `lastError`, and is null for an OAuth connection with no access token.
+   * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
+   */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
   /** A failure status always records why. */
   setStatus(
@@ -565,7 +568,10 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * the caller must not retry the write, because the successor's rotated token is the live one.
    */
   completeRefresh(id: string, holder: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
-  /** Disconnect: drop the tokens, their markers and any lease. Revocation at the server is the caller's. */
+  /**
+   * Disconnect: drop the tokens, their markers, any lease and `lastError`, and set `pending_auth`.
+   * Revocation at the server is the caller's.
+   */
   clearOAuthTokens(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
   setInitialOAuthTokens(

@@ -6,6 +6,7 @@ import {
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IOrganizationRepository,
   IScopedSettingsRepository,
   IUserDocument,
   IUserRepository,
@@ -64,6 +65,7 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipA
       >;
       /** Charges a content rewrite to the file's OWNER, who may not be `user` (an update share). */
       users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
+      organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
       // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;

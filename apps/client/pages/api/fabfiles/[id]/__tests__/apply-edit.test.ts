@@ -36,6 +36,7 @@ vi.mock('@server/utils/aiEditVersionRetention', async orig => ({
   getAiEditVersionRetention: async () => 1,
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   FabFile: { findById: () => ({ where: () => h.file }) },
   withTransaction: (fn: () => unknown) => fn(),
   adminSettingsRepository: {},

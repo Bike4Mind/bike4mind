@@ -1,3 +1,4 @@
+import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runTurn, type TurnContext } from './turnController';
 import { useCliStore } from '../store';
@@ -71,6 +72,7 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     additionalDirectories: [],
     featureRegistry: null,
     backgroundManager: null,
+    toolCatalog: new ToolCatalog(),
     todoStore: null,
     decisionStore: null,
     blockerStore: null,

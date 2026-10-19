@@ -64,6 +64,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   withTransaction: async (fn: () => unknown) => {
     h.inTransaction.push('enter');
     try {

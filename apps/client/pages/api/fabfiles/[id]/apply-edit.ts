@@ -1,5 +1,11 @@
 import { Permission, isImageServeable, FAB_FILE_CONTENT_REWRITE_PATCH, isStorageLimitError } from '@bike4mind/common';
-import { FabFile, withTransaction, fabFileRepository, userRepository } from '@bike4mind/database';
+import {
+  FabFile,
+  withTransaction,
+  fabFileRepository,
+  userRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -11,7 +17,11 @@ import { TEXT_EDIT_BACKUP_PREFIX } from '@server/utils/textEditBackupPrefix';
 import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 
-const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
+const rewriteStorageDb = {
+  fabFiles: fabFileRepository,
+  users: userRepository,
+  organizations: organizationRepository,
+};
 
 const handler = baseApi()
   .use((req, res, next) => {

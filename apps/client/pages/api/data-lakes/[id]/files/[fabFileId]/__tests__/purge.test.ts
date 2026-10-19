@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   changeStorageSize: vi.fn(async () => {}),
   userSave: vi.fn(async () => {}),
   userFindById: vi.fn(),
+  incrementCurrentStorage: vi.fn(async () => {}),
   storageDelete: vi.fn(async () => {}),
   shredMemoryFromSource: vi.fn(async () => 2),
   findingsDeleteForPurgedDocument: vi.fn(async () => 0),
@@ -71,6 +72,7 @@ vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: {},
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
+  organizationRepository: { incrementCurrentStorage: h.incrementCurrentStorage },
   changeStorageSize: h.changeStorageSize,
   withTransaction: (fn: (session: unknown) => unknown) => fn({}),
   User: { findById: h.userFindById },
@@ -147,7 +149,7 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
   /** Drive the service's post-destruction hook the way the service itself would. */
   const runOnPurged = async (
-    purged: { ownerUserId: string; fileSize: number; tagNames: string[] },
+    purged: { ownerUserId: string; ownerOrganizationId?: string; fileSize: number; tagNames: string[] },
     auth?: { user?: { id: string }; apiKeyInfo?: { keyId: string } }
   ) => {
     const { res } = makeRes();
@@ -218,6 +220,14 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     expect(h.userFindById).toHaveBeenCalledWith('owner-9');
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.anything(), -27707);
+  });
+
+  it("returns an org-stamped file's bytes to the ORG counter, not the uploader's", async () => {
+    await runOnPurged({ ownerUserId: 'u', ownerOrganizationId: 'org1', fileSize: 10, tagNames: [] });
+
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -10, expect.anything());
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 
   it('touches no quota when the row stored no bytes', async () => {

@@ -6,6 +6,7 @@ import {
   questRepository,
   fabFileRepository,
   userRepository,
+  organizationRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
@@ -195,6 +196,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       fabFileRepository,
       fileStorageService: storageAdapter,
       userRepository,
+      organizationRepository,
       adminSettingsRepository,
       logger,
       llmService,

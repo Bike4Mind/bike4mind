@@ -12,15 +12,14 @@ import type { ApiClient } from '../auth/ApiClient.js';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
 import {
   generateCliTools,
-  wrapTools,
   wrapToolWithHooks,
   type AgentContext,
   type ToolFilter,
   type HookWrapperContext,
-  type WrapToolDeps,
   type UserQuestionPayload,
   type UserQuestionResponse,
 } from '../utils/toolsAdapter.js';
+import { wrapTools, type WrapToolDeps } from '../tools/gateway/index.js';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
@@ -35,7 +34,6 @@ import { executeHooks, buildHookContext } from './hookExecutor.js';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
-import { isReadOnlyTool } from '../config/toolSafety.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import type { AgentHistoryStore } from './AgentHistoryStore.js';
 
@@ -439,7 +437,7 @@ export class SubagentOrchestrator {
           agent.run(task, {
             maxIterations,
             parallelExecution: this.deps.enableParallelToolExecution === true,
-            isReadOnlyTool,
+            isReadOnlyTool: toolName => this.deps.permissionManager.catalog.isReadOnly(toolName),
             maxHistoryIterations: 4,
             previousMessages: options.previousMessages,
           }),

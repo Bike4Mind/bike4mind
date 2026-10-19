@@ -1,18 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BadRequestError, NotFoundError, STORAGE_CHARGE_STAMP_CUTOFF, type IUserDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+  StorageLimitError,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 
 const MB = 1_000_000;
 const owner = (currentStorageSize: number) =>
   ({ id: 'owner', storageLimit: 1, currentStorageSize }) as unknown as IUserDocument;
 
-type Pre = { userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date };
+type Pre = {
+  userId: string;
+  organizationId?: string;
+  fileSize?: number;
+  storageChargedAt?: Date;
+  status?: string;
+  createdAt?: Date;
+};
 const makeDb = (pre: Pre | null = null, stored: Pre | null = pre) => ({
   fabFiles: {
     commitContentRewrite: vi.fn().mockResolvedValue(pre),
     findChargeState: vi.fn().mockResolvedValue(stored),
   },
   users: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
+  organizations: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
 });
 
 const before = new Date('2026-01-01T00:00:00Z');
@@ -93,6 +107,15 @@ describe('commitContentRewrite', () => {
     expect(counter).toBe(3000);
   });
 
+  it('moves the owning org counter, not the uploader, for an org-stamped row', async () => {
+    const db = makeDb({ userId: 'owner', organizationId: 'org-1', fileSize: 100, storageChargedAt: before });
+
+    await commitContentRewrite({ fabFileId: 'f1', newSize: 150 }, db);
+
+    expect(db.organizations.incrementCurrentStorage).toHaveBeenCalledWith('org-1', 50);
+    expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
   it('leaves the counter alone when the filter missed', async () => {
     const db = makeDb(null);
     const committed = await commitContentRewrite({ fabFileId: 'f1', newSize: 150, filter: { filePath: 'old' } }, db);
@@ -144,12 +167,40 @@ describe('assertRewriteFits', () => {
     await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow(NotFoundError);
   });
 
+  it.each([
+    ['uploader', 'storage_limit_exceeded', 'user', stored],
+    ['org', 'org_storage_limit_exceeded', 'org', { ...stored, organizationId: 'org-1' }],
+  ])("redacts the %s pool's refusal for a non-owner actor", async (_label, errorCode, poolOwner, storedRow) => {
+    const db = makeDb(null, storedRow);
+    db.users.findById.mockResolvedValue(owner(0.9 * MB));
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', storageLimit: 1, currentStorageSize: 0.9 * MB });
+    const editor = { id: 'editor' } as unknown as IUserDocument;
+
+    const error = await assertRewriteFits(row, 1.2 * MB, db, editor).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(StorageLimitError);
+    expect((error as StorageLimitError).additionalInfo).toStrictEqual({ errorCode, owner: poolOwner });
+  });
+
   it('measures against the owner, not an update-share editor', async () => {
     const db = makeDb(null, stored);
     db.users.findById.mockResolvedValue(owner(0.9 * MB));
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow('File size exceeds storage limit');
+    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', owner: 'user' },
+    });
     expect(db.users.findById).toHaveBeenCalledWith('owner');
+  });
+
+  it('measures an org-stamped row against the org quota, not the uploader', async () => {
+    const db = makeDb(null, { ...stored, organizationId: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', storageLimit: 1, currentStorageSize: 0.9 * MB });
+
+    // The uploader has room; the org does not.
+    await expect(assertRewriteFits(row, 1.2 * MB, db, owner(0))).rejects.toMatchObject({
+      info: { errorCode: 'org_storage_limit_exceeded', owner: 'org' },
+    });
+    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
   });
 });

@@ -1165,6 +1165,22 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(prefixOwned).toMatchObject({ userId: CREATOR, fileSize: 100 });
     });
 
+    // The sweep's storage delta is billed per storageOwnerOf(row), so a dropped org would bill the uploader.
+    it('carries the owning organizationId of an org-stamped member, both ways', async () => {
+      const orgOwned = await makeFile({
+        fileName: 'org-owned.txt',
+        userId: CREATOR,
+        organizationId: 'o1',
+        tags: [{ name: DATALAKE_TAG }],
+      });
+      const id = orgOwned._id.toString();
+
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      expect(swept.find(f => f.id === id)).toMatchObject({ userId: CREATOR, organizationId: 'o1' });
+      const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
+      expect(restored.find(f => f.id === id)).toMatchObject({ userId: CREATOR, organizationId: 'o1' });
+    });
+
     it('carries 0 bytes for a member that was never charged, both ways', async () => {
       const pending = await makeFile({
         fileName: 'pending.txt',

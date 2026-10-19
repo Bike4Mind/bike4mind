@@ -50,6 +50,7 @@ vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
 vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
 vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
+vi.mock('./WorkspaceVisibilitySection', () => ({ default: () => null }));
 vi.mock('../ExperimentalFeatureToggle', () => ({ default: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

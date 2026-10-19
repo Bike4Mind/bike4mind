@@ -297,6 +297,29 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('message attachments handed to getOrCreateSession for pinning', () => {
+    const body = { messageFileIds: ['f1', 'f2'], messageOnlyFileIds: ['f2'] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards them for a session (JWT) caller, and keeps messageOnlyFileIds out of invoke()', async () => {
+      const { req, res } = fire({ apiKey: null, body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockGetOrCreateSession.mock.calls[0][0]).toMatchObject(body);
+      expect(invokedBody()).not.toHaveProperty('messageOnlyFileIds');
+      expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
+    });
+
+    it('pins nothing for an API-key caller, whose files still ride the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockGetOrCreateSession.mock.calls[0][0]).not.toHaveProperty('messageFileIds');
+      expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
+    });
+  });
+
   describe('agentIds stamped on a newly created session (GH #2600)', () => {
     const getOrCreateArgs = () => mockGetOrCreateSession.mock.calls[0][0] as { agentIds?: string[] };
     const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;

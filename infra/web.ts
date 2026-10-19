@@ -105,6 +105,7 @@ import {
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
+import { searxngUrl } from './searxng';
 import {
   router,
   routerDistributionId,
@@ -436,6 +437,9 @@ export const web = new sst.aws.Nextjs(
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
       WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',
+      // Internal SearXNG (infra/searxng.ts), only where deployed. Inline web_search in this function
+      // needs it as the backup to SerpAPI, same as chatCompletion/agentExecutor/queues.
+      ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
       // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
       // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
       // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first

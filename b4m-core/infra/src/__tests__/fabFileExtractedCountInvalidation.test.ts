@@ -167,24 +167,33 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     expect(source).not.toMatch(/FabFile\.(updateOne|findOneAndUpdate)\(/);
   });
 
-  // The accounting helper moves the owner's counter through `users.incrementCurrentStorage`. A
-  // hand-built or cast adapter without it compiles but does not update the owner's storage usage.
-  it.each([...ADAPTER_WIRING_SITES, ...REWRITE_SITES.filter(rel => rel.startsWith('apps/'))])(
-    '%s wires the real user repository into the rewrite accounting',
-    rel => {
+  // The accounting helper moves the owner's counter through `users.incrementCurrentStorage`, or
+  // `organizations.incrementCurrentStorage` for an org-owned file (storageOwner.ts). A hand-built or
+  // cast adapter without it compiles but does not update the owner's storage usage.
+  const COUNTER_ADAPTERS = [
+    { key: 'users', repository: 'userRepository', type: 'IUserRepository' },
+    { key: 'organizations', repository: 'organizationRepository', type: 'IOrganizationRepository' },
+  ];
+  const WIRED_SITES = [...ADAPTER_WIRING_SITES, ...REWRITE_SITES.filter(rel => rel.startsWith('apps/'))];
+
+  it.each(WIRED_SITES.flatMap(rel => COUNTER_ADAPTERS.map(adapter => [rel, adapter.key, adapter] as const)))(
+    '%s wires the real %s repository into the rewrite accounting',
+    (rel, key, { repository, type }) => {
       const source = stripComments(read(rel));
       const adapters = [
-        ...[...source.matchAll(/\busers\s*:\s*([^,}\n]+)/g)].map(m => m[1].trim()),
-        ...[...source.matchAll(/[{,]\s*users\s*(?=[,}])/g)].map(() => 'users (shorthand)'),
+        ...[...source.matchAll(new RegExp(`\\b${key}\\s*:\\s*([^,}\\n]+)`, 'g'))].map(m => m[1].trim()),
+        ...[...source.matchAll(new RegExp(`[{,]\\s*${key}\\s*(?=[,}])`, 'g'))].map(() => `${key} (shorthand)`),
       ];
-      const bad = adapters.filter(rhs => !/(^|\.)userRepository$/.test(rhs));
-      const castUsers = /\bas\s+(unknown\s+as\s+)?IUserRepository\b/.test(source);
-      const fromRealModule = /import\s*\{[^}]*\buserRepository\b[^}]*\}\s*from\s*'@bike4mind\/database'/.test(source);
+      const bad = adapters.filter(rhs => !new RegExp(`(^|\\.)${repository}$`).test(rhs));
+      const cast = new RegExp(`\\bas\\s+(unknown\\s+as\\s+)?${type}\\b`).test(source);
+      const fromRealModule = new RegExp(
+        `import\\s*\\{[^}]*\\b${repository}\\b[^}]*\\}\\s*from\\s*'@bike4mind/database'`
+      ).test(source);
 
-      expect(adapters.length, `${rel}: no users adapter found`).toBeGreaterThan(0);
-      expect(bad, `${rel}: users adapter must be userRepository, found: ${bad.join(' | ')}`).toEqual([]);
-      expect(castUsers, `${rel}: users adapter is cast to IUserRepository`).toBe(false);
-      expect(fromRealModule, `${rel}: userRepository must come from @bike4mind/database`).toBe(true);
+      expect(adapters.length, `${rel}: no ${key} adapter found`).toBeGreaterThan(0);
+      expect(bad, `${rel}: ${key} adapter must be ${repository}, found: ${bad.join(' | ')}`).toEqual([]);
+      expect(cast, `${rel}: ${key} adapter is cast to ${type}`).toBe(false);
+      expect(fromRealModule, `${rel}: ${repository} must come from @bike4mind/database`).toBe(true);
     }
   );
 

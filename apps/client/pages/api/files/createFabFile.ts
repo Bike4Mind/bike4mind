@@ -6,6 +6,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
+  organizationRepository,
   FabFile,
   User,
   withTransaction,
@@ -100,6 +101,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
             users: User,
+            organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as
             // wide as the route's own prologue above: without the grant repo that re-gate loses

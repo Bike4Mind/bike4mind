@@ -22,6 +22,8 @@ import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
+import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
@@ -274,6 +276,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // swallows its own failures, so it cannot fail a delivery that already landed.
       if (cleanupFailed) {
         await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
+      }
+
+      // Only when Stripe's retry schedule ended in cancel. A Dashboard setting of "mark unpaid"
+      // never reaches here, and would need the same notice on customer.subscription.updated.
+      if (subscription.cancellation_details?.reason === 'payment_failed') {
+        await notifyCanceledForNonPayment(updated, req.logger);
       }
 
       break;
@@ -566,11 +574,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
-        status: 'past_due',
-      });
+      const updated = await subscriptionRepository.markPastDue(subscriptionId);
 
-      const userId = invoice.metadata?.userId ?? null;
+      // Same ownership guard as customer.subscription.deleted: a stage with no row for this
+      // subscription does not own it, and must not email its owner. Also null for a row already
+      // closed, since a late delivery of this event can arrive after the deletion.
+      if (!updated) {
+        req.logger.warn(
+          `Ignoring payment failure on subscription ${subscriptionId}: no row in this stage, or it is already closed`
+        );
+        break;
+      }
+
+      // The owner comes from the row: Stripe does not copy subscription metadata onto the invoice,
+      // so `invoice.metadata.userId` is never set.
+      const userId = updated.ownerType === SubscriptionOwnerType.User ? updated.ownerId : null;
       if (userId) {
         sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'invalidate_query',
@@ -579,9 +597,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       await postMessageToSlack(
-        `⚠️ *Subscription Payment Failed* — invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n${userId ? `*User ID:* ${userId}\n` : ''}Status set to past_due.`
+        `⚠️ *Subscription Payment Failed* \u2014 invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n*Owner:* ${updated.ownerType} ${updated.ownerId}\nStatus set to past_due.`
       );
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
+
+      await notifyPaymentFailed(updated, invoice, req.logger);
 
       break;
     }

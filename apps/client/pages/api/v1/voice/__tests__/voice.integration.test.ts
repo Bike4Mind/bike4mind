@@ -250,6 +250,25 @@ describe('GET /api/voice/v2/agents', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.listPublicVoiceAgents).toHaveBeenCalled();
   });
+
+  it("returns another user's voice agent through the viewer allowlist", async () => {
+    mocks.listPublicVoiceAgents.mockResolvedValue([
+      {
+        id: 'voice-1',
+        userId: 'admin',
+        name: 'Concierge',
+        type: 'voice',
+        isPublic: true,
+        systemPrompt: 'secret',
+        currentCredits: 9,
+      },
+    ]);
+    const { res, run } = fireAgents();
+    await run();
+    const [agent] = res._getJSONData().agents;
+    expect(agent).toMatchObject({ id: 'voice-1', name: 'Concierge', type: 'voice' });
+    for (const field of ['systemPrompt', 'currentCredits', 'userId']) expect(agent).not.toHaveProperty(field);
+  });
 });
 
 describe('GET /api/v1/voice/voices', () => {

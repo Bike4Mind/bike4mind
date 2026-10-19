@@ -1,5 +1,5 @@
-import { changeStorageSize, FabFile, userRepository } from '@bike4mind/database';
-import { chargedBytes, type IUserDocument } from '@bike4mind/common';
+import { changeStorageSize, FabFile, organizationRepository, User, userRepository } from '@bike4mind/database';
+import { chargedBytes, storageOwnerOf, type IUserDocument, type StorageOwner } from '@bike4mind/common';
 import type { ClientSession, Types } from 'mongoose';
 
 /**
@@ -10,7 +10,8 @@ import type { ClientSession, Types } from 'mongoose';
  * claim also writes `fileSize: size` and returns `size - chargedBytes(preImage)`, the same move a
  * content rewrite's commit makes (commitContentRewrite in
  * b4m-core/services/src/fabFileService/rewriteStorage.ts), so a rewrite's event and its commit add up
- * to the new size in either order. Returns null when the claim lost.
+ * to the new size in either order. Returns null when the claim lost, else the delta and the row's
+ * owner as of the claim (storageOwnerOf), so the bytes land on the counter the refund will later debit.
  *
  * `statusBeforeUpload` is the row's status as the event handler read it, before it marked the row
  * `complete`: the charge rule reads `status`, so judging the pre-image by the handler's own flip would
@@ -22,24 +23,29 @@ export const claimStorageCharge = async (
   size: number,
   statusBeforeUpload: string | null | undefined,
   session?: ClientSession
-): Promise<number | null> => {
+): Promise<{ delta: number; owner: StorageOwner } | null> => {
   const pre = await FabFile.findOneAndUpdate(
     { _id: fabFileId, $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: uploadedAt } }] },
     { $set: { storageChargedAt: uploadedAt, fileSize: size } },
     {
       new: false,
-      projection: { fileSize: 1, storageChargedAt: 1, createdAt: 1 },
+      projection: { userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, createdAt: 1 },
       ...(session ? { session } : {}),
     }
   ).lean();
-  return pre ? size - chargedBytes({ ...pre, status: statusBeforeUpload }) : null;
+  if (!pre) return null;
+  return {
+    delta: size - chargedBytes({ ...pre, status: statusBeforeUpload }),
+    owner: storageOwnerOf({ userId: String(pre.userId), organizationId: pre.organizationId }),
+  };
 };
 
 /**
- * Charges an uploaded object's bytes to `user` once per write, through claimStorageCharge.
- * Mutates `user` only; the caller saves it in the same `session`. A won claim also records `size` as
- * the row's `fileSize`. Shared by the hosted S3 event
- * (objectCreated.ts) and the self-host MinIO webhook (pages/api/internal/s3/object-created.ts).
+ * Charges an uploaded object's bytes to the row's owner once per write, through claimStorageCharge.
+ * A personal row mutates `user` (its uploader) only, and the caller saves it in the same `session`; an
+ * org-owned row moves the org counter inside `session` and leaves `user` untouched. A won claim also
+ * records `size` as the row's `fileSize`. Shared by the hosted S3 event (apps/workers/src/s3/objectCreated.ts)
+ * and the self-host MinIO webhook (pages/api/internal/s3/object-created.ts).
  */
 export const chargeUploadedObject = async (
   fabFileId: Types.ObjectId | string,
@@ -49,10 +55,37 @@ export const chargeUploadedObject = async (
   statusBeforeUpload: string | null | undefined,
   session: ClientSession
 ): Promise<boolean> => {
-  const delta = await claimStorageCharge(fabFileId, uploadedAt, size, statusBeforeUpload, session);
-  if (delta === null) return false;
-  await changeStorageSize(user, delta);
+  const claim = await claimStorageCharge(fabFileId, uploadedAt, size, statusBeforeUpload, session);
+  if (claim === null) return false;
+  if (claim.owner.type === 'org') {
+    await organizationRepository.incrementCurrentStorage(claim.owner.id, claim.delta, session);
+  } else {
+    await changeStorageSize(user, claim.delta);
+  }
   return true;
+};
+
+/**
+ * Moves `owner`'s counter by `bytes` (negative refunds) inside `session`: an atomic floored increment
+ * on the org, or the user counter's load-modify-save (changeStorageSize, floored at 0). The user is
+ * loaded here, inside the session, never passed in: a copy read before the transaction would write
+ * back a stale absolute value. A missing owner is skipped. The app-side counterpart of
+ * adjustOwnerStorage (b4m-core/services/src/fabFileService/ownerStorage.ts) for transactional sites.
+ */
+export const adjustOwnerStorageInSession = async (
+  owner: StorageOwner,
+  bytes: number,
+  session: ClientSession
+): Promise<void> => {
+  if (bytes === 0) return;
+  if (owner.type === 'org') {
+    await organizationRepository.incrementCurrentStorage(owner.id, bytes, session);
+    return;
+  }
+  const user = await User.findById(owner.id).session(session);
+  if (!user) return;
+  await changeStorageSize(user, bytes);
+  await user.save({ session });
 };
 
 /**

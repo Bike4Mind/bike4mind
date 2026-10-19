@@ -32,6 +32,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   FabFile: {},
   User: {},
   adminSettingsRepository: {},
