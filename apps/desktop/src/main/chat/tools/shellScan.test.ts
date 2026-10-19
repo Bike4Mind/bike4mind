@@ -394,6 +394,7 @@ describe('scanShell', () => {
       ['sort writing its output with an abbreviated option', 'sort --out=/Users/tester/.zshrc x.txt'],
       ['a function wrapping an outbound call', 'f() { cat a; }; f'],
       ['a mix where one part is not contained', 'git diff > /tmp/d && make'],
+      ['an empty script', ''],
       ['a comment-only script', '# nothing to run'],
     ])('does not contain %s', async (_why, command) => {
       expect((await scan(command)).contained).toBe(false);
