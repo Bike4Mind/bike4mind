@@ -12,7 +12,7 @@ import {
   IUserDocument,
   LakeAuditPrincipal,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimitForOwner, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
@@ -28,7 +28,8 @@ import {
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
-import type { StorageOwnerTransferDb } from './reassignStorageOwner';
+import { storedTagNames } from '../tagService/bulkTagNames';
+import { resolveStorageOwnerTransfer, type StorageOwnerTransferDb } from './reassignStorageOwner';
 
 const fabFileToggleTagsSchema = z.object({
   ids: z.array(z.string()),
@@ -91,9 +92,6 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembers
    */
   auditPrincipal?: LakeAuditPrincipal;
 }
-
-const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
-  (file.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string');
 
 const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
 
@@ -355,6 +353,36 @@ export const toggleTags = async (
           throw new BadRequestError('You do not have permission to add files to this data lake');
         }
       }
+    }
+
+    // A meta-tag join moves the file's charged bytes onto the lake's owner (reassignStorageOwner).
+    // Graded here, over the WHOLE batch and summed per destination, for the same reason as the gates
+    // above: the writes below are concurrent and non-transactional, so a refusal raised inside
+    // addFileToLake would land after earlier files in the batch had already joined. Summing also
+    // catches a batch that only overflows the destination together.
+    const joiningBytesByOwner = new Map<string, { organizationId?: string; userId: string; bytes: number }>();
+    for (const file of fabFiles) {
+      const joiningLakes = metaJoinsByFile.get(file.id);
+      if (!joiningLakes) continue;
+      const transfer = await resolveStorageOwnerTransfer(
+        file,
+        [...storedTagNames(file), ...joiningLakes.map(lake => lake.datalakeTag)],
+        db
+      );
+      if (!transfer || transfer.bytes <= 0) continue;
+      const key = `${transfer.to.type}:${transfer.to.id}`;
+      const entry = joiningBytesByOwner.get(key) ?? {
+        organizationId: transfer.nextOrganizationId,
+        userId: file.userId,
+        bytes: 0,
+      };
+      entry.bytes += transfer.bytes;
+      joiningBytesByOwner.set(key, entry);
+    }
+    for (const { organizationId, userId, bytes } of joiningBytesByOwner.values()) {
+      const uploader = await db.users.findById(userId);
+      if (!uploader) throw new NotFoundError('File owner not found');
+      await checkStorageLimitForOwner({ user: uploader, organizationId }, bytes, id => db.organizations.findById(id));
     }
 
     for (const file of fabFiles) {

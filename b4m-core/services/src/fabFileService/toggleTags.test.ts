@@ -199,6 +199,24 @@ describe('toggleTags - data lake meta-tags', () => {
     expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
+  it('refuses a batch that only overflows the destination org together, before any file joins', async () => {
+    const adapters = makeAdapters([
+      { ...file('f1'), fileSize: 400, storageChargedAt: new Date() },
+      { ...file('f2'), fileSize: 400, storageChargedAt: new Date() },
+    ]);
+    const orgLake = lake({ organizationId: 'org1' });
+    adapters.db.dataLakes.findByDatalakeTag.mockResolvedValue(orgLake);
+    adapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([{ ...orgLake, createdAt: new Date(0) }]);
+    // 1 MB pool with room for one 400-byte file but not for both.
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org1', currentStorageSize: 999_500, storageLimit: 1 });
+
+    await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(/storage limit/i);
+
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
+    expect(adapters.store.get('f1')?.tags).toEqual([]);
+    expect(adapters.store.get('f2')?.tags).toEqual([]);
+  });
+
   it('recomputes the lake stats in both directions', async () => {
     const leaving = makeAdapters([file('f1', [{ name: 'datalake:lake', strength: 1 }])]);
     await run(leaving, { ids: ['f1'], tags: ['datalake:lake'] });
