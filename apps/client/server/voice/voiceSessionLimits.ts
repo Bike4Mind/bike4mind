@@ -19,6 +19,25 @@ export function voiceSessionTokenExpiresAtMs(holdStartedAt: Date): number {
 export const REALTIME_VOICE_RESERVE_USD = 0.77;
 export const REALTIME_VOICE_HOLD_SECONDS = 60 * 60;
 
+// A realtime reconnect reuses its hold only while at least this much of the window is left; past
+// that it reserves afresh rather than open a session with almost no window to bill against.
+export const REALTIME_MIN_REUSE_SECONDS = 60;
+
+// OpenAI's own default lifetime for a realtime client secret (it accepts 10 to 7200 seconds).
+export const REALTIME_CLIENT_SECRET_TTL_SECONDS = 10 * 60;
+
+const realtimeHoldSecondsLeft = (holdStartedAt: Date, now: Date) =>
+  REALTIME_VOICE_HOLD_SECONDS - Math.floor((now.getTime() - holdStartedAt.getTime()) / 1000);
+
+/**
+ * Lifetime to mint a realtime client secret with, for a call on the hold opened at `holdStartedAt`:
+ * never past the hold's window, so a reconnect's key cannot start an OpenAI session after it. The
+ * secret only gates starting a session; OpenAI does not end one already open when it expires.
+ */
+export function realtimeClientSecretTtlSeconds(holdStartedAt: Date, now: Date = new Date()): number {
+  return Math.max(10, Math.min(REALTIME_CLIENT_SECRET_TTL_SECONDS, realtimeHoldSecondsLeft(holdStartedAt, now)));
+}
+
 /**
  * The least a realtime call that has been open `elapsedSeconds` (server clock, from its bootstrap)
  * settles for: the hold's own rate, pro rata, capped at the hold.
@@ -59,6 +78,7 @@ export function creditsForElapsed(reservedCredits: number, elapsedSeconds: numbe
  *
  * Reuse also ends with the hold's window (MAX_SESSION_SECONDS, or REALTIME_VOICE_HOLD_SECONDS for a
  * realtime hold): the reserve only covers that long a call, so a later reconnect pays a fresh hold.
+ * A realtime hold also stops being reused once less than REALTIME_MIN_REUSE_SECONDS of it is left.
  */
 export function shouldReuseVoiceHold(
   isReconnect: boolean | undefined,
@@ -70,9 +90,8 @@ export function shouldReuseVoiceHold(
   now: Date = new Date()
 ): boolean {
   if (!isReconnect || session?.voiceReservedCredits == null || session?.voiceSessionStartedAt == null) return false;
-  const windowMs = (realtime ? REALTIME_VOICE_HOLD_SECONDS : MAX_SESSION_SECONDS) * 1000;
-  return (
-    (session.voiceBilledCredits != null) === realtime &&
-    now.getTime() - new Date(session.voiceSessionStartedAt).getTime() < windowMs
-  );
+  if ((session.voiceBilledCredits != null) !== realtime) return false;
+  const startedAt = new Date(session.voiceSessionStartedAt);
+  if (realtime) return realtimeHoldSecondsLeft(startedAt, now) >= REALTIME_MIN_REUSE_SECONDS;
+  return now.getTime() - startedAt.getTime() < MAX_SESSION_SECONDS * 1000;
 }

@@ -28,7 +28,11 @@ import {
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
-import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import {
+  REALTIME_VOICE_RESERVE_USD,
+  realtimeClientSecretTtlSeconds,
+  shouldReuseVoiceHold,
+} from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
@@ -240,7 +244,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
     }
   }
 
+  // The call's hold window: the reused hold's, or the one this request opens below.
+  const holdStartedAt =
+    reuseHold && session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : new Date();
   const requestBody = {
+    expires_after: { anchor: 'created_at', seconds: realtimeClientSecretTtlSeconds(holdStartedAt) },
     session: {
       type: 'realtime',
       model: realtimeModel,

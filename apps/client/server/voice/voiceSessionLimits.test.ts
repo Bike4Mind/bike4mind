@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { REALTIME_VOICE_HOLD_SECONDS, realtimeCreditsFloor, shouldReuseVoiceHold } from './voiceSessionLimits';
+import {
+  REALTIME_CLIENT_SECRET_TTL_SECONDS,
+  REALTIME_MIN_REUSE_SECONDS,
+  REALTIME_VOICE_HOLD_SECONDS,
+  realtimeClientSecretTtlSeconds,
+  realtimeCreditsFloor,
+  shouldReuseVoiceHold,
+} from './voiceSessionLimits';
 
 // Guards the money path: a reconnect must REUSE an existing credit hold rather
 // than letting the bootstrap endpoint reserve (and charge) a second time. This
@@ -84,5 +91,27 @@ describe('shouldReuseVoiceHold past the hold window', () => {
     const hold = { voiceReservedCredits: 100, voiceSessionStartedAt: old, voiceBilledCredits: 0 };
     expect(shouldReuseVoiceHold(true, hold, true, now)).toBe(false);
     expect(shouldReuseVoiceHold(true, { ...hold, voiceSessionStartedAt: startedAt }, true, now)).toBe(true);
+  });
+});
+
+describe('realtime hold reuse near the end of its window', () => {
+  const now = new Date('2026-01-01T02:00:00Z');
+  const startedSecondsAgo = (seconds: number) => new Date(now.getTime() - seconds * 1000);
+  const hold = (seconds: number) => ({
+    voiceReservedCredits: 100,
+    voiceSessionStartedAt: startedSecondsAgo(seconds),
+    voiceBilledCredits: 0,
+  });
+
+  it('reuses a realtime hold only while REALTIME_MIN_REUSE_SECONDS of its window remain', () => {
+    const lastReusable = REALTIME_VOICE_HOLD_SECONDS - REALTIME_MIN_REUSE_SECONDS;
+    expect(shouldReuseVoiceHold(true, hold(lastReusable), true, now)).toBe(true);
+    expect(shouldReuseVoiceHold(true, hold(lastReusable + 1), true, now)).toBe(false);
+  });
+
+  it("mints the client secret no longer than what is left of the hold's window", () => {
+    expect(realtimeClientSecretTtlSeconds(now, now)).toBe(REALTIME_CLIENT_SECRET_TTL_SECONDS);
+    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 300), now)).toBe(300);
+    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 60), now)).toBe(60);
   });
 });

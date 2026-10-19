@@ -256,6 +256,39 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(mockOpenVoiceHold).toHaveBeenCalledWith('session-1', expired, expect.objectContaining({ realtime: true }));
   });
 
+  it("mints a reconnect's client secret to expire with the reused hold's window", async () => {
+    // Five minutes of the 60-minute window left.
+    const lateStartedAt = new Date(Date.now() - 55 * 60_000);
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: lateStartedAt });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    const { expires_after } = mockPost.mock.calls[0][1];
+    expect(expires_after.anchor).toBe('created_at');
+    expect(expires_after.seconds).toBeGreaterThan(290);
+    expect(expires_after.seconds).toBeLessThanOrEqual(300);
+  });
+
+  it('reserves afresh, instead of reusing, a hold with under a minute of its window left', async () => {
+    const nearlyOver = new Date(Date.now() - (60 * 60_000 - 30_000));
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: nearlyOver });
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: 30 });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockClaimVoiceHold).toHaveBeenCalledWith('session-1', nearlyOver);
+    expect(mockOpenVoiceHold).toHaveBeenCalledWith(
+      'session-1',
+      nearlyOver,
+      expect.objectContaining({ realtime: true })
+    );
+    // The fresh hold's whole window is ahead, so the key gets the full default lifetime.
+    expect(mockPost.mock.calls[0][1].expires_after).toEqual({ anchor: 'created_at', seconds: 600 });
+  });
+
   it('refuses a reconnect with no live hold that cannot afford a fresh one, before OpenAI mints a key', async () => {
     mockGetSession.mockResolvedValueOnce({ id: 'session-1', userId: 'user-1' });
     mockFindById.mockResolvedValueOnce({ id: 'user-1', currentCredits: 1 });
