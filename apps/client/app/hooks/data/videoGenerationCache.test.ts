@@ -8,6 +8,7 @@ import {
   patchVideoGeneration,
   prependVideoGeneration,
   reconcileFetchedVideoGeneration,
+  reconcileFetchedVideoGenerationPage,
   seedVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
@@ -194,5 +195,18 @@ describe('patchVideoGeneration', () => {
   it('reports a job it has never seen', () => {
     queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob()]));
     expect(patchVideoGeneration(queryClient, { id: 'elsewhere', state: 'pending' })).toBe(false);
+  });
+});
+
+describe('reconcileFetchedVideoGenerationPage', () => {
+  it('keeps a listed row a frame finished over a list refetch read before it', () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'succeeded' });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, {
+      data: [videoJob({ state: 'running' })],
+      next_cursor: null,
+    });
+    expect(page.data[0].state).toBe('succeeded');
+    expect(detail('job-1')?.state).toBe('succeeded');
   });
 });

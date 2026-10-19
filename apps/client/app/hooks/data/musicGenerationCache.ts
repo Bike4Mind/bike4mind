@@ -21,4 +21,5 @@ export const seedMusicGeneration = musicCache.seed;
 export const prependMusicGeneration = musicCache.prepend;
 export const upsertMusicGeneration = musicCache.upsert;
 export const reconcileFetchedMusicGeneration = musicCache.reconcileFetched;
+export const reconcileFetchedMusicGenerationPage = musicCache.reconcileFetchedPage;
 export const patchMusicGeneration = musicCache.patch;
