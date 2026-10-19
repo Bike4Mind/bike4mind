@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   blockedHosts: [] as string[],
   privateNetworks: { cidrs: [] as string[], allowHttp: false },
   policyScopes: [] as unknown[],
+  privateNetworksEntry: {} as { platformRejected?: true; ignoredOverrides?: { scopeLevel: string; scopeId: string }[] },
 }));
 
 vi.mock('@server/middlewares/featureFlag', () => ({
@@ -22,9 +23,14 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   scopedSettingsService: {
-    resolveScopedSettingValues: vi.fn(async () => ({
-      customMcpBlockedHosts: { hosts: state.blockedHosts },
-      customMcpAllowPrivateNetworks: state.privateNetworks,
+    resolveScopedSettingEntries: vi.fn(async () => ({
+      customMcpBlockedHosts: { value: { hosts: state.blockedHosts }, source: 'platform', stored: true },
+      customMcpAllowPrivateNetworks: {
+        value: state.privateNetworks,
+        source: 'platform',
+        stored: true,
+        ...state.privateNetworksEntry,
+      },
     })),
     resolveScopedSetting: vi.fn(async (_key: string, scope: { organizationId?: string }) => {
       state.policyScopes.push(scope);
@@ -47,6 +53,7 @@ beforeEach(() => {
   state.blockedHosts = [];
   state.privateNetworks = { cidrs: [], allowHttp: false };
   state.policyScopes = [];
+  state.privateNetworksEntry = {};
   process.env = {
     ...ORIGINAL_ENV,
     APP_URL: 'https://app.example.com',
@@ -72,6 +79,37 @@ describe('resolveOwnHosts', () => {
 });
 
 describe('resolveCustomMcpContext', () => {
+  describe('dropped stored override', () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => warn.mockRestore());
+
+    it('does not warn when the stored value is valid or nothing is stored', async () => {
+      state.privateNetworks = { cidrs: ['10.0.0.0/8'], allowHttp: false };
+      await resolveCustomMcpContext('u1');
+      state.privateNetworks = { cidrs: [], allowHttp: false };
+      await resolveCustomMcpContext('u1');
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('resolves to the default and warns with the setting key when the stored value was refused', async () => {
+      state.privateNetworksEntry = { platformRejected: true };
+      const context = await resolveCustomMcpContext('u1');
+      expect(context.network.allowPrivateCidrs).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("'customMcpAllowPrivateNetworks'");
+      expect(warn.mock.calls[0][0]).toContain('platform scope');
+    });
+
+    it('warns with the scope id for a narrower override that was skipped', async () => {
+      state.privateNetworksEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
+      await resolveCustomMcpContext('u1');
+      expect(warn.mock.calls[0][0]).toContain('organization scope org-a');
+    });
+  });
+
   it('needs both platform flags and no org set to off', async () => {
     expect((await resolveCustomMcpContext('u1')).enabled).toBe(true);
 

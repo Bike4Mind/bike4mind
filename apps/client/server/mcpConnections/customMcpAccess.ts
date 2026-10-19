@@ -71,6 +71,33 @@ function policyScope(userId: string, organizationId?: string): SettingScope {
     : { owner: { id: userId, type: CreditHolderType.User } };
 }
 
+const CUSTOM_MCP_HOST_SETTING_KEYS = ['customMcpBlockedHosts', 'customMcpAllowPrivateNetworks'] as const;
+
+/**
+ * A stored value the setting's schema now refuses (e.g. a private range saved before the shared
+ * unreachable-network list) resolves to the default, so say so; otherwise the operator's list vanishes silently.
+ */
+function warnOnDroppedOverrides(
+  entries: Record<
+    (typeof CUSTOM_MCP_HOST_SETTING_KEYS)[number],
+    { platformRejected?: true; ignoredOverrides?: { scopeLevel: string; scopeId: string }[] }
+  >
+): void {
+  for (const key of CUSTOM_MCP_HOST_SETTING_KEYS) {
+    const entry = entries[key];
+    if (entry.platformRejected) {
+      console.warn(
+        `[customMcpAccess] Stored '${key}' at platform scope failed validation; using the default (no override applied)`
+      );
+    }
+    for (const ignored of entry.ignoredOverrides ?? []) {
+      console.warn(
+        `[customMcpAccess] Stored '${key}' at ${ignored.scopeLevel} scope ${ignored.scopeId} failed validation; using the default (no override applied)`
+      );
+    }
+  }
+}
+
 /**
  * Resolves the switches, the policies and the network options for one user. Org policies come from
  * the user's actual memberships (`findMembershipOrgIds`), never from the selected-org pointer, so a
@@ -82,11 +109,7 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
     isFeatureEnabled('EnableMCPServer'),
     isFeatureEnabled('EnableCustomMcpConnectors'),
     organizationRepository.findMembershipOrgIds(userId),
-    scopedSettingsService.resolveScopedSettingValues(
-      ['customMcpBlockedHosts', 'customMcpAllowPrivateNetworks'],
-      policyScope(userId),
-      db
-    ),
+    scopedSettingsService.resolveScopedSettingEntries(CUSTOM_MCP_HOST_SETTING_KEYS, policyScope(userId), db),
   ]);
   const scopes = orgIds.length > 0 ? orgIds.map(orgId => policyScope(userId, orgId)) : [policyScope(userId)];
   const policies = await Promise.all(
@@ -94,12 +117,13 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
   );
 
   const platformFlag = mcpEnabled && customEnabled;
-  const privateNetworks = platform.customMcpAllowPrivateNetworks;
+  warnOnDroppedOverrides(platform);
+  const privateNetworks = platform.customMcpAllowPrivateNetworks.value;
   const selfHostPrivate = isSelfHost() ? privateNetworks : undefined;
   return {
     enabled: policies.every(policy => isCustomMcpEnabled(platformFlag, policy)),
     policies,
-    platformBlockedHosts: platform.customMcpBlockedHosts.hosts,
+    platformBlockedHosts: platform.customMcpBlockedHosts.value.hosts,
     organizationIds: orgIds,
     network: {
       ownHosts: resolveOwnHosts(),

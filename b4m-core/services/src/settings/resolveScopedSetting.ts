@@ -58,6 +58,11 @@ export interface ResolvedSetting<T> {
  */
 export interface ScopedSettingEntry<T> extends ResolvedSetting<T> {
   stored: boolean;
+  /**
+   * Set when the platform row holds a non-blank value that failed the setting's schema, so `value`
+   * is the coded default despite a stored row. Separates "dropped" from "never set" (both `stored: false`).
+   */
+  platformRejected?: true;
 }
 
 /** The repositories the resolver reads. `scopedSettings` is optional: absent means platform-only. */
@@ -285,12 +290,15 @@ async function resolveAll<K extends SettingKey>(
     // An unparseable platform row resolves to the coded default above, so it counts as not stored. So
     // does a blank one: a number schema's preprocess turns '' into the prefaulted default, not a choice.
     const raw = platformRecord[key];
-    const stored = !!won || (!isBlankSettingValue(raw) && def.schema.safeParse(raw).success);
+    const platformParses = !isBlankSettingValue(raw) && def.schema.safeParse(raw).success;
+    const stored = !!won || platformParses;
+    const platformRejected = !won && raw !== undefined && !isBlankSettingValue(raw) && !platformParses;
     result.set(key, {
       value: value as SettingValue<K>,
       source,
       ...(ignored.length > 0 ? { ignoredOverrides: ignored } : {}),
       stored,
+      ...(platformRejected ? { platformRejected: true as const } : {}),
     });
   }
 

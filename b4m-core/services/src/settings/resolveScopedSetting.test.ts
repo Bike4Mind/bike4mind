@@ -302,6 +302,22 @@ describe('resolveScopedSettingEntries (stored)', () => {
       stored: true,
     });
   });
+
+  it('flags platformRejected for a non-blank platform row that failed the schema', async () => {
+    expect(await storedFor({ [KEY]: 'not-a-number' })).toMatchObject({ platformRejected: true });
+  });
+
+  it('does not flag platformRejected for an unset platform row', async () => {
+    expect(await storedFor({})).not.toHaveProperty('platformRejected');
+  });
+
+  it('does not flag platformRejected for a blank platform row', async () => {
+    expect(await storedFor({ [KEY]: '' })).not.toHaveProperty('platformRejected');
+  });
+
+  it('does not flag platformRejected for a valid platform row', async () => {
+    expect(await storedFor({ [KEY]: '2000' })).not.toHaveProperty('platformRejected');
+  });
 });
 
 describe('resolveScopedSetting (integration, through the real settingsMap)', () => {
