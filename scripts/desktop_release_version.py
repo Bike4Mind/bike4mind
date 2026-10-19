@@ -108,7 +108,7 @@ def release_notes(version, previous, repository, destination):
     visible = [(sha, subject) for sha, subject, _ in changes
                if not re.match(r'(?:docs|test|ci|style|chore\(release\))(?:\(|:|!)', subject)
                and note_relevant(sha)]
-    lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
+    lines.extend(f'- {subject} ([`{sha[:7]}`](https://github.com/{repository}/commit/{sha}))'
                  for sha, subject in visible)
     if not visible:
         lines.append('- Maintenance release; no desktop-facing changes.')

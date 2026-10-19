@@ -221,6 +221,9 @@ class DesktopVersionTest(unittest.TestCase):
         self.assertIn('feat(desktop): add feature', notes)
         self.assertNotIn('feat(web): unrelated', notes)
         self.assertIn('https://github.com/example/repo/commit/', notes)
+        sha = self.git('rev-parse', 'HEAD')
+        self.assertIn(f'([`{sha[:7]}`](https://github.com/example/repo/commit/{sha}))', notes)
+        self.assertNotIn('[commit]', notes)
 
     def test_notes_exclude_server_code_and_release_bookkeeping(self):
         self.commit('fix(retrieval): server-only change', 'b4m-core/services/src/llm/retrieval.ts')
