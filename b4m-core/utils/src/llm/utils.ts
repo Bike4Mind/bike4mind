@@ -170,9 +170,12 @@ const CONTENT_TRUNCATION_NOTICE =
  * the content message itself means it lives or dies with what it is asserting, so it can never claim
  * content is present when `declareUndeliveredAttachments` has already dropped or replaced it.
  */
-export const ATTACHMENT_DELIVERED_NOTICE =
-  '[The content below is included in this request and you can read it. Do not tell the user you are ' +
-  'unable to access or open it.]\n\n';
+export const ATTACHMENT_DELIVERED_NOTICE = '[Attached file content included in this request:]\n\n';
+
+export const ATTACHMENT_END_DELIMITER = '\n\n--- End of attached file content ---\n\n';
+
+const withoutAttachmentEnd = (text: string): string =>
+  text.endsWith(ATTACHMENT_END_DELIMITER) ? text.slice(0, -ATTACHMENT_END_DELIMITER.length) : text;
 
 /**
  * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
@@ -1894,7 +1897,7 @@ export async function processFabFilesServer(
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
 
             const body = `Data for ${noticeFileName(file.fileName)}:\n${FILENAME_DIGIT_NOTICE}\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
-            userMessages.push({ role: 'user', content: body + notice });
+            userMessages.push({ role: 'user', content: body + notice + ATTACHMENT_END_DELIMITER });
 
             if (notice) {
               logger.warn(
@@ -2116,12 +2119,11 @@ export async function processFabFilesServer(
       contextFiles.forEach((file, index) => {
         combinedContent += `--- File ${index + 1}: ${noticeFileName(file.fileName)} ---\n${file.content}\n\n`;
       });
-      combinedContent += `--- End of attached files ---`;
     }
 
     userMessages.push({
       role: 'user',
-      content: combinedContent,
+      content: combinedContent + ATTACHMENT_END_DELIMITER,
     });
   }
 
@@ -2361,17 +2363,18 @@ const processMessages = (
     if (tokensPerMessage >= 1) {
       const truncatedMessages = messages.map(message => {
         // Held out of the slice so the cut cannot leave a fragment of it behind, then put back after.
-        const upstream =
-          truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
-        const source = upstream
-          ? { ...message, content: (message.content as string).slice(0, -upstream.length) }
-          : message;
+        const text = typeof message.content === 'string' ? message.content : null;
+        const boundary = truncationNotice && text?.endsWith(ATTACHMENT_END_DELIMITER) ? ATTACHMENT_END_DELIMITER : '';
+        const body = boundary && text !== null ? withoutAttachmentEnd(text) : text;
+        const upstream = truncationNotice && body !== null ? upstreamNoticeIn(body) : null;
+        const source =
+          body !== null ? { ...message, content: upstream ? body.slice(0, -upstream.length) : body } : message;
         const truncated = truncateMessageContent(source, tokensPerMessage);
         // Every message reaching this branch gets shortened - it only runs when none of them fit,
         // and the per-message share is at most the budget each one already exceeded. The type check
         // is the real guard: array content truncates by whole blocks and takes no text notice.
         if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
-        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) };
+        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) + boundary };
       });
       return {
         messages: truncatedMessages,
@@ -2880,7 +2883,7 @@ export async function buildAndSortMessages(
   // and URL content each get their own message and so are judged separately. Real per-file accounting
   // needs block-level bookkeeping through extraction and is tracked separately.
   const fileTokens = (message: IMessage): number => {
-    const text = messageContentText(message);
+    const text = withoutAttachmentEnd(messageContentText(message));
     // No notice is the file's own content, and either kind pushes a sliver over the threshold - the
     // excerpt notice weighs ~101 estimate tokens by itself, half the usability floor. Ours is matched
     // by identity so a file whose text happens to end with that sentence cannot spoof a cut; an
@@ -3004,7 +3007,10 @@ export async function buildAndSortMessages(
     message !== undeliveredNote &&
     isAttachment(message) &&
     !(cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS)
-      ? { ...message, content: ATTACHMENT_DELIVERED_NOTICE + message.content }
+      ? {
+          ...message,
+          content: ATTACHMENT_DELIVERED_NOTICE + withoutAttachmentEnd(message.content) + ATTACHMENT_END_DELIMITER,
+        }
       : message;
 
   const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
