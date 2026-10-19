@@ -166,9 +166,9 @@ describe('cleanupDeletedDataLake', () => {
           { name: 'datalake:mine', strength: 1 },
         ],
       })
-      // The pull matched nothing: an earlier attempt cleared the tags before its reassign failed,
-      // or a concurrent removal won the race. The owner still has to be recomputed from the tags
-      // the row carries now.
+      // The pull matched nothing: a concurrent removal cleared the tags between the survivor
+      // listing and this write. The owner still has to be recomputed from the tags the row
+      // carries now.
       .mockResolvedValue({ ...survivor, tags: [{ name: 'datalake:mine', strength: 1 }] });
     db.fabFiles.pullTagsByFabFileId = vi.fn(async () => 0 as never);
     db.dataLakes.findByDatalakeTags.mockResolvedValue([{ id: 'lake-mine', datalakeTag: 'datalake:mine' }]);
