@@ -44,6 +44,7 @@ const config: Config = {
             'features/optihashi.md',
             'features/libreoncology.md',
             'features/tavern/**',
+            'features/b4m-pi.md',
           ],
         },
         blog: false,

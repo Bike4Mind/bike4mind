@@ -97,7 +97,6 @@ Bike4Mind offers several cutting-edge features that are opt-in. **You must enabl
 | **[Rapid Reply](./rapid-reply.md)** | Get instant acknowledgments from fast mini models while your full response is being prepared | Quick-reply indicators in chat |
 | **[Private Model Hub](./private-model-hub.md)** | Access privately hosted cutting-edge models including DeepSeek, Qwen, and other frontier models | Additional models in model selector |
 | **[Research Engine](./research-engine.md)** | Search the web for information during AI conversations | Web search and deep research tools in chat |
-| **[B4M Pi](./b4m-pi.md)** | Repository analysis, task scheduling, Gantt charts, and team activity dashboards | **B4M Pi in the sidebar**, full project intelligence dashboard |
 | **[Lattice](./lattice.md)** | Create and manipulate financial pro-forma models using natural language | Lattice model artifacts in notebooks |
 
 ### Data Management
@@ -258,7 +257,6 @@ Connect your Slack workspace:
 Connect GitHub for:
 - Repository references and code search in chat
 - Issue tracking and pull request tools
-- Activity data for [B4M Pi](./b4m-pi.md) project intelligence dashboards
 
 ### Webhooks
 
@@ -467,4 +465,3 @@ Manage email-to-notebook functionality.
 - [Agents](./agents.md) - Custom AI assistants
 - [Quest Master](./quest-master.md) - Autonomous task planning
 - OptiHashi - Optimization engine
-- [B4M Pi](./b4m-pi.md) - Project intelligence
