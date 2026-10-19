@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: h.append } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
 
-import { recordAdminActionFromRequest, systemAuditActor } from './adminAudit';
+import { recordAdminActionFromRequest, systemAuditActor, type RecordAdminActionFromRequestInput } from './adminAudit';
 
 type RequestOverrides = {
   user?: Record<string, unknown>;
@@ -26,7 +26,7 @@ const buildRequest = (overrides: RequestOverrides = {}): Request =>
       email: 'admin@example.com',
       isAdmin: true,
     },
-    headers: { 'user-agent': 'vitest-agent', 'x-forwarded-for': '203.0.113.7' },
+    headers: { 'user-agent': 'vitest-agent', 'cloudfront-viewer-address': '203.0.113.7:4711' },
     socket: { remoteAddress: '198.51.100.1' },
     requestId: 'req-1',
     url: '/api/admin/users/u1/credits',
@@ -34,11 +34,11 @@ const buildRequest = (overrides: RequestOverrides = {}): Request =>
     ...overrides,
   }) as unknown as Request;
 
-const baseInput = {
+const baseInput: RecordAdminActionFromRequestInput = {
   action: 'user.credits.adjusted',
   target: { kind: 'user', id: 'u1', displayName: 'Target User' },
   summary: 'Granted credits',
-} as unknown as Parameters<typeof recordAdminActionFromRequest>[1];
+};
 
 const appended = () => h.append.mock.calls[0][0];
 
@@ -65,7 +65,7 @@ describe('recordAdminActionFromRequest', () => {
       route: '/api/admin/users/u1/credits',
       source: 'admin_ui',
     });
-    expect(typeof appended().context.ip).toBe('string');
+    expect(appended().context.ip).toBe('203.0.113.7');
     expect(h.findById).not.toHaveBeenCalled();
   });
 
@@ -130,6 +130,58 @@ describe('recordAdminActionFromRequest', () => {
 
     expect(appended().actor).toMatchObject({ kind: 'apiKey', apiKeyId: 'key-9', userId: 'admin-1' });
     expect(appended().context.source).toBe('api_key');
+  });
+
+  it('writes the fallback actor and logs when the impersonator lookup rejects', async () => {
+    h.findById.mockRejectedValue(new Error('db down'));
+    const req = buildRequest({
+      user: { id: 'customer-1', username: 'cust', name: 'Customer', isAdmin: false, impersonatedBy: 'real-admin' },
+    });
+
+    const entry = await recordAdminActionFromRequest(req, baseInput);
+
+    expect(entry).not.toBeNull();
+    expect(appended().actor).toMatchObject({
+      userId: 'real-admin',
+      name: 'Unknown admin',
+      impersonatedUserId: 'customer-1',
+    });
+    expect(req.logger.error).toHaveBeenCalledWith(
+      '[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]',
+      expect.objectContaining({ impersonatedBy: 'real-admin' })
+    );
+  });
+
+  it('combines impersonation with an API key', async () => {
+    h.findById.mockResolvedValue({
+      id: 'real-admin',
+      username: 'real',
+      name: 'Real Admin',
+      email: null,
+      isAdmin: true,
+    });
+    const req = buildRequest({
+      user: { id: 'customer-1', username: 'cust', name: 'C', isAdmin: false, impersonatedBy: 'real-admin' },
+      apiKeyInfo: { keyId: 'key-9' },
+    });
+
+    await recordAdminActionFromRequest(req, baseInput);
+
+    expect(appended().actor).toMatchObject({
+      kind: 'apiKey',
+      apiKeyId: 'key-9',
+      userId: 'real-admin',
+      impersonatedUserId: 'customer-1',
+    });
+    expect(appended().context.source).toBe('api_key');
+  });
+
+  it('throws when the request is unauthenticated', async () => {
+    const req = buildRequest();
+    delete req.user;
+
+    await expect(recordAdminActionFromRequest(req, baseInput)).rejects.toThrow(/authenticated/);
+    expect(h.append).not.toHaveBeenCalled();
   });
 
   it('strips the query string from the route', async () => {

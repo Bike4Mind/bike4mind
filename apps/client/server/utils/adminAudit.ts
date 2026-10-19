@@ -20,24 +20,35 @@ const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActo
   wasAdmin: user.isAdmin,
 });
 
+const lookUpImpersonator = async (req: Request, impersonatedBy: string) => {
+  try {
+    return await userRepository.findById(impersonatedBy);
+  } catch (error) {
+    // Attribution must not abort the admin operation; the fallback actor still names who acted.
+    const meta = { impersonatedBy, error };
+    if (req.logger) req.logger.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', meta);
+    else console.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', meta);
+    return null;
+  }
+};
+
 const resolveActor = async (req: Request, scope: AuditActor['scope']): Promise<AuditActor> => {
   const { user, apiKeyInfo } = req;
   if (!user) throw new Error('recordAdminActionFromRequest requires an authenticated request');
 
-  const impersonatedBy = user.impersonatedBy;
-  let actor: AuditActor;
-  if (impersonatedBy) {
-    // The acting identity is the real admin; req.user is the account being impersonated.
-    const admin = await userRepository.findById(impersonatedBy);
-    actor = admin
-      ? toUserActor(admin, scope)
-      : { kind: 'user', scope, userId: impersonatedBy, name: 'Unknown admin', wasAdmin: true };
-    actor.impersonatedUserId = user.id;
-  } else {
-    actor = toUserActor(user, scope);
-  }
+  const { impersonatedBy } = user;
+  // The acting identity is the real admin; req.user is the account being impersonated.
+  const admin = impersonatedBy ? await lookUpImpersonator(req, impersonatedBy) : undefined;
+  const base: AuditActor = !impersonatedBy
+    ? toUserActor(user, scope)
+    : {
+        ...(admin
+          ? toUserActor(admin, scope)
+          : { kind: 'user', scope, userId: impersonatedBy, name: 'Unknown admin', wasAdmin: true }),
+        impersonatedUserId: user.id,
+      };
 
-  return apiKeyInfo ? { ...actor, kind: 'apiKey', apiKeyId: apiKeyInfo.keyId } : actor;
+  return apiKeyInfo ? { ...base, kind: 'apiKey', apiKeyId: apiKeyInfo.keyId } : base;
 };
 
 const buildContext = (req: Request): AuditContext => ({
