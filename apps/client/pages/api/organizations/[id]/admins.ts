@@ -6,7 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { orgAclRowConfersMembership } from '@bike4mind/common';
+import { isOrgOwnerOrPlatformAdmin, orgAclRowConfersMembership } from '@bike4mind/common';
 import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { z } from 'zod';
 
@@ -24,8 +24,7 @@ const handler = baseApi().put(
     const organization = await organizationRepository.findById(organizationId);
     if (!organization) throw new NotFoundError('Organization not found');
 
-    const isOwner = organization.userId === req.user?.id;
-    if (!isOwner && !req.user?.isAdmin) {
+    if (!isOrgOwnerOrPlatformAdmin(req.user!, organization)) {
       throw new ForbiddenError('Only the billing owner or a platform admin can set org managers');
     }
 

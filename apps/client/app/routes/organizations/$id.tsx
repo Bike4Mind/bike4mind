@@ -1,4 +1,10 @@
-import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  Permission,
+  WithId,
+  isOrgOwnerOrCurrentAdmin,
+  isOrgOwnerOrPlatformAdmin,
+} from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -118,7 +124,7 @@ const OrganizationPage: FC = () => {
   // Only the billing owner or a platform admin may add or remove managers (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
-    return currentUser.isAdmin || currentUser.id === organization.userId;
+    return isOrgOwnerOrPlatformAdmin(currentUser, organization);
   }, [currentUser, organization]);
 
   // A ?tab= deep link can ask for a tab this caller never gets rendered, so the request is sent

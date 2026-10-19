@@ -181,7 +181,7 @@ export function canRevokeOrgMember(
   targetUserId: string
 ): boolean {
   if (!canAdministerOrganization(actor, organization)) return false;
-  if (actor.isAdmin || organization.userId === actor.id) return true;
+  if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
   const targetIsManager =
     (organization.adminUserIds ?? []).includes(targetUserId) || organization.managerId === targetUserId;
   return !targetIsManager;

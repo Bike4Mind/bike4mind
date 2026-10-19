@@ -7,10 +7,10 @@ import { UsageDashboard } from '@client/app/components/admin/CreditAnalysis/comp
 import { TransactionLedger } from '@client/app/components/admin/CreditAnalysis/components/TransactionLedger';
 
 /**
- * Org owner/manager surface for their own org's AI spend: the same Usage and
+ * Org owner surface for their own org's AI spend: the same Usage and
  * Ledger dashboards as the admin Credit Analytics tab, but pinned to this org
- * (picker hidden). Access is enforced server-side via verifyOrgAccess plus the
- * owner-scoped queries; this is only rendered for owner/manager/admin.
+ * (picker hidden). Access is enforced server-side via verifyOrgOwner plus the
+ * owner-scoped queries; this is only rendered for the owner or a platform admin.
  */
 const OrganizationUsageSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const [tab, setTab] = useState<'usage' | 'ledger'>('usage');
