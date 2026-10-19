@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
-import { validateUserCredits } from './base/utils';
+import { validateImageCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import { settleToolCallCredits } from '../settleToolCredits';
 
@@ -9,10 +9,10 @@ import { settleToolCallCredits } from '../settleToolCredits';
 // per delivered call, guard conditions) without an image-pricing fixture.
 vi.mock('./base/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('./base/utils')>();
-  return { ...actual, validateUserCredits: vi.fn() };
+  return { ...actual, validateImageCredits: vi.fn() };
 });
 vi.mock('../../imageCost', () => ({ estimateImageCredits: vi.fn() }));
-const mockValidateUserCredits = vi.mocked(validateUserCredits);
+const mockValidateImageCredits = vi.mocked(validateImageCredits);
 const mockEstimateImageCredits = vi.mocked(estimateImageCredits);
 
 const makeBuilder = ({
@@ -43,7 +43,7 @@ const quest = (): TestQuest => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, ima
 const asQuest = (q: TestQuest) => q as never;
 
 beforeEach(() => {
-  mockValidateUserCredits.mockReset().mockResolvedValue({ requiredCredits: 400, usdCost: 0.08 });
+  mockValidateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: 0.08 });
   mockEstimateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: 0.08 } as never);
 });
 
@@ -64,7 +64,7 @@ describe('ToolBuilder.gateImageCredits', () => {
     await builder.gateImageCredits('edit_image', COST_INPUT, true, null, MODELS);
 
     // In flight: 0, then 400. After one settles, its gate entry is replaced by the 400 charge.
-    expect(mockValidateUserCredits.mock.calls.map(call => call[6])).toEqual([0, 400, 800]);
+    expect(mockValidateImageCredits.mock.calls.map(call => call[6])).toEqual([0, 400, 800]);
   });
 
   it('drops the estimate of a call that fails before settling, so a retry is not refused', async () => {
@@ -83,7 +83,7 @@ describe('ToolBuilder.gateImageCredits', () => {
     await expect(tool.toolFn({})).rejects.toThrow('content policy');
     await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
 
-    expect(mockValidateUserCredits.mock.calls.map(call => call[6])).toEqual([0, 0]);
+    expect(mockValidateImageCredits.mock.calls.map(call => call[6])).toEqual([0, 0]);
   });
 
   it('checks affordability without reserving anything', async () => {
@@ -91,13 +91,15 @@ describe('ToolBuilder.gateImageCredits', () => {
 
     await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
 
-    expect(mockValidateUserCredits).toHaveBeenCalledTimes(1);
+    expect(mockValidateImageCredits).toHaveBeenCalledTimes(1);
     expect(toolCreditsMap.size).toBe(0);
     expect(record).not.toHaveBeenCalled();
   });
 
   it('propagates insufficient credits so the provider is never called', async () => {
-    mockValidateUserCredits.mockRejectedValueOnce(new Error('insufficient_credits'));
+    mockValidateImageCredits.mockImplementationOnce(() => {
+      throw new Error('insufficient_credits');
+    });
     const { builder } = makeBuilder();
 
     await expect(builder.gateImageCredits('edit_image', COST_INPUT, true, null, MODELS)).rejects.toThrow(
@@ -115,7 +117,7 @@ describe('ToolBuilder.gateImageCredits', () => {
 
     await builder.gateImageCredits('image_generation', data, enforce, null, MODELS);
 
-    expect(mockValidateUserCredits).not.toHaveBeenCalled();
+    expect(mockValidateImageCredits).not.toHaveBeenCalled();
   });
 });
 

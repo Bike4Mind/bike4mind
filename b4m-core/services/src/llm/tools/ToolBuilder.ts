@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
   IChatHistoryItemDocument,
@@ -20,7 +21,7 @@ import { generateMcpToolsFromCache, LlmTools } from './index';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits, validateAudioCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -476,6 +477,8 @@ export interface BuildToolPromptArgs {
 
 // The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
 const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// Reuse one async context store for the process; each tool invocation gets a unique token.
+const gatedToolInvocation = new AsyncLocalStorage<symbol>();
 
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
@@ -498,7 +501,7 @@ export class ToolBuilder {
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
     // This call's gate estimate is now superseded by its settled charge.
-    this.gatedToolCredits.get(toolName)?.shift();
+    this.releaseGatedToolCredits(toolName);
     // Only a charging call contributes: a zero-credit call is absent from the aggregate
     // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
@@ -515,47 +518,50 @@ export class ToolBuilder {
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
-  /**
-   * Gate estimates of calls that passed onToolStart and have not settled yet, per tool name in
-   * call order, so calls running in parallel in one turn each see the others. A call that ends
-   * without settling (a provider error) drops one when it returns (trackGatedCalls).
-   */
-  private readonly gatedToolCredits = new Map<string, number[]>();
-  private readonly inFlightToolCalls = new Map<string, number>();
+  /** Each invocation owns its estimate, including when same-name calls finish out of order. */
+  private readonly gatedToolCredits = new Map<string, Map<symbol, number>>();
 
-  /** Keeps no more gate estimates for a tool than it has calls still running. */
   private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
     return tools?.map(tool => {
       const name = tool.toolSchema.name;
       if (!GATED_TOOL_NAMES.has(name)) return tool;
-      const toolFn: ICompletionOptionTools['toolFn'] = async (...args) => {
-        this.inFlightToolCalls.set(name, (this.inFlightToolCalls.get(name) ?? 0) + 1);
-        try {
-          return await tool.toolFn(...args);
-        } finally {
-          const inFlight = (this.inFlightToolCalls.get(name) ?? 1) - 1;
-          this.inFlightToolCalls.set(name, inFlight);
-          const gated = this.gatedToolCredits.get(name);
-          if (gated && gated.length > inFlight) gated.splice(0, gated.length - inFlight);
-        }
+      const toolFn: ICompletionOptionTools['toolFn'] = (...args) => {
+        const invocation = Symbol(name);
+        return gatedToolInvocation.run(invocation, async () => {
+          try {
+            return await tool.toolFn(...args);
+          } finally {
+            this.gatedToolCredits.get(name)?.delete(invocation);
+          }
+        });
       };
       return { ...tool, toolFn };
     });
   }
 
+  private releaseGatedToolCredits(toolName: string): void {
+    const estimates = this.gatedToolCredits.get(toolName);
+    // Direct gate/settle callers are sequential; wrapped tools carry their invocation across awaits.
+    const invocation = gatedToolInvocation.getStore() ?? estimates?.keys().next().value;
+    if (invocation !== undefined) estimates?.delete(invocation);
+  }
+
   /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
   private committedToolCredits(): number {
     let total = 0;
-    for (const queues of [this.deps.toolCreditsMap, this.gatedToolCredits]) {
-      for (const queue of queues.values()) for (const credits of queue) total += credits;
+    for (const queue of this.deps.toolCreditsMap.values()) {
+      for (const credits of queue) total += credits;
+    }
+    for (const estimates of this.gatedToolCredits.values()) {
+      for (const credits of estimates.values()) total += credits;
     }
     return total;
   }
 
   private recordGatedToolCredits(toolName: string, credits: number): void {
-    const queue = this.gatedToolCredits.get(toolName) ?? [];
-    queue.push(credits);
-    this.gatedToolCredits.set(toolName, queue);
+    const estimates = this.gatedToolCredits.get(toolName) ?? new Map<symbol, number>();
+    estimates.set(gatedToolInvocation.getStore() ?? Symbol(toolName), credits);
+    this.gatedToolCredits.set(toolName, estimates);
   }
 
   /**
@@ -690,7 +696,7 @@ export class ToolBuilder {
   ): Promise<void> {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-    const { requiredCredits } = await validateUserCredits(
+    const { requiredCredits } = validateImageCredits(
       this.deps.user,
       modelInfo,
       data.n || 1,

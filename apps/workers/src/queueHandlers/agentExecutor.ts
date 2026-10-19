@@ -1927,9 +1927,11 @@ async function processExecution(
           },
           logger
         );
-        await agentExecutionRepository.incrementCreditsUsed(executionId, credits).catch(err =>
-          logger.warn('[Credits] failed to roll an untracked subagent spend into the run total', { err })
-        );
+        await agentExecutionRepository
+          .incrementCreditsUsed(executionId, credits)
+          .catch(err =>
+            logger.warn('[Credits] failed to roll an untracked subagent spend into the run total', { err })
+          );
       },
       onSubagentStatusUpdate: async status => {
         await sendWs('progress', { executionId, status });
@@ -3916,7 +3918,7 @@ async function processSubagentDispatch(
               organization,
               sessionId: child.sessionId,
               questId: child.questId,
-              model: meta?.model ?? child.model,
+              model: meta?.model ?? childModel,
               completionInfo: {
                 totalCredits: credits,
                 totalInputTokens: meta?.inputTokens ?? 0,
