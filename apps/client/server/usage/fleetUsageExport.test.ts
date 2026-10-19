@@ -31,8 +31,9 @@ describe('Fleet export dedicated authorization', () => {
         { ...scope, owners: [{ ownerId: 'owner', ownerType: 'Other' }] },
       ].map(value => ({ ...configured, FLEET_USAGE_EXPORT_SCOPE: JSON.stringify(value) })),
     ]) {
-      expect(authorizeFleetUsageExport(`Bearer ${token}`, env)).toEqual({ status: 'disabled' });
-      expect(authorizeFleetUsageExport(undefined, env)).toEqual({ status: 'disabled' });
+      const disabled = { status: 'disabled', misconfigured: !!env.FLEET_USAGE_EXPORT_TOKEN };
+      expect(authorizeFleetUsageExport(`Bearer ${token}`, env)).toEqual(disabled);
+      expect(authorizeFleetUsageExport(undefined, env)).toEqual(disabled);
     }
   });
 });

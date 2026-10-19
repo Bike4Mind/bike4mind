@@ -22,19 +22,25 @@ export class FleetUsageExportTooLargeError extends Error {
 
 /**
  * `disabled` means this stage has no usable token+scope pair, so the route should not exist there;
+ * `misconfigured` flags a token that is set but unusable, or a scope that does not parse.
  * `denied` means it is provisioned and the presented credential does not match.
  */
 export type FleetUsageExportAuthorization =
-  { status: 'disabled' } | { status: 'denied' } | { status: 'authorized'; scope: FleetUsageExportScope };
+  | { status: 'disabled'; misconfigured: boolean }
+  | { status: 'denied' }
+  | { status: 'authorized'; scope: FleetUsageExportScope };
 
 export function authorizeFleetUsageExport(
   authorization: string | undefined,
   env: { FLEET_USAGE_EXPORT_TOKEN?: string; FLEET_USAGE_EXPORT_SCOPE?: string }
 ): FleetUsageExportAuthorization {
   const token = env.FLEET_USAGE_EXPORT_TOKEN;
-  if (!token || token.length < 32 || token.trim() !== token || token.length > 4096) return { status: 'disabled' };
+  if (!token) return { status: 'disabled', misconfigured: false };
+  if (token.length < 32 || token.trim() !== token || token.length > 4096) {
+    return { status: 'disabled', misconfigured: true };
+  }
   const scope = parseScope(env.FLEET_USAGE_EXPORT_SCOPE);
-  if (!scope) return { status: 'disabled' };
+  if (!scope) return { status: 'disabled', misconfigured: true };
   if (!authorization || authorization.length > 4103) return { status: 'denied' };
   const presented = /^Bearer (\S+)$/i.exec(authorization)?.[1];
   if (!presented) return { status: 'denied' };

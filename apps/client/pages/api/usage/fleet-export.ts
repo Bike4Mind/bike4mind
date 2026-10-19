@@ -24,24 +24,31 @@ async function auditDenial() {
   );
 }
 
+// Once per cold start, so a provisioned-but-broken stage is visible without logging per request.
+let warnedMisconfigured = false;
+
 // Dedicated machine auth only: sessions and general API keys cannot enter this route.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const requestId = randomUUID();
   res.setHeader('X-Request-ID', requestId);
   res.setHeader('Cache-Control', 'no-store');
+  const authorization = authorizeFleetUsageExport(req.headers.authorization, {
+    FLEET_USAGE_EXPORT_TOKEN: process.env.FLEET_USAGE_EXPORT_TOKEN,
+    FLEET_USAGE_EXPORT_SCOPE: process.env.FLEET_USAGE_EXPORT_SCOPE,
+  });
+  // An unprovisioned stage answers every method as if the route did not exist, without touching the DB.
+  if (authorization.status === 'disabled') {
+    if (authorization.misconfigured && !warnedMisconfigured) {
+      warnedMisconfigured = true;
+      console.error('Fleet usage export is disabled: token or scope configuration is invalid');
+    }
+    return res.status(404).json({ error: 'Not found', request_id: requestId });
+  }
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed', request_id: requestId });
   }
   try {
-    const authorization = authorizeFleetUsageExport(req.headers.authorization, {
-      FLEET_USAGE_EXPORT_TOKEN: process.env.FLEET_USAGE_EXPORT_TOKEN,
-      FLEET_USAGE_EXPORT_SCOPE: process.env.FLEET_USAGE_EXPORT_SCOPE,
-    });
-    // An unprovisioned stage answers as if the route did not exist, without touching the DB.
-    if (authorization.status === 'disabled') {
-      return res.status(404).json({ error: 'Not found', request_id: requestId });
-    }
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
     const audit = async (outcome: string, range?: { from: string; to: string }) => {
       await CounterLog.create({
