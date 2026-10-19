@@ -171,6 +171,8 @@ export const musicGenerationTool: ToolDefinition = {
     // heuristic, so a false positive such as "inspired by Example Soloist" costs one rephrase instead of looping
     // until the tool-call cap with no song, and a rephrased prompt that is blocked again falls through to the card.
     let rephraseRequested = false;
+    // Jobs discarded for a rephrase never got a card; an identical retry must show it, or the block stays invisible.
+    const discardedJobIds = new Set<string>();
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
@@ -190,6 +192,9 @@ export const musicGenerationTool: ToolDefinition = {
         if (!result.ok) return `Music generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;
+          if (discardedJobIds.delete(result.job.id)) {
+            await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'music' }] });
+          }
           return `Music generation failed (${reason}): an identical request already ended without a song.`;
         }
         let outcome: IGenerationJobDocument | null = null;
@@ -198,6 +203,7 @@ export const musicGenerationTool: ToolDefinition = {
           rephraseRequested = true;
           outcome = await awaitEarlyOutcome(config.findJob, result.job, context);
           if (outcome && isUnbilledPromptBlock(outcome)) {
+            discardedJobIds.add(result.job.id);
             await config.releaseDiscardedJob?.(result.job.id);
             return PROVIDER_BLOCK_REFUSAL;
           }

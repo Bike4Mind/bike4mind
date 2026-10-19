@@ -307,6 +307,33 @@ describe('music_generation tool', () => {
       expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job2', kind: 'music' }] });
     });
 
+    // The discarded job had no card, so the replay guard must show it or the user never sees the block.
+    it('shows the card of a discarded job when the model retries the identical prompt', async () => {
+      const createJob = vi
+        .fn()
+        .mockResolvedValueOnce(runningJob)
+        .mockResolvedValueOnce({ ok: true, created: false, job: blocked });
+      const findJob = vi.fn().mockResolvedValue(blocked);
+      const { tool, statusUpdate } = build(createJob, { findJob });
+      expect(await call(tool)).toBe(PROVIDER_BLOCK_REFUSAL);
+      expect(statusUpdate).not.toHaveBeenCalled();
+      expect(await call(tool)).toBe(
+        'Music generation failed (content_blocked): an identical request already ended without a song.'
+      );
+      expect(statusUpdate).toHaveBeenCalledExactlyOnceWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+    });
+
+    it('shows a discarded job card only once across repeated identical retries', async () => {
+      const replay = { ok: true, created: false, job: blocked };
+      const createJob = vi.fn().mockResolvedValueOnce(runningJob).mockResolvedValue(replay);
+      const findJob = vi.fn().mockResolvedValue(blocked);
+      const { tool, statusUpdate } = build(createJob, { findJob });
+      await call(tool);
+      await call(tool);
+      await call(tool);
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
     it('shares the one rephrase with the artist guard', async () => {
       const findJob = vi.fn().mockResolvedValue(blocked);
       const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
