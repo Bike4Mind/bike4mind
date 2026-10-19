@@ -31,7 +31,7 @@ Docs are the easiest first contribution - a fix here follows the same flow as an
 2. Edit or add pages under `docs/`. Preview live with `pnpm start` (hot-reloads at http://localhost:3010).
 3. Run `pnpm check:content && pnpm build` - the build fails on broken links, so this catches most problems before CI does. The `Verify Docs Build` check runs the same build on your PR.
 4. Open a PR to `main` with a conventional-commit title (e.g. `docs: clarify CLI install steps`). Screenshots help for visual changes.
-5. First-time contributors sign the CLA once (a bot comments with the one-line instruction on your first PR). A maintainer reviews and merges; staging redeploys automatically on merge.
+5. First-time contributors sign the CLA once (a bot comments with the one-line instruction on your first PR). A maintainer reviews and merges; merging deploys to production automatically.
 
 External contributors: fork the repo, push your branch to the fork, and open the PR from there - the same steps otherwise.
 
@@ -43,4 +43,4 @@ This site is public. No customer or partner names, no internal issue references,
 
 ## Deployment
 
-Deploys run from the internal deployer, not from this repo: maintainers dispatch staging (docs.staging.bike4mind.com) or production (docs.bike4mind.com) for a commit that is already on `main`. A sensitive-term scan of the built site gates every deploy.
+There is no staging. Merging to `main` auto-deploys production (docs.bike4mind.com) from the internal deployer, usually within about 15 minutes. A sensitive-term scan of the built site gates every deploy.

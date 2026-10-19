@@ -158,9 +158,7 @@ jobs:
             **Changed files:**
             ${filesList}
 
-            Your changes will be deployed to:
-            - **Staging**: \`docs.staging.bike4mind.com\` (maintainer deploy of a commit on \`main\`)
-            - **Production**: \`docs.bike4mind.com\` (maintainer deploy of a commit on \`main\`)`;
+            Once merged to \`main\`, your changes deploy automatically to production (\`docs.bike4mind.com\`) within about 15 minutes. There is no staging.`;
             
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
