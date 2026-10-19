@@ -29,11 +29,19 @@ const session = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('applyWorkspaceSessionSettings', () => {
-  it('returns the session untouched with no table', async () => {
+  it('returns the session untouched with an empty table', async () => {
     const input = session();
 
-    expect(await applyWorkspaceSessionSettings(input, { user: null }, undefined)).toBe(input);
     expect(await applyWorkspaceSessionSettings(input, { user: null }, {})).toBe(input);
+  });
+
+  // Fail closed: a missing table must not read as "nothing owned", which would skip the resolver.
+  it.each([undefined, null])('throws when the table is %s, even off any workspace', async table => {
+    const run = (surface: string | undefined) =>
+      applyWorkspaceSessionSettings(session({ surface }), { user: null }, table as never);
+
+    await expect(run(WORKSPACE)).rejects.toThrow('table is required');
+    await expect(run(undefined)).rejects.toThrow('table is required');
   });
 
   it('overrides owned fields with resolved values and clears owned fields the resolver omits', async () => {
@@ -123,10 +131,9 @@ describe('stripSurfaceOwnedFields', () => {
     expect(stripSurfaceOwnedFields(input, table)).toBe(input);
   });
 
-  it('returns the session unchanged with no table', () => {
-    const input = session();
-
-    expect(stripSurfaceOwnedFields(input, undefined)).toBe(input);
+  it.each([undefined, null])('throws rather than keeping owned fields when the table is %s', table => {
+    expect(() => stripSurfaceOwnedFields(session(), table as never)).toThrow('table is required');
+    expect(() => surfaceOwnedFields(session(), table as never)).toThrow('table is required');
   });
 });
 

@@ -14,6 +14,12 @@ const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
  * clone's OWNER field changes; the messages themselves must be redacted at copy time or the
  * share/subscribe boundary promptMetaRedaction.ts documents is bypassed entirely.
  */
+const cloneWithEmptyTable = (
+  userId: string,
+  params: Parameters<typeof cloneSession>[1],
+  adapters: Omit<Parameters<typeof cloneSession>[2], 'workspaceSessionSettings'>
+) => cloneSession(userId, params, { ...adapters, workspaceSessionSettings: {} });
+
 describe('cloneSession - redaction at the copy boundary', () => {
   const makeAdapters = (sessionOwnerId: string, knowledgeIds: string[] = []) => {
     const created: Array<Record<string, unknown>> = [];
@@ -270,7 +276,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
       surface: 'opti',
     });
 
-    await cloneSession(
+    await cloneWithEmptyTable(
       'caller-1',
       { id: 'session-1' },
       { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }

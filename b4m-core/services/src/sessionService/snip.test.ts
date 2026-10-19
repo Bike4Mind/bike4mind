@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 import { snipSession } from './snip';
 
+const snipWithEmptyTable = (
+  userId: string,
+  params: Parameters<typeof snipSession>[1],
+  adapters: Omit<Parameters<typeof snipSession>[2], 'workspaceSessionSettings'>
+) => snipSession(userId, params, { ...adapters, workspaceSessionSettings: {} });
+
 describe('snipSession', () => {
   const makeAdapters = () => {
     const created: Array<Record<string, unknown>> = [];
@@ -281,7 +287,7 @@ describe('snipSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await snipSession(
+    await snipWithEmptyTable(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
       { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }

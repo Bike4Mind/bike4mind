@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 import { forkSession } from './fork';
 
+const forkWithEmptyTable = (
+  userId: string,
+  params: Parameters<typeof forkSession>[1],
+  adapters: Omit<Parameters<typeof forkSession>[2], 'workspaceSessionSettings'>
+) => forkSession(userId, params, { ...adapters, workspaceSessionSettings: {} });
+
 describe('forkSession', () => {
   const makeAdapters = () => {
     const created: Array<Record<string, unknown>> = [];
@@ -282,7 +288,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession(
+    await forkWithEmptyTable(
       'caller-1',
       { sessionId: 'session-1', messageId: 'm1' },
       { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }

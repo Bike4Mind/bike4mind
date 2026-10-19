@@ -253,9 +253,12 @@ export type WorkspaceSessionSettingsTable = Readonly<Record<string, WorkspaceSes
 
 const OWNABLE_FIELD_SET: ReadonlySet<string> = new Set(SURFACE_OWNABLE_SESSION_FIELDS);
 
-function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable | null | undefined) {
+function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable) {
+  // An absent table would read as "the workspace owns nothing" and skip both resolve and strip; the open-core
+  // value is the generated empty table, so a missing one is a wiring bug.
+  if (!table) throw new Error('Workspace session settings table is required');
   const id = normalizeSurfaceId(session.surface);
-  if (id === null || !table || !Object.prototype.hasOwnProperty.call(table, id)) return null;
+  if (id === null || !Object.prototype.hasOwnProperty.call(table, id)) return null;
   const entry = table[id];
   const userSet = new Set(session.userSetFields ?? []);
   const fields = entry.ownedFields.filter(field => OWNABLE_FIELD_SET.has(field) && !userSet.has(field));
@@ -269,7 +272,7 @@ function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSession
 export async function applyWorkspaceSessionSettings<TSession extends SurfaceSettingsSession>(
   session: TSession,
   ctx: Omit<WorkspaceSessionSettingsContext<TSession>, 'session'>,
-  table: WorkspaceSessionSettingsTable | null | undefined
+  table: WorkspaceSessionSettingsTable
 ): Promise<TSession> {
   const owned = ownedFieldsFor(session, table);
   if (!owned || owned.fields.length === 0) return session;
@@ -297,7 +300,7 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
  */
 export function stripSurfaceOwnedFields<TCopy extends object>(
   copy: TCopy,
-  table: WorkspaceSessionSettingsTable | null | undefined,
+  table: WorkspaceSessionSettingsTable,
   source: SurfaceSettingsSession = copy as SurfaceSettingsSession
 ): TCopy {
   const fields = surfaceOwnedFields(source, table);
@@ -310,7 +313,7 @@ export function stripSurfaceOwnedFields<TCopy extends object>(
 /** The fields `session`'s workspace owns, minus those the user set; what a move off it unsets. */
 export function surfaceOwnedFields(
   session: SurfaceSettingsSession,
-  table: WorkspaceSessionSettingsTable | null | undefined
+  table: WorkspaceSessionSettingsTable
 ): SurfaceOwnableSessionField[] {
   return ownedFieldsFor(session, table)?.fields ?? [];
 }
