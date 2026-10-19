@@ -244,6 +244,7 @@ const baseOptions = {
   // The contributed surface denials. Only the cases that set `mockSession.surface` to a key in here
   // resolve anything; every other test leaves the session with no surface at all.
   workspaceDeniedTools: { 'denied-surface': ['notion__search'], 'delegation-denied-surface': ['delegate_to_agent'] },
+  workspaceSessionSettings: {},
 };
 
 describe('ChatCompletionProcess', () => {
@@ -7986,6 +7987,112 @@ describe('ChatCompletionProcess', () => {
   // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
   // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
   // lines that wire them at this call site would leave that suite green.
+  describe('contributed workspace session settings', () => {
+    const resolve = vi.fn();
+    const table = {
+      'settings-surface': {
+        ownedFields: ['systemPromptText', 'enabledTools', 'temperature', 'maxToolCalls'] as const,
+        resolve,
+      },
+    };
+
+    const runTurn = async (session: Record<string, unknown>, workspaceSessionSettings: object) => {
+      mockDb.sessions.findById.mockResolvedValue({ ...mockSession, ...session });
+      (service as any).workspaceSessionSettings = workspaceSessionSettings;
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      const complete = vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!']));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      try {
+        await service.process({ body, logger: mockLogger });
+        const completeOptions = complete.mock.calls[0]?.[2];
+        return {
+          // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
+          sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
+          temperature: completeOptions?.temperature,
+          maxToolCalls: completeOptions?._internal?.maxToolCalls,
+          enabledTools: (buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined)?.enabledTools,
+        };
+      } finally {
+        buildToolsSpy.mockRestore();
+        (service as any).workspaceSessionSettings = {};
+      }
+    };
+
+    beforeEach(() => {
+      resolve.mockReset();
+    });
+
+    it('feeds the resolved fields to the prompt, temperature, tool cap and tool list', async () => {
+      resolve.mockResolvedValue({
+        systemPromptText: 'RESOLVED WORKSPACE PROMPT',
+        enabledTools: ['current_datetime'],
+        temperature: 0.15,
+        maxToolCalls: 3,
+      });
+
+      const turn = await runTurn({ surface: 'settings-surface' }, table);
+
+      expect(resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: expect.objectContaining({ id: 'user1' }),
+          session: expect.objectContaining({ surface: 'settings-surface' }),
+        })
+      );
+      expect(turn.sessionPrompt).toBe('RESOLVED WORKSPACE PROMPT');
+      expect(turn.temperature).toBe(0.15);
+      expect(turn.maxToolCalls).toBe(3);
+      expect(turn.enabledTools).toContain('current_datetime');
+    });
+
+    it('clears a baked owned field the resolver no longer yields', async () => {
+      resolve.mockResolvedValue({});
+
+      const turn = await runTurn(
+        { surface: 'settings-surface', systemPromptText: 'STALE BAKED PROMPT', maxToolCalls: 2 },
+        table
+      );
+
+      expect(turn.sessionPrompt).toBeUndefined();
+      expect(turn.maxToolCalls).toBeUndefined();
+    });
+
+    it('leaves the session untouched with an empty table', async () => {
+      const turn = await runTurn(
+        { surface: 'settings-surface', systemPromptText: 'SESSION PROMPT', temperature: 0.4, maxToolCalls: 5 },
+        {}
+      );
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(turn.sessionPrompt).toBe('SESSION PROMPT');
+      expect(turn.temperature).toBe(0.4);
+      expect(turn.maxToolCalls).toBe(5);
+    });
+  });
+
   describe('MCP narrowing options threaded into buildTools', () => {
     const runWithOptions = async (opts: {
       promptMode?: 'raw' | 'grounded' | 'surface';
