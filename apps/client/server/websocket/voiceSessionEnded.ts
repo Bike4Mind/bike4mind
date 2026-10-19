@@ -126,13 +126,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     try {
       billedBefore = await withTransaction(async () => {
         shortfall = 0;
-        await recordVoiceUsage({
-          userId: user.id,
-          sessionId,
-          model,
-          credits: actualCredits,
-          transactionId: `realtime-voice:${sessionId}:${responseId}`,
-        });
         const before = startedAt
           ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
           : null;
@@ -145,6 +138,19 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (fromBalance > 0) {
           shortfall = await debit(user.id, fromBalance);
         }
+        // The hold's billed total and the ledger carry what was taken, not what the balance could not cover.
+        if (shortfall > 0 && startedAt && before !== null) {
+          await sessionRepository.addVoiceBilledCredits(session.id, startedAt, -shortfall);
+        }
+        // Written even at zero credits: its key is what makes a replayed frame a no-op.
+        await recordVoiceUsage({
+          userId: user.id,
+          sessionId,
+          model,
+          credits: actualCredits - shortfall,
+          transactionId: `realtime-voice:${sessionId}:${responseId}`,
+          ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
+        });
         return before;
       }, transactionOptions);
     } catch (err) {
@@ -155,6 +161,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     if (billedBefore !== null) {
       holdLeft = Math.max(0, reserved - billedBefore - actualCredits);
     }
+    actualCredits -= shortfall;
     // The sweep settles an abandoned hold up to the last response the server saw. Best-effort and
     // after the debit, so a failed marker write can never leave a ledger row the balance never paid.
     await sessionRepository.recordVoiceActivity(session.id, new Date(), startedAt).catch(err => {
@@ -215,16 +222,19 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         } else if (delta < 0) {
           shortfall = await debit(payerId, -delta);
         }
-        if (credits > 0) {
+        // Only what was taken is charged; the shortfall rides on the ledger row.
+        const charged = credits - shortfall;
+        if (charged > 0) {
           await recordVoiceUsage({
             userId: payerId,
             sessionId,
             model,
-            credits,
+            credits: charged,
             transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
+            ...(shortfall > 0 ? { metadata: { shortfallCredits: shortfall } } : {}),
           });
         }
-        return { credits, capped, floor: floored ? floor : null };
+        return { credits: charged, capped, floor: floored ? floor : null };
       }, transactionOptions);
     } catch (err) {
       if (!isVoiceLedgerKeyTaken(err)) throw err;

@@ -14,7 +14,7 @@ interface FakeSession {
 const state = vi.hoisted(() => ({
   session: null as unknown as FakeSession,
   balance: 0,
-  transactions: [] as Array<{ credits: number; transactionId?: string }>,
+  transactions: [] as Array<{ credits: number; transactionId?: string; metadata?: Record<string, unknown> }>,
   // Runs just before a claim, to stand in for another settler that got there first.
   beforeClaim: null as null | (() => void),
   failIncrement: false,
@@ -426,6 +426,28 @@ describe('voiceSessionEnded realtime billing', () => {
       expect.any(String),
       expect.objectContaining({ action: 'voice_credits_exhausted' })
     );
+  });
+
+  it('records only what a response actually debited, with the shortfall on its ledger row', async () => {
+    state.balance = 10;
+
+    await send(HOLD + 50, 'resp-1');
+
+    // The hold covered 100 and the balance 10 of the 150 used.
+    expect(state.session.voiceBilledCredits).toBe(HOLD + 10);
+    expect(state.transactions).toEqual([
+      expect.objectContaining({ credits: -(HOLD + 10), metadata: { shortfallCredits: 40 } }),
+    ]);
+  });
+
+  it('records only what a close actually debited, with the shortfall on its ledger row', async () => {
+    await send(HOLD, 'resp-1');
+    state.balance = 5;
+
+    await send(30);
+
+    expect(state.transactions.map(t => t.credits)).toEqual([-HOLD, -5]);
+    expect(state.transactions[1].metadata).toEqual({ shortfallCredits: 25 });
   });
 
   it('never takes the balance below zero when a close settles past it', async () => {

@@ -45,6 +45,7 @@ export async function recordVoiceUsage(row: {
   model: string;
   credits: number;
   transactionId: string;
+  metadata?: Record<string, unknown>;
 }): Promise<void> {
   const recorded = await creditTransactionRepository.createTransaction('realtime_voice_usage', {
     ownerId: row.userId,
@@ -54,6 +55,7 @@ export async function recordVoiceUsage(row: {
     model: row.model,
     sessionId: row.sessionId,
     transactionId: row.transactionId,
+    ...(row.metadata ? { metadata: row.metadata } : {}),
   });
   if (!recorded) throw new VoiceLedgerKeyTaken(row.transactionId);
 }
