@@ -12,7 +12,7 @@ import {
   Typography,
   Input,
 } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
+import { IOrganization, IOrganizationDocument, WithId, canAdministerOrganization } from '@bike4mind/common';
 import GroupsIcon from '@mui/icons-material/Groups';
 import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
@@ -63,7 +63,10 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       return lastLoginDate && lastLoginDate >= thresholdDate;
     }).length || 0;
 
-  const managers = org.users?.filter(({ user }) => user?.level === 'ManagerUser' || user?.level === 'AdminUser') || [];
+  // The org's own managers - the members its write gate admits besides the owner - not members whose
+  // platform-wide `level` happens to be Manager/Admin.
+  const managers =
+    org.users?.filter(({ userId }) => userId !== org.userId && canAdministerOrganization({ id: userId }, org)) ?? [];
 
   const handleChange = (field: keyof IOrganizationDocument, value: any) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));

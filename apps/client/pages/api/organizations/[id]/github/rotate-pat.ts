@@ -5,7 +5,7 @@
  * Rate limited to 3 rotations per hour per organization.
  *
  * Security:
- * - Org owner or manager access required
+ * - Org owner or platform admin only - org managers are refused
  * - Encrypts token at rest
  * - Audit logged
  *
@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@server/security/secretEncryption';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -44,7 +44,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     const parseResult = RotatePATSchema.safeParse(req.body);
     if (!parseResult.success) {

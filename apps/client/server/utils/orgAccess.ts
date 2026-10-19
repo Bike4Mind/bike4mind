@@ -7,8 +7,8 @@
  * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`           - owner only
- * - `verifyOrgAccess`          - owner or manager
- * - `verifyOrgAdminRead`       - owner, manager or appointed admin (reads only)
+ * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster, or legacy `managerId`)
+ * - `verifyOrgAdminRead`       - owner or manager, matching `adminUserIds` without the roster row (reads only)
  * - `verifyOrgMemberOrManager` - any member, or the manager without a membership row (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
@@ -97,9 +97,12 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
  *
  * The strictest of the four tiers in this file - owner only, where `verifyOrgAccess` also admits
  * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
- * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
- * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
- * workspace acts for the whole tenant). A manager has agreed to neither.
+ * owns the org may act: billing writes (committing the org to a charge, or changing what it pays),
+ * the org's credit spend and ledger (`usage/index.ts`, `admin/transactions.ts`,
+ * `admin/session-usage.ts`), and org-level integration wiring and secrets (`integrations/slack/*`,
+ * `organizations/[id]/github/*`, `organizations/[id]/webhooks/github*`), which act for the whole
+ * tenant. A manager has agreed to none of these. The client's tab gates for them
+ * (routes/organizations/orgTabAccess.ts) must stay in sync with this list.
  *
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
  * NotFoundError, so the route cannot be used to enumerate which organization ids exist.

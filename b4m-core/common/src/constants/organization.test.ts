@@ -92,13 +92,22 @@ describe('canAdministerOrganization', () => {
     expect(canAdministerOrganization({ id: 'member-id', isAdmin: null }, org)).toBe(false);
   });
 
-  // The two authority predicates answer different questions: a manager may revoke but not invite,
-  // an appointed admin may invite but not revoke.
-  it('splits from isOrgOwnerOrCurrentAdmin on manager vs appointed admin', () => {
+  it('admits an org manager (adminUserIds) who is still on the roster', () => {
+    const roster = { ...org, adminUserIds: ['org-admin-id'], users: [{ userId: 'org-admin-id' }] };
+    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(true);
+  });
+
+  it('refuses a stale adminUserIds entry with no users[] row', () => {
+    const roster = { ...org, adminUserIds: ['org-admin-id'], users: [] };
+    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(false);
+  });
+
+  // The legacy single managerId is the only actor that passes this but not isOrgOwnerOrCurrentAdmin.
+  it('is a superset of isOrgOwnerOrCurrentAdmin only by the legacy managerId', () => {
     const roster = { ...org, adminUserIds: ['org-admin-id'], users: [{ userId: 'org-admin-id' }] };
     expect(canAdministerOrganization({ id: 'manager-id' }, roster)).toBe(true);
     expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, roster)).toBe(false);
-    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(false);
+    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(true);
     expect(isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, roster)).toBe(true);
   });
 });

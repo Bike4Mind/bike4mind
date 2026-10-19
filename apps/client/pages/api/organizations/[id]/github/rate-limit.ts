@@ -4,7 +4,7 @@
  * Returns the current GitHub API rate limit status for the organization's connection.
  *
  * Security:
- * - Org owner or manager access required
+ * - Org owner or platform admin only - org managers are refused
  * - Rate limited to 60 requests per hour per organization
  *
  * @route GET /api/organizations/[id]/github/rate-limit - Get rate limit status
@@ -14,7 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isNearLimit } from '@bike4mind/common';
 
@@ -32,7 +32,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     const service = await GitHubService.forOrganization(orgId, logger);
     if (!service) {

@@ -26,7 +26,7 @@ const handler = baseApi().put(
 
     const isOwner = organization.userId === req.user?.id;
     if (!isOwner && !req.user?.isAdmin) {
-      throw new ForbiddenError('Only the billing owner or a platform admin can set org admins');
+      throw new ForbiddenError('Only the billing owner or a platform admin can set org managers');
     }
 
     // An appointed admin must be a member of the org - don't reference outsiders. Membership means

@@ -120,20 +120,29 @@ export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
 export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
 
 /** The organization slice an administration decision needs. */
-export type AdministrableOrg = { userId: string; managerId?: string | null };
+export type AdministrableOrg = {
+  userId: string;
+  managerId?: string | null;
+  adminUserIds?: readonly string[] | null;
+  users?: ReadonlyArray<{ userId: string }> | null;
+};
 
 /**
- * May this actor administer the organization's roster - remove members, or add them through the
- * direct `addMember` path? Billing owner, appointed manager, or platform admin.
+ * May this actor administer the organization - its roster (remove members, or add them through the
+ * direct `addMember` path) and the write routes behind `verifyOrgAccess`, such as connecting a
+ * lake's GitHub or Drive source? Billing owner, any org manager, or platform admin.
+ *
+ * "Managers" are the `adminUserIds` list the owner edits in the UI, held to the same current-row
+ * rule as `isOrgOwnerOrCurrentAdmin`, plus the legacy single `managerId` until it is folded into
+ * that list. Billing, credits and org integration secrets stay owner-only via `verifyOrgOwner`.
  *
  * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
  * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
  * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
  *
- * NOT the same set as `isOrgOwnerOrCurrentAdmin`: a manager passes this but not that, an appointed
- * admin passes that but not this. Invites (and cancelling them) gate on that one, behind an
- * `isOrgMember` check, so the client must ask each control's own server predicate rather than
- * one "can manage" flag.
+ * A superset of `isOrgOwnerOrCurrentAdmin` only by the legacy `managerId`, who passes this but not
+ * that. Invites (and cancelling them) gate on that one, behind an `isOrgMember` check, so the
+ * client must ask each control's own server predicate rather than one "can manage" flag.
  *
  * `userId` and `managerId` are declared `String` on the organization schema, so a strict
  * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
@@ -142,6 +151,6 @@ export type AdministrableOrg = { userId: string; managerId?: string | null };
  * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
-  if (actor.isAdmin) return true;
-  return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
+  if (isOrgOwnerOrCurrentAdmin(actor, organization)) return true;
+  return !!organization.managerId && organization.managerId === actor.id;
 }
