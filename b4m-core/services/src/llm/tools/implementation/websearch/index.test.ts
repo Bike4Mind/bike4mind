@@ -846,7 +846,10 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     it('logs one error naming the failed SerpAPI lead when the SearXNG backup answers empty', async () => {
       configure('serpapi');
-      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+      stubProviders({
+        serpOrganic: [{ status: 503 }, { status: 503 }],
+        searxng: { status: 200, body: { results: [] } },
+      });
 
       await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
       expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -919,5 +922,51 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(toolFn({ query: 'q' })).rejects.toThrow();
     await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+});
+
+describe('performWebSearch - shared citation numbering', () => {
+  const hits = [
+    { title: 'A', link: 'https://a.com', snippet: 'about a' },
+    { title: 'B', link: 'https://b.com', snippet: 'about b' },
+  ];
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ organic_results: hits }),
+        text: async () => '',
+      } as unknown as Response)
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('labels each result with the number the turn gave it and returns the stamped citables', async () => {
+    // Two forced-retrieval documents already hold [1] and [2].
+    const numberCitables: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((c, i) => ({ ...c, metadata: { ...c.metadata, citationIndex: i + 3 } }));
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' }, '', undefined, numberCitables);
+
+    expect(result.formattedResults).toContain('[3] **A**');
+    expect(result.formattedResults).toContain('[4] **B**');
+    expect(result.formattedResults).not.toMatch(/^1\. \*\*/m);
+    expect(result.formattedResults).toContain('ONLY by the bracketed number');
+    expect(result.citables.map(c => c.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it('keeps local labels when the turn is not numbered', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q' }, '', undefined, () => undefined);
+
+    expect(result.formattedResults).toContain('1. **A**');
+    expect(result.formattedResults).not.toContain('ONLY by the bracketed number');
+    expect(result.citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
   });
 });

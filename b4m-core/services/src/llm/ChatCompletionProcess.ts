@@ -3069,6 +3069,8 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
+        // Same source as forced retrieval's numbering (KnowledgeRetrievalFeature), so tools extend it.
+        citationStyle: session.citationStyle,
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         attachedFileIds: [...new Set([...(session.knowledgeIds ?? []), ...sessionFabFileIds, ...messageFileIds])],
         fullyInlinedAttachmentIds,
