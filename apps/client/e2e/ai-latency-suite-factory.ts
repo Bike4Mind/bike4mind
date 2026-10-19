@@ -248,6 +248,7 @@ export function createAiLatencySuite({
       );
 
       const breach = latencyBreach(results, thresholdSec);
+      if (breach) test.info().annotations.push({ type: 'latency-breach', description: breach });
       expect(breach, breach ?? undefined).toBeNull();
     });
   });

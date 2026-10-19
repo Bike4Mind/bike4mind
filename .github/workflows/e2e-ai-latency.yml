@@ -719,6 +719,7 @@ jobs:
                     REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
                     [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
                     LATENCY_STR="$REASON"
+                    echo "::error title=AI latency breach::${SPEC} on ${AI_MODEL}: ${REASON}"
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else
