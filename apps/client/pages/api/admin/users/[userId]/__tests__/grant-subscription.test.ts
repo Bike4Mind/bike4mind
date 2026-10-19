@@ -30,13 +30,22 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 const mockUserFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn(undefined);
+    } finally {
+      inTransaction = false;
+    }
+  },
 }));
 
 const mockSubCreate = vi.fn();
@@ -53,7 +62,12 @@ vi.mock('@server/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn(async () => {
+    insideTransactionAtAudit = inTransaction;
+    return null;
+  }),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
@@ -87,9 +101,10 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
 
-  it('records user.subscription.granted against the user for a team grant', async () => {
+  it('records user.subscription.granted against the user for a team grant, inside the transaction', async () => {
     const { run } = call(5);
     await run();
+    expect(insideTransactionAtAudit).toBe(true);
     expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),

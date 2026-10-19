@@ -33,16 +33,30 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 const mockOrgFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn(undefined);
+    } finally {
+      inTransaction = false;
+    }
+  },
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn(async () => {
+    insideTransactionAtAudit = inTransaction;
+    return null;
+  }),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -91,9 +105,10 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
   });
 
-  it('records org.credits.topped_up against the organization', async () => {
+  it('records org.credits.topped_up against the organization, inside the transaction', async () => {
     const { run } = call({});
     await run();
+    expect(insideTransactionAtAudit).toBe(true);
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

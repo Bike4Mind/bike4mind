@@ -237,26 +237,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           await organizationRepository.update({ id: targetOrganization.id, seats });
         }
 
+        await recordAdminActionFromRequest(req, {
+          action: 'user.subscription.granted',
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+          organizationId: targetOrganization.id,
+          summary: `granted team subscription with ${seats} seats for ${durationMonths} month(s)`,
+          details: {
+            subscriptionType: 'team',
+            seats,
+            credits: seats * teamPlan.creditsPerSeat * durationMonths,
+            durationMonths,
+            organizationOwnerId: targetOrganization.userId,
+          },
+        });
+
         req.logger.info(`Admin ${req.user.id} granted team subscription to organization ${targetOrganization.id}`, {
           seats,
           credits: creditsToAdd,
           durationMonths,
           userId,
         });
-      });
-
-      await recordAdminActionFromRequest(req, {
-        action: 'user.subscription.granted',
-        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
-        organizationId: targetOrganization.id,
-        summary: `granted team subscription with ${seats} seats for ${durationMonths} month(s)`,
-        details: {
-          subscriptionType: 'team',
-          seats,
-          credits: seats * teamPlan.creditsPerSeat * durationMonths,
-          durationMonths,
-          organizationOwnerId: targetOrganization.userId,
-        },
       });
 
       // Notify relevant users. (No ['entitlements'] push here: entitlement
