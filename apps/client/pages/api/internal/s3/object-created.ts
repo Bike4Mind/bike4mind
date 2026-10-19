@@ -148,9 +148,11 @@ const handler = baseApi({ auth: false }).post(
         typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
           ? payloadSize
           : (await getFilesStorage().getMetadata(objectKey)).size;
+      // Unjudged bytes must not go complete; a 500 has MinIO redeliver the event.
+      if (size === undefined) throw new Error(`No object size for ${objectKey}; upload not admitted`);
 
       // Same measured-size gate as the hosted event (objectCreated.ts), before the row is complete.
-      if (size !== undefined && !(await admitLandedUpload(metadata, size, objectKey, req.logger))) continue;
+      if (!(await admitLandedUpload(metadata, size, objectKey, req.logger))) continue;
 
       metadata.status = 'complete';
       await metadata.save();
@@ -175,22 +177,15 @@ const handler = baseApi({ auth: false }).post(
       // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
       // complete and a redelivery would enqueue chunking twice.
       try {
-        if (size === undefined) {
-          req.logger.warn(`No object size for ${objectKey}; storage not charged`);
-        } else {
-          const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
-          const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
-          await withTransaction(async session => {
-            const user = await User.findById(metadata.userId).session(session);
-            // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
-            if (
-              user &&
-              (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))
-            ) {
-              await user.save({ session });
-            }
-          });
-        }
+        const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
+        const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
+        await withTransaction(async session => {
+          const user = await User.findById(metadata.userId).session(session);
+          // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+          if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))) {
+            await user.save({ session });
+          }
+        });
       } catch (error) {
         req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
       }

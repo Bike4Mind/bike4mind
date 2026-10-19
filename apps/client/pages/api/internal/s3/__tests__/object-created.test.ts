@@ -391,13 +391,17 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(Number.isNaN(uploadedAt.getTime())).toBe(false);
     });
 
-    it('charges nothing and warns when neither source has a size', async () => {
+    // An unmeasured landing cannot be judged by the size gate, so it fails for MinIO to redeliver.
+    it('fails without completing, charging or chunking when neither source has a size', async () => {
       getMetadataMock.mockResolvedValue({});
-      const req = makeReq('secret-token', 'uploads/a.pdf');
-      await handler(req, makeRes());
+      await expect(handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes())).rejects.toThrow(
+        'No object size for uploads/a.pdf'
+      );
 
+      expect(admitMock).not.toHaveBeenCalled();
+      expect(saveMock).not.toHaveBeenCalled();
       expect(chargeMock).not.toHaveBeenCalled();
-      expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('storage not charged'));
+      expect(sendToQueueMock).not.toHaveBeenCalled();
     });
 
     it('charges nothing when the owner no longer exists', async () => {
