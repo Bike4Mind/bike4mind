@@ -6,6 +6,7 @@ import type {
 } from '@shared/chat';
 import {
   IPC_CHANNELS,
+  type CreateCodeSessionIpcRequest,
   type CreateCodeSessionIpcResult,
   type CreateSessionRequest,
   type CreatedSession,
@@ -28,17 +29,17 @@ const placement = (outcome: PlacementOutcome): Pick<CreatedSession, 'sidebarSect
 });
 
 export function registerSessionCreateIpc(ipc: Pick<IpcMain, 'handle'>, creation: SessionCreation): void {
-  ipc.handle(IPC_CHANNELS.chatCreateSession, async (_event, request: CreateSessionRequest | undefined) => {
-    const session = await creation.createSession();
-    return { session, ...placement(await creation.place(session.id, request?.sectionId)) };
-  });
+  ipc.handle(
+    IPC_CHANNELS.chatCreateSession,
+    async (_event, request: CreateSessionRequest | undefined): Promise<CreatedSession> => {
+      const session = await creation.createSession();
+      return { session, ...placement(await creation.place(session.id, request?.sectionId)) };
+    }
+  );
 
   ipc.handle(
     IPC_CHANNELS.chatCreateCodeSession,
-    async (
-      _event,
-      request: CreateCodeSessionRequest & { sectionId?: string }
-    ): Promise<CreateCodeSessionIpcResult> => {
+    async (_event, request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult> => {
       const result = await creation.createCodeSession(request);
       creation.rememberFolder(folderToRemember(request, result));
       if (!result.ok) return result;

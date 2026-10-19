@@ -408,6 +408,9 @@ export interface CreatedSession {
   placementFailed?: boolean;
 }
 
+/** A Code session's create request, plus the same optional section the Chat one takes. */
+export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
+
 /** A Code session's create reply - `ok: false` never carries placement. */
 export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
@@ -500,7 +503,7 @@ export interface DesktopApi {
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
      */
-    createCodeSession(request: CreateCodeSessionRequest & { sectionId?: string }): Promise<CreateCodeSessionIpcResult>;
+    createCodeSession(request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult>;
     /**
      * Ground a Code session that already exists: its first directory, or a different directory,
      * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.
