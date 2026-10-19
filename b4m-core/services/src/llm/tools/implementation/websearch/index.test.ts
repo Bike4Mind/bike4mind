@@ -958,7 +958,7 @@ describe('performWebSearch - shared citation numbering', () => {
     expect(result.formattedResults).toContain('[3] **A**');
     expect(result.formattedResults).toContain('[4] **B**');
     expect(result.formattedResults).not.toMatch(/^1\. \*\*/m);
-    expect(result.formattedResults).toContain('ONLY by the bracketed number');
+    expect(result.formattedResults).toContain('Citation numbers: the bracketed number');
     expect(result.citables.map(c => c.metadata?.citationIndex)).toEqual([3, 4]);
   });
 
@@ -966,7 +966,7 @@ describe('performWebSearch - shared citation numbering', () => {
     const result = await performWebSearch(mockAdapters, { query: 'q' }, '', undefined, () => undefined);
 
     expect(result.formattedResults).toContain('1. **A**');
-    expect(result.formattedResults).not.toContain('ONLY by the bracketed number');
+    expect(result.formattedResults).not.toContain('Citation numbers: the bracketed number');
     expect(result.citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
   });
 });

@@ -66,12 +66,14 @@ export const stripCitationIndices = (citables: readonly CitableSource[]): Citabl
   });
 
 /**
- * Shown to the model under tool results that carry the turn's shared numbers, so it cites them the
- * way forced retrieval's header asks it to cite the documents numbered before them.
+ * Shown to the model beside tool results that carry the turn's shared numbers. A statement, not a
+ * directive: imperatives inside tool output (which also holds untrusted page and file text) can read
+ * to the model as injected instructions. The cite-by-number directive belongs in system-side text
+ * (forced retrieval's indexed header in ChatCompletionFeatures).
  */
-export const INDEXED_TOOL_CITATION_RULE =
-  'Cite each of these sources ONLY by the bracketed number it is labelled with, placed immediately after the ' +
-  'claim it supports. These numbers continue the sources already numbered this turn.';
+export const INDEXED_TOOL_CITATION_LABEL =
+  "(Citation numbers: the bracketed number on each of these sources is its number in this turn's " +
+  'citation sequence, continuing from the sources numbered earlier this turn.)';
 
 /** Each stamped citable's number, keyed by citable id, for labelling results that point at it. */
 export const citationNumbersById = (citables: readonly CitableSource[]): Map<string, number> =>

@@ -1903,7 +1903,7 @@ describe('retrieve_knowledge_content with the library off', () => {
 });
 
 describe('retrieve_knowledge_content turn-wide citation numbering', () => {
-  const INDEXED_RULE = 'Cite each of these sources ONLY by the bracketed number';
+  const INDEXED_RULE = 'Citation numbers: the bracketed number on each of these sources';
 
   async function runTwoFiles(numberCitables?: ToolContext['numberCitables']) {
     const chunkRepo = {

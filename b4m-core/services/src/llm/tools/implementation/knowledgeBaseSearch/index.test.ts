@@ -4141,7 +4141,7 @@ describe('search_knowledge_base chip source origin', () => {
 });
 
 describe('search_knowledge_base shared citation numbering', () => {
-  const RULE_FRAGMENT = 'ONLY by the bracketed number';
+  const RULE_FRAGMENT = 'Citation numbers: the bracketed number';
   const scan = {
     truncated: false,
     fileBudgetHit: false,

@@ -566,7 +566,7 @@ describe('web_fetch turn-wide citation numbering', () => {
 
     const { result, citables } = await runNumbered(stamp);
 
-    expect(result.startsWith('This page is source [3].')).toBe(true);
+    expect(result.startsWith('(This page is source [3] ')).toBe(true);
     expect(result).toContain('page body');
     expect(citables).toHaveLength(1);
     expect(citables[0].metadata?.citationIndex).toBe(3);

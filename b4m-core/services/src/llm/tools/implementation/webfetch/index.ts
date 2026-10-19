@@ -84,7 +84,7 @@ export function webFetchBody(result: WebFetchResult): string {
 
 /** Leads an indexed turn's fetched page with the number the turn gave it (ToolContext.numberCitables). */
 export function webFetchCitationLine(citationIndex: number): string {
-  return `This page is source [${citationIndex}]. Cite content from it ONLY as [${citationIndex}], placed immediately after the claim it supports.\n\n`;
+  return `(This page is source [${citationIndex}] in this turn's citation numbering.)\n\n`;
 }
 
 function isPdfUrl(url: string): boolean {
