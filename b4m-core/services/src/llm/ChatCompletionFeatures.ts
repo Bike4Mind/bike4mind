@@ -3856,8 +3856,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             `The following content was retrieved from the curated library for this query, drawn from ${sourceFileIds.length} ` +
             'numbered source document(s) — each section heading carries its document number as [N]. Ground your answer in this ' +
             'content and cite ONLY by bracketed index (e.g. [1], [3]) placed immediately after the claim it supports. Never write ' +
-            'source names or URLs as citations, and never invent references or source numbers. ' +
-            "Numbered tool sources continue this turn's sequence; cite their supplied indices. " +
+            `source names or URLs as citations, and never invent references or source numbers. Do not cite an index above ${sourceFileIds.length} ` +
+            "unless a tool result supplies a higher number. Numbered tool sources continue this turn's sequence; cite their supplied indices. " +
             'If the retrieved content does not address the question, say so rather than relying on outside knowledge.\n\n'
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
