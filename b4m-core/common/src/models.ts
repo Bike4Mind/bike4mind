@@ -314,11 +314,10 @@ export enum ChatModels {
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
 export const CHAT_MODELS = Object.values(ChatModels);
-// The dated snapshot is excluded until it has a catalog row: with no row, no LLM backend can
-// serve it, so accepting it in agent `preferredModel` would pass validation and fail at run time.
+// The dated snapshot is excluded until it has a catalog row: without one it has no pricing or
+// limits, so accepting it in agent `preferredModel` would pass validation and fail at run time.
 export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
-// Servable subset of CHAT_MODELS for settings dropdowns and validity checks.
 export const SERVABLE_CHAT_MODELS: string[] = [...supportedChatModels.options];
 
 /**
