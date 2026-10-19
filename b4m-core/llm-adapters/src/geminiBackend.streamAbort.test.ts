@@ -27,8 +27,6 @@ function buildBackend(streams: Step[][]) {
     models: {
       generateContentStream: async (request: CapturedRequest) => {
         requests.push(request);
-        // The SDK rejects up front on an already-aborted signal.
-        if (request.config?.abortSignal?.aborted) throw new Error('The operation was aborted');
         const steps = streams[requests.length - 1] ?? [];
         return (async function* () {
           for (const step of steps) {
@@ -134,6 +132,19 @@ describe('GeminiBackend - aborted stream', () => {
 
     expect((error as Error).message).toBe('Request aborted');
     expect(infos.at(-1)).toMatchObject({ inputTokens: 30, outputTokens: 4, stopReason: 'aborted' });
+  });
+
+  it('never calls the SDK when the signal is already aborted before the request', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { infos, error, requests } = await run(
+      [[textChunk('never seen', { promptTokenCount: 87000, candidatesTokenCount: 1 })]],
+      controller
+    );
+
+    expect((error as Error).message).toBe('Request aborted');
+    expect(requests).toEqual([]);
+    expect(infos).toEqual([]);
   });
 
   it('emits nothing when the abort lands before any chunk', async () => {

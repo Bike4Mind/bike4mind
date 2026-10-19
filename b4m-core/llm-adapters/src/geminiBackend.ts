@@ -737,6 +737,8 @@ export class GeminiBackend implements ICompletionBackend {
       let streamedChars = 0;
       let latestUsage: GenerateContentResponse['usageMetadata'];
       try {
+        // @google/genai ignores a signal that is already aborted, so the request would still go out.
+        if (options.abortSignal?.aborted) throw new Error('Request aborted');
         const result = await this._api.models.generateContentStream({
           ...request,
           config: { ...request.config, abortSignal: options.abortSignal },
