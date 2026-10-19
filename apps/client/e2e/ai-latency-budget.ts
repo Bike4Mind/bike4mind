@@ -162,3 +162,27 @@ export function gatedAverageSec(results: PromptResult[]): number {
   if (gated.length === 0) return 0;
   return Math.round((gated.reduce((sum, r) => sum + r.responseTimeSec, 0) / gated.length) * 1000) / 1000;
 }
+
+/**
+ * The cell's latency verdict: a failure message when it breached thresholdSec, null otherwise.
+ *
+ * Must stay in sync with the aggregate step's Latency column in .github/workflows/e2e-ai-latency.yml:
+ * a breach is an average over thresholdSec OR any abandoned gated prompt (an abandoned prompt has no
+ * upper bound, so two fast prompts could otherwise average it away). No gated result is "No Data"
+ * there, not a breach, so it returns null here too.
+ */
+export function latencyBreach(results: PromptResult[], thresholdSec: number): string | null {
+  const gated = results.filter(r => !r.measuresDeliverable);
+  if (gated.length === 0) return null;
+
+  const averageSec = gatedAverageSec(results);
+  const abandoned = gated.filter(r => r.incomplete).map(r => r.id);
+  if (averageSec <= thresholdSec && abandoned.length === 0) return null;
+
+  const causes: string[] = [];
+  if (averageSec > thresholdSec)
+    causes.push(`average AI latency ${averageSec}s exceeds the ${thresholdSec}s threshold`);
+  if (abandoned.length > 0) causes.push(`${abandoned.length} prompt(s) never finished: ${abandoned.join(', ')}`);
+  const timings = gated.map(r => `${r.id}=${r.responseTimeSec}s${r.incomplete ? ' (incomplete)' : ''}`);
+  return `Latency breach - ${causes.join('; ')} [${timings.join(', ')}]`;
+}
