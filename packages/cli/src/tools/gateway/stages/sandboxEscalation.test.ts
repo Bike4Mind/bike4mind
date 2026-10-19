@@ -39,6 +39,25 @@ describe('detectSandboxDenial', () => {
     const denial = detectSandboxDenial(true, `bwrap: ${'x'.repeat(500)}`);
     expect(denial?.snippet).toHaveLength(200);
   });
+
+  it('starts the snippet at the denial line, not at long stdout before it', () => {
+    const denial = detectSandboxDenial(true, `${'line\n'.repeat(100)}STDERR:\n${EPERM_RESULT}`);
+    expect(denial?.snippet.startsWith('touch: /etc/hosts: Operation not permitted')).toBe(true);
+  });
+
+  it('only counts a launcher marker at the start of a line', () => {
+    expect(detectSandboxDenial(true, 'notes.md:3: see bwrap: for details\nExit code: 0')).toBeNull();
+    expect(detectSandboxDenial(true, 'out\nSTDERR:\nsandbox-exec: execvp() failed')).toMatchObject({
+      reason: 'launcher',
+    });
+  });
+
+  it("reads the tool's own final exit code line, not one the command printed", () => {
+    expect(detectSandboxDenial(true, 'Exit code: 0\nmkdir: x: Operation not permitted\n\nExit code: 1')).toMatchObject({
+      reason: 'eperm',
+    });
+    expect(detectSandboxDenial(true, 'Exit code: 1\nOperation not permitted\nExit code: 0')).toBeNull();
+  });
 });
 
 describe('runSandboxed', () => {
@@ -137,7 +156,34 @@ describe('runSandboxed', () => {
     expect(showPermissionPrompt).not.toHaveBeenCalled();
   });
 
+  it('does not escalate a yield_time_ms run, which may still be running as a session', async () => {
+    const { run, attempt, showPermissionPrompt } = setup({ extraArgs: { yield_time_ms: 5000 } });
+    await expect(run()).resolves.toBe(EPERM_RESULT);
+    expect(showPermissionPrompt).not.toHaveBeenCalled();
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   describe('session approval', () => {
+    it('allow-always retries once but is neither remembered nor turned into tool trust', async () => {
+      const first = setup({ answer: 'allow-always' });
+      await expect(first.run()).resolves.toBe('done');
+      expect(first.permissionManager.isTrusted('bash_execute')).toBe(false);
+      expect(first.permissionManager.isSessionTrusted('bash_execute')).toBe(false);
+
+      const second = setup({ permissionManager: first.permissionManager });
+      await second.run();
+      expect(second.showPermissionPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not carry over to a different cwd', async () => {
+      const first = setup({ answer: 'allow-session' });
+      await first.run();
+
+      const elsewhere = setup({ permissionManager: first.permissionManager, extraArgs: { cwd: '/other/workspace' } });
+      await elsewhere.run();
+      expect(elsewhere.showPermissionPrompt).toHaveBeenCalledTimes(1);
+    });
+
     it('allow-session skips the prompt for the same command and cwd next time', async () => {
       const first = setup({ answer: 'allow-session' });
       await first.run();

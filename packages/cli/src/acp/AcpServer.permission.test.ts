@@ -54,6 +54,14 @@ describe('AcpServer permission bridge', () => {
     expect(response.action).toBe('allow-once');
   });
 
+  it('denies an escalation answered with the never-offered allow-always', async () => {
+    const { promptFn } = serverWithClient({ outcome: 'selected', optionId: PERMISSION_OPTION_ALLOW_ALWAYS });
+
+    await expect(promptFn('bash_execute', { command: 'ls' }, 'preview', 'sandbox-escalation')).resolves.toEqual({
+      action: 'deny',
+    });
+  });
+
   it('denies when the client request fails', async () => {
     const server = new AcpServer(new AbortController().signal, 'test');
     const request = vi.fn(async () => {

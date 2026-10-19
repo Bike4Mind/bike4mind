@@ -505,6 +505,9 @@ export class AcpServer {
           decisionController.signal.addEventListener('abort', () => resolve('deny'), { once: true });
         }),
       ]);
+      // allow-always was never offered for an escalation; a client that answers it anyway
+      // (e.g. replaying a remembered choice) gets a deny, not a retry.
+      if (isSandboxEscalation && action === 'allow-always') return { action: 'deny' };
       return { action };
     } finally {
       clearTimeout(timer);

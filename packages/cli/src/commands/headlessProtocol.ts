@@ -21,7 +21,7 @@ import { commandTextOf, toolCategory } from '../tools/gateway/toolPolicy.js';
  * field or a new event type (backward-compatible). Consumers should reject a
  * MAJOR they do not understand.
  */
-export const HEADLESS_SCHEMA_VERSION = '1.0.0';
+export const HEADLESS_SCHEMA_VERSION = '1.1.0';
 
 /** Every event type the stream-json protocol can emit. */
 export type HeadlessEventType =

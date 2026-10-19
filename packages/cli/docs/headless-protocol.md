@@ -42,7 +42,7 @@ envelope:
 - **MINOR** bumps on a backward-compatible addition: a new optional field or a
   new event type. Consumers should ignore unknown event types and fields.
 
-Current version: **`1.0.0`**.
+Current version: **`1.1.0`** (1.1.0 added `kind` to `permission_request`).
 
 ## Events (`stream-json`)
 
@@ -67,7 +67,7 @@ The `json` format emits a single object (not a stream):
 
 ```jsonc
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "runId": "<uuid>",
   "result": "<final answer>",
   "steps": [{ "type": "...", "content": "...", "toolName": "...", "toolInput": {} }],
@@ -143,10 +143,10 @@ Decision precedence overall: `--dangerously-skip-permissions` >
 
 ```console
 $ b4m -p "list the files here" --output-format stream-json --permission-policy ci-policy.json
-{"schemaVersion":"1.0.0","runId":"...","type":"thought","content":"I should list the directory."}
-{"schemaVersion":"1.0.0","runId":"...","type":"permission_request","toolName":"bash_execute","risk":{"level":"low","reasons":[]}}
-{"schemaVersion":"1.0.0","runId":"...","type":"permission_decision","toolName":"bash_execute","action":"allow-once","reason":"risk low <= maxAutoAllowRisk low","risk":"low"}
-{"schemaVersion":"1.0.0","runId":"...","type":"action","content":"","toolName":"bash_execute","toolInput":{"command":"ls"}}
-{"schemaVersion":"1.0.0","runId":"...","type":"observation","content":"...","toolName":"bash_execute"}
-{"schemaVersion":"1.0.0","runId":"...","type":"result","content":"...","tokenUsage":{"totalTokens":0,"inputTokens":0,"outputTokens":0},"iterations":1,"toolCalls":1}
+{"schemaVersion":"1.1.0","runId":"...","type":"thought","content":"I should list the directory."}
+{"schemaVersion":"1.1.0","runId":"...","type":"permission_request","toolName":"bash_execute","risk":{"level":"low","reasons":[]},"kind":"tool"}
+{"schemaVersion":"1.1.0","runId":"...","type":"permission_decision","toolName":"bash_execute","action":"allow-once","reason":"risk low <= maxAutoAllowRisk low","risk":"low"}
+{"schemaVersion":"1.1.0","runId":"...","type":"action","content":"","toolName":"bash_execute","toolInput":{"command":"ls"}}
+{"schemaVersion":"1.1.0","runId":"...","type":"observation","content":"...","toolName":"bash_execute"}
+{"schemaVersion":"1.1.0","runId":"...","type":"result","content":"...","tokenUsage":{"totalTokens":0,"inputTokens":0,"outputTokens":0},"iterations":1,"toolCalls":1}
 ```

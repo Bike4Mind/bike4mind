@@ -13,24 +13,43 @@ export type SandboxDenial = {
 };
 
 const SNIPPET_LENGTH = 200;
-const EXIT_CODE_LINE = /^Exit code:\s*(-?\d+)\s*$/m;
+// The bash tool appends its own "Exit code: N" after stdout/stderr, so the last such line is
+// the real one; an earlier match is command output.
+const EXIT_CODE_LINE = /^Exit code:\s*(-?\d+)\s*$/gm;
+// sandbox-exec and bwrap print their own failures at the start of a stderr line.
+const LAUNCHER_MARKER = /^(?:sandbox-exec|bwrap):/m;
+const EPERM_TEXT = 'Operation not permitted';
 
 const NETWORK_TIP = "If this was a network call, prefer '/sandbox:network on' to allow filtered egress.";
 
 /**
- * Detect a sandbox denial in a tool result. A launcher marker (`sandbox-exec:`, `bwrap:`)
- * suffices. On macOS a real Seatbelt denial is the denied syscall's own EPERM with no marker, so
- * "Operation not permitted" also counts, but only next to a non-zero "Exit code:" line: a
- * command that printed the phrase and still exited 0 (e.g. a tolerated `kill`) was not stopped.
+ * Detect a sandbox denial in a tool result. A launcher marker (`sandbox-exec:`, `bwrap:` at the
+ * start of a line) suffices. On macOS a real Seatbelt denial is the denied syscall's own EPERM
+ * with no marker, so "Operation not permitted" also counts, but only with a non-zero final
+ * "Exit code:" line: a command that printed the phrase and still exited 0 (e.g. a tolerated
+ * `kill`) was not stopped.
  */
 export function detectSandboxDenial(sandboxed: boolean, result: string): SandboxDenial | null {
   if (!sandboxed) return null;
-  const snippet = result.slice(0, SNIPPET_LENGTH);
-  if (result.includes('sandbox-exec:') || result.includes('bwrap:')) return { reason: 'launcher', snippet };
-  if (!result.includes('Operation not permitted')) return null;
-  const exitCode = EXIT_CODE_LINE.exec(result)?.[1];
+  const marker = LAUNCHER_MARKER.exec(result);
+  if (marker) return { reason: 'launcher', snippet: snippetAt(result, marker.index) };
+  const epermIndex = result.indexOf(EPERM_TEXT);
+  if (epermIndex === -1) return null;
+  const exitCodes = [...result.matchAll(EXIT_CODE_LINE)];
+  const exitCode = exitCodes[exitCodes.length - 1]?.[1];
   if (exitCode === undefined || Number(exitCode) === 0) return null;
-  return { reason: 'eperm', snippet };
+  return { reason: 'eperm', snippet: snippetAt(result, epermIndex) };
+}
+
+/** The error text from the start of the line holding `index`, so long stdout never hides it. */
+function snippetAt(result: string, index: number): string {
+  const lineStart = result.lastIndexOf('\n', index) + 1;
+  return result.slice(lineStart, lineStart + SNIPPET_LENGTH);
+}
+
+/** A bash session (background, or promoted after yield_time_ms) may still be running. */
+function isSessionRun(args: ToolArgs): boolean {
+  return args.run_in_background === true || typeof args.yield_time_ms === 'number';
 }
 
 export type SandboxedRunInput = {
@@ -52,7 +71,8 @@ export type SandboxedRunInput = {
  * The sandbox stage of execution: run the attempt, record violations, and if the OS sandbox
  * denied it, ask before retrying outside the sandbox. The question is its own prompt: auto-accept,
  * session trust, trusted tools and the host allowlist never approve it, and when nobody can
- * answer, the model gets the sandbox error back. Background runs are never escalated.
+ * answer, the model gets the sandbox error back. Session runs (background or yield_time_ms) are
+ * never escalated: the sandboxed process may still be running.
  */
 export async function runSandboxed(input: SandboxedRunInput): Promise<string> {
   const { descriptor, rawArgs, execArgs, isSandboxed, attempt, permissionManager, sandboxOrchestrator } = input;
@@ -61,7 +81,7 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<string> {
 
   const commandArg = sandboxedCommandArg(descriptor);
   const command = commandTextOf(descriptor, rawArgs);
-  if (!commandArg || command === undefined || execArgs.run_in_background === true) return result;
+  if (!commandArg || command === undefined || isSessionRun(execArgs)) return result;
   const denial = detectSandboxDenial(isSandboxed, result);
   if (!denial) return result;
 
