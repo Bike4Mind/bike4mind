@@ -1,5 +1,12 @@
 # @bike4mind/db-core
 
+## 0.8.3
+
+### Patch Changes
+
+- Updated dependencies [[`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498), [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c), [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f), [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5), [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661), [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d), [`e774b4a`](https://github.com/Bike4Mind/bike4mind/commit/e774b4ab69877762a15cb7ac59edd082fdc93320), [`d42b0c6`](https://github.com/Bike4Mind/bike4mind/commit/d42b0c62ef7e22ea0c63cffb66ed05402a7d9178), [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41), [`f33b246`](https://github.com/Bike4Mind/bike4mind/commit/f33b246c31f172ec274d965e4950856490f5c45b)]:
+  - @bike4mind/common@16.0.0
+
 ## 0.8.2
 
 ### Patch Changes
