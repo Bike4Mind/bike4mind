@@ -42,6 +42,8 @@ const config: Config = {
             'admin/liveops-triage.md',
             'admin/data-lake-cost-governance.md',
             'features/optihashi.md',
+            'features/libreoncology.md',
+            'features/tavern/**',
           ],
         },
         blog: false,
