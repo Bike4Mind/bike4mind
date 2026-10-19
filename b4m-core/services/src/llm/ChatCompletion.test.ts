@@ -10313,6 +10313,7 @@ describe('prompt moderation', () => {
     getMcpClient: vi.fn(),
     logEvent: vi.fn(),
     getScopeFilter: vi.fn().mockReturnValue([]),
+    workspaceSessionSettings: {},
     tokenizer: {
       countTokens: vi.fn().mockResolvedValue(100),
       encodeTokens: vi.fn().mockResolvedValue([1, 2, 3]),
