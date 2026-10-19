@@ -26,9 +26,13 @@ export interface StreamedSideEffect {
 
 export interface DispatchOptions {
   /**
-   * Whether these effects are arriving live from a streaming completion, as
-   * opposed to being replayed when an existing session loads. Handlers decide
-   * what live vs replay means for their effect types.
+   * True only for the first dispatch of a reply that arrived (finished
+   * streaming) in this client session: "this just happened, apply it". Anything
+   * else - a session load, a reload, a refetch or remount of an older reply - is
+   * a replay and must leave this unset, because a handler may auto-apply live
+   * effects over state the user has changed since. Render-path callers gate it
+   * with claimLiveDispatch(). Handlers decide what live vs replay means for their
+   * effect types.
    */
   live?: boolean;
   /**
@@ -37,6 +41,30 @@ export interface DispatchOptions {
    * (streaming-completion handler and render-pipeline dispatcher).
    */
   dedupeKey?: string;
+}
+
+// Keys (quest/message ids) of replies seen unfinished in this client session, and
+// of replies whose one live dispatch has been claimed. Deliberately in-memory: a
+// reply that finished before this page loaded was never seen in flight, so a
+// reload dispatches it as a replay without persisting anything.
+const inFlightKeys = new Set<string>();
+const liveClaimedKeys = new Set<string>();
+
+/** Record that the reply with this key was seen unfinished (streaming) in this client session. */
+export function noteReplyInFlight(key: string): void {
+  if (!liveClaimedKeys.has(key)) inFlightKeys.add(key);
+}
+
+/**
+ * Claim the single live dispatch for a reply. Returns true at most once per key,
+ * and only for a reply noted in flight in this client session; every later call
+ * (remount, refetch, the other live dispatch path) returns false.
+ */
+export function claimLiveDispatch(key: string): boolean {
+  if (!inFlightKeys.has(key) || liveClaimedKeys.has(key)) return false;
+  inFlightKeys.delete(key);
+  liveClaimedKeys.add(key);
+  return true;
 }
 
 /** Returns the number of effects it dispatched. */

@@ -367,3 +367,80 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     expect(screen.queryByTestId('mcp-confirm-btn')).toBeNull();
   });
 });
+
+describe('reply UI side effects: live only on first arrival', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const effects = [{ type: 'plugin-effect', payload: { v: 1 } }];
+  let seq = 0;
+  const handler = vi.fn((_effects: unknown[], _options: { live?: boolean; dedupeKey?: string }) => 1);
+  let unregister: () => void = () => {};
+
+  beforeEach(async () => {
+    const { registerUiSideEffectHandler } = await import('@client/app/utils/uiSideEffectDispatcher');
+    unregister();
+    handler.mockClear();
+    unregister = registerUiSideEffectHandler(handler);
+    seq += 1;
+  });
+
+  const replyId = (suffix = '') => `side-effect-quest-${seq}${suffix}`;
+
+  const reply = (id: string, status: string, withEffects = status === 'done') => (
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <PromptReplies
+          key={id}
+          messageData={
+            { id, questMasterReply: 'answer', status, ...(withEffects ? { uiSideEffects: effects } : {}) } as never
+          }
+          onSendMessage={async () => {}}
+        />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+
+  const liveCalls = () => handler.mock.calls.filter(([, options]) => options.live === true);
+
+  it('dispatches live exactly once when a streaming reply finishes', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'running'));
+    expect(handler).not.toHaveBeenCalled();
+    rerender(reply(id, 'done'));
+    rerender(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(1);
+    expect(liveCalls()[0][1]).toEqual({ live: true, dedupeKey: id });
+  });
+
+  it('does not dispatch live again when the same finished reply remounts', () => {
+    const id = replyId();
+    const first = render(reply(id, 'running'));
+    first.rerender(reply(id, 'done'));
+    first.unmount();
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(1);
+  });
+
+  it('does not dispatch live for a finished reply a refetch re-keys under a new id', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done'));
+    handler.mockClear();
+    rerender(reply(replyId('-rekeyed'), 'done'));
+    expect(liveCalls()).toHaveLength(0);
+  });
+
+  it('does not dispatch live for a reply that was already finished when the page loaded', () => {
+    render(reply(replyId(), 'done'));
+    expect(liveCalls()).toHaveLength(0);
+  });
+
+  it('applies a reply live once when the streaming completion already claimed it', async () => {
+    const { claimLiveDispatch, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    noteReplyInFlight(id);
+    expect(claimLiveDispatch(id)).toBe(true);
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(0);
+  });
+});

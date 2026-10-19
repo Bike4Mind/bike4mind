@@ -87,7 +87,7 @@ import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import { claimLiveDispatch, dispatchUiSideEffects, noteReplyInFlight } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
@@ -1172,20 +1172,25 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
 
 // UiSideEffectDispatcher
 
-const UiSideEffectDispatcher: FC<{ effects: UiSideEffect[]; completed: boolean; dedupeKey?: string }> = ({
+const UiSideEffectDispatcher: FC<{ effects?: UiSideEffect[]; completed: boolean; dedupeKey: string }> = ({
   effects,
   completed,
   dedupeKey,
 }) => {
-  const hasDispatched = useRef(false);
-
   useEffect(() => {
-    if (!completed || hasDispatched.current) return;
-    hasDispatched.current = true;
-    // Live arrival from a just-completed reply - auto-apply the brief and follow
-    // the AI to its console. dedupeKey ensures the streaming path and this render
-    // path apply the same quest only once (the later one is a no-op).
-    dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    if (!completed) {
+      noteReplyInFlight(dedupeKey);
+      return;
+    }
+    if (!effects?.length) return;
+    // Live only for the first dispatch of a reply this client watched finish; the claim is
+    // keyed on the reply id (not this component instance), so a remount, a refetch that
+    // re-keys the reply, or a reload never re-applies an old reply over newer user state.
+    // Replays are not re-dispatched here: SessionMiddle owns the non-destructive replay of
+    // the session's latest side effects, and useSubscribeChatCompletion usually claims first.
+    if (claimLiveDispatch(dedupeKey)) {
+      dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    }
   }, [completed, effects, dedupeKey]);
 
   return null;
@@ -1928,9 +1933,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
-      {uiSideEffects && uiSideEffects.length > 0 && completed && (
-        <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />
-      )}
+      {messageId && <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />}
 
       {notebookContent && completed && (
         <NotebookExecutionButtons

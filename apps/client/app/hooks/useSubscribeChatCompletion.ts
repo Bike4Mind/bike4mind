@@ -14,7 +14,7 @@ import { useStreamingState } from './useStreamingState';
 import { useStreamingQueryUpdates } from './useStreamingQueryUpdates';
 import { useStreamingMetrics } from './useStreamingMetrics';
 import { useStreamingArtifactPersistence } from './useStreamingArtifactPersistence';
-import { dispatchUiSideEffects } from '../utils/uiSideEffectDispatcher';
+import { claimLiveDispatch, dispatchUiSideEffects, noteReplyInFlight } from '../utils/uiSideEffectDispatcher';
 import { fabFileKeys } from './data/fabFileKeys';
 import useSessionLayout from './useSessionLayout';
 import {
@@ -327,6 +327,9 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         }
 
         updateStreamingQuest(typedMsg.quest, isComplete, typedMsg.statusMessage);
+        // A frame over this socket means the reply is arriving in this client session, so its
+        // completion is a live arrival (see claimLiveDispatch).
+        if (typedMsg.quest.id) noteReplyInFlight(typedMsg.quest.id);
 
         // OPTIMIZED STREAMING: Real-time visual updates with performance optimizations
         if (isComplete) {
@@ -338,10 +341,11 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
             perfLogger.log(
               `🎯 [UI_SIDE_EFFECTS] Dispatching ${typedMsg.quest.uiSideEffects.length} side effect(s) from streaming completion`
             );
-            // Live streaming completion - auto-apply the formulated brief and follow
-            // the AI to its console. dedupeKey (quest id) makes this and the
-            // render-pipeline dispatch apply the same quest exactly once.
-            dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
+            // Live streaming completion. The claim (quest id) makes this and the
+            // render-pipeline dispatcher apply the same quest live exactly once.
+            if (typedMsg.quest.id && claimLiveDispatch(typedMsg.quest.id)) {
+              dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
+            }
           }
 
           // PERFORMANCE PROTECTION: Mark streaming as complete
