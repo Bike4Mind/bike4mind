@@ -4051,6 +4051,40 @@ describe('ChatCompletionProcess', () => {
         expect(charged).toBeGreaterThanOrEqual(2 * settledCredits(1000));
         expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', twoConfigHold - charged);
       });
+
+      it('refunds the hold when the research settlement fails', async () => {
+        const { complete } = reservationOrgSetup();
+        complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+          await cb(['Answer'], { inputTokens: 10, outputTokens: 1000 });
+        });
+        fundedOrg();
+        mockQuest.sessionId = 'session1';
+        mockDb.organizations.incrementCredits = vi
+          .fn()
+          .mockResolvedValueOnce({ id: 'org1', currentCredits: 50_000 })
+          .mockRejectedValueOnce(new Error('write failed'))
+          .mockResolvedValue({ id: 'org1', currentCredits: 50_000 });
+
+        await service.process({ body: researchReservationBody() as any, logger: mockLogger });
+
+        const twoConfigHold = realUsdToCredits((2 * PREFLIGHT_RESERVATION_OUTPUT_TOKENS * 30) / 1_000_000);
+        expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(3, 'org1', twoConfigHold);
+      });
+
+      // Each configuration inherits the turn's thinking options, so a thinking Claude configuration
+      // is sent the raised max_tokens (buildThinkingParams) and is held on it like the primary is.
+      it('holds a thinking Anthropic configuration on the max_tokens the adapter will send', async () => {
+        reservationOrgSetup({ can_think: true, backend: ModelBackend.Anthropic });
+        fundedOrg();
+        mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+        const body = researchReservationBody();
+        body.researchMode.configurations = body.researchMode.configurations.slice(0, 1);
+        body.params = { ...body.params, max_tokens: 1000, thinking: { enabled: true, budget_tokens: 32_000 } } as any;
+
+        await service.process({ body: body as any, logger: mockLogger });
+
+        expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
+      });
     });
 
     // A Stop or disconnect that makes the adapter throw still spent what it streamed: it settles
@@ -4112,6 +4146,180 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body: reservationBody(), logger: mockLogger });
 
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
+    });
+
+    const abortError = () => {
+      const abort = new Error('The operation was aborted');
+      abort.name = 'AbortError';
+      return abort;
+    };
+
+    // releaseReservedCredits (a caller giving up on a stuck turn) can run while the settlement awaits
+    // its balance update; the settlement claims the hold first, so the release has nothing to refund.
+    it('claims the hold before a thrown-abort settlement awaits, so a concurrent release refunds nothing', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'.repeat(40_000)]);
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      let calls = 0;
+      mockDb.organizations.incrementCredits = vi.fn().mockImplementation(async () => {
+        calls++;
+        if (calls === 2) await service.releaseReservedCredits('quest1', mockLogger);
+        return { id: 'org1', currentCredits: 50_000 };
+      });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      // The hold and the settlement only: no refund on top of the settlement's own.
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+    });
+
+    it('refunds the hold when a thrown-abort settlement fails to move the balance', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'.repeat(40_000)]);
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockDb.organizations.incrementCredits = vi
+        .fn()
+        .mockResolvedValueOnce({ id: 'org1', currentCredits: 50_000 })
+        .mockRejectedValueOnce(new Error('write failed'))
+        .mockResolvedValue({ id: 'org1', currentCredits: 50_000 });
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(3, 'org1', expectedHold);
+    });
+
+    // A stuck turn's hold is refunded by the caller; when the run later ends on a thrown abort, what it
+    // streamed is still billed, in full, against the restored balance.
+    it('bills a thrown abort in full after its hold was released as stuck', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'], { inputTokens: 10, outputTokens: 1000 });
+        await service.releaseReservedCredits('quest1', mockLogger);
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.map(
+        ([, row]: [string, { credits: number }]) => Math.abs(row.credits)
+      );
+      expect(charged).toHaveLength(1);
+      expect(charged[0]).toBeGreaterThanOrEqual(settledCredits(1000));
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(3, 'org1', -charged[0]);
+    });
+
+    // An image or audio tool that ran before the Stop reserved its charge (ToolBuilder
+    // reserveToolCredits); the abort settlement bills it like the main settlement does, even when no
+    // text streamed.
+    it("bills a thrown abort's reserved tool charges, even with no streamed text", async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async () => {
+        (service as any).toolCreditsMap.set('image_generation', [300, 200]);
+        (service as any).toolCreditModels.add('image-model');
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - 500);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'tool_usage',
+        expect.objectContaining({ credits: -500, model: 'image-model' })
+      );
+    });
+
+    // A Stop that lands after a cross-model failover bills the model that was answering, not the
+    // requested one that failed.
+    it('bills a thrown abort after a failover on the fallback model', async () => {
+      reservationOrgSetup();
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: try again')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 128_000,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 0, output: 60 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['x'], { inputTokens: 10, outputTokens: 1000 });
+            throw abortError();
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord.mock.calls[0][0]).toMatchObject({ model: 'claude-opus-4-8', status: 'error' });
+      expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo((1000 * 60) / 1_000_000, 9);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'text_generation_usage',
+        expect.objectContaining({ model: 'claude-opus-4-8' })
+      );
+    });
+
+    // Cache reads and writes are priced at their own rates, as the main settlement prices them, not
+    // folded into input at the full rate.
+    it("prices and records a thrown abort's provider-reported cache tokens", async () => {
+      const { complete } = reservationOrgSetup({
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      });
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'], {
+          inputTokens: 10,
+          outputTokens: 1000,
+          cacheReadInputTokens: 50_000,
+          cacheCreationInputTokens: 2_000,
+        });
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const event = usageEventsRecord.mock.calls[0][0];
+      expect(event).toMatchObject({ inputTokens: 10, cachedInputTokens: 50_000, cacheWriteTokens: 2_000 });
+      // 10 uncached + 50K read at 0.1x + 2K written at 1.25x, and 1000 output.
+      expect(event.costUsd).toBeCloseTo((10 * 10 + 50_000 * 1 + 2_000 * 12.5 + 1000 * 30) / 1_000_000, 9);
     });
 
     // Idempotency guard for a cross-model failover: the failed primary
