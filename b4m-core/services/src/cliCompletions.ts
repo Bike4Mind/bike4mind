@@ -29,6 +29,7 @@ import {
   UNKNOWN_MODEL_ERROR_CODE,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
+  completionsSupportsToolSearch,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -182,13 +183,15 @@ function estimateInputTokens(messages: IMessage[]): number {
 
 /**
  * Same heuristic as estimateInputTokens, over the tool schemas the provider is sent (wire or
- * server-executed). A deferred tool is left out: native tool search keeps it out of the prompt
- * until it is referenced, and prepareWireTools strips `defer_loading` wherever that is not
- * honoured, so a tool still flagged here is genuinely deferred.
+ * server-executed). A deferred tool is left out only where `deferralHonoured`: native tool search
+ * keeps it out of the prompt until it is referenced, and anywhere else the flag is ignored and
+ * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
+ * the flag, because `serverTools` never pass through it.
  */
-function estimateToolTokens(tools: ICompletionOptionTools[]): number {
+function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
   const totalChars = tools.reduce(
-    (sum, tool) => (tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length),
+    (sum, tool) =>
+      deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
     0
   );
   return Math.ceil(totalChars / 2.5);
@@ -540,7 +543,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // through - 8x what this keeps - and reject short prompts outright for anyone near their
     // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
     // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
-    const estimatedToolTokens = estimateToolTokens(completionOptions.tools ?? []);
+    const estimatedToolTokens = estimateToolTokens(
+      completionOptions.tools ?? [],
+      completionsSupportsToolSearch(modelInfo)
+    );
     const estimatedInputTokens = estimateInputTokens(messages) + estimatedToolTokens;
     const estimatedOutputTokens = Math.min(
       maxTokens,
