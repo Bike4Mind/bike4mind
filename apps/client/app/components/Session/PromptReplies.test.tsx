@@ -384,6 +384,7 @@ describe('reply UI side effects: live only on first arrival', () => {
   });
 
   const replyId = (suffix = '') => `side-effect-quest-${seq}${suffix}`;
+  const sessionOf = () => `side-effect-session-${seq}`;
 
   const reply = (id: string, status: string, withEffects = status === 'done') => (
     <QueryClientProvider client={new QueryClient()}>
@@ -391,7 +392,13 @@ describe('reply UI side effects: live only on first arrival', () => {
         <PromptReplies
           key={id}
           messageData={
-            { id, questMasterReply: 'answer', status, ...(withEffects ? { uiSideEffects: effects } : {}) } as never
+            {
+              id,
+              sessionId: sessionOf(),
+              questMasterReply: 'answer',
+              status,
+              ...(withEffects ? { uiSideEffects: effects } : {}),
+            } as never
           }
           onSendMessage={async () => {}}
         />
@@ -400,6 +407,7 @@ describe('reply UI side effects: live only on first arrival', () => {
   );
 
   const liveCalls = () => handler.mock.calls.filter(([, options]) => options.live === true);
+  const replayCalls = () => handler.mock.calls.filter(([, options]) => !options.live);
 
   it('dispatches live exactly once when a streaming reply finishes', () => {
     const id = replyId();
@@ -407,40 +415,61 @@ describe('reply UI side effects: live only on first arrival', () => {
     expect(handler).not.toHaveBeenCalled();
     rerender(reply(id, 'done'));
     rerender(reply(id, 'done'));
-    expect(liveCalls()).toHaveLength(1);
+    expect(handler).toHaveBeenCalledTimes(1);
     expect(liveCalls()[0][1]).toEqual({ live: true, dedupeKey: id });
   });
 
-  it('does not dispatch live again when the same finished reply remounts', () => {
+  it('does not dispatch the same finished reply again when it remounts', () => {
     const id = replyId();
     const first = render(reply(id, 'running'));
     first.rerender(reply(id, 'done'));
     first.unmount();
     render(reply(id, 'done'));
     expect(liveCalls()).toHaveLength(1);
+    expect(replayCalls()).toHaveLength(0);
   });
 
-  it('does not dispatch live for a finished reply a refetch re-keys under a new id', () => {
+  it('replays, never live, a finished reply a refetch re-keys under a new id', () => {
     const id = replyId();
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));
     handler.mockClear();
-    rerender(reply(replyId('-rekeyed'), 'done'));
+    const rekeyed = replyId('-rekeyed');
+    rerender(reply(rekeyed, 'done'));
     expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0][1]).toEqual({ dedupeKey: rekeyed });
   });
 
-  it('does not dispatch live for a reply that was already finished when the page loaded', () => {
-    render(reply(replyId(), 'done'));
+  it('replays once, never live, a reply already finished when the page loaded', () => {
+    const id = replyId();
+    const first = render(reply(id, 'done'));
+    first.unmount();
+    render(reply(id, 'done'));
     expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0][1]).toEqual({ dedupeKey: id });
   });
 
-  it('applies a reply live once when the streaming completion already claimed it', async () => {
+  it('replays a finished reply again once its session view is released', async () => {
+    const { forgetSessionDispatches } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    const first = render(reply(id, 'running'));
+    first.rerender(reply(id, 'done'));
+    first.unmount();
+    forgetSessionDispatches(sessionOf());
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(1);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
+  it('does not dispatch a reply the streaming completion already applied live', async () => {
     const { claimLiveDispatch, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
     const id = replyId();
     noteReplyInFlight(id);
-    expect(claimLiveDispatch(id)).toBe(true);
+    expect(claimLiveDispatch(id, sessionOf())).toBe(true);
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));
-    expect(liveCalls()).toHaveLength(0);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

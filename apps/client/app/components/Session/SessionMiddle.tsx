@@ -38,7 +38,11 @@ import PendingApprovalBeacon from '@client/app/components/Session/AgentExecution
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import Typography from '@mui/joy/Typography';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import {
+  claimReplayDispatch,
+  dispatchUiSideEffects,
+  forgetSessionDispatches,
+} from '@client/app/utils/uiSideEffectDispatcher';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
@@ -257,14 +261,18 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
 
   useSessionReconnectProbe(sessionId);
 
-  // Scan loaded quests for uiSideEffects and dispatch them. Handles the
+  // Scan loaded quests for uiSideEffects and replay them. Handles the
   // notebook-switch case where quests load from the API - the rendering-based
   // UiSideEffectDispatcher in PromptReplies has timing issues during pagination
   // loading. Tracking dispatched quest IDs prevents duplicate dispatches.
   const dispatchedQuestIds = useRef(new Set<string>());
   useEffect(() => {
-    // Reset tracking when session changes
+    // Reset tracking when session changes. On leaving, release the session's replies
+    // in the shared ledger so the next view of it replays them again (handlers may
+    // rebuild per-view state from them); this cleanup runs before the next session's
+    // replies mount.
     dispatchedQuestIds.current.clear();
+    return () => forgetSessionDispatches(sessionId);
   }, [sessionId]);
 
   useEffect(() => {
@@ -279,15 +287,15 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       ) {
         dispatchedQuestIds.current.add(quest.id);
         // Replay path (no `live` flag): this scans persisted quests as a session
-        // loads, so it must stay NON-destructive - surface the "Load Problem" review
-        // banner rather than auto-applying, which would clobber a brief the user
-        // hand-edited after the AI first formulated it. The live auto-apply path is
-        // PromptReplies / useSubscribeChatCompletion.
-        dispatchUiSideEffects(quest.uiSideEffects);
+        // loads, so it must stay NON-destructive - handlers surface a review step
+        // rather than auto-applying, which would clobber state the user changed after
+        // the reply first arrived. The claim is shared with the PromptReplies render
+        // path, which usually replays the same quest first; a quest is replayed once.
+        if (claimReplayDispatch(quest.id, sessionId)) dispatchUiSideEffects(quest.uiSideEffects);
         break; // Only dispatch the most recent one
       }
     }
-  }, [flattenQuests]);
+  }, [flattenQuests, sessionId]);
 
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);

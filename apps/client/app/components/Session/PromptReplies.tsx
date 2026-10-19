@@ -87,7 +87,12 @@ import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
-import { claimLiveDispatch, dispatchUiSideEffects, noteReplyInFlight } from '@client/app/utils/uiSideEffectDispatcher';
+import {
+  claimLiveDispatch,
+  claimReplayDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+} from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
@@ -638,6 +643,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
+        replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
       />
@@ -1172,26 +1178,30 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
 
 // UiSideEffectDispatcher
 
-const UiSideEffectDispatcher: FC<{ effects?: UiSideEffect[]; completed: boolean; dedupeKey: string }> = ({
-  effects,
-  completed,
-  dedupeKey,
-}) => {
+const UiSideEffectDispatcher: FC<{
+  effects?: UiSideEffect[];
+  completed: boolean;
+  dedupeKey: string;
+  sessionId?: string;
+}> = ({ effects, completed, dedupeKey, sessionId }) => {
   useEffect(() => {
     if (!completed) {
       noteReplyInFlight(dedupeKey);
       return;
     }
     if (!effects?.length) return;
-    // Live only for the first dispatch of a reply this client watched finish; the claim is
-    // keyed on the reply id (not this component instance), so a remount, a refetch that
-    // re-keys the reply, or a reload never re-applies an old reply over newer user state.
-    // Replays are not re-dispatched here: SessionMiddle owns the non-destructive replay of
-    // the session's latest side effects, and useSubscribeChatCompletion usually claims first.
-    if (claimLiveDispatch(dedupeKey)) {
+    // Live only for the first dispatch of a reply this client watched finish. Otherwise a
+    // replay (no `live`), once per view of the session: handlers rebuild derived state from
+    // replays, but must never re-apply an old reply over newer user state. Both claims are
+    // keyed on the reply id, not this component instance, so a remount, a refetch that
+    // re-keys the reply, or a reload is never live. Shared with SessionMiddle and
+    // useSubscribeChatCompletion, so no reply is dispatched twice across the three paths.
+    if (claimLiveDispatch(dedupeKey, sessionId)) {
       dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    } else if (claimReplayDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { dedupeKey });
     }
-  }, [completed, effects, dedupeKey]);
+  }, [completed, effects, dedupeKey, sessionId]);
 
   return null;
 };
@@ -1229,6 +1239,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   attachmentNotices,
   attachmentDelivery,
   uiSideEffects,
+  replySessionId,
   jupyterNotebook,
   notebookContent,
 }) => {
@@ -1933,7 +1944,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
-      {messageId && <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />}
+      {messageId && (
+        <UiSideEffectDispatcher
+          effects={uiSideEffects}
+          completed={completed}
+          dedupeKey={messageId}
+          sessionId={replySessionId}
+        />
+      )}
 
       {notebookContent && completed && (
         <NotebookExecutionButtons

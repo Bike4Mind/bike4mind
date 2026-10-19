@@ -43,12 +43,15 @@ export interface DispatchOptions {
   dedupeKey?: string;
 }
 
-// Keys (quest/message ids) of replies seen unfinished in this client session, and
-// of replies whose one live dispatch has been claimed. Deliberately in-memory: a
-// reply that finished before this page loaded was never seen in flight, so a
-// reload dispatches it as a replay without persisting anything.
+// In-memory ledger of which replies (keyed by quest/message id) have been dispatched,
+// shared by every dispatch path so each reply is applied live at most once and
+// replayed at most once per view of its session. Deliberately not persisted: a reply
+// that finished before this page loaded was never seen in flight, so a reload can
+// only replay it.
 const inFlightKeys = new Set<string>();
 const liveClaimedKeys = new Set<string>();
+/** Dispatched (live or replay) reply key -> the session it belongs to. */
+const dispatchedKeys = new Map<string, string>();
 
 /** Record that the reply with this key was seen unfinished (streaming) in this client session. */
 export function noteReplyInFlight(key: string): void {
@@ -60,11 +63,35 @@ export function noteReplyInFlight(key: string): void {
  * and only for a reply noted in flight in this client session; every later call
  * (remount, refetch, the other live dispatch path) returns false.
  */
-export function claimLiveDispatch(key: string): boolean {
+export function claimLiveDispatch(key: string, sessionId = ''): boolean {
   if (!inFlightKeys.has(key) || liveClaimedKeys.has(key)) return false;
   inFlightKeys.delete(key);
   liveClaimedKeys.add(key);
+  dispatchedKeys.set(key, sessionId);
   return true;
+}
+
+/**
+ * Claim the replay (a dispatch without `live`) of a finished reply. Returns true once
+ * per reply until its session is released with forgetSessionDispatches; false for a
+ * reply already dispatched in this view of the session, or one still in flight (its
+ * completion will be live). Handlers may rebuild derived state from replays, so a
+ * reply must not be replayed twice into the same view.
+ */
+export function claimReplayDispatch(key: string, sessionId = ''): boolean {
+  if (inFlightKeys.has(key) || dispatchedKeys.has(key)) return false;
+  dispatchedKeys.set(key, sessionId);
+  return true;
+}
+
+/**
+ * Release a session's dispatched replies so the next view of it replays them again
+ * (live claims stay spent). Called when the session view is left (SessionMiddle).
+ */
+export function forgetSessionDispatches(sessionId: string): void {
+  for (const [key, owner] of dispatchedKeys) {
+    if (owner === sessionId) dispatchedKeys.delete(key);
+  }
 }
 
 /** Returns the number of effects it dispatched. */

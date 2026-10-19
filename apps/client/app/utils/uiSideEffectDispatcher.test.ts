@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   claimLiveDispatch,
+  claimReplayDispatch,
   dispatchUiSideEffects,
+  forgetSessionDispatches,
   noteReplyInFlight,
   registerUiSideEffectHandler,
 } from './uiSideEffectDispatcher';
@@ -22,6 +24,25 @@ describe('live dispatch ledger', () => {
     expect(claimLiveDispatch('ledger-c')).toBe(true);
     noteReplyInFlight('ledger-c');
     expect(claimLiveDispatch('ledger-c')).toBe(false);
+  });
+
+  it('grants a replay once per reply until its session is released', () => {
+    expect(claimReplayDispatch('ledger-d', 's1')).toBe(true);
+    expect(claimReplayDispatch('ledger-d', 's1')).toBe(false);
+    forgetSessionDispatches('s2');
+    expect(claimReplayDispatch('ledger-d', 's1')).toBe(false);
+    forgetSessionDispatches('s1');
+    expect(claimReplayDispatch('ledger-d', 's1')).toBe(true);
+  });
+
+  it('refuses a replay while the reply is in flight, and after it went live', () => {
+    noteReplyInFlight('ledger-e');
+    expect(claimReplayDispatch('ledger-e', 's1')).toBe(false);
+    expect(claimLiveDispatch('ledger-e', 's1')).toBe(true);
+    expect(claimReplayDispatch('ledger-e', 's1')).toBe(false);
+    forgetSessionDispatches('s1');
+    expect(claimLiveDispatch('ledger-e', 's1')).toBe(false);
+    expect(claimReplayDispatch('ledger-e', 's1')).toBe(true);
   });
 });
 

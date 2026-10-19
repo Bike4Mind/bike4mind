@@ -343,7 +343,7 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
             );
             // Live streaming completion. The claim (quest id) makes this and the
             // render-pipeline dispatcher apply the same quest live exactly once.
-            if (typedMsg.quest.id && claimLiveDispatch(typedMsg.quest.id)) {
+            if (typedMsg.quest.id && claimLiveDispatch(typedMsg.quest.id, typedMsg.quest.sessionId)) {
               dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
             }
           }
