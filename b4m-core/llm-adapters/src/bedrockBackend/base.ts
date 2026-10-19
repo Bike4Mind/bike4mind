@@ -26,6 +26,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { getCachingAdapter } from '../caching/adapters';
+import { describePayloadShape } from './payloadShape';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
 import {
@@ -983,20 +984,20 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
           throw error;
         }
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}:`, error);
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error details:`, {
+        // One entry, so the alert carries the real error. The request is described by shape only:
+        // error logs reach a shared alert channel and must never include prompt text.
+        const { $fault, $metadata } = error as Error & { $fault?: unknown; $metadata?: unknown };
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${error.name}`, {
           name: error.name,
           message: error.message,
           stack: error.stack,
-          // Add more properties that might be available on the specific error type
-          ...(error as any),
-        });
-
-        // Log the request payload for debugging
-        Logger.globalInstance.error(`[BaseBedrockBackend] Request payload:`, {
-          modelId: input.modelId,
-          contentType: input.contentType,
-          bodyPreview: input.body.substring(0, 500) + (input.body.length > 500 ? '...' : ''),
+          $fault,
+          $metadata,
+          request: {
+            modelId: input.modelId,
+            contentType: input.contentType,
+            ...describePayloadShape(input.body),
+          },
         });
       }
 
