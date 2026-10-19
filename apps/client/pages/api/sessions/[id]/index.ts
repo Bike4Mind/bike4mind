@@ -5,6 +5,7 @@ import {
   sessionDeleteContract,
   sessionGetContract,
   sessionUpdateContract,
+  stripSurfaceOwnedFields,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
@@ -36,12 +37,17 @@ const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res)
   // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.
   const doc = session as typeof session & { toJSON?: () => typeof session };
   const plain = typeof doc.toJSON === 'function' ? doc.toJSON() : session;
-  const effective = await applyWorkspaceSessionSettings(
-    plain,
-    { user: req.user, logger: req.logger },
-    premiumWorkspaceSessionSettings
-  );
-  return res.json(redactSessionForClient(effective));
+  try {
+    const effective = await applyWorkspaceSessionSettings(
+      plain,
+      { user: req.user, logger: req.logger },
+      premiumWorkspaceSessionSettings
+    );
+    return res.json(redactSessionForClient(effective));
+  } catch (error) {
+    req.logger.warn('Workspace session settings unavailable for GET; returning without owned fields', error);
+    return res.json(redactSessionForClient(stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings)));
+  }
 });
 
 const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (req, res) => {
