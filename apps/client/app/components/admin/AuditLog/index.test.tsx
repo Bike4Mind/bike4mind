@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   entries: [] as unknown[],
   listError: false,
   entryError: false,
+  entryRefetchError: false,
   summaryError: false,
 }));
 
@@ -32,8 +33,8 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
     fetchNextPage: vi.fn(),
   }),
   useAuditEntry: (id: string | null, initial: unknown) => ({
-    data: id && !mocks.entryError ? initial : undefined,
-    isError: id !== null && mocks.entryError,
+    data: id && (!mocks.entryError || mocks.entryRefetchError) ? initial : undefined,
+    isError: id !== null && (mocks.entryError || mocks.entryRefetchError),
   }),
   useAuditSummary: () => ({
     isError: mocks.summaryError,
@@ -81,6 +82,7 @@ describe('AuditLogPage', () => {
     mocks.entries = [makeAuditEntry({ id: 'e1' })];
     mocks.listError = false;
     mocks.entryError = false;
+    mocks.entryRefetchError = false;
     mocks.summaryError = false;
   });
 
@@ -151,5 +153,14 @@ describe('AuditLogPage', () => {
     render(<AuditLogPage />, { wrapper: TestWrapper });
     expect(mocks.openEntry).toHaveBeenCalledWith(null);
     expect(mocks.showSnackbar).toHaveBeenCalledWith(expect.any(String), { variant: 'soft', color: 'warning' });
+  });
+
+  it('keeps the drawer open when a background refetch of a loaded entry fails', () => {
+    mocks.entryId = 'e1';
+    mocks.entryRefetchError = true;
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-drawer')).toBeTruthy();
+    expect(mocks.openEntry).not.toHaveBeenCalled();
+    expect(mocks.showSnackbar).not.toHaveBeenCalled();
   });
 });

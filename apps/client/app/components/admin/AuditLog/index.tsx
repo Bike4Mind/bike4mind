@@ -34,12 +34,13 @@ const AuditLogPage: React.FC = () => {
   );
   const { data: drawerEntry, isError: isEntryError } = useAuditEntry(entryId, loadedEntry);
 
-  // A deep link to a missing or unreadable entry would otherwise leave a drawer that never opens.
+  // A deep link to a missing entry would otherwise leave a drawer that never opens; a failed
+  // background refetch of an entry already on screen must not close it.
   useEffect(() => {
-    if (!entryId || !isEntryError) return;
+    if (!entryId || !isEntryError || drawerEntry) return;
     showSnackbar(ENTRY_UNAVAILABLE_MESSAGE, { variant: 'soft', color: 'warning' });
     openEntry(null);
-  }, [entryId, isEntryError, openEntry, showSnackbar]);
+  }, [drawerEntry, entryId, isEntryError, openEntry, showSnackbar]);
 
   const relatedFilters = relatedFiltersFor(drawerEntry);
   const { data: relatedData } = useAuditLog(relatedFilters ?? NO_FILTERS, {
