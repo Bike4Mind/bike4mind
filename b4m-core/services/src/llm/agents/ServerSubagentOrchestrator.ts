@@ -1,10 +1,18 @@
 import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
-import { DELEGATION_TOOLS, classifyToolPermission, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import {
+  DELEGATION_TOOLS,
+  classifyToolPermission,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
+import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
+import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -31,11 +39,18 @@ export type SubagentToolPermissions = {
  * Wrap each tool so a call the parent's permission gate would not let through is refused
  * instead of run. A child has no approver to pause for, so `needs_approval` is a refusal
  * that tells the model to hand the step back to the parent, whose gate can ask the user.
+ *
+ * Confirming MCP servers' tools (github, atlassian) are the exception, but only for the agent that
+ * claims the server via `exclusiveMcpServers` (`claimedServers`). Those tools are agent-only, so the
+ * parent never holds them and could never take the step back. Their writes only preview and
+ * execute on the user's Confirm click, which is the approval the gate would otherwise ask for.
+ * Custom agents can claim these servers too. A denied tool is still refused.
  */
 export function gateSubagentTools(
   tools: ICompletionOptionTools[],
   permissions: SubagentToolPermissions,
-  logger: Logger
+  logger: Logger,
+  claimedServers: readonly string[] = []
 ): ICompletionOptionTools[] {
   return tools.map(tool => {
     const toolName = tool.toolSchema.name;
@@ -43,7 +58,13 @@ export function gateSubagentTools(
 
     const toolFn: ICompletionOptionTools['toolFn'] = async (parameters, apiKey) => {
       const verdict = classifyToolPermission(toolName, permissions.approvedTools, permissions.deniedTools);
-      if (verdict === 'allowed') return tool.toolFn(parameters, apiKey);
+      const confirmingServer = confirmingServerOf(toolName);
+      const isClaimedConfirmingTool = confirmingServer !== undefined && claimedServers.includes(confirmingServer);
+      if (verdict === 'allowed' || (verdict === 'needs_approval' && isClaimedConfirmingTool)) {
+        const result = await tool.toolFn(parameters, apiKey);
+        // A gated child has no Confirm card, so a write preview must not point the model at one.
+        return confirmingServer ? withoutConfirmPrompt(result) : result;
+      }
 
       logger.warn(`[SubagentOrchestrator] Refused subagent call to "${toolName}" (${verdict})`);
       return verdict === 'denied'
@@ -408,16 +429,22 @@ export class ServerSubagentOrchestrator {
    */
   private resolveAgentRuntime(agentDef: ServerAgentDefinition): { llm: ICompletionBackend; model: string } {
     const parent = { llm: this.deps.llm, model: this.deps.llm.currentModel };
-    if (!agentDef.model || agentDef.model === parent.model) return parent;
+    if (!agentDef.model) return parent;
+    // An agent can stay pinned to a retired id; map it to the successor before any backend lookup.
+    const pinnedModel = resolveDeprecatedModelId(agentDef.model, 'subagentOrchestrator');
+    if (pinnedModel === parent.model) return parent;
 
     // No resolver wired: serviceability can't be tested, so keep the historical
     // same-provider assumption. Every production construction site now passes one
     // (delegateToAgent, coordinateTask, and the dispatched-subagent handler), so
     // this is the harness/test path - if a new caller omits it, an agent on a
     // foreign model id reaches this branch and 404s exactly as before.
-    if (!this.deps.resolveBackend) return { llm: parent.llm, model: agentDef.model };
+    if (!this.deps.resolveBackend) return { llm: parent.llm, model: pinnedModel };
 
-    const candidates = [agentDef.model, ...(agentDef.fallbackModels ?? [])];
+    const candidates = [
+      pinnedModel,
+      ...(agentDef.fallbackModels ?? []).map(m => resolveDeprecatedModelId(m, 'subagentOrchestrator')),
+    ];
     for (const model of candidates) {
       // The parent's own backend already serves this id; no need to build another.
       if (model === parent.model) return parent;
@@ -435,14 +462,14 @@ export class ServerSubagentOrchestrator {
       }
       if (!backend) continue;
       backend.currentModel = model;
-      if (model === agentDef.model) {
+      if (model === pinnedModel) {
         this.deps.logger.info(
           `🤖🔄 [SubagentOrchestrator] Resolved fresh backend for agent model "${model}" ` +
             `(parent uses "${parent.model}")`
         );
       } else {
         this.deps.logger.warn(
-          `🤖⚠️ [SubagentOrchestrator] "${agentDef.model}" is not serviceable; ` +
+          `🤖⚠️ [SubagentOrchestrator] "${pinnedModel}" is not serviceable; ` +
             `"${agentDef.name}" falling back to "${model}"`
         );
       }
@@ -511,7 +538,12 @@ export class ServerSubagentOrchestrator {
       deniedTools
     );
     const filteredTools = this.deps.toolPermissions
-      ? gateSubagentTools(selectedTools, this.deps.toolPermissions, this.deps.logger)
+      ? gateSubagentTools(
+          selectedTools,
+          this.deps.toolPermissions,
+          this.deps.logger,
+          agentDef.exclusiveMcpServers ?? []
+        )
       : selectedTools;
 
     // Substitute variables in system prompt
@@ -664,7 +696,7 @@ export class ServerSubagentOrchestrator {
       if (!result.completionInfo.totalCredits && this.deps.availableModels) {
         const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
         if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens } =
+          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
             result.completionInfo;
           // Cache-aware so this fallback stays on the same basis as the cache-aware
           // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
@@ -674,13 +706,16 @@ export class ServerSubagentOrchestrator {
           // That shape is shared with the main cliCompletions credit path, so credits
           // stay consistent across the two paths rather than diverging - matching the
           // primary path is deliberate; do not "fix" it here in isolation.
-          const usdCost = getTextModelCost(
-            modelInfo,
-            totalInputTokens,
-            totalOutputTokens,
-            totalCacheReadTokens ?? 0,
-            totalCacheWriteTokens ?? 0
-          );
+          // Per request when the agent reports it: long-context tiers are chosen per request.
+          const usdCost = turnUsage?.length
+            ? getTurnsCost(modelInfo, turnUsage)
+            : getTextModelCost(
+                modelInfo,
+                totalInputTokens,
+                totalOutputTokens,
+                totalCacheReadTokens ?? 0,
+                totalCacheWriteTokens ?? 0
+              );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
         } else {
           // Model absent from availableModels: credits stay unset and the delegation's

@@ -43,6 +43,7 @@ import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from './latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -59,7 +60,13 @@ import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver'
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { buildMusicToolConfig } from '@server/musicGenerations/buildMusicToolConfig';
+import {
+  getCreateMusicJobDeps,
+  getCreateVideoJobDeps,
+  getMusicJobDeps,
+  getVideoJobDeps,
+} from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -149,6 +156,7 @@ export const getStaticOptions = () => {
     wsHttpsUrl: Resource.websocket.managementEndpoint,
     slackWebhookUrl: Config.SLACK_WEBHOOK_URL,
     abilityGetter: defineAbilitiesFor,
+    workspaceDeniedTools: premiumWorkspaceDeniedTools,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve the caller's entitlement keys so retrieval can reach entitlement-gated lakes
@@ -221,6 +229,12 @@ export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId:
   apiKeyId
     ? undefined
     : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
+
+/** Same rule as video: the music-generations contract's scope check and rate limit must not be bypassed. */
+export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
+  apiKeyId
+    ? undefined
+    : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
 
 /**
  * Quest Processor - shared processing core.
@@ -343,6 +357,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     logger,
     externalTools,
     videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+    musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
   });
 
   await recordFirstChatValue({

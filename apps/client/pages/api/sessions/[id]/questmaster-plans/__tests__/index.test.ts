@@ -64,6 +64,20 @@ describe('GET /api/sessions/[id]/questmaster-plans', () => {
     expect(questMasterPlanRepository.findByNotebookId).toHaveBeenCalledWith(SESSION_ID);
   });
 
+  it('strips undeclared document keys and keeps declared plan fields', async () => {
+    questMasterPlanRepository.findByNotebookId.mockResolvedValue([
+      { id: 'plan1', goal: 'ship it', _id: 'raw-object-id', __v: 3 },
+    ]);
+    const { res, result } = call(SESSION_ID);
+    await result;
+
+    expect(res._getStatusCode()).toBe(200);
+    const [plan] = res._getJSONData();
+    expect(plan).toEqual({ id: 'plan1', goal: 'ship it' });
+    expect(plan).not.toHaveProperty('_id');
+    expect(plan).not.toHaveProperty('__v');
+  });
+
   it('rejects a session id that is not object-id shaped', async () => {
     const { res, result } = call('not-a-session-id');
     await result;

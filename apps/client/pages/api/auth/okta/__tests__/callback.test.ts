@@ -20,6 +20,7 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
+const mockEndConnections = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...a: any[]) => mockFindOne(...a),
@@ -28,7 +29,22 @@ vi.mock('@bike4mind/database', () => ({
   },
   authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
   authSessionRepository: { revokeAllByUserId: (...a: any[]) => mockRevokeAllByUserId(...a) },
+  realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
+
+// The real revoke primitive runs against the repository mocks above, so ending the realtime
+// connections is exercised for real; the spy only records the adapters it was given.
+const mockRevokeAllUserSessions = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  mockRevokeAllUserSessions.mockImplementation(actual.authSessionService.revokeAllUserSessions);
+  return {
+    authSessionService: {
+      revokeAllUserSessions: (...args: Parameters<typeof actual.authSessionService.revokeAllUserSessions>) =>
+        mockRevokeAllUserSessions(...args),
+    },
+  };
+});
 
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
 const mockGetConfig = vi.fn();
@@ -78,10 +94,12 @@ vi.mock('@server/utils/validators', () => ({
 }));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
-vi.mock('@bike4mind/observability', () => {
-  const instance = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+// A class, not a bare object: the real services barrel constructs Loggers at import time.
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/observability')>();
   return {
-    Logger: { ...instance, globalInstance: instance },
+    ...actual,
+    Logger: Object.assign(actual.Logger, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   };
 });
 // Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.
@@ -97,10 +115,15 @@ vi.mock('@server/auth/emailVerifiedGrants', () => ({
 // Import after mocks are registered.
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
 const CODE = 'auth-code';
+
+// baseApi is mocked away, so the handler sees a logger only when the test supplies one; a real
+// request carries req.logger. A shared stub keeps the pass-through assertions addressable.
+const reqLogger = { log: vi.fn(), warn: vi.fn() };
 
 function makeReqRes() {
   const { req, res } = createMocks({
@@ -110,6 +133,7 @@ function makeReqRes() {
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
     url: '/api/auth/okta/callback',
   });
+  Object.assign(req, { logger: reqLogger });
   return { req: req as any, res: res as any };
 }
 
@@ -145,6 +169,7 @@ beforeEach(() => {
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockEndConnections.mockResolvedValue({ connectionIds: [] });
   // Default both lookup stages to "no match" so tests that drive the handler
   // directly (rather than through runCallback) exercise the create path.
   mockFindOne.mockResolvedValue(null);
@@ -188,8 +213,34 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     // New provider link: tokenVersion incremented to invalidate other sessions.
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
     // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
+    // The adapters must be the exact repository instances and a logger, not a look-alike object.
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockRevokeAllUserSessions.mock.calls[0].slice(0, 2)).toEqual(['u2', {}]);
+    const adapters = mockRevokeAllUserSessions.mock.calls[0][2];
+    expect(adapters.db.authSessions).toBe(authSessionRepository);
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
+    expect(adapters.logger).toBe(reqLogger);
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
+    expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('still completes the login when ending realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValueOnce(new Error('prune failed'));
+
+    const res = await runCallback({
+      user: { id: 'u2', _id: 'u2', email: 'User@Example.com', emailVerified: true, authProviders: [], tokenVersion: 3 },
+      userInfo: { sub: 'okta-1', email: 'user@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
+    expect(mockEndConnections).toHaveBeenCalledTimes(1);
+    // The prune's failure is reported, not swallowed silently.
+    expect(reqLogger.warn).toHaveBeenCalledWith(
+      'Failed to end realtime connections; the sweep will retry',
+      expect.any(Error)
+    );
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {

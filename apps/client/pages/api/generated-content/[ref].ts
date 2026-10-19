@@ -35,7 +35,7 @@ const handler = baseApi({ exemptReadsFromDailyRateLimit: true }).get(
     // otherwise read another user's image by supplying its key. Only serve an image the caller
     // created (or one shared with them via the source chat). Return 404 (not 403) so a foreign key
     // is indistinguishable from a nonexistent one and existence itself is not confirmed.
-    if (!req.user?.id || !(await userCanAccessGeneratedImage(ref, req.user.id))) {
+    if (!req.user?.id || !(await userCanAccessGeneratedImage(ref, req.user))) {
       throw new NotFoundError(`Content not found: ${ref}`);
     }
 

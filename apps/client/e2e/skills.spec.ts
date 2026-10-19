@@ -21,21 +21,22 @@ const SEARCH_HIT = `e2e-find-me-${TEST_RUN_ID}`;
 const SEARCH_MISS = `e2e-other-${TEST_RUN_ID}`;
 
 let token: string;
+let userId: string;
 
 test.describe('Skills - list, create, detail, edit, share', () => {
   // `request` (test-scoped) isn't available in beforeAll/afterAll, so mint a
   // short-lived API context from the worker-scoped `playwright` fixture.
   test.beforeAll(async ({ playwright }) => {
-    token = getTestUsers().specUsers.skills.accessToken;
+    ({ accessToken: token, userId } = getTestUsers().specUsers.skills);
     const ctx = await playwright.request.newContext();
     // Clean slate so the empty-state assertion is deterministic.
-    await apiDeleteAllSkills(ctx, token);
+    await apiDeleteAllSkills(ctx, token, userId);
     await ctx.dispose();
   });
 
   test.afterAll(async ({ playwright }) => {
     const ctx = await playwright.request.newContext();
-    await apiDeleteAllSkills(ctx, token);
+    await apiDeleteAllSkills(ctx, token, userId);
     await ctx.dispose();
   });
 
@@ -85,7 +86,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     });
 
     // Reset so the true-empty assertion in later runs / the lifecycle test isn't polluted.
-    await apiDeleteAllSkills(request, token);
+    await apiDeleteAllSkills(request, token, userId);
   });
 
   // --- Full lifecycle ------------------------------------------------------

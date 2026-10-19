@@ -35,6 +35,7 @@ import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
+import { getClientIp } from '@server/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
@@ -204,6 +205,9 @@ const handler = baseApi({ auth: false })
             existingUser.tags = grants.tags;
             existingUser.pendingCreditGrant = null;
           }
+          if (grants.tagsApplied.length > 0) {
+            existingUser.tags = [...new Set([...(existingUser.tags ?? []), ...grants.tagsApplied])];
+          }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
         } catch (err) {
@@ -241,7 +245,7 @@ const handler = baseApi({ auth: false })
       );
       setRefreshCookie(res, refreshToken);
       const tokens = { accessToken };
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
 
       // Analytics + device history are best-effort for the same post-rotation reason as
       // above: the login is already proven, so none of these writes may fail the response.
@@ -272,7 +276,7 @@ const handler = baseApi({ auth: false })
           colorDepth: clientData.colorDepth || 0,
           pixelDepth: clientData.pixelDepth || 0,
           devicePixelRatio: clientData.devicePixelRatio || 1,
-          ip: req.ip || '',
+          ip: getClientIp(req),
         });
         existingUser.loginRecords = existingUser.loginRecords.slice(0, 15);
         try {
@@ -343,7 +347,7 @@ const handler = baseApi({ auth: false })
                 colorDepth: req.body.clientData.colorDepth || 0,
                 pixelDepth: req.body.clientData.pixelDepth || 0,
                 devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
-                ip: req.ip || '',
+                ip: getClientIp(req),
               }
             : undefined,
         },
@@ -394,7 +398,7 @@ const handler = baseApi({ auth: false })
     }
 
     // registerViaOTC set emailVerified=true, so the now-verified domain may confer its signup
-    // grant (one-time domain credits on top of the flat grant, partner-rule org membership).
+    // grant (one-time domain credits on top of the flat grant, partner-rule org membership and tags).
     // Never throws, so it cannot 500 a completed registration. Reflect the grant and any join on
     // the returned user so the client sees the full balance and the org immediately.
     const domainGrant = await applySignupDomainGrant({
@@ -405,6 +409,9 @@ const handler = baseApi({ auth: false })
     });
     if (domainGrant.currentCredits !== null) newUser.currentCredits = domainGrant.currentCredits;
     if (domainGrant.joinedOrganizationId) newUser.organizationId = domainGrant.joinedOrganizationId;
+    if (domainGrant.tagsApplied.length > 0) {
+      newUser.tags = [...new Set([...(newUser.tags ?? []), ...domainGrant.tagsApplied])];
+    }
 
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).

@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import { createMocks } from 'node-mocks-http';
+import { createMocks, type RequestMethod } from 'node-mocks-http';
 import nc from 'next-connect';
 
 // auth.ts wires every strategy at import time; none of those collaborators are exercised here.
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   User: { findOne: vi.fn(), updateOne: vi.fn(), create: vi.fn() },
   SamlRequestId: { findOne: vi.fn(), updateOne: vi.fn(), findOneAndDelete: vi.fn() },
@@ -15,6 +19,12 @@ vi.mock('@bike4mind/database/infra', () => ({
 vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@server/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
+}));
+
+const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
 import { auth } from './auth';
@@ -89,5 +99,51 @@ describe('auth middleware: mfaPending allowlist', () => {
   it('keeps a pending token off non-allowlisted routes even without accepted policies', async () => {
     const { blocked } = await requestAsMfaPending('/api/users/u1', { aupAcceptedVersion: undefined });
     expect(blocked).toBe(true);
+  });
+});
+
+/** Runs `auth` for a request already carrying an mfaPending user (as the JWT strategy would set). */
+const callAsMfaPending = async (method: RequestMethod, url: string) => {
+  const { req, res } = createMocks({ method, url }, { eventEmitter: EventEmitter });
+  // any: node-mocks-http mocks aren't structurally the Express types the handler is typed against.
+  (req as any).user = { id: 'user-1', mfaPending: true, aupAcceptedVersion: 'v1' };
+  (req as any).logger = { info: vi.fn(), updateMetadata: vi.fn() };
+
+  // Mounted under a router with a terminal handler, as baseApi does (see auth.unauthenticated.test.ts).
+  const handlerFn = vi.fn((_req: unknown, response: { status: (code: number) => { end: () => void } }) =>
+    response.status(200).end()
+  );
+  const route = nc<any, any>().use(auth).all(handlerFn);
+  await route(req as any, res as any);
+  return { res, handlerFn };
+};
+
+describe('auth middleware: mfaPending sign-in token', () => {
+  it.each([
+    ['POST', '/api/auth/step-up'],
+    ['GET', '/api/auth/step-up/options'],
+    ['POST', '/api/auth/step-up/passkey-options'],
+    ['POST', '/api/auth/step-up/email/send'],
+    ['POST', '/api/auth/mfa/disable'],
+    ['POST', '/api/auth/mfa/regenerate-backup-codes'],
+  ] as const)('keeps %s %s behind the second factor', async (method, url) => {
+    const { res, handlerFn } = await callAsMfaPending(method, url);
+
+    expect(handlerFn).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData()).toMatchObject({ mfaPending: true });
+  });
+
+  it('still admits the sign-in enrollment and verification routes', async () => {
+    for (const url of [
+      '/api/auth/mfa/setup',
+      '/api/auth/mfa/verify-setup',
+      '/api/auth/mfa/verify',
+      '/api/auth/mfa/cancel-setup',
+    ]) {
+      const { res, handlerFn } = await callAsMfaPending('POST', url);
+      expect(handlerFn).toHaveBeenCalledTimes(1);
+      expect(res._getStatusCode()).toBe(200);
+    }
   });
 });

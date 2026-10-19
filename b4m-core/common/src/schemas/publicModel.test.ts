@@ -90,8 +90,7 @@ describe('toPublicModel', () => {
   it.each([
     ['Gemini', ModelBackend.Gemini, 'gemini-2.5-pro'],
     ['xAI', ModelBackend.XAI, 'grok-4.5'],
-    ['a non-Claude Bedrock model', ModelBackend.Bedrock, 'moonshotai.kimi-k2-thinking'],
-  ])('publishes a null cached_input on %s, whose cache reads settle at the input rate', (_label, backend, id) => {
+  ])('publishes the explicit cached_input on %s, whose adapter forwards cache reads at it', (_label, backend, id) => {
     const projected = project({
       ...textModel,
       id: id as ModelInfo['id'],
@@ -99,13 +98,31 @@ describe('toPublicModel', () => {
       pricing: { 200_000: { input: 2 / 1_000_000, output: 6 / 1_000_000, cache_read: 0.5 / 1_000_000 } },
     });
 
-    expect(projected.credits_per_1m_tokens).toEqual({
-      input: 2 * CREDITS_PER_USD_COST,
-      output: 6 * CREDITS_PER_USD_COST,
-      cached_input: null,
-    });
-    expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
+    expect(projected.credits_per_1m_tokens?.cached_input).toBe(0.5 * CREDITS_PER_USD_COST);
   });
+
+  it.each([
+    ['a Gemini model with no published cache rate', ModelBackend.Gemini, 'gemini-3-pro-preview', undefined],
+    ['an xAI model with no published cache rate', ModelBackend.XAI, 'grok-3', undefined],
+    ['a non-Claude Bedrock model', ModelBackend.Bedrock, 'moonshotai.kimi-k2-thinking', 0.5 / 1_000_000],
+  ])(
+    'publishes a null cached_input on %s, whose cache reads settle at the input rate',
+    (_label, backend, id, cacheRead) => {
+      const projected = project({
+        ...textModel,
+        id: id as ModelInfo['id'],
+        backend,
+        pricing: { 200_000: { input: 2 / 1_000_000, output: 6 / 1_000_000, cache_read: cacheRead } },
+      });
+
+      expect(projected.credits_per_1m_tokens).toEqual({
+        input: 2 * CREDITS_PER_USD_COST,
+        output: 6 * CREDITS_PER_USD_COST,
+        cached_input: null,
+      });
+      expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
+    }
+  );
 
   it('publishes cached_input for Claude on Bedrock, whose cache reads settle separately', () => {
     const projected = project({

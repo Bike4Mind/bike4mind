@@ -790,6 +790,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **Saving settings / generating an API key / uploading returns `403`, but reading works** - `APP_URL` does not match the origin in your browser's address bar. It is the CSRF origin allow-list and it fails closed, so only state-changing requests break; `GET` is exempt, which is why the app looks fine until you try to save something. Unset, the response is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected ...)`, which names the value it is comparing against. `APP_URL` was added to the template after the initial release, so an **upgraded install may be missing it entirely** - an existing `.env.selfhost` does not gain it. Add `APP_URL=<the origin you browse>` (scheme + host + optional port, no trailing slash) and recreate the `app` container. Reaching the stack over Tailscale or the Caddy proxy? It must be the tailnet or public origin, not `http://localhost:3000` - see "Share your instance with friends".
+- **After an upgrade, everyone gets `429 Rate limit exceeded` on sign-in** - you run your own reverse proxy and `TRUSTED_PROXY_HOPS` is unset, so all users share the proxy's rate-limit bucket. Set it in `.env.selfhost` and recreate the `app` container - see "Client IP and trusted proxies".
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
@@ -827,7 +828,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
-The FabFile safety-net filter in `apps/client/server/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 
@@ -1035,9 +1036,28 @@ It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @comple
 
 ### What the bundled Caddy proxy does and does not do
 
-It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable.
+It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable. It also sets `TRUSTED_PROXY_HOPS=1` on the app so per-IP rate limits key on the visitor's address (which Caddy writes into `X-Forwarded-For`) rather than on Caddy's own container IP.
 
 It **does not**: enable Mongo authentication, change your MinIO credentials, configure SMTP, add application-level access control beyond the app's own invite-only sign-up, or replace a firewall. Do those yourself per the checklist. If you swap in your own reverse proxy instead of the bundled one, you must forward the original `Host` header and set `X-Forwarded-Proto=https`, and proxy both the app and the ws gateway (upgrading the WebSocket), or realtime and published artifacts will break.
+
+### Client IP and trusted proxies (`TRUSTED_PROXY_HOPS`)
+
+Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure log behind the IP blocklist, and the auth, session, API-key and integration audit records all key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
+
+Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
+
+| Setup | `TRUSTED_PROXY_HOPS` |
+| --- | --- |
+| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
+| Tailscale sidecar (Path A) | unset - tailnet members then share the sidecar's rate-limit bucket, which suits a small private tailnet; whether `tailscale serve` writes `X-Forwarded-For` is not verified, so do not raise it without checking |
+| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
+| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
+| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+
+With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number fails every request loudly rather than guessing.
+
+**Upgrading an existing install:** earlier releases read `X-Real-IP` / `X-Forwarded-For` on self-host without being told to, so an install behind its own nginx, Traefik or load balancer got per-client IPs with no setting. After upgrading it gets the proxy's address instead, and every user shares one bucket - the 16th distinct person to request a sign-in code within 15 minutes gets `429 Rate limit exceeded`. If you run your own reverse proxy, add `TRUSTED_PROXY_HOPS=1` (or your real hop count) to `.env.selfhost` before upgrading and recreate the `app` container. Bundled-Caddy installs need nothing; `compose.caddy.yaml` sets it.
 
 ## What you get (and don't)
 

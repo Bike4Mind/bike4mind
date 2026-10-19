@@ -19,8 +19,24 @@ directories:
 files:
   - out/**
   - package.json
+  # node-pty ships prebuilt binaries for every platform, plus Windows debug symbols (~20 MB)
+  # and the sources it would compile from without them; none of that is needed to run.
+  - "!**/node_modules/node-pty/prebuilds/*/*.pdb"
+  - "!**/node_modules/node-pty/{src,third_party,scripts,binding.gyp}"
+  - "!**/node_modules/node-pty/lib/*.test.js"
 
 asar: true
+# node-pty is the only native dependency, and it is N-API with prebuilt binaries for every target,
+# so Electron's ABI is irrelevant to it. A rebuild would compile it from source (needing a C++
+# toolchain on the packaging machine) and ship a different binary from the one dev runs.
+npmRebuild: false
+# A native module cannot be loaded from inside the archive, and node-pty's spawn-helper has to be
+# a real executable on disk: node-pty rewrites its path to app.asar.unpacked itself. Listed
+# rather than left to electron-builder's native-module detection, which looks for .node files and
+# would not know the helper binary beside them is needed too.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   icon: build/icon.icns
@@ -65,6 +81,17 @@ win:
   # Same shape as macOS: no certificate is named here. electron-builder picks one up
   # from WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or the platform-neutral CSC_LINK +
   # CSC_KEY_PASSWORD). Unsigned installers work, behind a SmartScreen warning.
+
+linux:
+  icon: build/icon.png
+  executableName: bike4mind
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]
+
+appImage:
+  artifactName: ${productName}-${version}-x64.${ext}
 
 nsis:
   oneClick: false

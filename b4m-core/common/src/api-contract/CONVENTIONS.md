@@ -147,6 +147,10 @@ re-deciding per endpoint:
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
+| Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
+| A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
+| A `tool_reference` names a tool absent from the request's `tools`, or carries no string `tool_name` (native tool search models only) | `400` | `unknown_tool_reference` |
 | The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
@@ -156,15 +160,21 @@ re-deciding per endpoint:
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
+| Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
+
+The four tool search rows are `400`, not the `422` used for schema failures: the body is well-formed and passes the schema, and whether it is acceptable depends on the requested model (`tool_search_unsupported`, like `unknown_model`) or on how the request's tools relate to each other, which is request semantics rather than body shape.
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
-`503`).
+`503`, `504`).
 
 A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
 resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong
@@ -321,6 +331,11 @@ for the whole window. Removing an alias is a major-version change.
   window was possible. Its create body is strict so a stale field such as `callbackUrl`
   fails with a 422 rather than being dropped. A future in-place change needs a comparable
   reason; "the new shape is nicer" is not one.
+- Second precedent: `files[].url` on `GET /api/v1/quests/{id}` (and the generation-callback
+  body) went from a permanent public URL to a presigned one that expires in about an hour.
+  The shape is unchanged; only the lifetime is. Keeping the permanent URL would have kept
+  generated media readable by anyone holding the link, so no sunset window was offered. It
+  shipped as a breaking (`!`) release so SDK consumers that store the URL get a signal.
 
 ---
 
@@ -410,6 +425,13 @@ Nothing published is ever silently removed while anyone is left to warn. Depreca
 anything - a field, an alias, a whole endpoint - means: mark it deprecated in the
 contract, state a sunset date in the description, keep serving it until that date, and
 announce it before the date rather than after.
+
+For a whole endpoint, that is one field on its contract:
+`deprecated: { since, sunset, successor? }` (dates `YYYY-MM-DD`, checked by
+`defineEndpoint`). It flags the operation `deprecated: true` in the spec, leads its
+description with the sunset and successor, and makes the Next adapter send RFC 9745
+`Deprecation`, RFC 8594 `Sunset` and `Link: rel="successor-version"` on every response
+the handler produces. `POST /api/ai/music` is the reference.
 
 Undocumented legacy routes still count as published if they are reachable, so they go
 through the same window unless nobody is left to warn. Check who calls one first: the

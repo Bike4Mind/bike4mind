@@ -1,6 +1,6 @@
 import { questRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
-import { ABANDONED_RUN, terminalRecoveryFor } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_RUN, terminalRecoveryFor } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 /**
  * Outcome of a settle pass. `failed: true` distinguishes a pass that could not

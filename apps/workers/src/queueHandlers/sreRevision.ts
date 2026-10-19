@@ -39,7 +39,7 @@ import {
   postSreRateLimitedMessage,
   postSreNoFixNeededMessage,
 } from '@server/integrations/slack/sreSlackApproval';
-import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@server/integrations/sre/wontFixComment';
+import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
 
 /** HTML marker so the self-heal escalation comment is posted at most once per PR/issue. */
 const SRE_SELFHEAL_ESCALATION_MARKER = '<!-- sre-selfheal-escalation -->';

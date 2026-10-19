@@ -85,6 +85,8 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
+  // MUST STAY IN SYNC WITH completionsForwardsNativeTools in @bike4mind/common
+  // (claudeToolCapabilities.ts), which restates this family-then-backend routing.
   if (modelInfo.adapterFamily) {
     backend = backendForAdapterFamily(modelInfo.adapterFamily, {
       apiKeyTable,
@@ -592,7 +594,7 @@ export {
   MAX_QUEUED_PER_TENANT,
   DEFAULT_ACQUIRE_TIMEOUT_MS,
 } from './_anthropicSemaphore';
-export { isTurnEndingTool } from './executeToolsBatch';
+export { isTerminalToolError, isTurnEndingTool } from './executeToolsBatch';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export {

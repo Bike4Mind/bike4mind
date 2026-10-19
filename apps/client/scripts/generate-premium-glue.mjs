@@ -14,9 +14,11 @@
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
+ *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
+ *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -67,6 +69,8 @@ function pointsAtLink(pkgName, dir) {
   });
 }
 
+// Overlay discovery here must stay in sync with scripts/link-premium-overlays.mjs, which
+// declares the packages this finds as apps/client dependencies so pnpm links them.
 function discoverPremiumPackages() {
   if (!existsSync(PREMIUM_DIR)) return [];
 
@@ -596,6 +600,67 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
   return { table, displays };
 }
 
+// Tools a workspace denies to every session whose surface matches (b4mContributions.workspaceDeniedTools,
+// `{ "<workspace id>": ["<tool name>"] }`). Pure data, applied at read time and never written onto sessions.
+// Native tool names are lowercase, but an MCP id is `${serverName.toLowerCase()}__${originalToolName}`
+// (see toolGenerators.ts), so the tool half of a `server__tool` entry keeps the upstream server's case.
+// The prefix stays lowercase; the MCP runtime lowercases it. Read-time matching is exact, so a mixed-case
+// workspace id (whose surface is compared verbatim) is still rejected below.
+const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
+
+function generateWorkspaceDeniedTools(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
+  const field = 'workspaceDeniedTools';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> tool names, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, tools] of Object.entries(declared)) {
+      if (!WORKSPACE_ID_RE.test(workspaceId)) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+        );
+      }
+      if (workspaceId !== workspaceId.toLowerCase()) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase, because surface ids are matched exactly`
+        );
+      }
+      if (!Array.isArray(tools) || !tools.every(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool))) {
+        throw new Error(
+          `[codegen] invalid ${field} tools for "${workspaceId}" from package "${pkg.name}": ` +
+            `expected an array of lowercase tool names or \`server__tool\` MCP ids, got ${JSON.stringify(tools)}`
+        );
+      }
+      const list = merged.get(workspaceId) ?? [];
+      for (const tool of tools) {
+        if (!list.includes(tool)) list.push(tool);
+      }
+      merged.set(workspaceId, list);
+    }
+  }
+
+  const entries = [...merged].map(
+    ([workspaceId, tools]) =>
+      `  ${JSON.stringify(workspaceId)}: [${tools.map(tool => JSON.stringify(tool)).join(', ')}],`
+  );
+  const body = entries.length === 0 ? '{}' : `{\n${entries.join('\n')}\n}`;
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceDeniedTools: WorkspaceDeniedToolsTable = ${body};\n`
+  );
+}
+
 function generateWorkspaceCopyEntitlements(packages) {
   const outPath = join(GENERATED_DIR, 'premiumWorkspaceCopyEntitlements.generated.ts');
   const typeImport = `import type { PremiumWorkspaceCopyEntitlements } from '../premiumContract';`;
@@ -1043,6 +1108,40 @@ function generateSystemPrompts(packages) {
   );
 }
 
+// Premium packages can run their own grant after a partner signup rule matches
+// (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
+// PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
+// file, so like the LLM tools it must exist in BOTH forms.
+function generatePartnerSignupHooks(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts');
+  const typeImport = `import type { PartnerSignupHook } from '@server/entitlements/partnerSignupHooks';`;
+
+  const contributors = packages.filter(p => p.contributions.partnerSignupHooksExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.partnerSignupHooksExport, p.name, 'partnerSignupHooksExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { partnerSignupHooks as hooks${i} } from '${p.contributions.partnerSignupHooksExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...hooks${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1303,6 +1402,7 @@ generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generatePartnerSignupHooks(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
@@ -1312,6 +1412,7 @@ generateInfraGlue(packages);
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
+generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
 
 console.log('[codegen] done.');

@@ -41,21 +41,26 @@ path does not apply to them.
   additionally filters `$ne: 'blocked'` in the delete predicate (belt-and-suspenders).
 - The data lake sweep and purge callers catch the resulting legal-hold error and skip the
   blocked file rather than re-throwing for DLQ retry.
+- An owner deleting a blocked upload, singly or in bulk (`fabFileService/delete.ts`) or through
+  "delete all my files" (`DELETE /api/files`), soft-deletes the FabFile and refunds its quota but
+  keeps its S3 objects, including retained versions and the generated copy. Both go through
+  `deleteStoredObjects`, which holds a file per `isModerationEvidenceHold`: a block for
+  `blockReason: 'unsupported_format'` (bytes that could not be scanned never raise an incident)
+  is not held. Only the bytes follow that rule: the DB-row guards above still hold every
+  `'blocked'` row, including `unsupported_format`.
 - An `ImageModerationIncident` row written at block time carries the labels, user ID, session,
   and file reference. It has no TTL and is retained indefinitely.
 
 **What is NOT yet protected**
 
-- **S3 object bytes.** The data lake sweep paths (`cleanupDeletedDataLake`, `purgeDataLakeConnectionFiles`)
-  delete S3 objects before reaching the hard-delete guard. A lake containing a blocked file
-  will skip the DB row but will lose the S3 bytes. Operators should apply S3 Object Lock
-  to blocked files at block time to make byte preservation explicit and tamper-evident.
-- **User-initiated file delete.** `fabFileService/delete.ts` does not currently check
-  `moderationStatus` before deleting the S3 object. A user who uploaded the blocked file
-  can trigger the S3 deletion through the normal delete flow. The FabFile DB row is still
-  protected by the hard-delete guard.
+- **S3 object bytes.** The data lake sweep and purge paths (`cleanupDeletedDataLake`,
+  `purgeDataLakeConnectionFiles`, and the per-document `purgeDataLakeDocument`, which a user can
+  run on their own file in their own lake) delete S3 objects before reaching the hard-delete
+  guard. A lake containing a blocked file will skip the DB row but will lose the S3 bytes.
+  Operators should apply S3 Object Lock to blocked files at block time to make byte
+  preservation explicit and tamper-evident.
 
-Both gaps are tracked as follow-up work. The DB row and the NCMEC report are durable; the
+This gap is tracked as follow-up work. The DB row and the NCMEC report are durable; the
 primary evidence for the identity of the uploader and the timestamp is preserved.
 
 ## Block-to-triage flow
@@ -69,6 +74,7 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
                false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
                record_manual_report -> filed by hand on the CyberTipline web form
                                        -> reviewStatus = 'reported', reportChannel = 'manual'
+                                       (also from 'false_positive'; previousReviewStatus = 'false_positive')
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest
@@ -97,7 +103,8 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
   Only one concurrent admin request can claim a given incident; others receive 409.
 - `updateReviewStatus` uses `$nin: ['reported', 'confirmed_csam']` for `false_positive`
   transitions, preventing a concurrent false_positive verdict from overriding an in-flight
-  NCMEC submission.
+  NCMEC submission or a recorded report. The reverse is allowed only for
+  `record_manual_report`: a hand-filed tip overrides `false_positive`.
 - On NCMEC failure, the verdict route distinguishes two outcomes:
   - **Rejected** (`NcmecRejectedError`, non-2xx on `/submit`): no tip was filed; the route
     rolls back `confirmed_csam` -> `pending_review` and returns 502.
@@ -125,7 +132,12 @@ whenever the API is unavailable, an admin files the CyberTip by hand on the Cybe
 form and records it with `{ verdict: "record_manual_report", ncmecReportId }`. This moves the
 incident from `pending_review`/absent straight to `'reported'` in one atomic write, stores
 `reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
-credentials. The report id must be letters, digits and dashes only. It does not act on a
+credentials. It also overrides a `false_positive` verdict, because the tip already exists at
+NCMEC and the record must say so; `previousReviewStatus: 'false_positive'` keeps the earlier
+verdict visible, and `falsePositiveBy`/`falsePositiveAt` (written by the `false_positive`
+verdict and left untouched by the override) keep who made it and when. A second hand-filed tip
+on an already `reported` incident is refused and not stored; the 409 says so and the warn log
+keeps its id. The report id must be letters, digits and dashes only. It does not act on a
 `confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when
 an unfinished report id is stored (once NCMEC's 24-hour window has passed, file by hand and
 use `mark_reported` with the new report id instead), otherwise (once the claim is stale) `mark_reported` if NCMEC

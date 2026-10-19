@@ -91,6 +91,7 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // knowledge is re-read server-side from the session document; these two
   // arrays capture the workbench + per-message snapshots taken at dispatch.
   messageFileIds: z.array(z.string()).optional(),
+  messageOnlyFileIds: z.array(z.string()).optional(),
   sessionFabFileIds: z.array(z.string()).optional(),
   // LLM runtime knobs. All optional - the executor falls back to
   // ReActAgent defaults when omitted. `imageConfig` was previously persisted
@@ -302,6 +303,8 @@ async function handleStart(
       apiKeyInfo,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
+      pinMessageFiles: true,
+      messageOnlyFileIds: cmd.messageOnlyFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,
       temperature: cmd.temperature,
       maxTokens: cmd.maxTokens,

@@ -4,18 +4,22 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
   FileResponseSchema,
+  MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
   type CreateFileUploadResponse,
   type CreateVideoGenerationBody,
   type FileResponse,
   type VideoGeneration,
-  type MusicRequest,
+  type CreateMusicGenerationBody,
+  type MusicGeneration,
+  type PublicMusicModel,
   type SoundEffectsRequest,
   type TTSRequest,
   type TtsBase64Response,
 } from '@bike4mind/common';
 import type { ChatToolNotice } from '@shared/chat';
+import { parseMusicModels } from './musicModels';
 
 /**
  * A generation failure worth saying something specific about.
@@ -27,6 +31,8 @@ import type { ChatToolNotice } from '@shared/chat';
 export class MediaToolError extends Error {
   /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
   status?: number;
+  /** How long the server asked this caller to wait, in ms, when a 429 carried a Retry-After. */
+  retryAfterMs?: number;
 
   constructor(
     message: string,
@@ -58,7 +64,7 @@ export interface QuestPoll {
   reply?: string;
   /** Bare generated-file basenames, e.g. `<uuid>.png`. */
   images?: string[];
-  /** The same files with resolved URLs, empty when the deployment advertises no CDN base. */
+  /** The same files with short-lived presigned URLs (about an hour); empty only on an older server. */
   files?: { name: string; url: string; isImage: boolean; isAudio: boolean }[];
 }
 
@@ -144,7 +150,7 @@ export class MediaApiClient {
    * client. An absolute one is a CDN that serves it unauthenticated, and is fetched with a bare
    * axios instance so the access token is never sent to an origin that is not the backend.
    */
-  async fetchGenerated(url: string): Promise<FetchedBytes> {
+  async fetchGenerated(url: string, action = 'Downloading the generated image'): Promise<FetchedBytes> {
     const absolute = /^https?:\/\//i.test(url);
     try {
       const config = { responseType: 'arraybuffer' as const, timeout: TIMEOUT_MS.download };
@@ -157,7 +163,7 @@ export class MediaApiClient {
         contentType: typeof header === 'string' ? header : '',
       };
     } catch (error) {
-      throw toMediaError(error, 'Downloading the generated image');
+      throw toMediaError(error, action);
     }
   }
 
@@ -287,8 +293,58 @@ export class MediaApiClient {
     return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
   }
 
-  generateMusic(request: MusicRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/music', request, 'Music generation');
+  /** Music models this caller can use right now, in the server's order. */
+  async listMusicModels(): Promise<PublicMusicModel[]> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/music-models', { timeout: TIMEOUT_MS.download });
+      return parseMusicModels(response);
+    } catch (error) {
+      throw toMediaError(error, 'Listing music models');
+    }
+  }
+
+  /**
+   * Start a music job. Returns as soon as it is queued; the song renders server-side.
+   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   *
+   * Takes no abort signal on purpose: a submit cut off mid-flight would leave a job billing that
+   * the caller has no id for, so a stop is handled by cancelling the job this returns instead.
+   */
+  async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Music generation');
+    }
+  }
+
+  async getMusicGeneration(jobId: string, signal?: AbortSignal): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.get<unknown>(`/api/v1/music-generations/${encodeURIComponent(jobId)}`, {
+        timeout: TIMEOUT_MS.download,
+        signal,
+      });
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Reading the music job');
+    }
+  }
+
+  async cancelMusicGeneration(jobId: string): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.post<unknown>(
+        `/api/v1/music-generations/${encodeURIComponent(jobId)}/cancel`,
+        {},
+        { timeout: TIMEOUT_MS.download }
+      );
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Cancelling the song');
+    }
   }
 
   /**
@@ -359,6 +415,18 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
   return error;
 }
 
+/**
+ * Retry-After as milliseconds, the way RFC 9110 allows it: delta-seconds or an HTTP-date. The rate
+ * limiter sends whole seconds; the date form is accepted so a proxy's rewrite is still honoured.
+ */
+function parseRetryAfterMs(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
+}
+
 /** The error body these routes share; every field is optional because 5xx bodies carry none. */
 interface ApiErrorBody {
   error?: string;
@@ -382,6 +450,8 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (isAxiosError(error)) {
     const mapped = fromAxiosError(error, action);
     mapped.status = error.response?.status;
+    const retryAfterMs = parseRetryAfterMs(error.response?.headers['retry-after']);
+    if (retryAfterMs !== undefined) mapped.retryAfterMs = retryAfterMs;
     return mapped;
   }
 

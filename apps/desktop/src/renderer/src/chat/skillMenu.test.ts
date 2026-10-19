@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SkillSummary } from '@shared/skills';
-import { matchSkills, skillQuery } from './skillMenu';
+import type { SkillSource, SkillSummary } from '@shared/skills';
+import { matchSkills, skillChipColor, skillQuery, skillSourceLabel } from './skillMenu';
 
 function skill(name: string, source: SkillSummary['source'], description = 'does a thing'): SkillSummary {
   return { name, source, description, filePath: `/tmp/${name}` };
@@ -54,11 +54,32 @@ describe('matchSkills', () => {
     expect(matchSkills(skills, 'ship the').map(entry => entry.name)).toEqual(['deploy']);
   });
 
+  it('puts account skills after global ones of the same rank', () => {
+    const mixed = [skill('a-web', 'account'), skill('z-local', 'global'), skill('m-repo', 'project')];
+    expect(matchSkills(mixed, '').map(entry => entry.name)).toEqual(['m-repo', 'z-local', 'a-web']);
+  });
+
   it('is case insensitive', () => {
     expect(matchSkills(skills, 'LINT').map(entry => entry.name)).toEqual(['lint']);
   });
 
   it('returns nothing for a name no skill has', () => {
     expect(matchSkills(skills, 'nope')).toEqual([]);
+  });
+});
+
+describe('skill chip presentation', () => {
+  it.each([
+    ['project', 'warning', 'Project'],
+    ['global', 'neutral', 'Global'],
+    ['account', 'primary', 'Bike4Mind'],
+  ] as const)('presents %s as %s / %s', (source, color, label) => {
+    expect(skillChipColor(source)).toBe(color);
+    expect(skillSourceLabel(source)).toBe(label);
+  });
+
+  it('covers every source, so a new one cannot fall through to the global look', () => {
+    const sources: SkillSource[] = ['project', 'global', 'account'];
+    expect(sources.map(skillSourceLabel)).toEqual(['Project', 'Global', 'Bike4Mind']);
   });
 });

@@ -1595,6 +1595,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
 export type LakeRebuildStatus = {
   underChunkedCount: number;
   failedCount: number;
+  /** Files reset for a rebuild that has not committed yet: no passages, no error. */
+  rebuildingCount: number;
   /**
    * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
    * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
@@ -1619,37 +1621,48 @@ export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
 export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
 
 /**
- * The REPAIRABLE work outstanding on a lake: both counts that drain to zero as waves complete.
- * Pure and exported for the same reason `nextRebuildPoll` is - it decides when the badge stops
- * polling, and a closure inside the hook is not executed by anything.
+ * The work outstanding on a lake: the two REPAIRABLE counts, plus the files whose rebuild has not
+ * committed yet. Pure and exported for the same reason `nextRebuildPoll` is - it decides when the
+ * badge stops polling, and a closure inside the hook is not executed by anything.
  *
  * A re-embed is normally run on a lake whose under-chunked count is already zero, so summing is
  * what keeps the badge alive for that wave rather than going quiet the moment it starts. A `null`
  * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
+ *
+ * `rebuildingCount` is in FLIGHT, not repairable - a reset file leaves the count when its own chunk
+ * job commits or fails - so it is here only because the chip still has to refresh when that
+ * happens. `nextRebuildPoll` keeps a backlog made only of these off the fast cadence.
  */
 export const rebuildBacklog = (
-  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
-): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'> &
+    Partial<Pick<LakeRebuildStatus, 'rebuildingCount'>>
+): number =>
+  (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0) + (status?.rebuildingCount ?? 0);
 
 /**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `backlog` is the sum of the two REPAIRABLE counts - under-chunked and stale-embedding-space -
- * because each drains to zero on its own as waves complete. `failedCount` deliberately is NOT in
- * it: a failed file never retries (see countFailedFilesByScope - it is invisible to both the
- * detection query and the rescue sweep), so including it gives a term that can never reach zero and
- * the badge polls forever on any lake holding one. But the counts alone stop too early: they drop
- * the instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
- * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
- * extra times to catch that, then stop for good.
+ * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The size
+ * tiers read the TOTAL backlog, because each tick is a full lake rescan, so one straggler beside a
+ * 1000-file wave stays on the slow lane. The in-flight slice only parks a backlog with nothing
+ * repairable left at the slow cadence, since a rebuild in flight commits on the chunk worker's own
+ * clock. `failedCount` deliberately is NOT in the sum: a failed file never
+ * retries (see countFailedFilesByScope - it is invisible to both the detection query and the rescue
+ * sweep), so including it gives a term that can never reach zero and the badge polls forever on any
+ * lake holding one. But the backlog alone still stops too early: a wave is RESET minutes before
+ * those chunk jobs finish, so a job that later fails lands in failedCount after this sum has
+ * already read zero. So once the backlog clears we keep polling a bounded number of extra times to
+ * catch that, then stop for good.
  */
 export function nextRebuildPoll(
   backlog: number,
-  prev: RebuildPollState
+  prev: RebuildPollState,
+  rebuilding = 0
 ): { interval: number | false; next: RebuildPollState } {
   if (backlog > 0) {
-    const interval = backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
+    const repairable = backlog - rebuilding;
+    const interval = repairable <= 0 || backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
@@ -1676,6 +1689,7 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
       return {
         underChunkedCount: res.data.underChunkedCount,
         failedCount: res.data.failedCount ?? 0,
+        rebuildingCount: res.data.rebuildingCount ?? 0,
         // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
         // zero would advertise "no stale files" on a lake nobody has measured.
         staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
@@ -1687,7 +1701,12 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      const { interval, next } = nextRebuildPoll(rebuildBacklog(query.state.data), pollState.current);
+      const status = query.state.data;
+      const { interval, next } = nextRebuildPoll(
+        rebuildBacklog(status),
+        pollState.current,
+        status?.rebuildingCount ?? 0
+      );
       pollState.current = next;
       return interval;
     },

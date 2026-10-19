@@ -47,15 +47,20 @@ import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
+import LakeSyncStatus from '@client/app/components/datalake/LakeSyncStatus';
 import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
-import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import { REBUILD_PENDING_STALE_MS, isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
+
+// The rebuild door re-offers a stranded file after this window (findConvergencePausedFilesByScope's
+// stale-pending arm).
+const REBUILD_PENDING_HOURS = REBUILD_PENDING_STALE_MS / (60 * 60_000);
 
 export function LakeInfoPanel({
   lake,
@@ -116,6 +121,7 @@ export function LakeInfoPanel({
   const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rebuildingCount = rebuildStatus?.rebuildingCount ?? 0;
   // Members embedded in a PREVIOUS embedding space, which retrieval withholds wholesale rather than
   // ranking badly - so this is the one lake defect with no symptom an owner can see in search
   // results, and the reason it gets its own affordance instead of folding into Rebuild passages.
@@ -531,9 +537,17 @@ export function LakeInfoPanel({
               {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
             </Chip>
           )}
-          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
-            {lake.fileTagPrefix}
-          </Chip>
+          {!isGeneratedLakeTagPrefix(lake) && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-prefix-chip-${lake.id}`}
+            >
+              {lake.fileTagPrefix}
+            </Chip>
+          )}
           {lake.requiredUserTag && (
             <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '11px' }}>
               {lake.requiredUserTag}
@@ -592,6 +606,9 @@ export function LakeInfoPanel({
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
           <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          {lake.origin === 'connector-fed' && (
+            <LakeSyncStatus lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
+          )}
           <LakeSkippedFilesChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
@@ -695,6 +712,28 @@ export function LakeInfoPanel({
                 data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
               >
                 {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* Reset files have no passages and no error until the rebuild commits or finally fails,
+              so without this chip a lake mid-rebuild reads as having nothing to rebuild. The
+              tooltip says the rebuild has not FINISHED rather than that it is running: a file whose
+              queue send was rejected keeps the same fresh stamp and is indistinguishable from a
+              working one in this count. */}
+          {(lake.canRebuild || lake.canManage) && rebuildingCount > 0 && (
+            <Tooltip
+              title={`These files were reset for a rebuild that has not finished yet, so they are not searchable. If a rebuild never finishes, they are offered as 'to rebuild' again within ${REBUILD_PENDING_HOURS} hours.`}
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuilding-chip-${lake.id}`}
+              >
+                {rebuildingCount} rebuilding
               </Chip>
             </Tooltip>
           )}

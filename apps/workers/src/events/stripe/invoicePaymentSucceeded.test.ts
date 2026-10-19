@@ -4,7 +4,7 @@ import { emitMetric } from '@server/utils/cloudwatch';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
-} from '@client/lib/userSubscriptions/serverUtils';
+} from '@workers/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
 import { emitProductEvent } from '@server/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
@@ -23,7 +23,7 @@ vi.mock('@server/utils/eventBus', () => ({
   },
 }));
 
-vi.mock('@client/lib/userSubscriptions/serverUtils', () => ({
+vi.mock('@workers/lib/userSubscriptions/serverUtils', () => ({
   handleUserSubscriptionInvoice: vi.fn().mockResolvedValue(undefined),
   handleOrganizationSubscriptionInvoice: vi.fn().mockResolvedValue(undefined),
 }));
@@ -38,7 +38,7 @@ vi.mock('@server/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
-vi.mock('@server/utils/eventContext', () => ({
+vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (h: any) => h,
 }));
 

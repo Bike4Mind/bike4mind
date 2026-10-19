@@ -135,6 +135,23 @@ describe('reserveRequestCredits', () => {
     );
   });
 
+  it('logs a failed refund with the owner instead of throwing it', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    userIncrement.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(reservation.refund()).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('embeddings refund failed'),
+      expect.objectContaining({ ownerId: 'u1', reservedCredits: 3, error: 'db down' })
+    );
+  });
+
   it('rolls back and rejects when the reservation overdraws the pool', async () => {
     let balance = 1;
     userIncrement.mockImplementation(async (_id: string, delta: number) => ({ currentCredits: (balance += delta) }));

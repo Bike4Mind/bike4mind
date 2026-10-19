@@ -42,6 +42,16 @@ describe('buildOpenApiDocument', () => {
     expect(tools.operationId).toBe('executeTool');
   });
 
+  it('publishes the sync music route as deprecated, pointing at the job resource', () => {
+    const music = doc.paths['/api/ai/music'].post;
+    expect(music.deprecated).toBe(true);
+    expect(music.description).toMatch(
+      /^\*\*Deprecated, sunset \d{4}-\d{2}-\d{2}\.\*\* Use `\/api\/v1\/music-generations`/
+    );
+    expect(music.responses['200'].headers).toHaveProperty('Sunset');
+    expect(doc.paths['/api/v1/music-generations'].post.deprecated).toBeUndefined();
+  });
+
   it('declares the security schemes and requires the right one per operation', () => {
     expect(Object.keys(doc.components.securitySchemes).sort()).toEqual(['apiKeyAuth', 'bearerAuth', 'jwtAuth']);
     // Completions accepts an API key (either header) OR a JWT.
@@ -119,7 +129,13 @@ describe('buildOpenApiDocument', () => {
   it('documents every pre-stream completions failure as a JSON error with a real status', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
-    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual(['unknown_model']);
+    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'unknown_model',
+      'tool_search_unsupported',
+      'all_tools_deferred',
+      'deferred_tool_cache_control',
+      'unknown_tool_reference',
+    ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));
     expect(doc.components.schemas.createCompletionResponse422.properties.errorCode).toBeDefined();

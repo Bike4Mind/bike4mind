@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -145,11 +146,63 @@ describe('cliCompletion websocket handler', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('sends a provider block as its own provider_block chunk, in order with content', async () => {
+    const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+    mockExecuteCompletion.mockImplementationOnce(async ({ onChunk }) => {
+      await onChunk(['', 'searching'], {});
+      await onChunk([], { providerBlock: { provider: 'anthropic', block } });
+      await onChunk(['', 'found it'], { outputTokens: 5 });
+    });
+
+    await run();
+
+    const chunks = vi
+      .mocked(sendToConnection)
+      .mock.calls.map(call => call[2] as { action: string })
+      .filter(data => data.action === 'cli_completion_chunk')
+      .map(data => CliCompletionChunkAction.parse(data).chunk);
+    expect(chunks.map(c => c.type)).toEqual(['content', 'provider_block', 'content']);
+    expect(chunks[1]).toEqual({ type: 'provider_block', provider: 'anthropic', block });
+  });
+
   it('logs success analytics with source cli', async () => {
     await run();
 
     expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', source: 'cli' })
+    );
+  });
+
+  it('passes the per-request usage from the final frame to analytics, so each request is priced on its own tier', async () => {
+    const turnUsage = [
+      { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
+      { inputTokens: 2000, outputTokens: 30, cacheReadInputTokens: 151_000 },
+    ];
+    mockExecuteCompletion.mockImplementation(
+      async ({ onChunk }: { onChunk: (text: string[], info: unknown) => Promise<void> }) => {
+        await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
+        await onChunk(['done'], {
+          inputTokens: 3000,
+          outputTokens: 50,
+          cacheReadInputTokens: 301_000,
+          cacheCreationInputTokens: 500,
+          turnUsage,
+        });
+        // A trailing frame without the breakdown must not clear the latched one.
+        await onChunk([''], { stopReason: 'end_turn' });
+      }
+    );
+
+    await run();
+
+    expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'success',
+        finalInputTokens: 3000,
+        finalCacheReadTokens: 301_000,
+        finalCacheWriteTokens: 500,
+        finalTurnUsage: turnUsage,
+      })
     );
   });
 
@@ -161,5 +214,32 @@ describe('cliCompletion websocket handler', () => {
     expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'failure', source: 'cli' })
     );
+  });
+
+  it('keeps the message and errorCode of a 4xx the caller must fix', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('Model does not support tool search.', { errorCode: 'tool_search_unsupported' })
+    );
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Model does not support tool search.',
+      errorCode: 'tool_search_unsupported',
+    });
+  });
+
+  it('sanitizes any other error', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(new Error('db exploded at 10.0.0.1'));
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Internal server error',
+    });
   });
 });

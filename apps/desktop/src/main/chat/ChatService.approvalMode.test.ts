@@ -161,7 +161,7 @@ describe('ChatService approval modes', () => {
       expect(calls('done')).toHaveLength(0);
     });
 
-    it('runs a pipeline that reaches the network without asking', async () => {
+    it('runs a pipeline inside the project without asking', async () => {
       await startTurn('auto');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'cat notes.txt | head -n 1 && echo ok', cwd: root }));
       streams[0].write(frame('[DONE]'));

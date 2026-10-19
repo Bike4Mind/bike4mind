@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import { AsyncFzf, type FzfResultItem } from 'fzf';
@@ -17,9 +17,9 @@ export interface FileSearchResult {
  * a dangling link, or one pointing somewhere unreadable, must not take down a whole
  * directory listing.
  */
-function statOrNull(targetPath: string): fs.Stats | null {
+async function statOrNull(targetPath: string): Promise<Stats | null> {
   try {
-    return fs.statSync(targetPath);
+    return await fsp.stat(targetPath);
   } catch {
     return null;
   }
@@ -64,7 +64,7 @@ async function readGitignore(absoluteDir: string): Promise<Ignore | null> {
  */
 async function listDirectory(projectRoot: string, directory: PendingDirectory): Promise<ListedEntry[]> {
   const absoluteDir = path.join(projectRoot, directory.relativePath);
-  let dirents: fs.Dirent[];
+  let dirents: Dirent[];
   try {
     dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
   } catch {
@@ -129,8 +129,8 @@ export async function crawlDirectory(
  * Stat a crawled entry for its type and size. An entry that vanished since the
  * crawl is still returned, as a file without a size.
  */
-function describeEntry(projectRoot: string, relativePath: string): FileSearchResult {
-  const stats = statOrNull(path.join(projectRoot, relativePath));
+async function describeEntry(projectRoot: string, relativePath: string): Promise<FileSearchResult> {
+  const stats = await statOrNull(path.join(projectRoot, relativePath));
   if (!stats) {
     return { path: relativePath, isDirectory: false };
   }
@@ -220,70 +220,65 @@ export function warmFileCache(): void {
   getCachedFiles().catch(logCrawlFailure);
 }
 
+// What the @ dropdown can show for an absolute-path listing.
+const MAX_ABSOLUTE_LISTING_RESULTS = 15;
+
 /**
  * List files in an absolute directory path with optional filtering
  * @param absolutePath - Absolute directory path
  * @param filterQuery - Optional query to filter results (case-insensitive prefix/contains match)
- * @returns Array of files/directories in that path (max 15)
+ * @returns Array of files/directories in that path (max MAX_ABSOLUTE_LISTING_RESULTS)
  */
-function listAbsoluteDirectory(absolutePath: string, filterQuery?: string): FileSearchResult[] {
+async function listAbsoluteDirectory(absolutePath: string, filterQuery?: string): Promise<FileSearchResult[]> {
   try {
-    // Normalize the path
     const normalizedPath = path.normalize(absolutePath);
 
-    // Check if path exists
-    if (!fs.existsSync(normalizedPath)) {
-      return [];
-    }
-
-    // Check if it's a directory
-    const stats = fs.statSync(normalizedPath);
+    // A missing path throws here and falls through to the empty result below.
+    const stats = await fsp.stat(normalizedPath);
     if (!stats.isDirectory()) {
       return [];
     }
 
-    // Read directory contents
-    const entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+    const entries = await fsp.readdir(normalizedPath, { withFileTypes: true });
 
-    // Filter entries if query is provided
     let filteredEntries = entries;
     if (filterQuery && filterQuery.length > 0) {
       const lowerQuery = filterQuery.toLowerCase();
       filteredEntries = entries.filter(entry => entry.name.toLowerCase().includes(lowerQuery));
     }
 
-    // Convert to FileSearchResult format (max 15 items)
-    return filteredEntries.slice(0, 15).map(entry => {
-      const fullPath = path.join(normalizedPath, entry.name);
-      // A Dirent describes the entry, not the link target, so a symlink answers false to
-      // BOTH isDirectory() and isFile(). Left unresolved, a symlinked directory listed as
-      // a file and stopped offering path completion past it - which is the normal layout
-      // under a dotfile manager. stat() follows the link; a broken one throws and keeps
-      // the Dirent's answer, so it still lists rather than disappearing.
-      const target = entry.isSymbolicLink() ? statOrNull(fullPath) : null;
-      const isDirectory = target ? target.isDirectory() : entry.isDirectory();
-      const isFile = target ? target.isFile() : entry.isFile();
-
-      const result: FileSearchResult = {
-        path: fullPath,
-        isDirectory,
-      };
-
-      // Add file size if it's a file. Reuses the stat already taken for a symlink so a
-      // resolved link costs one syscall, not two.
-      if (isFile) {
-        const fileStats = target ?? statOrNull(fullPath);
-        if (fileStats) {
-          result.size = fileStats.size;
-        }
-      }
-
-      return result;
-    });
+    // Only the entries that are returned get stat'ed, concurrently.
+    return await Promise.all(
+      filteredEntries.slice(0, MAX_ABSOLUTE_LISTING_RESULTS).map(entry => describeListedEntry(normalizedPath, entry))
+    );
   } catch {
     // If any error occurs (permission denied, etc.), return empty
     return [];
   }
+}
+
+async function describeListedEntry(directory: string, entry: Dirent): Promise<FileSearchResult> {
+  const fullPath = path.join(directory, entry.name);
+  // A Dirent describes the entry, not the link target, so a symlink answers false to
+  // BOTH isDirectory() and isFile(). Left unresolved, a symlinked directory listed as
+  // a file and stopped offering path completion past it - which is the normal layout
+  // under a dotfile manager. stat() follows the link; a broken one throws and keeps
+  // the Dirent's answer, so it still lists rather than disappearing.
+  const target = entry.isSymbolicLink() ? await statOrNull(fullPath) : null;
+  const isDirectory = target ? target.isDirectory() : entry.isDirectory();
+  const isFile = target ? target.isFile() : entry.isFile();
+
+  const result: FileSearchResult = { path: fullPath, isDirectory };
+
+  // Reuses the stat already taken for a symlink so a resolved link costs one syscall, not two.
+  if (isFile) {
+    const fileStats = target ?? (await statOrNull(fullPath));
+    if (fileStats) {
+      result.size = fileStats.size;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -299,9 +294,9 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   if (path.isAbsolute(query)) {
     // First, check if the path itself is a directory
     try {
-      const stats = fs.statSync(query);
+      const stats = await fsp.stat(query);
       if (stats.isDirectory()) {
-        return listAbsoluteDirectory(query);
+        return await listAbsoluteDirectory(query);
       }
     } catch {
       // Path doesn't exist or can't be accessed
@@ -319,7 +314,7 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
       filterQuery = path.basename(query);
     }
 
-    return listAbsoluteDirectory(dirToList, filterQuery);
+    return await listAbsoluteDirectory(dirToList, filterQuery);
   }
 
   const files = await getCachedFiles(projectRoot);
@@ -328,7 +323,7 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   if (!query || query.trim() === '') {
     // Root-level entries: no '/' except a directory's trailing one.
     const rootFiles = files.filter(f => !f.slice(0, -1).includes('/')).slice(0, maxResults);
-    return rootFiles.map(p => describeEntry(projectRoot, p));
+    return Promise.all(rootFiles.map(p => describeEntry(projectRoot, p)));
   }
 
   // Use fzf for fuzzy matching
@@ -336,7 +331,9 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   const results = await fzf.find(query);
 
   // Take top results and add metadata
-  return results.slice(0, maxResults).map((result: FzfResultItem<string>) => describeEntry(projectRoot, result.item));
+  return Promise.all(
+    results.slice(0, maxResults).map((result: FzfResultItem<string>) => describeEntry(projectRoot, result.item))
+  );
 }
 
 /**
@@ -344,7 +341,7 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
  * @param filePath - The path to validate
  * @returns true if the path is within cwd, false otherwise
  */
-export function isPathWithinCwd(filePath: string): boolean {
+export async function isPathWithinCwd(filePath: string): Promise<boolean> {
   const cwd = path.resolve(process.cwd());
   const absolutePath = path.resolve(cwd, filePath);
 
@@ -353,7 +350,7 @@ export function isPathWithinCwd(filePath: string): boolean {
   let resolvedPath = absolutePath;
 
   try {
-    const realCwd = fs.realpathSync.native(cwd);
+    const realCwd = await fsp.realpath(cwd);
     // Only use the resolved path if it's valid (guards against mocked fs returning undefined)
     if (realCwd) {
       resolvedCwd = realCwd;
@@ -363,7 +360,7 @@ export function isPathWithinCwd(filePath: string): boolean {
   }
 
   try {
-    const realPath = fs.realpathSync.native(absolutePath);
+    const realPath = await fsp.realpath(absolutePath);
     // Only use the resolved path if it's valid (guards against mocked fs returning undefined)
     if (realPath) {
       resolvedPath = realPath;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
@@ -331,8 +332,10 @@ export type ChatModelName = z.infer<typeof supportedChatModels>;
  */
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
+const CLAUDE_ID_PREFIX = new RegExp(`^${BEDROCK_ANTHROPIC_PREFIX}claude-`);
+
 /** Claude ids, direct (`claude-...`) or on Bedrock (`anthropic.claude-...`, optionally region-prefixed). */
-export const isClaudeModelId = (model: string): boolean => /^(?:(?:[a-z-]+\.)?anthropic\.)?claude-/.test(model);
+export const isClaudeModelId = (model: string): boolean => CLAUDE_ID_PREFIX.test(model);
 
 /**
  * Models that support OpenAI's `reasoning_effort` request parameter.
@@ -553,6 +556,9 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
 
 // Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
 // and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
+// Deliberately a permissive deny-list, not claudeFamilyVersion: an unreviewed spelling of these models (a patch
+// version, a vendor prefix) must still read as unsupported. Keep in sync with TOOL_CHANGES_VERSIONS in
+// claudeToolCapabilities.ts when a new 5.x ships.
 const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
 
 /**
@@ -802,6 +808,16 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
   return cost;
 };
 
+/**
+ * Backends whose adapters forward cache reads only for a model whose priced record publishes
+ * cache_read on every tier (publishesCacheReadRate in pricing.ts), since the 0.1x default is
+ * Anthropic's discount, not theirs. A tier without cache_read on one of these backends bills
+ * forwarded reads at its input rate (costAtTier). The gates in geminiBackend.ts and xaiBackend.ts
+ * (@bike4mind/llm-adapters) apply publishesCacheReadRate to the same priced record settlement uses.
+ * @internal Exported for pricing.ts and cliCompletions.ts; not a stable public API.
+ */
+export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
+
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
@@ -817,7 +833,9 @@ const costAtTier = (
   const tierPricing = tier === null ? undefined : model.pricing[tier];
   if (!tierPricing) return 0;
 
-  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
+  const cacheReadRate =
+    tierPricing.cache_read ??
+    (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) ? tierPricing.input : tierPricing.input * CACHE_READ_MULTIPLIER);
   const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
 
   return (

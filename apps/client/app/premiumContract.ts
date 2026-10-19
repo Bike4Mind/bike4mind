@@ -1,3 +1,4 @@
+import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -248,6 +249,15 @@ export type PremiumLocalStorageKeyPrefixes = string[];
  * only the keys; the display half lands in `premiumWorkspaceGrantDisplays.generated.ts`.
  */
 export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Tools denied, per workspace id, to every session whose current `surface` matches. Contributed as
+ * literal data in `b4mContributions.workspaceDeniedTools` (`{ "<surface id>": ["<tool name>"] }`) and
+ * unioned with the session's own `disabledTools` at read time, on the server and in the client alike.
+ * Nothing is written onto the session, so a copy or move takes on its destination's denials.
+ * Entries from several overlays are merged.
+ */
+export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
 
 /**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one

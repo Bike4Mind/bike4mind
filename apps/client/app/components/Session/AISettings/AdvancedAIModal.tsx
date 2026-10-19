@@ -578,13 +578,13 @@ const formatTokenCount = (tokens: number): string => tokens.toLocaleString().rep
 const MIN_OUTPUT_TOKENS = 2048;
 
 /**
- * Checked-state frame for the Advanced Settings checkboxes, matching the composer's Agent-mode
- * button: green border at 75% over a 10% green fill instead of Joy's solid green.
+ * Checked-state frame for the Advanced Settings checkboxes: green border at 75% over a 10% green
+ * fill instead of Joy's solid green.
  *
  * Requires the checkbox to be pinned to `variant="outlined"` - Joy otherwise swaps to `solid`
  * on check, and these vars only feed the outlined variant. Set as CSS vars rather than
  * backgroundColor/borderColor because Joy resolves the variant through them, so a plain value
- * in sx is ignored. Keep in sync with AgentModeToggleButton.
+ * in sx is ignored.
  */
 const AGENT_FRAME_CHECKBOX_SX = {
   '--variant-outlinedColor': green[800],
@@ -2090,8 +2090,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                         title="Audio Generation"
                         description={
                           <>
-                            Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
-                            model-callable audio_generation tool in chat.
+                            Defaults for both the Studio Speech and Sound effects tabs and the model-callable
+                            audio_generation tool in chat.
                           </>
                         }
                       />

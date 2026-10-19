@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
+import { passthroughField, passthroughShape } from './responseShape';
 
 export const VALID_USER_TAGS = [
   '',
@@ -212,15 +213,6 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   currentCredits: true,
   lastCreditsPurchasedAt: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
-
-const passthroughField = z.unknown().optional();
-
-function passthroughShape<K extends string>(fields: Record<K, true>): Record<K, typeof passthroughField> {
-  return Object.fromEntries(Object.keys(fields).map(field => [field, passthroughField])) as Record<
-    K,
-    typeof passthroughField
-  >;
-}
 
 /** A redacted integration object: only the named non-secret subfields survive. */
 function redactedSubdocument<K extends string>(fields: readonly K[]) {

@@ -13,6 +13,7 @@ import {
   billingRoute,
   feedbackRollupRoute,
   dataLakesRoute,
+  integrationsRoute,
   newRoute,
   notebooksIndexRoute,
   router,
@@ -181,5 +182,17 @@ describe('guessed index URLs redirect instead of 404ing', () => {
   it.each(['/notebooks', '/subscriptions'])('%s matches its redirect route, not the 404', path => {
     const ids = router.matchRoutes(path).map(m => m.routeId);
     expect(ids.some(id => id.endsWith(path))).toBe(true);
+  });
+});
+
+// The page's analytics entry point. Only the known sources survive, so a hand-edited or stale
+// ?source= reads as a direct visit rather than landing an arbitrary string in the event.
+describe('integrationsRoute validateSearch', () => {
+  it.each(['profile_menu', 'profile_tab_link', 'direct'])('keeps %s', source => {
+    expect(integrationsRoute.options.validateSearch?.({ source })).toEqual({ source });
+  });
+
+  it.each([{}, { source: 'newsletter' }, { source: 42 }, { source: ['profile_menu'] }])('drops %o', search => {
+    expect(integrationsRoute.options.validateSearch?.(search)).toEqual({ source: undefined });
   });
 });

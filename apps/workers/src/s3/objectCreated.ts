@@ -1,5 +1,5 @@
 import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
-import { isMediaOnlyMimeType } from '@bike4mind/common';
+import { isMediaOnlyMimeType, isStorageCharged } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import {
@@ -50,8 +50,21 @@ export const func = withContext(async (event, context, logger) => {
     // 'pending' - permanently invisible to content-hash dedup, which excludes 'pending' as a
     // never-landed upload (FabFileModel.findByContentHashes).
     // Serving stays gated by moderationStatus, which this does not touch.
+    // The storage charge below is judged by the status from before this flip (claimStorageCharge).
+    const statusBeforeUpload = metadata.status;
+    // Except where the flip alone changes how the charge rule reads the row (a pre-cutoff unstamped
+    // row): there it rides the transaction's save, because a retry after a failed transaction would
+    // read a persisted flip as the pre-upload status and undercharge. Such a row keeps its old status
+    // while the transaction is in flight, and keeps it for good only if every attempt fails.
+    const chargeFields = { storageChargedAt: metadata.storageChargedAt, createdAt: metadata.createdAt };
+    const deferStatusFlip =
+      metadata.status !== 'complete' &&
+      isStorageCharged({ ...chargeFields, status: 'complete' }) !==
+        isStorageCharged({ ...chargeFields, status: metadata.status });
+    const markComplete = () =>
+      FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
     if (metadata.status !== 'complete') {
-      await FabFile.updateOne({ _id: metadata._id, status: { $ne: 'complete' } }, { $set: { status: 'complete' } });
+      if (!deferStatusFlip) await markComplete();
       metadata.status = 'complete';
     }
 
@@ -162,11 +175,15 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
+      // A won claim records the measured size as `fileSize` itself; a late event for an earlier write
+      // of the same path loses the claim and leaves the newer write's size alone.
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, statusBeforeUpload, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;
     });
+    // No owner means no charge and no retry, so nothing is left to judge by the old status.
+    if (!user && deferStatusFlip) await markComplete();
 
     // The lakes this file's meta-tags name can count it as soon as the bytes are known to have
     // landed - same reason the status write moved up, and every site that marks a FabFile

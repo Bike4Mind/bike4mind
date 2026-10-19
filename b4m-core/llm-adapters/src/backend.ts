@@ -15,6 +15,8 @@ import {
   type ResponseFormat,
   type StreamChannel,
   type ToolStarted,
+  type ToolSearchServerTool,
+  type ProviderBlock,
   type TurnUsage,
 } from '@bike4mind/common';
 import type { AnthropicEffort } from './thinkingParams';
@@ -115,6 +117,8 @@ export interface ICompletionOptionTools {
       required?: string[];
     };
     strict?: boolean;
+    /** Anthropic tool search; set only by the completions path, which drops it for every other adapter. */
+    defer_loading?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
   /**
@@ -144,9 +148,20 @@ export interface ICompletionOptions {
   logprobs?: number;
   echo?: boolean;
   stream?: boolean;
+  /**
+   * Set when a caller renders reply text live (e.g. the CLI TUI). Backends that
+   * stream text out early must stop retrying once text has gone out, so callers
+   * with no live view leave this unset and keep full retry and fallback.
+   */
+  streamText?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
+  /**
+   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
+   */
+  providerTools?: ToolSearchServerTool[];
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
@@ -231,6 +246,8 @@ export interface ICompletionOptions {
     accumCacheWriteTokens?: number;
     /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
     accumTurnUsage?: TurnUsage[];
+    /** Stays undefined until a turn reports a count - see reasoningTokens.ts. */
+    accumReasoningTokens?: number;
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -348,8 +365,16 @@ export type CompletionInfo = {
   channel?: StreamChannel;
   /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
   toolStarted?: ToolStarted;
+  /** A provider-run block for the caller to echo back; see CompletionInfo.providerBlock in @bike4mind/common. */
+  providerBlock?: ProviderBlock;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Provider-reported reasoning/thinking tokens: a SUBSET of `outputTokens`, not
+   * additive, and never billed separately. Absent when the provider reported nothing.
+   * Same accumulate-across-tool-turns contract as the other token counts.
+   */
+  reasoningTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
   toolsUsed?: Array<RecordableToolUse>;
@@ -367,12 +392,16 @@ export type CompletionInfo = {
     content: string;
     is_error?: boolean;
   }>;
-  /** Prompt caching statistics (if caching was enabled) */
+  /**
+   * Prompt caching statistics (if caching was enabled). Diagnostic only: no billing or token
+   * accounting reads it, because some adapters set it while keeping the cached tokens inside
+   * `inputTokens`. Accounting reads `cacheReadInputTokens`/`cacheCreationInputTokens` below.
+   */
   cacheStats?: CacheUsageStats;
   /**
-   * Anthropic-style cache token deltas. Surfaced separately from `inputTokens`
-   * so credit accounting can apply provider-specific multipliers (read: 0.1x,
-   * write: 1.25x of base input rate).
+   * Cache token counts in the billing convention: always disjoint from `inputTokens` (an adapter
+   * whose `inputTokens` includes cached tokens leaves these unset), so settlement prices each at
+   * its own rate. The fields `foldCompletionInfo` in @bike4mind/agents sums into agent totals.
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -476,7 +505,8 @@ export interface ICompletionBackend {
    * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
    * model this build has no id knowledge of get a correctly shaped request
    * instead of a 400. Optional: a backend whose request shape is id-independent
-   * has nothing to read.
+   * has nothing to read. Gemini and xAI also gate cache-read forwarding on this
+   * record, so for them it must be the record settlement prices with.
    */
   setDispatchModel?(info: ModelInfo): void;
 }

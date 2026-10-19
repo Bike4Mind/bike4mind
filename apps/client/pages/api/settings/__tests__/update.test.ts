@@ -35,6 +35,9 @@ vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.re
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
 }));
+vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
+  resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
+}));
 
 import handler from '../update';
 import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
@@ -218,13 +221,31 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('still stores an explicit 75', async () => {
+  it('still stores an explicit 75 once the caller confirms it is above the measured minimum', async () => {
     stageWriteResult('forcedRetrievalMinSimilarityPct', 75);
-    await runHandler('forcedRetrievalMinSimilarityPct', '75');
+    await runHandler('forcedRetrievalMinSimilarityPct', '75', { confirmAboveMeasuredFloor: true });
     expect(deleteOne).not.toHaveBeenCalled();
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'forcedRetrievalMinSimilarityPct' },
       { $set: { settingValue: 75 } },
+      expect.anything()
+    );
+  });
+
+  it('refuses a minimum above the one measured for the default embedding model without a confirmation', async () => {
+    await expect(runHandler('forcedRetrievalMinSimilarityPct', '75')).rejects.toThrow(
+      '75% is above the 58% minimum measured for text-embedding-3-small'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invalidateSettingsCache).not.toHaveBeenCalled();
+  });
+
+  it('stores a minimum at the measured one without a confirmation', async () => {
+    stageWriteResult('forcedRetrievalMinSimilarityPct', 58);
+    await runHandler('forcedRetrievalMinSimilarityPct', '58');
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalMinSimilarityPct' },
+      { $set: { settingValue: 58 } },
       expect.anything()
     );
   });

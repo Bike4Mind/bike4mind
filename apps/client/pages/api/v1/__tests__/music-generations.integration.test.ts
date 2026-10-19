@@ -5,7 +5,7 @@
  * and the repository are mocked: their behaviour is covered in services and database.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import {
   asUser,
   fire,
@@ -176,6 +176,100 @@ describe('POST /api/v1/music-generations', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
     expect(h.createMusicJob).not.toHaveBeenCalled();
+  });
+
+  describe('billing target (API key)', () => {
+    const KEY_ORG = 'd'.repeat(24);
+    const OTHER_ORG = 'b'.repeat(24);
+    const HOME_ORG = 'c'.repeat(24);
+    const base = { model: 'test-music', prompt: 'p' };
+    const orgKey = () =>
+      validateWithScopes([ApiKeyScope.AI_GENERATE], 'user-1', {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: KEY_ORG,
+      });
+
+    beforeEach(() => {
+      h.createMusicJob.mockResolvedValue({ ok: true, job: musicJob(), created: true });
+    });
+
+    it('bills the key org when the body names none', async () => {
+      orgKey();
+      const { req, res } = post(base);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+    });
+
+    it('bills the key org when the body names the same org', async () => {
+      orgKey();
+      const { req, res } = post({ ...base, organization_id: KEY_ORG });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+    });
+
+    it.each([
+      ['another org', OTHER_ORG],
+      ['null (personal)', null],
+    ])('refuses %s on an org-billed key (403) before the domain', async (_label, orgId) => {
+      orgKey();
+      const { req, res } = post({ ...base, organization_id: orgId });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'billing_organization_mismatch' });
+      expect(h.createMusicJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses an org-billed key whose org no longer exists (400) before the domain', async () => {
+      orgKey();
+      h.orgFindById.mockResolvedValue(null);
+      const { req, res } = post(base);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(h.createMusicJob).not.toHaveBeenCalled();
+    });
+
+    describe('without an org-billed key', () => {
+      beforeEach(async () => {
+        asUser('user-1', HOME_ORG);
+        const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+        h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
+        h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
+          id === HOME_ORG ? { id } : null
+        );
+      });
+
+      it('keeps a personal key on the home org when the body names none', async () => {
+        validateWithScopes([ApiKeyScope.AI_GENERATE]);
+        const { req, res } = post(base);
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.orgFindById).not.toHaveBeenCalled();
+      });
+
+      it('keeps a personal key on the org the body names', async () => {
+        validateWithScopes([ApiKeyScope.AI_GENERATE]);
+        const { req, res } = post({ ...base, organization_id: HOME_ORG });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+      });
+
+      it('keeps a session caller on the org the body names', async () => {
+        const { req, res } = fire({
+          method: 'POST',
+          url: '/api/v1/music-generations',
+          apiKey: null,
+          body: { ...base, organization_id: HOME_ORG },
+        });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.orgFindById).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it.each(['', 'x'.repeat(256), 'bad\u0001key'])('rejects Idempotency-Key %j with 422', async key => {

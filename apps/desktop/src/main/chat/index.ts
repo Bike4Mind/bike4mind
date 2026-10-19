@@ -45,6 +45,8 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
@@ -52,7 +54,7 @@ import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
@@ -75,11 +77,14 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
+import { RecentFolderStore } from './project/RecentFolderStore';
+import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -250,7 +255,10 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
-export function registerChat(auth: AuthService): RegisteredChat {
+export function registerChat(
+  auth: AuthService,
+  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
@@ -282,9 +290,15 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
-  // Its own file beside tool-access.json, and for the same reason: both record a consent the
-  // user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')));
+  // App-wide like approval-mode.json; see SidebarSectionStore.
+  const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
+  const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
+  // The trust file is its own file beside tool-access.json, and for the same reason: both record
+  // a consent the user gave once and should not be asked for again on every launch.
+  const skills = new SkillCatalog(
+    new ProjectTrustStore(join(userData, 'project-skill-trust.json')),
+    accountSkillsProvider(auth, userData)
+  );
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
@@ -400,6 +414,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     media,
     videoJobs,
     activity,
+    sidebarSections,
     mcp,
     browser,
     artifacts,
@@ -410,8 +425,16 @@ export function registerChat(auth: AuthService): RegisteredChat {
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
-    emit: broadcast,
+    emit: event => {
+      broadcast(event);
+      try {
+        hooks.observeStream?.(event);
+      } catch {
+        logger.warn('FLEET: activity observer failed');
+      }
+    },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionClosed: hooks.sessionClosed,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
@@ -445,15 +468,30 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
-  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
-    service.createCodeSession(request)
-  );
+  const rememberFolder = (directory: string | null): void => {
+    if (!directory) return;
+    recentFolders
+      .record(directory)
+      .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
+  };
+  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, async (_event, request: CreateCodeSessionRequest) => {
+    const result = await service.createCodeSession(request);
+    rememberFolder(folderToRemember(request, result));
+    return result;
+  });
 
-  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, (_event, request: UpdateProjectRequest) =>
-    service.updateProject(request)
-  );
+  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
+    const result = await service.updateProject(request);
+    rememberFolder(folderToRemember(request, result));
+    return result;
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
+  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
+  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
+    if (typeof directory === 'string') await recentFolders.remove(directory);
+    return recentFolders.list();
+  });
 
   // Reading branches is a git call on a path the user just chose in a native dialog, so it is
   // not gated: nothing here writes, and the alternative is a branch field the user must type
@@ -509,6 +547,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
   });
+  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+    store.get(sessionId).then(
+      session => session !== null,
+      () => false
+    )
+  );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );

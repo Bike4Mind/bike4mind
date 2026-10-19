@@ -95,3 +95,26 @@ export const unsubscribeQueryRoute = websocketApi.route('unsubscribe_query', {
     },
   ],
 });
+
+// Re-authenticates a live socket after the client refreshes its access token, then tells it to
+// re-subscribe (apps/client/server/websocket/reauthConnection.ts). Needs ManageConnections to post
+// resubscribe_required and to close a connection whose reauth is refused. Self-host wires the same
+// handler in apps/client/pages/api/internal/ws/[action].ts.
+export const reauthConnectionRoute = websocketApi.route('reauth_connection', {
+  handler: 'apps/client/server/websocket/reauthConnection.func',
+  runtime: 'nodejs24.x',
+  // Same Node 24 + Mongoose + AWS SDK cold-start stack as subscribe_query (see #8655).
+  memory: '1024 MB',
+  vpc: lambdaVpc,
+  // A token verify, two small writes and one post; fail fast like unsubscribe_query.
+  timeout: '30 seconds',
+  // Every open tab reauths once per token refresh, so cap it like the subscribe routes.
+  concurrency: PRODUCTION_STAGES.includes($app.stage) ? { reserved: 100 } : undefined,
+  link: [...allSecrets, websocketApi],
+  permissions: [
+    {
+      actions: ['execute-api:ManageConnections'],
+      resources: ['*'],
+    },
+  ],
+});

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../../utils/themes';
@@ -33,12 +33,14 @@ vi.mock('../../common/ToolIndicators', () => ({
   default: () => <div data-testid="tool-indicators" />,
   ICONED_MCP_SERVERS: ['github', 'atlassian'],
   AGENT_ONLY_MCP_SERVERS: ['github', 'atlassian'],
+  hasToolIndicators: () => false,
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: modelRepo }),
 }));
 
 import ToolsButton from './ToolsButton';
+import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 
 const baseProps = {
   isMobile: false,
@@ -128,6 +130,7 @@ describe('ToolsButton active-tool indicators', () => {
 describe('ToolsButton session-denied tools', () => {
   beforeEach(() => {
     toolsSectionMounts.length = 0;
+    useAdvancedAISettings.setState({ toolsDropdownOpen: false });
     modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -160,7 +163,8 @@ describe('ToolsButton session-denied tools', () => {
         <ToolsButton {...baseProps} isMobile model="gpt-4o" disabledTools={['dice_roll']} />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('session-tools-dropdown-toggle'));
+    // Phones have no button in the row; the plus menu opens the panel through the store.
+    act(() => useAdvancedAISettings.setState({ toolsDropdownOpen: true }));
     expect(screen.getByTestId('tools-section')).toBeInTheDocument();
     expect(lastMount().disabledTools).toEqual(['dice_roll']);
   });
@@ -172,7 +176,19 @@ describe('ToolsButton session-denied tools', () => {
         <ToolsButton {...baseProps} isMobile model="gpt-4o" />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('session-tools-dropdown-toggle'));
+    act(() => useAdvancedAISettings.setState({ toolsDropdownOpen: true }));
     expect(lastMount().disabledTools).toBeUndefined();
+  });
+});
+
+describe('ToolsButton in a crowded composer row', () => {
+  it('keeps its width instead of letting flex squeeze it', () => {
+    modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];
+    render(
+      <TestWrapper>
+        <ToolsButton {...baseProps} model="gpt-4o" />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('session-tools-dropdown-toggle')).toHaveStyle({ flexShrink: '0' });
   });
 });

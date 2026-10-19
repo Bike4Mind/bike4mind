@@ -41,6 +41,7 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...args: any[]) => mockFindById(...args),
   },

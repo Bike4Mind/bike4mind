@@ -71,6 +71,7 @@ const seedFile = async (opts: {
   driveConnectionId?: string;
   userId?: string;
   fileSize?: number;
+  overrides?: Record<string, unknown>;
 }) => {
   const doc = await FabFile.create({
     userId: opts.userId ?? OWNER,
@@ -78,9 +79,11 @@ const seedFile = async (opts: {
     type: KnowledgeType.FILE,
     status: 'complete',
     fileSize: opts.fileSize ?? 100,
+    storageChargedAt: new Date(),
     filePath: `files/${new mongoose.Types.ObjectId().toHexString()}`,
     tags: [{ name: opts.datalakeTag, strength: 1 }],
     ...(opts.driveConnectionId ? { driveConnectionId: opts.driveConnectionId } : {}),
+    ...opts.overrides,
   });
   await FabFileChunk.create({ fabFileId: doc.id, text: 'hello world', tokenCount: 2 });
   return doc;
@@ -141,6 +144,35 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
       storage,
     });
     expect(deleted).toEqual([fileC.filePath]);
+  });
+
+  it('refunds only the bytes that were charged, not a never-charged pending file', async () => {
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const seeded = [
+      await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 100 }),
+      await seedFile({ datalakeTag: lake.datalakeTag, driveConnectionId: connectionId, fileSize: 200 }),
+      await seedFile({
+        datalakeTag: lake.datalakeTag,
+        driveConnectionId: connectionId,
+        fileSize: 500,
+        overrides: { storageChargedAt: null, status: 'pending' },
+      }),
+    ];
+
+    // Passed directly: the connection finder skips pending rows, so a never-charged row reaches
+    // the purge only through the caller's own list.
+    const files = seeded.map(doc => doc.toJSON());
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const result = await dataLakeService.purgeDataLakeConnectionFiles(
+      dataLakeService.lakeMembershipScope(lake),
+      files as Parameters<typeof dataLakeService.purgeDataLakeConnectionFiles>[1],
+      { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, users: { incrementCurrentStorage } } }
+    );
+
+    expect(result.filesPurged).toBe(3);
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith(OWNER, -300);
   });
 
   it('leaves a sibling Drive connection in the SAME lake untouched', async () => {

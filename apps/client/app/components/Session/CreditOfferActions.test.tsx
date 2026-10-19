@@ -5,8 +5,11 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 
 vi.mock('./SessionCreditsButtons', () => ({
-  SubscribeButton: ({ label }: { label?: string }) => <button data-testid="session-subscribe-btn">{label}</button>,
-  SessionCreditsButton: ({ secondary, label }: { secondary?: boolean; label?: string }) => (
+  SECONDARY_CREDIT_BUTTON_PROPS: { variant: 'outlined', color: 'neutral' },
+  SubscribeButton: ({ label = 'Subscribe' }: { label?: string }) => (
+    <button data-testid="session-subscribe-btn">{label}</button>
+  ),
+  SessionCreditsButton: ({ secondary, label = 'Add Credits' }: { secondary?: boolean; label?: string }) => (
     <button data-testid="session-credits-btn" data-secondary={String(!!secondary)}>
       {label}
     </button>
@@ -31,9 +34,6 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptionsRef.current }),
 }));
-vi.mock('./useProCreditOffer', () => ({
-  useProCreditOffer: () => ({ name: 'Professional', credits: 50000, priceLabel: '$30' }),
-}));
 
 import { CreditOfferActions, buildAdminRequestMessage } from './CreditOfferActions';
 
@@ -54,23 +54,22 @@ beforeEach(() => {
 describe('CreditOfferActions', () => {
   it('leads with the Pro plan from plan data and keeps the pack secondary', () => {
     renderActions('low');
-    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent('Subscribe to Professional');
+    expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Subscribe$/);
     expect(screen.getByTestId('session-credits-btn')).toHaveAttribute('data-secondary', 'true');
-    expect(screen.getByTestId('credit-offer-pitch')).toHaveTextContent('$30/mo for 50,000 credits every month');
     expect(screen.queryByTestId('credit-offer-ask-admin-btn')).toBeNull();
   });
 
-  it('makes no better-value claim: plan credits and packs sell at the same per-credit rate', () => {
+  it('puts Subscribe on the far right once credits are out, after Add Credits', () => {
     renderActions('out');
-    expect(screen.getByTestId('credit-offer-pitch')).not.toHaveTextContent(/better value/i);
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Buy a credit pack');
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map(b => b.getAttribute('data-testid'))).toEqual(['session-credits-btn', 'session-subscribe-btn']);
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
   });
 
   it('offers a subscriber only a credit pack, never the plan they already hold', () => {
     subscriptionsRef.current = [{ status: 'active' }];
     renderActions('out');
     expect(screen.queryByTestId('session-subscribe-btn')).toBeNull();
-    expect(screen.queryByTestId('credit-offer-pitch')).toBeNull();
     expect(screen.getByTestId('session-credits-btn')).toHaveAttribute('data-secondary', 'false');
   });
 
@@ -92,5 +91,20 @@ describe('CreditOfferActions', () => {
 
     await waitFor(() => expect(screen.getByTestId('credit-offer-ask-admin-btn')).toHaveTextContent('Message copied'));
     expect(writeText).toHaveBeenCalledWith(buildAdminRequestMessage('Acme', 'Sam Member'));
+  });
+
+  it('keeps the one action secondary on a low balance, primary once credits are out', () => {
+    subscriptionsRef.current = [{ status: 'active' }];
+    const { unmount } = renderActions('low');
+    expect(screen.getByTestId('session-credits-btn')).toHaveAttribute('data-secondary', 'true');
+    unmount();
+
+    accountRef.current = { id: 'org1', personal: false };
+    orgRef.current = { name: 'Acme' };
+    const low = renderActions('low');
+    expect(screen.getByTestId('credit-offer-ask-admin-btn').className).toMatch(/variantOutlined/);
+    low.unmount();
+    renderActions('out');
+    expect(screen.getByTestId('credit-offer-ask-admin-btn').className).toMatch(/variantSolid/);
   });
 });

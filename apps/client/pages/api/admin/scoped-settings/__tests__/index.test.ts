@@ -17,6 +17,9 @@ vi.mock('@bike4mind/services', () => ({
     clearScopedOverride: (...args: unknown[]) => clearScopedOverride(...args),
   },
 }));
+vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
+  resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
+}));
 // The route builds itself at import time via .get().put().delete(), so the chain captures each
 // handler on itself under a `__<method>` key; the default export IS the chain, which is how a test
 // gets hold of one method's handler. Assigning into a registry declared in this file would run
@@ -258,6 +261,45 @@ describe('admin/scoped-settings writes', () => {
       { logger }
     );
     expect(response).toEqual({ cleared: true });
+  });
+});
+
+describe('admin/scoped-settings forced-retrieval minimum above the measured one', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const orgFloor = (value: number, extra: Record<string, unknown> = {}) => ({
+    body: {
+      settingName: 'forcedRetrievalMinSimilarityPct',
+      scopeLevel: 'organization',
+      scopeId: 'org-1',
+      value,
+      ...extra,
+    },
+  });
+
+  it('refuses it without a confirmation and writes nothing', async () => {
+    await expectStatus('put', orgFloor(75), 400);
+    await expect(invoke('put', orgFloor(75))).rejects.toThrow(
+      'above the 58% minimum measured for text-embedding-3-small'
+    );
+    expect(writeScopedOverride).not.toHaveBeenCalled();
+  });
+
+  it('writes it once confirmed, and writes a value at the measured minimum without one', async () => {
+    writeScopedOverride.mockResolvedValue(undefined);
+    await invoke('put', orgFloor(75, { confirmAboveMeasuredFloor: true }));
+    await invoke('put', orgFloor(58));
+    expect(writeScopedOverride.mock.calls.map(call => call[2])).toEqual(['75', '58']);
+  });
+
+  it('lets an out-of-range value reach the write service instead of refusing it as above the floor', async () => {
+    // 150 fails the setting's own schema (1-100, int). Refusing it as "above the 58% floor" first
+    // would be a second, unrelated 400 after the value is already known to be invalid.
+    const message = "[scopedSettings] value for 'forcedRetrievalMinSimilarityPct' failed validation: 150";
+    writeScopedOverride.mockRejectedValue(new Error(message));
+
+    await expect(invoke('put', orgFloor(150))).rejects.toThrow(message);
+    expect(writeScopedOverride).toHaveBeenCalled();
   });
 });
 

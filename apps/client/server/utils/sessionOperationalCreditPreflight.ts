@@ -71,7 +71,7 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
  *    nothing about the narrower one a real operational call lands in. `{128000: {input: 0.15,
  *    output: 0.6}, 2000000: {input: 0, output: 0}}` prices free at 1M and charges a 10k call in
  *    full. Reading every tier is also what covers the cache legs, which settlement passes real
- *    counts for (recordSessionOperationalUsage.ts:63) and a sample priced at zero cache tokens
+ *    counts for (the `costUsd` line in recordSessionOperationalUsage.ts) and a sample priced at zero cache tokens
  *    never exercises.
  *
  * Checking the map directly rather than calling `getTextModelCost` also keeps this total and

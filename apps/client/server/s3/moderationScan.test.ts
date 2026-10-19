@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   download: vi.fn(),
   downloadRange: vi.fn(),
   moderateUploadedFile: vi.fn(),
+  getMetadata: vi.fn(),
   getSettingsValue: vi.fn(),
 }));
 
@@ -21,7 +22,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ download: h.download, downloadRange: h.downloadRange }),
+  getFilesStorage: () => ({ download: h.download, downloadRange: h.downloadRange, getMetadata: h.getMetadata }),
 }));
 vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 
@@ -125,5 +126,39 @@ describe('moderationScan', () => {
         blockReason: 'explicit',
       });
     });
+  });
+});
+
+describe('scanUploadedObject - ai:generate-only upload constraint', () => {
+  const scan = (sourceMetadata?: unknown) =>
+    scanUploadedObject({
+      fabFile: { id: 'ff1', userId: 'u1', mimeType: 'image/png', sourceMetadata },
+      objectKey: 'k.png',
+      logger,
+    });
+  const passed = () => h.moderateUploadedFile.mock.calls[0][0].generateUpload;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockReturnValue(undefined);
+    h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
+  });
+
+  it('hands a marked file a constraint that measures the stored object', async () => {
+    h.getMetadata.mockResolvedValue({ size: 1234 });
+    await scan({ uploadedVia: 'ai-generate-key-upload' });
+    await expect(passed().measureSize()).resolves.toBe(1234);
+    expect(h.getMetadata).toHaveBeenCalledWith('k.png');
+  });
+
+  it('treats an unknown stored size as oversized', async () => {
+    h.getMetadata.mockResolvedValue({});
+    await scan({ uploadedVia: 'ai-generate-key-upload' });
+    await expect(passed().measureSize()).resolves.toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it.each([[undefined], [{}], [{ uploadedVia: 'other' }]])('passes no constraint for %j', async meta => {
+    await scan(meta);
+    expect(passed()).toBeUndefined();
   });
 });

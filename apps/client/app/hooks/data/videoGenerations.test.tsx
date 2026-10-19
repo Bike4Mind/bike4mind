@@ -235,6 +235,17 @@ describe('useVideoGeneration', () => {
     expect(h.get).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a finished job over a refetch that was read before it finished', async () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1', state: 'succeeded' }));
+    h.get.mockResolvedValue({
+      data: videoJob({ id: 'job-1', state: 'running', updated_at: '2026-10-07T00:01:00.000Z' }),
+    });
+    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await result.current.refetch();
+    expect(h.get).toHaveBeenCalled();
+    expect(queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail('job-1'))?.state).toBe('succeeded');
+  });
+
   it('does not refetch on mount when the detail is already cached', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1' }), {
       updatedAt: Date.now() - 120_000,

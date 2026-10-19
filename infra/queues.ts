@@ -306,12 +306,9 @@ const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
     vpc: lambdaVpc,
-    link: [...allSecrets],
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-      // The callback body mirrors GET /api/quests/{id}, whose `files[].url` needs the CDN base.
-      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
-    },
+    // The callback body mirrors GET /api/quests/{id}, whose `files[].url` are presigned against the generated bucket.
+    link: [...allSecrets, generatedImagesBucket],
+    environment: DEFAULT_LAMBDA_ENVIRONMENT,
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],

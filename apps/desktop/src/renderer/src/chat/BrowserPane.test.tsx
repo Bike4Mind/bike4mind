@@ -516,9 +516,16 @@ describe('the browser pane under overlays', () => {
   };
   const still = () => host?.querySelector<HTMLImageElement>('[data-testid="chat-browser-pane-still"]') ?? null;
   /** Past the still's delay, with the capture's promise settled. */
-  const waitForStill = () => act(() => new Promise(resolve => setTimeout(resolve, 80)));
+  const waitForStill = () => act(() => vi.advanceTimersByTimeAsync(80));
+
+  // In production the still's delay is a 50ms timer, and the awaited acts between a layer's coming
+  // and going can take that long on a loaded runner. Only timeouts are faked: frames are scripted above.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const layer of layers.splice(0)) layer.remove();
   });
 

@@ -37,6 +37,8 @@ export type LLMCommandArgs = {
   agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   promptFileIds: string[];
+  /** The subset of `promptFileIds` scoped to this message only; the server pins the rest. */
+  messageOnlyFileIds?: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   questId?: string;
   /** Correct-and-retry target: the quest whose answer the user says was wrong. */
@@ -131,6 +133,7 @@ export async function handleLLMCommand(
       model,
       dashboardParams,
       promptFileIds,
+      messageOnlyFileIds,
       questId,
       correctsQuestId,
       enableQuestMaster,
@@ -260,6 +263,7 @@ export async function handleLLMCommand(
         fabFileIds,
         message: userPrompt,
         messageFileIds: promptFileIds,
+        ...(messageOnlyFileIds?.length ? { messageOnlyFileIds } : {}),
         enableQuestMaster,
         enableMementos: args.enableMementos,
         enableArtifacts: args.enableArtifacts,

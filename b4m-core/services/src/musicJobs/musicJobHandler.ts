@@ -227,6 +227,7 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
 
   return {
     kind: 'music',
+    submitMode: 'sync',
 
     async submit(job, context) {
       let prepared: PreparedSubmit | MusicStepResult;
@@ -270,7 +271,7 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
       return unreachable(job, 'store');
     },
 
-    // A sync job is never running at the provider: there is nothing to cancel.
+    // A sync job can only be cancelled before its provider call starts, so there is never a provider job to stop.
     async cancelAtProvider() {},
 
     // Reads only the committed job, so the sweep's recovery of an unhandled terminal job settles or releases alike.

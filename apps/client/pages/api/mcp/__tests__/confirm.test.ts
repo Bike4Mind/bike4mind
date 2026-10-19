@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
@@ -16,10 +16,16 @@ vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
   Quest: { findById: vi.fn(), findByIdAndUpdate: vi.fn() },
-  FabFile: { findById: vi.fn() },
+  fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
+vi.mock('@server/utils/storage', () => {
+  const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
+  return { getFilesStorage: () => storage };
+});
+
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
 vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
 
@@ -30,8 +36,11 @@ vi.mock('@bike4mind/slack', () => {
   return { GitHubResource: StubResource, JiraResource: StubResource, ConfluenceResource: StubResource };
 });
 
-import { Quest, Session } from '@bike4mind/database';
+import { fabFileRepository, Quest, Session } from '@bike4mind/database';
+import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
@@ -77,9 +86,54 @@ describe('POST /api/mcp/confirm', () => {
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe('user-1');
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
+  });
+
+  it('downloads slackFileUrl through the SSRF-guarded helper and passes its bytes as base64 content', async () => {
+    const fileBuffer = Buffer.from('x'.repeat(200));
+    vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(fileBuffer);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://h.example.com/a' },
+        ts: pendingActionTs,
+      },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(downloadAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://h.example.com/a');
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+      content: fileBuffer.toString('base64'),
+    });
+  });
+
+  it('leaves the action unclaimed and answers generically when the attachment download fails', async () => {
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(
+      new Error('URL blocked for security reasons: Hostname resolves to private IP address (127.0.0.1)')
+    );
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'http://internal.example/a' },
+        ts: pendingActionTs,
+      },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData().error).not.toContain('127.0.0.1');
+    // Left unclaimed so the user can fix the URL and retry.
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
   it('refuses before claiming or invoking anything while the MCP admin flag is off', async () => {
@@ -95,7 +149,7 @@ describe('POST /api/mcp/confirm', () => {
   it('returns 409 and does not invoke the tool when the claim is lost', async () => {
     vi.mocked(claimPendingAction).mockResolvedValue(false);
 
-    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(409);
     expect(invokeMcpHandler).not.toHaveBeenCalled();
@@ -104,10 +158,40 @@ describe('POST /api/mcp/confirm', () => {
   it('keeps the action unclaimed when a fixable pre-execution check fails', async () => {
     vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['other/repo']);
 
-    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(400);
     expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('matches the selected repository regardless of case but still refuses a different one', async () => {
+    vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['acme/app']);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'App', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    const selected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(selected._getStatusCode()).toBe(200);
+    expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'Other', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockClear();
+
+    const unselected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(unselected._getStatusCode()).toBe(400);
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
@@ -124,11 +208,137 @@ describe('POST /api/mcp/confirm', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
-  it('claims with the stored ts when the request carries no pendingActionTs', async () => {
+  it('rejects a request that does not name the displayed action ts', async () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
 
-    expect(res._getStatusCode()).toBe(200);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(res._getStatusCode()).toBe(400);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(['image_generation', 'get_issue', 'unknown_tool'])(
+    'refuses to execute a pending action for the non-confirmable tool %s',
+    async tool => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: { tool, params: {}, ts: pendingActionTs },
+      } as never);
+
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(claimPendingAction).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  it('routes an allowlisted Atlassian tool to the atlassian server', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: { tool: 'jira_create_issue', params: {}, ts: pendingActionTs },
+    } as never);
+
+    await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0]).toMatchObject({
+      name: 'atlassian',
+      toolName: 'jira_create_issue',
+    });
+  });
+
+  describe('attachment upload from a stored file', () => {
+    const FAB_FILE_ID = 'cccccccccccccccccccccccc';
+
+    beforeEach(() => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: {
+          tool: 'jira_upload_attachment',
+          params: { issueKey: 'P-1', filename: 'a.txt', fabFileId: FAB_FILE_ID },
+          ts: pendingActionTs,
+        },
+      } as never);
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('looks the file up scoped to the confirming user', async () => {
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'clean',
+      } as never);
+
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(fabFileRepository.shareable.findAccessibleById).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user-1' }),
+        FAB_FILE_ID
+      );
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: Buffer.from('file-bytes').toString('base64'),
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('refuses a file the confirming user cannot access, even with a Slack URL fallback, without fetching, claiming or invoking', async () => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: {
+          tool: 'jira_upload_attachment',
+          params: {
+            issueKey: 'P-1',
+            filename: 'a.txt',
+            fabFileId: FAB_FILE_ID,
+            slackFileUrl: 'https://files.example.test/a.txt',
+          },
+          ts: pendingActionTs,
+        },
+      } as never);
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
+      vi.stubGlobal('fetch', vi.fn());
+
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(claimPendingAction).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the Slack URL, never uploading held bytes, when the stored file is not serveable', async () => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: {
+          tool: 'jira_upload_attachment',
+          params: {
+            issueKey: 'P-1',
+            filename: 'a.txt',
+            fabFileId: FAB_FILE_ID,
+            slackFileUrl: 'https://files.example.test/a.txt',
+          },
+          ts: pendingActionTs,
+        },
+      } as never);
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'pending',
+      } as never);
+      const slackBytes = Buffer.from('slack-bytes');
+      vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(slackBytes);
+
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: slackBytes.toString('base64'),
+      });
+    });
   });
 
   it('returns 500 but still consumes the action when execution throws', async () => {
@@ -176,7 +386,7 @@ describe('POST /api/mcp/confirm', () => {
       pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: expiredTs },
     } as never);
 
-    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true });
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: expiredTs });
 
     expect(res._getStatusCode()).toBe(400);
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs);

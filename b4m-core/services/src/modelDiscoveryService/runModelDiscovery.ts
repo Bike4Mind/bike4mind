@@ -825,6 +825,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     coveredBackends,
     priorDiscoveryGroups,
     priorContributors,
+    providerUndated: signals.providerUndated,
     operatorOwnedModelIds,
     presentationOwnedElsewhere,
     credentials,

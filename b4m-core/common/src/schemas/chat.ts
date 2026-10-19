@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { UNKNOWN_MODEL_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
@@ -8,6 +13,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
+import { COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
@@ -328,6 +334,18 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
+ * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll and
+ * `sessionId` is the notebook the turn was recorded in, so a caller that sent no `sessionId` can
+ * continue the conversation it just started (same field name as the ACK and the `wait: true` body).
+ */
+export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
  * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
  * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
  * together, which the endpoint's 400 description states for integrators.
@@ -339,10 +357,16 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
 });
 
-/** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
-export const UnknownModelErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.literal(UNKNOWN_MODEL_ERROR_CODE).optional(),
+/**
+ * 400 for a `model` the caller cannot use, or a refused tool search request; `errorCode` is absent on the
+ * other 400s (e.g. malformed JSON).
+ */
+export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.enum([UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
 });
+
+/** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
+export const UnknownModelErrorSchema = CompletionsBadRequestErrorSchema;
 
 /**
  * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
@@ -360,4 +384,12 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .array(z.string())
     .optional()
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
+
+/**
+ * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
+ * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ */
+export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
 });

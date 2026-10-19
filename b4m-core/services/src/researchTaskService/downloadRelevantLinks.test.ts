@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { downloadRelevantLinks } from './downloadRelevantLinks';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ResearchTaskType, ResearchTaskStatus, KnowledgeType } from '@bike4mind/common';
-import axios from 'axios';
+import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { fileTypeFromBuffer } from 'file-type';
 import * as fabFilesService from '../fabFileService';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask, createSendStatusUpdate } from './utils';
 
-vi.mock('axios');
+vi.mock('@bike4mind/fab-pipeline', () => ({ ssrfSafeDownload: vi.fn() }));
 vi.mock('file-type');
 vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
 vi.mock('./utils', () => ({
@@ -16,7 +16,7 @@ vi.mock('./utils', () => ({
   createSendStatusUpdate: vi.fn(),
 }));
 
-const mockedAxios = axios as any;
+const mockedDownload = vi.mocked(ssrfSafeDownload);
 const mockedFileTypeFromBuffer = fileTypeFromBuffer as any;
 const mockedFabFilesService = fabFilesService as any;
 const mockedFindOrUpdateExistingResearchData = findOrUpdateExistingResearchData as any;
@@ -41,6 +41,7 @@ describe('downloadRelevantLinks', () => {
       researchTasks: {
         findById: vi.fn(),
         update: vi.fn(),
+        addWarning: vi.fn(),
       },
       researchDatas: {
         create: vi.fn(),
@@ -149,7 +150,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -163,8 +164,14 @@ describe('downloadRelevantLinks', () => {
     // Assert
     expect(mockDb.researchTasks.findById).toHaveBeenCalledWith('test-task-id');
     expect(mockDb.users.findById).toHaveBeenCalledWith('test-user-id');
-    expect(mockedAxios.get).toHaveBeenCalledWith('https://example.com/document1.pdf', { responseType: 'arraybuffer' });
-    expect(mockedAxios.get).toHaveBeenCalledWith('https://example.com/document2.pdf', { responseType: 'arraybuffer' });
+    expect(mockedDownload).toHaveBeenCalledWith(
+      'https://example.com/document1.pdf',
+      expect.objectContaining({ maxBytes: expect.any(Number), timeoutMs: expect.any(Number) })
+    );
+    expect(mockedDownload).toHaveBeenCalledWith(
+      'https://example.com/document2.pdf',
+      expect.objectContaining({ maxBytes: expect.any(Number), timeoutMs: expect.any(Number) })
+    );
     expect(mockedFabFilesService.createFabFile).toHaveBeenCalledTimes(2);
     expect(mockDb.researchDatas.existsByUrlAndResearchTaskId).toHaveBeenCalledTimes(2);
     expect(mockDb.researchDatas.create).toHaveBeenCalledTimes(2);
@@ -228,7 +235,7 @@ describe('downloadRelevantLinks', () => {
     await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
 
     // Assert
-    expect(mockedAxios.get).not.toHaveBeenCalled();
+    expect(mockedDownload).not.toHaveBeenCalled();
     expect(mockedFabFilesService.createFabFile).not.toHaveBeenCalled();
     expect(mockDb.researchDatas.create).not.toHaveBeenCalled();
   });
@@ -267,7 +274,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(taskWithMixedLinks);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -283,17 +290,18 @@ describe('downloadRelevantLinks', () => {
     await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
 
     // Assert
-    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-    expect(mockedAxios.get).toHaveBeenCalledWith('https://example.com/high-relevance.pdf', {
-      responseType: 'arraybuffer',
-    });
+    expect(mockedDownload).toHaveBeenCalledTimes(1);
+    expect(mockedDownload).toHaveBeenCalledWith(
+      'https://example.com/high-relevance.pdf',
+      expect.objectContaining({ maxBytes: expect.any(Number), timeoutMs: expect.any(Number) })
+    );
   });
 
   it('should handle unsupported file types gracefully', async () => {
     // Arrange
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/unsupported',
       ext: 'unsupported',
@@ -314,7 +322,7 @@ describe('downloadRelevantLinks', () => {
     // Arrange
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue(null);
 
     // Act
@@ -340,7 +348,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -362,6 +370,34 @@ describe('downloadRelevantLinks', () => {
     expect(mockJobs.file.chunk).toHaveBeenCalledWith('existing-fab-file-id');
   });
 
+  it('tells the user when a re-downloaded link keeps the previous copy because storage is full', async () => {
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.users.findById.mockResolvedValue(mockUser);
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+    mockedFileTypeFromBuffer.mockResolvedValue({ mime: 'application/pdf', ext: 'pdf' });
+    mockedFindOrUpdateExistingResearchData.mockResolvedValue({
+      file: { id: 'existing-fab-file-id', fileName: 'existing-file.pdf', mimeType: 'application/pdf' },
+      researchData: { id: 'existing-research-data-id', researchTaskId: 'test-task-id' },
+      storageLimitReached: true,
+    });
+    mockDb.researchDatas.existsByUrlAndResearchTaskId.mockResolvedValue(true);
+
+    await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+      '⚠️ Storage limit reached: kept the previous copy of Important Document 1',
+      0
+    );
+    expect(mockDb.researchTasks.addWarning).toHaveBeenCalledWith(
+      'test-task-id',
+      'Storage limit reached: kept the previous copy of https://example.com/document1.pdf'
+    );
+    expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+      '\u{1F389} Research task completed with 0 files downloaded, 2 kept their previous copy (storage limit reached)',
+      100
+    );
+  });
+
   it('should create research data when existing file is not owned by current task', async () => {
     // Arrange
     const existingFile = {
@@ -377,7 +413,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -410,7 +446,7 @@ describe('downloadRelevantLinks', () => {
     const downloadError = new Error('Network error');
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockRejectedValue(downloadError);
+    mockedDownload.mockRejectedValue(downloadError);
 
     // Act
     await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
@@ -418,6 +454,11 @@ describe('downloadRelevantLinks', () => {
     // Assert
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to download file from'));
     expect(mockedFabFilesService.createFabFile).not.toHaveBeenCalled();
+    // The status update names the link but not the failure detail: a guard message can carry the
+    // private address a hostname resolved to, which belongs in the log, not in the task owner's UI.
+    const statusTexts = mockSendStatusUpdate.mock.calls.map((call: unknown[]) => call[0] as string);
+    expect(statusTexts).toContain('❌ Download failed: Important Document 1');
+    expect(statusTexts.some(text => text.includes(downloadError.message))).toBe(false);
     expect(mockDb.researchTasks.update).toHaveBeenCalledWith(
       expect.objectContaining({
         status: ResearchTaskStatus.COMPLETED,
@@ -436,7 +477,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -473,7 +514,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -498,7 +539,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -540,7 +581,7 @@ describe('downloadRelevantLinks', () => {
 
     mockDb.researchTasks.findById.mockResolvedValue(orgTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -580,7 +621,7 @@ describe('downloadRelevantLinks', () => {
     // Arrange
     mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
     mockDb.users.findById.mockResolvedValue(mockUser);
-    mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
     mockedFileTypeFromBuffer.mockResolvedValue({
       mime: 'application/pdf',
       ext: 'pdf',
@@ -621,7 +662,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',
@@ -680,7 +721,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(taskWithMultipleLinks);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',
@@ -716,7 +757,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',
@@ -763,7 +804,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(taskWithMultipleLinks);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',
@@ -793,7 +834,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',
@@ -834,7 +875,7 @@ describe('downloadRelevantLinks', () => {
 
       mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
       mockDb.users.findById.mockResolvedValue(mockUser);
-      mockedAxios.get.mockResolvedValue({ data: mockFileBuffer });
+      mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
       mockedFileTypeFromBuffer.mockResolvedValue({
         mime: 'application/pdf',
         ext: 'pdf',

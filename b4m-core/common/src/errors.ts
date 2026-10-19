@@ -109,15 +109,42 @@ export const StorageLimitErrorInfoSchema = z.object({
 });
 export type StorageLimitErrorInfo = z.infer<typeof StorageLimitErrorInfoSchema>;
 
+/**
+ * The refusal a caller gets when the limit belongs to someone else (an update-share editor growing
+ * another user's file): the code and whose limit, without that owner's byte counts.
+ */
+export const RedactedStorageLimitErrorInfoSchema = StorageLimitErrorInfoSchema.pick({
+  errorCode: true,
+  owner: true,
+}).extend({
+  // Absent, so a full body with a bad count is rejected rather than read as redacted.
+  used_bytes: z.never().optional(),
+  limit_bytes: z.never().optional(),
+  requested_bytes: z.never().optional(),
+});
+export type RedactedStorageLimitErrorInfo = z.infer<typeof RedactedStorageLimitErrorInfoSchema>;
+export type AnyStorageLimitErrorInfo = StorageLimitErrorInfo | RedactedStorageLimitErrorInfo;
+
+const AnyStorageLimitErrorInfoSchema = z.union([StorageLimitErrorInfoSchema, RedactedStorageLimitErrorInfoSchema]);
+
+export const hasStorageUsage = (info: AnyStorageLimitErrorInfo): info is StorageLimitErrorInfo =>
+  info.used_bytes !== undefined;
+
 /** 400 for a quota or per-file size refusal; the status stays 400 so existing clients keep working. */
 export class StorageLimitError extends BadRequestError {
   constructor(
     message: string,
-    public readonly info: StorageLimitErrorInfo
+    public readonly info: AnyStorageLimitErrorInfo
   ) {
     super(message, info);
     this.name = 'StorageLimitError';
   }
+}
+
+/** The same refusal with the byte counts dropped, for a caller who does not own the limit. */
+export function redactStorageLimitError(error: StorageLimitError): StorageLimitError {
+  const info: RedactedStorageLimitErrorInfo = { errorCode: error.info.errorCode, owner: error.info.owner };
+  return new StorageLimitError(describeStorageLimitError(info, String), info);
 }
 
 /** Name fallback for the same cross-module-realm reason as `isConcurrencyConflictError`. */
@@ -126,13 +153,13 @@ export function isStorageLimitError(err: unknown): err is StorageLimitError {
     err instanceof StorageLimitError ||
     (err instanceof Error &&
       err.name === 'StorageLimitError' &&
-      StorageLimitErrorInfoSchema.safeParse((err as { info?: unknown }).info).success)
+      AnyStorageLimitErrorInfoSchema.safeParse((err as { info?: unknown }).info).success)
   );
 }
 
 /** The storage detail on an error response body, or undefined when the body carries none. */
-export function parseStorageLimitErrorInfo(body: unknown): StorageLimitErrorInfo | undefined {
-  const parsed = StorageLimitErrorInfoSchema.safeParse(body);
+export function parseStorageLimitErrorInfo(body: unknown): AnyStorageLimitErrorInfo | undefined {
+  const parsed = AnyStorageLimitErrorInfoSchema.safeParse(body);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -140,7 +167,15 @@ export function parseStorageLimitErrorInfo(body: unknown): StorageLimitErrorInfo
  * The one user-facing wording for a storage refusal, built from the numbers so rewording the thrown message
  * cannot change it. The caller supplies the byte formatter so the app's own units stay the single source.
  */
-export function describeStorageLimitError(info: StorageLimitErrorInfo, formatBytes: (bytes: number) => string): string {
+export function describeStorageLimitError(
+  info: AnyStorageLimitErrorInfo,
+  formatBytes: (bytes: number) => string
+): string {
+  if (!hasStorageUsage(info)) {
+    return info.owner === 'org'
+      ? "This change would exceed the organization's storage limit."
+      : "This change would exceed the file owner's storage limit.";
+  }
   const { errorCode, used_bytes, limit_bytes, requested_bytes } = info;
   switch (errorCode) {
     case 'storage_limit_exceeded': {

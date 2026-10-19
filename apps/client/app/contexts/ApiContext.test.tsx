@@ -4,6 +4,8 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRe
 import { ApiProvider, api, resetRedirectingGuard } from './ApiContext';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { useAccessToken } from '../hooks/useAccessToken';
+import { useStepUpStore } from '@client/app/stores/useStepUpStore';
+import { STEP_UP_REQUIRED_CODE } from '@bike4mind/common';
 
 // clearClientCaches touches localStorage/IndexedDB; the redirect chain doesn't depend
 // on its result (it's fire-and-forget), so stub it to keep the test hermetic.
@@ -331,6 +333,40 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     // A plain 401 (no mfaPending marker) is a real error and must still be logged.
     useAccessToken.setState({ accessToken: null, refreshToken: null, expired: true, mfaPending: false });
     api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+    await expect(api.get('/api/agents')).rejects.toBeTruthy();
+    expect(errorSpy).toHaveBeenCalledWith('Axios Error:', expect.anything());
+
+    errorSpy.mockRestore();
+  });
+
+  it('does NOT console-log a 403 step_up_required (the interceptor prompts instead), but logs a plain 403', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const make403 = (config: InternalAxiosRequestConfig, data: unknown): AxiosError =>
+      new AxiosError('Forbidden', 'ERR_BAD_REQUEST', config, {}, {
+        status: 403,
+        statusText: 'Forbidden',
+        data,
+        headers: {},
+        config,
+      } as AxiosResponse);
+
+    useAccessToken.setState({ accessToken: 'tok', refreshToken: 'refresh', expired: false, mfaPending: false });
+    useStepUpStore.setState({ open: false, pending: null, resolvePending: null, rejectPending: null });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(
+        make403(config, { error: 'Recent verification required', code: STEP_UP_REQUIRED_CODE })
+      )) as AxiosAdapter;
+
+    // The step-up interceptor opens the shared prompt instead of logging; the request stays open.
+    const request = api.get('/api/email/change');
+    await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
+    expect(errorSpy).not.toHaveBeenCalled();
+    useStepUpStore.getState().cancelStepUp();
+    await expect(request).rejects.toBeTruthy();
+
+    // A 403 without the step-up code is a real error and must still be logged.
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make403(config, { error: 'Forbidden' }))) as AxiosAdapter;
     await expect(api.get('/api/agents')).rejects.toBeTruthy();
     expect(errorSpy).toHaveBeenCalledWith('Axios Error:', expect.anything());
 

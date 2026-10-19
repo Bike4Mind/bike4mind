@@ -11,11 +11,11 @@ import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlin
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
-import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
+import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -29,6 +29,9 @@ import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { firstUsableStudioModality } from '@client/app/components/Studio/studioModality';
+import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
+import { useMusicModels } from '@client/app/hooks/data/musicGenerations';
 import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { gray } from '@client/app/utils/themes/colors';
@@ -133,9 +136,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Gears page, so its row could never appear on its own.
 
   const gearsSignal = useGearsNavSignal();
-  // Shown only when GET /api/v1/video-models lists a model this user can run, so it never dead-ends.
-  const { data: videoModels } = useVideoModels();
-  const isVideoStudioEnabled = (videoModels?.length ?? 0) > 0;
+  // Shown only when a modality's endpoint (GET /api/v1/video-models, /music-models, /api/ai/audio-providers) lists a
+  // model or provider this user can run, and it opens on that modality's tab, so it never dead-ends.
+  const videoModels = useVideoModels();
+  const musicModels = useMusicModels();
+  const audioProviders = useAudioProviders();
+  // Decided once every list has settled, so a fast later answer cannot open Studio on a later tab while Video is usable.
+  const studioModality =
+    videoModels.isPending || musicModels.isPending || audioProviders.isPending
+      ? undefined
+      : firstUsableStudioModality({
+          video: (videoModels.data?.length ?? 0) > 0,
+          music: (musicModels.data?.length ?? 0) > 0,
+          speech: (audioProviders.data?.speech.length ?? 0) > 0,
+          'sound-effects': (audioProviders.data?.soundEffects.length ?? 0) > 0,
+        });
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -290,16 +305,16 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/projects' });
       },
     },
-    ...(isVideoStudioEnabled
+    ...(studioModality
       ? [
           {
-            key: 'video-studio',
-            label: t('sidenav.videoStudio', 'Video Studio'),
-            icon: iconSlot(<MovieOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/studio/video'),
+            key: 'studio',
+            label: t('sidenav.studio', 'Studio'),
+            icon: iconSlot(<PermMediaOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/studio/'),
             onClick: () => {
               closeOnMobile();
-              navigate({ to: '/studio/$modality', params: { modality: 'video' } });
+              navigate({ to: '/studio/$modality', params: { modality: studioModality } });
             },
           },
         ]
@@ -316,24 +331,18 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/profile', search: { tab: 'published' } });
       },
     },
-    // Gated on the experimental flag alone: the flag says the feature exists for
-    // this user, and that is the whole question. Sits beside Tavern/Gears - the
-    // shared-log destination.
-    ...(isFeatureEnabled('enableHearth')
-      ? [
-          {
-            key: 'hearth',
-            label: t('sidenav.hearth', 'Hearth'),
-            icon: iconSlot(<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/hearth'),
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/hearth' });
-            },
-          },
-        ]
-      : []),
-    // Single-gated on the experimental flag (unlike Hearth's flag+gear pair):
+    {
+      // A discovery surface, so it sits in the nav rather than behind Profile -> Skills.
+      key: 'skill-market',
+      label: t('sidenav.skillMarket', 'Skill Market'),
+      icon: iconSlot(<StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname.startsWith('/skills/market'),
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/skills/market' });
+      },
+    },
+    // Single-gated on the experimental flag:
     // v5 has no gear, and the flag is opt-in-only, so anyone who turned it on
     // asked for the surface and needs a way to reach it.
     ...(isFeatureEnabled('enableQuestMasterV5')

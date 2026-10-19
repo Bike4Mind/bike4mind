@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
 import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
-import { defineLambdaRoute } from '@server/cli/defineLambdaRoute';
+import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
 
 /**
  * Route logic for CLI server-side tool execution (production & preview). The Lambda

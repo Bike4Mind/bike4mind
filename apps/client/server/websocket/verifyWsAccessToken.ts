@@ -5,14 +5,16 @@ import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGra
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
 
 /**
  * Rotation-aware access-token verification for the data subscribe/unsubscribe WS actions.
  *
- * Applies six gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
- * refusal, the `mfaPending` refusal, the tokenVersion kill switch, and assertAccountStateUsable.
+ * Applies seven gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
+ * refusal, the `mfaPending` refusal, the tokenVersion kill switch, assertAccountStateUsable, and
+ * the enforceMFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
  * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
  * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
  * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate
@@ -23,6 +25,14 @@ import jwt from 'jsonwebtoken';
  * removes its subscribers when the socket closes.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
+  return (await verifyWsAccessTokenClaims(accessToken)).user;
+}
+
+/**
+ * verifyWsAccessToken plus the claims a Connection row records: the session id, the verified
+ * tokenVersion and the token's expiry. Used by reauth_connection to re-stamp a live socket.
+ */
+export async function verifyWsAccessTokenClaims(accessToken: string | undefined) {
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window. `previousKey`
@@ -58,6 +68,16 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
     throw new UnauthorizedError('Session expired');
   }
   assertAccountStateUsable(user);
+  // enforceMFA binds sessions minted before it applied, as on REST (auth.ts). Forbidden, not
+  // Unauthorized: the credential is valid, so a client must re-enroll rather than refresh.
+  if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
+    throw new ForbiddenError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+  }
 
-  return user;
+  return {
+    user,
+    sid: typeof decoded.sid === 'string' ? decoded.sid : undefined,
+    tokenVersion: typeof decoded.tokenVersion === 'number' ? decoded.tokenVersion : 0,
+    expiresAt: typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : undefined,
+  };
 }

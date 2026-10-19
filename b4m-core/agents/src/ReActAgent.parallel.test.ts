@@ -831,6 +831,7 @@ describe('ReActAgent Parallel Execution Integration', () => {
               inputTokens: 100,
               outputTokens: 50,
               toolsUsed: [{ name: 'file_read', arguments: '{}' }],
+              cacheCreationInputTokens: 7000,
               cacheStats: {
                 provider: ModelBackend.Bedrock,
                 model: 'test-model',
@@ -849,6 +850,7 @@ describe('ReActAgent Parallel Execution Integration', () => {
               inputTokens: 200,
               outputTokens: 100,
               toolsUsed: [],
+              cacheReadInputTokens: 180000,
               cacheStats: {
                 provider: ModelBackend.Bedrock,
                 model: 'test-model',

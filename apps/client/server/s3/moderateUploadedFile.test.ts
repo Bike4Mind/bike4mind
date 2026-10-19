@@ -197,3 +197,47 @@ describe('isTerminalModerationStatus (terminal-state guard)', () => {
     expect(isTerminalModerationStatus(undefined)).toBe(false);
   });
 });
+
+describe('moderateUploadedFile - ai:generate-only upload constraint', () => {
+  const cap = 10 * 1024 * 1024;
+  const constraint = (size: number) => ({ measureSize: vi.fn(async () => size) });
+
+  it('blocks an oversized object without scanning it', async () => {
+    const d = deps({ generateUpload: constraint(cap + 1) });
+    const result = await moderateUploadedFile(d);
+    expect(result).toMatchObject({ moderationStatus: 'blocked', blockReason: 'generate_upload_constraint' });
+    expect(d.moderateImageOrThrow).not.toHaveBeenCalled();
+  });
+
+  it('blocks bytes that are not a png even when declared as one', async () => {
+    const d = deps({ generateUpload: constraint(100), downloadPartialBytes: vi.fn(async () => UNSNIFFABLE_BYTES) });
+    expect(await moderateUploadedFile(d)).toMatchObject({
+      moderationStatus: 'blocked',
+      blockReason: 'generate_upload_constraint',
+    });
+  });
+
+  it('blocks a different real image type and reports the corrected type', async () => {
+    const d = deps({ generateUpload: constraint(100), downloadPartialBytes: vi.fn(async () => PDF_SIGNATURE) });
+    expect(await moderateUploadedFile(d)).toMatchObject({
+      moderationStatus: 'blocked',
+      correctedMimeType: 'application/pdf',
+    });
+  });
+
+  it('still enforces the constraint when image moderation is disabled', async () => {
+    const d = deps({ enabled: false, generateUpload: constraint(cap + 1) });
+    expect((await moderateUploadedFile(d)).moderationStatus).toBe('blocked');
+  });
+
+  it('lets a png at the cap through to the normal scan', async () => {
+    const d = deps({ generateUpload: constraint(cap) });
+    expect((await moderateUploadedFile(d)).moderationStatus).toBe('clean');
+    expect(d.moderateImageOrThrow).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a file with no constraint alone', async () => {
+    const d = deps({ downloadPartialBytes: vi.fn(async () => PDF_SIGNATURE), mimeType: 'application/pdf' });
+    expect((await moderateUploadedFile(d)).moderationStatus).toBe('clean');
+  });
+});

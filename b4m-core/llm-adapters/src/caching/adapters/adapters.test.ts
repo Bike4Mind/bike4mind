@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
 import { AnthropicCachingAdapter } from './anthropic';
+import { XAICachingAdapter } from './xai';
 import { getCachingAdapter, NoOpCachingAdapter } from './index';
 
 describe('AnthropicCachingAdapter', () => {
@@ -136,6 +137,21 @@ describe('AnthropicCachingAdapter', () => {
       const tools = result.tools as Record<string, unknown>[];
       expect(tools[0].cache_control).toBeUndefined();
       expect(tools[1].cache_control).toEqual(cacheControl);
+    });
+
+    it('marks the last tool that can carry cache_control, skipping deferred and server tools', () => {
+      const params = {
+        tools: [
+          { name: 'a', input_schema: {} },
+          { name: 'b', input_schema: {}, defer_loading: true },
+          { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' },
+        ],
+      };
+      const tools = adapter.applyCaching(params, { enableCaching: true, cacheTools: true }).tools as Record<
+        string,
+        unknown
+      >[];
+      expect(tools.map(t => t.cache_control)).toEqual([cacheControl, undefined, undefined]);
     });
 
     it('marks the last system block when cacheSystemPrompt is set', () => {
@@ -544,5 +560,15 @@ describe('getCachingAdapter', () => {
     const adapter = new NoOpCachingAdapter();
     const params = { foo: 'bar' };
     expect(adapter.applyCaching(params, {} as never)).toBe(params);
+  });
+});
+
+describe('XAICachingAdapter', () => {
+  it('reads cache hits from prompt_tokens_details.cached_tokens, the field xAI documents', () => {
+    const stats = new XAICachingAdapter().extractCacheStats(
+      { usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 40 } } },
+      'grok-4.5'
+    );
+    expect(stats).toMatchObject({ totalInputTokens: 100, cacheReadTokens: 40, uncachedTokens: 60, cacheHitRate: 40 });
   });
 });

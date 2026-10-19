@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyStage,
+  feedbackDeliveryFailed,
   FEEDBACK_ROLLUP_MAX_WINDOW_DAYS,
   FeedbackRollupQuerySchema,
   parseFeedbackRollupBound,
@@ -98,5 +99,82 @@ describe('FeedbackRollupQuerySchema', () => {
     const result = FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(30), userId: 'someone-else' });
     expect(result.success).toBe(true);
     expect(result.data).not.toHaveProperty('userId');
+  });
+});
+
+describe('feedbackDeliveryFailed', () => {
+  const skipped = (reason: string) => ({ outcome: 'skipped' as const, reason });
+
+  it('is false when every channel was merely skipped - the staging default', () => {
+    // Both channels skip with nonprod_unconfigured on any stage an operator has not opted in.
+    // This is the case that made every staging send say "we could not notify the team".
+    expect(
+      feedbackDeliveryFailed({
+        delivered: false,
+        channels: { slack: skipped('nonprod_unconfigured'), email: skipped('nonprod_unconfigured') },
+      })
+    ).toBe(false);
+  });
+
+  it('is false for the other skip reasons too', () => {
+    for (const reason of ['disabled', 'no_recipients', 'unconfigured_webhook']) {
+      expect(
+        feedbackDeliveryFailed({ delivered: false, channels: { slack: skipped(reason), email: skipped(reason) } })
+      ).toBe(false);
+    }
+  });
+
+  it('is true when a channel actually failed, even beside a skip', () => {
+    expect(
+      feedbackDeliveryFailed({
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: skipped('disabled') },
+      })
+    ).toBe(true);
+  });
+
+  it('is false when a channel failed but another one delivered - the team was still told', () => {
+    // Slack throws, the email goes out: `delivered` is true and someone has seen the report, so
+    // the submitter must not be told otherwise. The dead channel still reaches ops through the
+    // handler's own isIncident alarm.
+    expect(
+      feedbackDeliveryFailed({
+        delivered: true,
+        channels: { slack: { outcome: 'delivered' }, email: { outcome: 'failed', reason: 'error' } },
+      })
+    ).toBe(false);
+  });
+
+  it('is true when every channel failed', () => {
+    expect(
+      feedbackDeliveryFailed({
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'failed', reason: 'error' } },
+      })
+    ).toBe(true);
+  });
+
+  it('is false for the shape the handler sends on a clean send', () => {
+    // Both channels present and delivered - the reply a real successful send produces.
+    expect(
+      feedbackDeliveryFailed({
+        delivered: true,
+        channels: { slack: { outcome: 'delivered' }, email: { outcome: 'delivered' } },
+      })
+    ).toBe(false);
+  });
+
+  it('is false when a channel delivered', () => {
+    expect(
+      feedbackDeliveryFailed({
+        delivered: true,
+        channels: { slack: { outcome: 'delivered' }, email: skipped('disabled') },
+      })
+    ).toBe(false);
+  });
+
+  it('is false for a reply with no delivery field at all - a rolling deploy, not bad news', () => {
+    expect(feedbackDeliveryFailed(undefined)).toBe(false);
+    expect(feedbackDeliveryFailed({})).toBe(false);
   });
 });

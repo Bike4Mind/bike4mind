@@ -1,5 +1,11 @@
 // Extracted from @bike4mind/utils/src/llm/utils.ts - these functions only depend on @bike4mind/common
-import type { IMessage, MessageContentObject, MessageContentText, MessageContentToolUse } from '@bike4mind/common';
+import {
+  TOOL_SEARCH_BLOCK_TYPES,
+  type IMessage,
+  type MessageContentObject,
+  type MessageContentText,
+  type MessageContentToolUse,
+} from '@bike4mind/common';
 
 /**
  * Drops the messages whose instructions assume a tool is attached (see `IMessage.requiresTool`).
@@ -286,7 +292,8 @@ export const ensureToolPairingIntegrity = (
 };
 
 /**
- * Last-resort recovery: strips ALL tool_use and tool_result blocks from messages.
+ * Last-resort recovery: strips ALL tool_use and tool_result blocks from messages, and the server tool
+ * blocks (server_tool_use, tool_search_tool_result) that only make sense alongside them.
  * This degrades conversation history (loses tool context) but allows the completion
  * to proceed when tool pairing is irrecoverably broken.
  */
@@ -296,6 +303,7 @@ export const stripAllToolBlocks = (
 ): IMessage[] => {
   let strippedToolUse = 0;
   let strippedToolResult = 0;
+  let strippedServerBlocks = 0;
   const result: IMessage[] = [];
 
   for (const message of messages) {
@@ -314,6 +322,10 @@ export const stripAllToolBlocks = (
         strippedToolResult++;
         return false;
       }
+      if (TOOL_SEARCH_BLOCK_TYPES.has(block.type)) {
+        strippedServerBlocks++;
+        return false;
+      }
       return true;
     });
 
@@ -327,9 +339,9 @@ export const stripAllToolBlocks = (
     // Drop assistant messages that were only tool_use blocks
   }
 
-  if ((strippedToolUse > 0 || strippedToolResult > 0) && logger) {
+  if ((strippedToolUse > 0 || strippedToolResult > 0 || strippedServerBlocks > 0) && logger) {
     logger.warn(
-      `[Tool Pairing Recovery] Stripped ${strippedToolUse} tool_use and ${strippedToolResult} tool_result blocks from history`
+      `[Tool Pairing Recovery] Stripped ${strippedToolUse} tool_use, ${strippedToolResult} tool_result and ${strippedServerBlocks} server tool blocks from history`
     );
   }
 

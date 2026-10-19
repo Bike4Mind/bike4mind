@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import KnowledgeModal, { useKnowledgeModal } from './KnowledgeModal';
-import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
+import { getFabFileByIdFromServer, updateFileUtility } from '@client/app/utils/filesAPICalls';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 
 const {
@@ -183,5 +183,57 @@ describe('KnowledgeModal media files', () => {
     await openFile({ ...image, sourceMetadata: undefined });
     expect(await screen.findByText('Editing: fox.png')).toBeTruthy();
     expect(screen.queryByTestId('generation-details')).toBeNull();
+  });
+});
+
+// A manual edit goes through PUT /api/files/[id], which refuses a rewrite that would exceed storage.
+describe('KnowledgeModal save refusal', () => {
+  const textFile = { id: 'doc-1', fileName: 'notes.txt', mimeType: 'text/plain' };
+  const axiosError = (status: number, data: unknown) =>
+    Object.assign(new Error('Request failed'), { isAxiosError: true, response: { status, data } });
+
+  const editAndSave = async () => {
+    vi.mocked(getFabFileByIdFromServer).mockResolvedValue(textFile as never);
+    vi.mocked(getContentFromFabfile).mockResolvedValue('hello' as never);
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <KnowledgeModal />
+      </CssVarsProvider>
+    );
+    act(() => {
+      useKnowledgeModal.setState({ open: true, selectedFabFileId: textFile.id, viewOnly: false });
+    });
+    fireEvent.change(await screen.findByTestId('knowledge-modal-name-input'), { target: { value: 'notes2.txt' } });
+    save();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useKnowledgeModal.setState({ open: false, selectedFabFileId: null, viewOnly: false });
+  });
+
+  it('shows the server storage-limit message when the save is refused for storage', async () => {
+    vi.mocked(updateFileUtility).mockRejectedValue(
+      axiosError(400, {
+        error: 'Storage limit exceeded',
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 800_000,
+        limit_bytes: 1_000_000,
+        requested_bytes: 300_000,
+        owner: 'user',
+      })
+    );
+    await editAndSave();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        'Not enough storage: you are using 800 kB of 1 MB, and this upload needs 300 kB. Free up at least 100 kB to continue.'
+      )
+    );
+  });
+
+  it('keeps the generic message for any other save failure', async () => {
+    vi.mocked(updateFileUtility).mockRejectedValue(axiosError(500, { error: 'boom' }));
+    await editAndSave();
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to save file content'));
   });
 });

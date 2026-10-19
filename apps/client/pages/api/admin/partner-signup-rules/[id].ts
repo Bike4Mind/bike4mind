@@ -4,7 +4,11 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { ApiKeyScope, updatePartnerSignupRuleSchema } from '@bike4mind/common';
-import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
+import {
+  invalidatePartnerRuleCache,
+  assertKnownEntitlements,
+  assertKnownSubscriptionPlan,
+} from '@server/entitlements/partnerRules';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
 
@@ -32,11 +36,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (data.entitlements) assertKnownEntitlements(data.entitlements);
       // Present (and non-null) only when the update sets/changes the org association.
       if (data.organizationId) await assertOrganizationExists(data.organizationId);
+      // Only a changed plan is checked, so an admin can still edit or disable a rule whose plan
+      // was removed from the catalog after it was saved.
+      if (data.subscription) {
+        const stored = await partnerSignupRuleRepository.findById(id);
+        if (stored?.subscription?.priceId !== data.subscription.priceId) {
+          assertKnownSubscriptionPlan(data.subscription);
+        }
+      }
 
       const updated = await partnerSignupRuleRepository.update({ id, ...data });
       // Null => the row was deleted between check and write (or never existed). 404 rather
-      // than a 200 with an empty body. update() is the single source of truth here, so no
-      // separate findById pre-check is needed.
+      // than a 200 with an empty body. update() decides existence; the findById above only
+      // reads the stored plan.
       if (!updated) throw new NotFoundError('Partner signup rule not found');
 
       // A conditions change (credits/entitlements/enabled) must apply now, not after the TTL.

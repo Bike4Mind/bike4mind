@@ -7,7 +7,7 @@ import {
   applyRecoveryInMemory,
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
@@ -74,7 +74,7 @@ const handler = nextRouteForContract(getQuestContract, {
     }
   }
 
-  return res.json(toQuestPollBody(quest, { isOwner, logger: req.logger }));
+  return res.json(await toQuestPollBody(quest, { isOwner, logger: req.logger }));
 });
 
 export default handler;

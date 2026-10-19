@@ -148,22 +148,25 @@ describe('POST /api/v1/video-generations/{id}/cancel', () => {
 
   it('requests cancellation of a running job and returns it', async () => {
     h.findById.mockResolvedValue(videoJob({ state: 'running' }));
-    h.requestCancel.mockResolvedValue(videoJob({ state: 'running', cancelRequested: true }));
+    h.requestCancel.mockResolvedValue({
+      status: 'requested',
+      job: videoJob({ state: 'running', cancelRequested: true }),
+    });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
+    expect(h.requestCancel).toHaveBeenCalledWith(expect.objectContaining({ id: JOB_ID }));
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, state: 'running' });
   });
 
   it('cancel during storing returns 200 with the job as-is when the engine declines the cancel', async () => {
     const storing = videoJob({ state: 'storing', updatedAt: new Date('2026-10-06T00:05:00Z') });
     h.findById.mockResolvedValue(storing);
-    h.requestCancel.mockResolvedValue(null);
+    h.requestCancel.mockResolvedValue({ status: 'unchanged', job: null });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
+    expect(h.requestCancel).toHaveBeenCalledWith(expect.objectContaining({ id: JOB_ID }));
     // The response renders the job read before the cancel, unchanged, rather than a cancelled or failed one.
     expect(res._getJSONData()).toMatchObject({
       id: JOB_ID,

@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { deleteFabFile } from './delete';
-import { DATA_LAKES, IFabFileDocument } from '@bike4mind/common';
+import { DATA_LAKES, IFabFileDocument, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
+
+const beforeStampCutoff = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
+const afterStampCutoff = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000);
 
 describe('deleteFabFile', () => {
   const mockUserId = 'user-123';
@@ -14,6 +17,7 @@ describe('deleteFabFile', () => {
     fileName: 'test-file.txt',
     filePath: 'uploads/test-file.txt',
     fileSize: 1024,
+    storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     users: [],
   };
 
@@ -123,6 +127,60 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(mockFabFile, 1024);
     });
 
+    // A row deleted before its upload's ObjectCreated event ever charged it: refunding its claimed
+    // size would push the counter below what recalc reports.
+    it('hands onDeleteComplete 0 for a never-charged pending row', async () => {
+      const pending = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'pending' as const,
+        createdAt: new Date(),
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(pending);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(pending);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(pending, 0);
+    });
+
+    // A `complete` row from before the stamping release was charged by the upload event, so it
+    // refunds in full - a stamp-only rule would drop every one of these.
+    it('hands onDeleteComplete the full size for a legacy pre-stamp complete row', async () => {
+      const legacy = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'complete' as const,
+        createdAt: beforeStampCutoff,
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(legacy);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(legacy);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(legacy, 1024);
+    });
+
+    // The other side of the same arm: marked uploaded before its event, but after the release that
+    // charges on that event - so it was never charged and refunds nothing.
+    it('hands onDeleteComplete 0 for a post-stamp complete row that was never charged', async () => {
+      const uncharged = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'complete' as const,
+        createdAt: afterStampCutoff,
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(uncharged);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(uncharged);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(uncharged, 0);
+    });
+
     it("also removes a generated file's inline-playback copy from the generated bucket", async () => {
       const generatedFile = { ...mockFabFile, sourceMetadata: { sessionId: 's1', generatedCopyKey: 'abc.mp3' } };
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(generatedFile);
@@ -136,6 +194,30 @@ describe('deleteFabFile', () => {
 
       expect(mockAdapter.storage.delete).toHaveBeenCalledWith('uploads/test-file.txt');
       expect(generatedCopies.storage.delete).toHaveBeenCalledWith('abc.mp3');
+    });
+
+    // Ownership is resolved by findByIdAndUserId, whose whole document is what feeds the stored-object
+    // delete - so these pin the field the legal-hold rule reads, not just the row.
+    describe('moderation hold', () => {
+      it('frees the bytes of a file blocked only for an unscannable format', async () => {
+        const blocked = { ...mockFabFile, moderationStatus: 'blocked', blockReason: 'unsupported_format' };
+        mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(blocked);
+        mockAdapter.db.fabFiles.update.mockResolvedValue(blocked);
+
+        await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+        expect(mockAdapter.storage.delete).toHaveBeenCalledWith('uploads/test-file.txt');
+      });
+
+      it('keeps the bytes of a content block as legal-hold evidence', async () => {
+        const blocked = { ...mockFabFile, moderationStatus: 'blocked' };
+        mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(blocked);
+        mockAdapter.db.fabFiles.update.mockResolvedValue(blocked);
+
+        await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+        expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
+      });
     });
 
     it('should skip S3 deletion when file has no filePath', async () => {

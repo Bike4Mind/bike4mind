@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
   openVoiceHold: vi.fn(),
   claimVoiceHold: vi.fn(),
-  restoreVoiceHold: vi.fn(),
+  createTransaction: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -103,6 +103,11 @@ vi.mock('@bike4mind/database', async orig => {
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
+    withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+    creditTransactionRepository: {
+      ...(actual.creditTransactionRepository as object),
+      createTransaction: (...a: unknown[]) => mocks.createTransaction(...a),
+    },
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mocks.userFindById(...a) }),
     agentRepository: {
       ...(actual.agentRepository as object),
@@ -116,7 +121,6 @@ vi.mock('@bike4mind/database', async orig => {
       openVoiceHold: (...a: unknown[]) => mocks.openVoiceHold(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
-      restoreVoiceHold: (...a: unknown[]) => mocks.restoreVoiceHold(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -144,8 +148,6 @@ import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
 import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
-import { VOICE_HOLD_LOSER_REFUND_FAILED_LOG } from '@server/voice/settleVoiceHold';
-import { Logger } from '@bike4mind/observability';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
@@ -216,6 +218,7 @@ beforeEach(() => {
   mocks.openVoiceHold.mockResolvedValue(true);
   mocks.incrementCredits.mockResolvedValue(undefined);
   mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
+  mocks.createTransaction.mockImplementation(async (_type: string, row: object) => ({ id: 'tx', ...row }));
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -246,6 +249,25 @@ describe('GET /api/voice/v2/agents', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.listPublicVoiceAgents).toHaveBeenCalled();
+  });
+
+  it("returns another user's voice agent through the viewer allowlist", async () => {
+    mocks.listPublicVoiceAgents.mockResolvedValue([
+      {
+        id: 'voice-1',
+        userId: 'admin',
+        name: 'Concierge',
+        type: 'voice',
+        isPublic: true,
+        systemPrompt: 'secret',
+        currentCredits: 9,
+      },
+    ]);
+    const { res, run } = fireAgents();
+    await run();
+    const [agent] = res._getJSONData().agents;
+    expect(agent).toMatchObject({ id: 'voice-1', name: 'Concierge', type: 'voice' });
+    for (const field of ['systemPrompt', 'currentCredits', 'userId']) expect(agent).not.toHaveProperty(field);
   });
 });
 
@@ -378,6 +400,15 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(res._getStatusCode()).toBe(422);
     expect(res._getJSONData()).toMatchObject({ errorCode: 'insufficient_credits' });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 insufficient_credits when the balance no longer covers the reservation at reserve time', async () => {
+    // The balance read at the top of the request passed; a concurrent debit drew it down since.
+    mocks.incrementCredits.mockResolvedValue({ currentCredits: -1 });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'insufficient_credits' });
   });
 
   it('returns 503 provider_not_configured when no ElevenLabs server key is set', async () => {
@@ -516,36 +547,13 @@ describe('POST /api/v1/voice/sessions', () => {
     );
   });
 
-  it('refunds the reserve and answers 409 when a concurrent bootstrap wrote its hold first', async () => {
+  it('answers 409 and moves no credits when a concurrent bootstrap opened its hold first', async () => {
     mocks.openVoiceHold.mockResolvedValue(false);
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
-    expect(mocks.incrementCredits.mock.calls).toEqual([
-      ['user-1', -RESERVED_CREDITS],
-      ['user-1', RESERVED_CREDITS],
-    ]);
-  });
-
-  it('still answers 409 and logs the owed refund when the loser refund throws', async () => {
-    mocks.openVoiceHold.mockResolvedValue(false);
-    mocks.incrementCredits.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('db down'));
-    const logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
-    try {
-      const { res, run } = fireSessions();
-      await run();
-      expect(res._getStatusCode()).toBe(409);
-      expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
-      expect(logError).toHaveBeenCalledWith(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
-        userId: 'user-1',
-        sessionId: SESSION_ID,
-        refund: RESERVED_CREDITS,
-        err: { message: 'db down', name: 'Error' },
-      });
-    } finally {
-      logError.mockRestore();
-    }
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
 
   it('leaves exactly one hold and one reserve charged when two fresh bootstraps race', async () => {
@@ -629,15 +637,29 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
   });
 
-  it('returns 502 without leaking the upstream message, and refunds the hold', async () => {
+  it('returns 502 without exposing the upstream message, and takes no reserve', async () => {
     mocks.createTransportSession.mockRejectedValue(new Error(UPSTREAM_SECRET_DETAIL));
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).not.toHaveProperty('detail');
     expect(JSON.stringify(res._getJSONData())).not.toContain('sk_live_internal');
-    expect(mocks.incrementCredits).toHaveBeenNthCalledWith(1, 'user-1', -RESERVED_CREDITS);
-    expect(mocks.incrementCredits).toHaveBeenNthCalledWith(2, 'user-1', RESERVED_CREDITS);
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    expect(mocks.openVoiceHold).not.toHaveBeenCalled();
+  });
+
+  // The reserve runs after the transport session is minted, so its failure must still fail the
+  // request rather than answer 200 with the session.
+  it('answers 500 after the transport session is created when the reserve fails', async () => {
+    mocks.incrementCredits.mockRejectedValueOnce(new Error('balance write failed'));
+    const { res, run } = fireSessions();
+    await run();
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(mocks.createTransportSession).toHaveBeenCalled();
+    const body = JSON.stringify(res._getJSONData());
+    expect(body).not.toContain('signed-session-token');
+    expect(body).not.toContain('sig=1');
   });
 });
 
@@ -719,36 +741,18 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
   });
 
-  it('restores the hold with its last activity at the end when the refund fails, so a retry bills to the end', async () => {
-    const startedAt = new Date(Date.now() - 300_000);
-    const connectedAt = new Date(Date.now() - 240_000);
-    const lastActivityAt = new Date(Date.now() - 10_000);
+  it('answers 500 and writes no ledger row when the refund fails', async () => {
     mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       voiceReservedCredits: RESERVED_CREDITS,
-      voiceSessionStartedAt: startedAt,
-      voiceConnectedAt: connectedAt,
-      voiceLastActivityAt: lastActivityAt,
+      voiceSessionStartedAt: new Date(Date.now() - 300_000),
+      voiceConnectedAt: new Date(Date.now() - 240_000),
     });
     mocks.incrementCredits.mockRejectedValue(new Error('db blip'));
-    mocks.restoreVoiceHold.mockResolvedValue(true);
     const { res, run } = fireEnd();
-    const beforeEnd = Date.now();
     await run();
     expect(res._getStatusCode()).toBe(500);
-    expect(mocks.restoreVoiceHold).toHaveBeenCalledWith(SESSION_ID, RESERVED_CREDITS, startedAt, {
-      voiceConnectedAt: connectedAt,
-      voiceLastActivityAt: expect.any(Date),
-      voiceBilledCredits: null,
-    });
-    const [, , , markers] = mocks.restoreVoiceHold.mock.calls[0] as [
-      unknown,
-      unknown,
-      unknown,
-      { voiceLastActivityAt: Date },
-    ];
-    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThanOrEqual(beforeEnd);
-    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThan(lastActivityAt.getTime());
+    expect(mocks.createTransaction).not.toHaveBeenCalled();
   });
 
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
@@ -785,9 +789,9 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     const { res, run } = fireEnd();
     await run();
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      { id: SESSION_ID, voiceReservedCredits: null, voiceSessionStartedAt: null },
-      { unset: ['voiceBilledCredits'] }
-    );
+    // Conditional on the hold this request read, so a hold opened since is not cleared.
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, expect.any(Date));
+    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
 });

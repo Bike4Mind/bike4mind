@@ -30,7 +30,8 @@
     "title": "Registro de Mudanças"
   },
   "feedback": {
-    "send": "Enviar Feedback"
+    "send": "Enviar Feedback",
+    "rollupTitle": "Seu feedback"
   },
   "terms_policies": "Termos e Políticas",
   "login": "Entrar",
@@ -166,7 +167,8 @@
     "messages": "Mensagens",
     "invites": "Convites",
     "sendMessage": "Enviar uma mensagem",
-    "noMessages": "Sem mensagens"
+    "noMessages": "Sem mensagens",
+    "title_unread": "Caixa de entrada, itens não lidos"
   },
   "addSomething": "Adicionar {{ name }}",
   "deleteAllSomething": "Excluir todos {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Renova em {{ date }}"
   },
   "billing": {
-    "title": "Cobrança"
+    "title": "Cobrança",
+    "balance": "Saldo",
+    "credits_heading": "Recarregar créditos",
+    "credits_sub": "Pacotes avulsos, adicionados ao seu saldo. Sem assinatura.",
+    "credits_sub_with_plan": "Pacotes avulsos, somados à sua cota mensal.",
+    "free_plan": "Grátis",
+    "free_plan_detail": "Pague conforme o uso com pacotes de créditos",
+    "low_org": "Um administrador da organização pode adicionar créditos a esta conta.",
+    "low_with_plan": "Recarregue para continuar trabalhando até sua cota renovar.",
+    "low_without_plan": "Um plano adiciona créditos todo mês; um pacote recarrega agora.",
+    "payment_failed": "Falha no pagamento",
+    "plan": "Plano",
+    "plan_fallback": "Assinatura",
+    "plan_unavailable": "Indisponível",
+    "plan_unavailable_detail": "Não foi possível carregar seu plano.",
+    "plans_change": "Seu plano",
+    "plans_change_sub": "Gerencie, altere ou cancele sua assinatura.",
+    "plans_heading": "Planos",
+    "plans_heading_sub": "Planos mensais com uma cota de créditos.",
+    "plans_upgrade": "Fazer upgrade",
+    "plans_upgrade_sub": "Receba uma cota mensal de créditos em vez de recarregar manualmente.",
+    "retry": "Tentar novamente",
+    "see_plans": "Ver planos",
+    "top_up": "Recarregar"
   },
   "credits": {
     "title": "Créditos",
@@ -314,7 +339,8 @@
     "usage_pattern": "Baseado no seu padrão de uso dos últimos {{days}} dias",
     "credits_used": "Créditos Usados",
     "credits_purchased": "Créditos Comprados",
-    "net_credits": "Créditos Líquidos"
+    "net_credits": "Créditos Líquidos",
+    "unit": "créditos"
   },
   "time": {
     "last_7_days": "Últimos 7 dias",
@@ -351,7 +377,7 @@
     "current_credits": "Quantidade atual de créditos",
     "best_value": "Melhor Valor",
     "purchase_success": "Comprados {{credits}} créditos",
-    "history_title": "Histórico de Compras de Créditos",
+    "history_title": "Histórico de compras de créditos",
     "purchase": "Comprar",
     "no_transactions": "Nenhuma transação ainda",
     "low_credits": "Seus créditos estão baixos",
@@ -362,7 +388,15 @@
       "completed": "Concluído",
       "pending": "Pendente",
       "failed": "Falhou"
-    }
+    },
+    "buy_pack": "Comprar {{credits}} créditos por {{price}}",
+    "choose_pack": "Escolha um pacote de créditos",
+    "history_usage_hint": "Aqui aparecem apenas compras.",
+    "organization_credits_active": "Créditos da organização ativos",
+    "rate_per_thousand": "{{rate}} por 1.000 créditos",
+    "see_usage": "Ver uso",
+    "shared_rate": "Todos os pacotes têm a mesma tarifa: {{rate}} por 1.000 créditos.",
+    "switch_to_personal": "Mude para sua conta pessoal para comprar créditos para uso pessoal."
   },
   "settings": {
     "title": "Configurações",
@@ -543,7 +577,9 @@
     "personal": "Pessoal",
     "business": "Negócios",
     "team": "Equipe",
-    "enterprise": "Empresarial"
+    "enterprise": "Empresarial",
+    "audience_label": "Tipo de plano",
+    "includes": "Inclui"
   },
   "agents": {
     "title": "Agentes",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Habilidades",
     "command_palette_description": "Gerenciar modelos reutilizáveis de instruções"
+  },
+  "apiKeys": {
+    "title": "Chaves de API"
+  },
+  "connections": {
+    "menuTooltip": "Integrações como Google Drive e Slack, além de chaves de API para o seu próprio código",
+    "sections": "Seções de conexões",
+    "title": "Conexões"
   }
 }

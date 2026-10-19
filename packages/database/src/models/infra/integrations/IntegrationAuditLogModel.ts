@@ -1,10 +1,16 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
-/**
- * Entity types for integration audit logging
- */
-export type IntegrationAuditEntityType = 'oauth' | 'webhook' | 'mcp_tool' | 'token_refresh';
+/** Entity types for integration audit logging; one const feeds both the TS type and the schema enum. */
+export const INTEGRATION_AUDIT_ENTITY_TYPES = [
+  'oauth',
+  'webhook',
+  'mcp_tool',
+  'token_refresh',
+  'mcp_connection',
+] as const;
+
+export type IntegrationAuditEntityType = (typeof INTEGRATION_AUDIT_ENTITY_TYPES)[number];
 
 /**
  * Supported integration names. Single source of truth for BOTH the TS type and
@@ -19,9 +25,27 @@ export const INTEGRATION_AUDIT_INTEGRATION_NAMES = [
   'linear',
   'notion',
   'optihashi',
+  'custom_mcp',
 ] as const;
 
 export type IntegrationAuditIntegrationName = (typeof INTEGRATION_AUDIT_INTEGRATION_NAMES)[number];
+
+/**
+ * Metadata for `integrationName: 'custom_mcp'` entries. Identifiers, sizes and hashes only: argument
+ * and result bodies are never logged, since they can carry user data to and from a third party.
+ */
+export interface CustomMcpAuditMetadata {
+  connectionId: string;
+  host: string;
+  slug: string;
+  toolName?: string;
+  argsSha256?: string;
+  argsBytes?: number;
+  resultBytes?: number;
+  durationMs?: number;
+  approval?: 'auto' | 'user' | 'remembered';
+  policyVerdict?: string;
+}
 
 /**
  * Outcome of the audited operation
@@ -88,7 +112,7 @@ const IntegrationAuditLogSchema = new Schema<IIntegrationAuditLogDocument>(
     entityType: {
       type: String,
       required: true,
-      enum: ['oauth', 'webhook', 'mcp_tool', 'token_refresh'],
+      enum: [...INTEGRATION_AUDIT_ENTITY_TYPES],
     },
     integrationName: {
       type: String,

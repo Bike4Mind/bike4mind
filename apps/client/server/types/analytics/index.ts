@@ -45,6 +45,8 @@ import {
   SlackEventPayload,
   HelpEvents,
   HelpEventPayload,
+  IntegrationsEvents,
+  IntegrationsEventPayload,
   MarketingReportEvents,
   MarketingReportEventPayload,
   BriefcaseEvents,
@@ -85,6 +87,7 @@ export const ANALYTICS_EVENTS = {
   ...OrganizationEvents,
   ...SlackEvents,
   ...HelpEvents,
+  ...IntegrationsEvents,
   ...CreditPurchaseEvents,
   // Audit-log event families (registered so logAuditEvent -> logEvent does
   // not throw "Invalid counter event" inside withTransaction handlers).
@@ -120,6 +123,7 @@ export type AnalyticsEventPayloads =
   | OrganizationEventPayload
   | SlackEventPayload
   | HelpEventPayload
+  | IntegrationsEventPayload
   | MarketingReportEventPayload
   | BriefcaseEventPayload
   | CreditPurchaseEventPayload;
