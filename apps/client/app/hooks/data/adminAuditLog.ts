@@ -23,7 +23,7 @@ const definedFilterParams = (filters: AuditLogFilters): Record<string, string> =
 export const useAuditLog = (filters: AuditLogFilters, options: { enabled?: boolean; limit?: number } = {}) => {
   const { enabled = true, limit = DEFAULT_PAGE_SIZE } = options;
   return useInfiniteQuery({
-    queryKey: ['admin', 'audit-log', 'list', filters],
+    queryKey: ['admin', 'audit-log', 'list', filters, limit],
     queryFn: async ({ pageParam }): Promise<AuditLogPage> => {
       const params: Record<string, string> = { ...definedFilterParams(filters), limit: String(limit) };
       if (pageParam) params.cursor = pageParam;
