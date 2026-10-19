@@ -25,17 +25,20 @@ export const REALTIME_MIN_REUSE_SECONDS = 60;
 
 // OpenAI's own default lifetime for a realtime client secret (it accepts 10 to 7200 seconds).
 export const REALTIME_CLIENT_SECRET_TTL_SECONDS = 10 * 60;
+// Leave room for ordinary provider latency; the returned deadline still gates slower responses.
+const REALTIME_CLIENT_SECRET_EXPIRY_HEADROOM_SECONDS = 5;
 
 const realtimeHoldSecondsLeft = (holdStartedAt: Date, now: Date) =>
-  REALTIME_VOICE_HOLD_SECONDS - Math.floor((now.getTime() - holdStartedAt.getTime()) / 1000);
+  Math.floor((holdStartedAt.getTime() + REALTIME_VOICE_HOLD_SECONDS * 1000 - now.getTime()) / 1000);
 
 /**
  * Lifetime to mint a realtime client secret with, for a call on the hold opened at `holdStartedAt`:
- * never past the hold's window, so a reconnect's key cannot start an OpenAI session after it. The
- * secret only gates starting a session; OpenAI does not end one already open when it expires.
+ * rounded down to the whole seconds left. The caller must also check the returned expires_at:
+ * OpenAI anchors this TTL to its own creation time. Expiry only gates starting a session.
  */
 export function realtimeClientSecretTtlSeconds(holdStartedAt: Date, now: Date = new Date()): number {
-  return Math.max(10, Math.min(REALTIME_CLIENT_SECRET_TTL_SECONDS, realtimeHoldSecondsLeft(holdStartedAt, now)));
+  const secondsLeft = realtimeHoldSecondsLeft(holdStartedAt, now) - REALTIME_CLIENT_SECRET_EXPIRY_HEADROOM_SECONDS;
+  return Math.max(10, Math.min(REALTIME_CLIENT_SECRET_TTL_SECONDS, secondsLeft));
 }
 
 /**

@@ -106,12 +106,14 @@ describe('realtime hold reuse near the end of its window', () => {
   it('reuses a realtime hold only while REALTIME_MIN_REUSE_SECONDS of its window remain', () => {
     const lastReusable = REALTIME_VOICE_HOLD_SECONDS - REALTIME_MIN_REUSE_SECONDS;
     expect(shouldReuseVoiceHold(true, hold(lastReusable), true, now)).toBe(true);
+    expect(shouldReuseVoiceHold(true, hold(lastReusable + 0.001), true, now)).toBe(false);
     expect(shouldReuseVoiceHold(true, hold(lastReusable + 1), true, now)).toBe(false);
   });
 
   it("mints the client secret no longer than what is left of the hold's window", () => {
     expect(realtimeClientSecretTtlSeconds(now, now)).toBe(REALTIME_CLIENT_SECRET_TTL_SECONDS);
-    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 300), now)).toBe(300);
-    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 60), now)).toBe(60);
+    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 300), now)).toBe(295);
+    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 60), now)).toBe(55);
+    expect(realtimeClientSecretTtlSeconds(startedSecondsAgo(REALTIME_VOICE_HOLD_SECONDS - 60 + 0.5), now)).toBe(54);
   });
 });

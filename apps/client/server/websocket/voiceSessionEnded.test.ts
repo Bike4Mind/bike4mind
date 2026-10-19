@@ -450,6 +450,20 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(state.transactions[1].metadata).toEqual({ shortfallCredits: 25 });
   });
 
+  it('records a fully unpaid close and its shortfall once without changing the zero balance', async () => {
+    await send(HOLD, 'resp-1');
+    state.balance = 0;
+
+    await send(30);
+    await send(30);
+
+    expect(state.balance).toBe(0);
+    expect(state.session.voiceSessionStartedAt).toBeNull();
+    expect(state.transactions).toHaveLength(2);
+    expect(Math.abs(state.transactions[1].credits)).toBe(0);
+    expect(state.transactions[1].metadata).toEqual({ shortfallCredits: 30 });
+  });
+
   it('never takes the balance below zero when a close settles past it', async () => {
     // Responses already drew the whole hold; the closing frame's usage comes from the balance.
     await send(HOLD, 'resp-1');

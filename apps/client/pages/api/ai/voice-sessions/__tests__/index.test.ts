@@ -94,7 +94,9 @@ beforeEach(() => {
   mockFindById.mockResolvedValue({ id: 'user-1', currentCredits: 1_000_000 });
   mockGetEffectiveApiKey.mockResolvedValue('sk-test');
   mockCreateSession.mockResolvedValue({ id: 'session-1' });
-  mockPost.mockResolvedValue({ data: { value: 'ek-test' } });
+  mockPost.mockImplementation(async (_url: string, request: { expires_after: { seconds: number } }) => ({
+    data: { value: 'ek-test', expires_at: Math.floor(Date.now() / 1000) + request.expires_after.seconds },
+  }));
   mockOpenVoiceHold.mockResolvedValue(true);
   // The web server is a Lambda: console.error lines carry the ERROR prefix the log monitor alerts on,
   // so the handled-failure paths must stay off it as well as off req.logger.error.
@@ -103,6 +105,7 @@ beforeEach(() => {
 
 afterEach(() => {
   consoleError.mockRestore();
+  vi.useRealTimers();
 });
 
 /**
@@ -269,6 +272,82 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(expires_after.anchor).toBe('created_at');
     expect(expires_after.seconds).toBeGreaterThan(290);
     expect(expires_after.seconds).toBeLessThanOrEqual(300);
+  });
+
+  it.each([6, 61])('withholds a reconnect key created %i seconds late if it outlives the hold', async delaySeconds => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    vi.setSystemTime(new Date(startedAt.getTime() + 59 * 60_000));
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: startedAt });
+    mockPost.mockImplementationOnce(async (_url: string, request: { expires_after: { seconds: number } }) => {
+      vi.setSystemTime(new Date(Date.now() + delaySeconds * 1000));
+      return { data: { value: 'ek-test', expires_at: Date.now() / 1000 + request.expires_after.seconds } };
+    });
+
+    const { res, logger } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
+    expect(res._getData()).not.toContain('ek-test');
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    expect(mockIncrementCredits).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('accepts a reconnect key expiring exactly at the hold deadline', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    vi.setSystemTime(new Date(startedAt.getTime() + 59 * 60_000));
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: startedAt });
+    mockPost.mockResolvedValueOnce({
+      data: { value: 'ek-test', expires_at: (startedAt.getTime() + 60 * 60_000) / 1000 },
+    });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ ephemeralKey: 'ek-test' });
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it('leaves enough expiry headroom for an ordinary provider delay on a reconnect', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-01-01T00:00:00Z');
+    vi.setSystemTime(new Date(startedAt.getTime() + 59 * 60_000));
+    mockGetSession.mockResolvedValueOnce({ ...openHoldSession, voiceSessionStartedAt: startedAt });
+    mockPost.mockImplementationOnce(async (_url: string, request: { expires_after: { seconds: number } }) => {
+      vi.setSystemTime(new Date(Date.now() + 1000));
+      return { data: { value: 'ek-test', expires_at: Date.now() / 1000 + request.expires_after.seconds } };
+    });
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, 'invalid', 0, -1, 1.5, NaN, Infinity])(
+    'withholds a provider key with an invalid expiry: %s',
+    async expiresAt => {
+      mockPost.mockResolvedValueOnce({ data: { value: 'ek-test', expires_at: expiresAt } });
+
+      const { res } = await callRoute();
+
+      expect(res._getStatusCode()).toBe(502);
+      expect(res._getData()).not.toContain('ek-test');
+      expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+      expect(mockIncrementCredits).not.toHaveBeenCalled();
+    }
+  );
+
+  it('withholds a key already expired when the provider responds', async () => {
+    mockPost.mockResolvedValueOnce({ data: { value: 'ek-test', expires_at: Math.floor(Date.now() / 1000) } });
+
+    const { res } = await callRoute();
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getData()).not.toContain('ek-test');
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
   });
 
   it('reserves afresh, instead of reusing, a hold with under a minute of its window left', async () => {

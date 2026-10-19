@@ -30,6 +30,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import {
   REALTIME_VOICE_RESERVE_USD,
+  REALTIME_VOICE_HOLD_SECONDS,
   realtimeClientSecretTtlSeconds,
   shouldReuseVoiceHold,
 } from '@server/voice/voiceSessionLimits';
@@ -43,6 +44,11 @@ const CreateSessionBodySchema = z.object({
   // Set by the client when re-establishing a dropped connection. Lets the handler
   // reuse the existing credit hold instead of reserving (and charging) a second time.
   isReconnect: z.boolean().optional(),
+});
+
+const RealtimeClientSecretSchema = z.object({
+  value: z.string().min(1),
+  expires_at: z.number().int().positive(),
 });
 
 // Marked expected so errorHandler logs it at warn: an error-level log reaches the LiveOps alert filter,
@@ -382,7 +388,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
 
   let result;
   try {
-    result = await axios.post('https://api.openai.com/v1/realtime/client_secrets', requestBody, {
+    result = await axios.post<unknown>('https://api.openai.com/v1/realtime/client_secrets', requestBody, {
       headers: {
         Authorization: `Bearer ${openaiApiKey}`,
         'Content-Type': 'application/json',
@@ -398,6 +404,19 @@ When you get the tool result back, summarize it conversationally for voice.`;
       throw voiceUnavailableError({ upstreamStatus: status });
     }
     throw error;
+  }
+
+  const clientSecret = RealtimeClientSecretSchema.safeParse(result.data);
+  if (!clientSecret.success) {
+    req.logger.warn('[Voice Session] OpenAI returned an invalid client secret');
+    throw voiceUnavailableError();
+  }
+  const expiresAtMs = clientSecret.data.expires_at * 1000;
+  const holdExpiresAtMs = holdStartedAt.getTime() + REALTIME_VOICE_HOLD_SECONDS * 1000;
+  // The provider starts the TTL after our request leaves; its returned deadline is authoritative.
+  if (expiresAtMs <= Date.now() || (reuseHold && expiresAtMs > holdExpiresAtMs)) {
+    req.logger.warn('[Voice Session] OpenAI client secret falls outside its voice hold window');
+    throw voiceUnavailableError();
   }
 
   if (!session) {
@@ -437,7 +456,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
     session: redactSessionForClient(session),
     model: realtimeModel,
     voice: voiceSessionAiVoice || 'alloy',
-    ephemeralKey: result.data.value,
+    ephemeralKey: clientSecret.data.value,
   });
 });
 

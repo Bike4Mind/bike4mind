@@ -167,6 +167,22 @@ describe('voiceSessionEnded on a real replica set', () => {
     expect(await ledger(call.sessionId)).toHaveLength(1);
   });
 
+  it('persists a fully unpaid closing shortfall once with a zero debit', async () => {
+    const call = await seedCall();
+    await send(call, HOLD, 'resp-1');
+    await User.updateOne({ _id: call.userId }, { $set: { currentCredits: 0 } });
+
+    await send(call, 30);
+    await send(call, 30);
+
+    const rows = await ledger(call.sessionId);
+    const closingRow = rows.find(row => row.transactionId?.startsWith('realtime-voice-close:'));
+    expect(rows).toHaveLength(2);
+    expect(closingRow).toMatchObject({ credits: -0, metadata: { shortfallCredits: 30 } });
+    expect((await User.findById(call.userId).lean())?.currentCredits).toBe(0);
+    expect((await hold(call.sessionId))?.voiceSessionStartedAt ?? null).toBeNull();
+  });
+
   it('closing the session settles the hold exactly once', async () => {
     const call = await seedCall();
     await send(call, 30, 'resp-1');

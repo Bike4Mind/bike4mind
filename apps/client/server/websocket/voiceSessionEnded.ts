@@ -224,7 +224,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         }
         // Only what was taken is charged; the shortfall rides on the ledger row.
         const charged = credits - shortfall;
-        if (charged > 0) {
+        if (charged > 0 || shortfall > 0) {
           await recordVoiceUsage({
             userId: payerId,
             sessionId,
