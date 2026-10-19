@@ -67,13 +67,14 @@ function idTokenUserParams(user: { id: string; email?: string | null; username?:
 
 const invalidGrant = { error: 'invalid_grant', error_description: 'Invalid refresh token' };
 
-// A relying party's backend refreshes for all of its users from one egress IP, so the per-IP limit
-// would cap it at ~600 active users (30 min access tokens); refresh is counted per client instead.
+// Refresh gets a per-IP ceiling above the per-client limit, so one relying-party backend (one egress IP)
+// is capped by its per-client budget, while unauthenticated refresh traffic is still bounded per IP.
 const REFRESH_PER_CLIENT_LIMIT = 600;
+const REFRESH_PER_IP_LIMIT = 2 * REFRESH_PER_CLIENT_LIMIT;
 const RATE_WINDOW_MS = 60 * 1000;
 
 const tokenRateLimit = (req: { body?: { grant_type?: unknown } }) =>
-  req.body?.grant_type === 'refresh_token' ? Infinity : 20;
+  req.body?.grant_type === 'refresh_token' ? REFRESH_PER_IP_LIMIT : 20;
 
 const handler = baseApi({ auth: false })
   .use(rateLimit({ limit: tokenRateLimit, windowMs: RATE_WINDOW_MS }))
@@ -251,7 +252,7 @@ const handler = baseApi({ auth: false })
       }
 
       // Counted after client auth so failed-secret probes cannot burn a confidential client's budget.
-      // A public client has no secret, so anyone can spend its budget; add a per-IP sub-limit if abused.
+      // A public client has no secret, so others can still spend its budget, within the per-IP ceiling.
       const rl = await cacheRepository.tryIncrementWithinLimitFixedWindow(
         `rate-limit:oauth-refresh:${client_id}`,
         REFRESH_PER_CLIENT_LIMIT,

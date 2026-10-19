@@ -651,9 +651,9 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     expect(h.tryIncrement).not.toHaveBeenCalled();
   });
 
-  it('exempts refresh from the per-IP limit but keeps it on the code exchange', () => {
+  it('caps refresh per IP above the per-client limit, and keeps 20 on the code exchange', () => {
     const limit = h.rateLimitOptions!.limit;
-    expect(limit({ body: { grant_type: 'refresh_token' } })).toBe(Infinity);
+    expect(limit({ body: { grant_type: 'refresh_token' } })).toBe(1200);
     expect(limit({ body: { grant_type: 'authorization_code' } })).toBe(20);
     expect(limit({ body: {} })).toBe(20);
   });
