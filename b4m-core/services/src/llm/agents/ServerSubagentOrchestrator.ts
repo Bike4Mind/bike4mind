@@ -413,13 +413,6 @@ export class InsufficientSubagentCreditsError extends Error {
   }
 }
 
-/**
- * Server-side SubagentOrchestrator
- *
- * Simplified version of the CLI's SubagentOrchestrator, designed for
- * server/Lambda environments. No hooks, no background execution,
- * no permission prompts, no filesystem-based agent loading.
- */
 const SPENT_RESULT = Symbol('subagentSpentResult');
 
 /** The usage a delegateToAgent run spent before it threw, so the caller can bill it. */
@@ -429,6 +422,13 @@ export function spentResultOf(error: unknown): ServerAgentExecutionResult | unde
     : undefined;
 }
 
+/**
+ * Server-side SubagentOrchestrator
+ *
+ * Simplified version of the CLI's SubagentOrchestrator, designed for
+ * server/Lambda environments. No hooks, no background execution,
+ * no permission prompts, no filesystem-based agent loading.
+ */
 export class ServerSubagentOrchestrator {
   private deps: ServerOrchestratorDeps;
 
