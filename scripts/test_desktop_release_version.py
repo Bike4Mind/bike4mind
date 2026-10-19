@@ -4,8 +4,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from desktop_release_version import bump_level, release_notes, select_version, with_reservations
+from desktop_release_version import (bump_level, note_relevant, release_notes, select_version,
+                                     shared_note_inputs, with_reservations)
 
 
 class DesktopVersionTest(unittest.TestCase):
@@ -269,15 +271,86 @@ import { client } from '@bike4mind/mcp';""",
             ('fix(mcp): shared transport', 'b4m-core/mcp/src/client.ts'),
         ):
             self.commit(subject, path)
-        from desktop_release_version import note_relevant
+        shared = shared_note_inputs('HEAD') | shared_note_inputs('desktop-v0.1.1')
         for sha in self.git('rev-list', 'desktop-v0.1.1..HEAD').splitlines():
             subject = self.git('show', '-s', '--format=%s', sha)
-            self.assertEqual(note_relevant(sha), 'unrelated' not in subject and 'server extraction' not in subject)
+            self.assertEqual(note_relevant(sha, shared), 'unrelated' not in subject and 'server extraction' not in subject)
 
-    def test_notes_explain_empty_maintenance_release(self):
+    def shared_baseline(self):
+        sources = {
+            'apps/desktop/package.json': json.dumps({'name': '@bike4mind/desktop',
+                'dependencies': {'@bike4mind/utils': 'workspace:*'}}),
+            'pnpm-lock.yaml': json.dumps({'lockfileVersion': '9.0',
+                'importers': {'.': {}, 'apps/desktop': {}, 'b4m-core/utils': {}},
+                'snapshots': {}, 'packages': {}}),
+            'apps/desktop/src/imports.ts': "import { scan } from '@bike4mind/utils/scanner';",
+            'b4m-core/utils/package.json': '{"name":"@bike4mind/utils"}',
+            'b4m-core/utils/src/scanner.ts': "export { value } from './value.js';",
+            'b4m-core/utils/src/value.ts': "export const value = 'caf\u00e9';",
+        }
+        for path, source in sources.items():
+            file = Path(path)
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(source)
+        self.commit('chore: shared baseline')
+        self.git('tag', 'desktop-v0.1.1')
+
+    def test_notes_scan_only_release_endpoints_for_long_backlog(self):
+        self.shared_baseline()
+        for number in range(40):
+            self.commit(f'fix(utils): scan {number}', 'b4m-core/utils/src/value.ts')
+        with patch('desktop_release_version.shared_note_inputs', wraps=shared_note_inputs) as scan:
+            notes = release_notes('0.1.2', 'desktop-v0.1.1', 'example/repo', 'example/dist')
+        self.assertEqual([call.args for call in scan.call_args_list],
+                         [('HEAD',), ('desktop-v0.1.1',)])
+        self.assertEqual(notes.count('- fix(utils): scan '), 40)
+
+    def test_shared_sources_use_one_batch_process(self):
+        self.shared_baseline()
+        with patch('desktop_release_version.subprocess.Popen', wraps=subprocess.Popen) as spawn:
+            shared = shared_note_inputs('HEAD')
+        commands = [call.args[0] for call in spawn.call_args_list]
+        self.assertEqual(commands, [['git', 'ls-tree', '-r', '--name-only', 'HEAD'],
+                                    ['git', 'cat-file', '--batch']])
+        self.assertEqual(shared, {'b4m-core/utils/src/scanner.ts',
+                                  'b4m-core/utils/src/value.ts'})
+
+    def test_notes_keep_deleted_shared_sources_from_previous_release(self):
+        self.shared_baseline()
+        self.git('rm', 'b4m-core/utils/src/scanner.ts', 'b4m-core/utils/src/value.ts')
+        self.git('commit', '-qm', 'fix(utils): remove old scanner')
+        self.git('rm', 'apps/desktop/src/imports.ts')
+        self.git('commit', '-qm', 'refactor(desktop): drop scanner import')
+        notes = release_notes('0.1.2', 'desktop-v0.1.1', 'example/repo', 'example/dist')
+        self.assertIn('fix(utils): remove old scanner', notes)
+        self.assertEqual(shared_note_inputs('HEAD'), set())
+
+    def test_notes_keep_new_shared_sources_from_head(self):
+        self.shared_baseline()
+        self.commit('fix(utils): update scanner', 'b4m-core/utils/src/value.ts')
+        notes = release_notes('0.1.1', 'desktop-v0.1.0', 'example/repo', 'example/dist')
+        self.assertIn('fix(utils): update scanner', notes)
+
+    def test_notes_without_previous_release_scan_head_once(self):
+        self.shared_baseline()
+        with patch('desktop_release_version.shared_note_inputs', wraps=shared_note_inputs) as scan:
+            notes = release_notes('0.1.0', '', 'example/repo', 'example/dist')
+        self.assertEqual([call.args for call in scan.call_args_list], [('HEAD',)])
+        self.assertIn('initial package baseline', notes)
+
+    def test_build_only_minor_bump_has_accurate_placeholder(self):
+        self.shared_baseline()
+        self.commit('feat(utils): server-only feature', 'b4m-core/utils/src/server.ts')
+        self.assertEqual(select_version(self.releases, '0.1.0')[0], '0.2.0')
+        notes = release_notes('0.2.0', 'desktop-v0.1.1', 'example/repo', 'example/dist')
+        self.assertIn('Version selection: minor.', notes)
+        self.assertIn('Build-only changes; no desktop-facing changes.', notes)
+        self.assertNotIn('server-only feature', notes)
+
+    def test_notes_explain_empty_build_only_release(self):
         self.commit('test(desktop): expand coverage', 'apps/desktop/src/app.test.ts')
         notes = release_notes('0.1.1', 'desktop-v0.1.0', 'example/repo', 'example/dist')
-        self.assertIn('Maintenance release; no desktop-facing changes.', notes)
+        self.assertIn('Build-only changes; no desktop-facing changes.', notes)
         self.assertNotIn('test(desktop): expand coverage', notes)
 
 
