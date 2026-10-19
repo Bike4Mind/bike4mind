@@ -21,7 +21,7 @@ import {
   scrubInternalReferences,
   isNoVariantContent,
 } from '@bike4mind/services';
-import { ChatModels, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { ChatModels, SERVABLE_CHAT_MODELS, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import {
   sanitizeContentForLLM,
   buildWhatsNewPrompt,
@@ -394,9 +394,8 @@ async function processModalGeneration(
   const models = await getAvailableModels(apiKeyTable);
   let resolvedModelId = config.modelId;
 
-  // Validate configured model against ChatModels enum
-  const validModels = Object.values(ChatModels) as string[];
-  if (!validModels.includes(resolvedModelId)) {
+  // Validate configured model against the servable ChatModels
+  if (!SERVABLE_CHAT_MODELS.includes(resolvedModelId)) {
     logger.warn('Invalid LLM model configured, falling back to default', {
       configuredModel: resolvedModelId,
       defaultModel: DEFAULT_LLM_MODEL,

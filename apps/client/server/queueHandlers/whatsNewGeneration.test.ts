@@ -364,6 +364,34 @@ describe('whatsNewGeneration queue handler', () => {
       );
     });
 
+    it.each([
+      ['gpt-5.4-mini-2026-03-17', 'gpt-4o-mini'],
+      ['gpt-5.4-mini', 'gpt-5.4-mini'],
+    ])('configured model %s resolves to %s', async (configured, expected) => {
+      (ModalModel.findOne as any).mockResolvedValue(null);
+      (ModalModel.find as any).mockReturnValue({
+        sort: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        lean: vi.fn().mockResolvedValue([]),
+      });
+      const mockLLM = {
+        complete: vi.fn().mockImplementation(async (_modelId, _messages, _options, callback) => {
+          await callback([JSON.stringify(mockLLMResponse)]);
+        }),
+      };
+      setupLLMMocks(mockLLM, configured);
+      // Both ids are listed, so only the servable-model check can send the snapshot to the default.
+      (getAvailableModels as any).mockResolvedValue(
+        [configured, 'gpt-4o-mini'].map(id => ({ id, name: id, backend: 'test', type: 'text', contextWindow: 8000 }))
+      );
+      (ModalModel.create as any).mockResolvedValue([{ _id: 'new-modal-id' }]);
+
+      await dispatch(createMockEvent(createMockPayload()), mockContext);
+
+      expect(mockLLM.complete).toHaveBeenCalledWith(expected, expect.anything(), expect.anything(), expect.any(Function));
+    });
+
     // Skipping timeout test due to fake timer complexity causing unhandled rejections in CI
     // The timeout functionality will be verified during integration testing
     it.skip('should handle LLM timeout', async () => {
