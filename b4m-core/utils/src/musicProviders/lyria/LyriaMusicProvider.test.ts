@@ -135,6 +135,7 @@ describe('normalizeLyriaLyrics', () => {
 
   it('keeps a timing that is not at the start of the line', () => {
     expect(normalizeLyriaLyrics('[:] hold on [3:4] and [:]')).toBe('hold on [3:4] and [:]');
+    expect(normalizeLyriaLyrics('hold on [3:4]')).toBe('hold on [3:4]');
   });
 
   it('returns undefined for an instrumental or a structure with no lines', () => {
