@@ -75,6 +75,11 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...a: unknown[]) => orgFindById(...a),
     incrementCredits: (...a: unknown[]) => orgIncrement(...a),
   },
+  pendingCreditHoldRepository: {
+    record: async (hold: object) => ({ ...hold, id: 'hold-1' }),
+    claim: async (id: string) => ({ id }),
+  },
+  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
   userRepository: {
     findById: (...a: unknown[]) => findById(...a),

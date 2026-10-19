@@ -1,5 +1,12 @@
 import { CreditHolderType, IUserDocument } from '@bike4mind/common';
-import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  creditTransactionRepository,
+  organizationRepository,
+  pendingCreditHoldRepository,
+  userRepository,
+  type PendingCreditHold,
+  withTransaction,
+} from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { Logger } from '@bike4mind/observability';
@@ -7,6 +14,14 @@ import { BadRequestError } from '@server/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 
 export type { CreditLedgerEntry };
+
+/**
+ * How long a reservation may stay unsettled before apps/workers/src/cron/creditHoldSweep.ts refunds it.
+ * Far past the longest request these routes serve, so a live request is never swept.
+ */
+export const CREDIT_HOLD_TTL_MS = 60 * 60_000;
+
+const SETTLE_CLAIM_ATTEMPTS = 3;
 
 export type CreditReservation = {
   ownerId: string;
@@ -85,19 +100,34 @@ export async function reserveRequestCredits({
     creditTransactions: creditTransactionRepository,
     deductCredits: creditService.deductCreditsWithOrgSupport,
   };
-  const hold = await creditService.holdCredits(
-    {
-      userId,
-      organizationId: billingOrganizationId ?? null,
-      requiredCredits,
-      featureLabel,
-      logger: req.logger,
-      // Re-checked against the roster holdCredits just fetched - no extra query.
-      assertBillable: (billingUser, billingOrg) =>
-        assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
-    },
-    holdAdapters
-  );
+  // One transaction, so the balance never moves without a pending row the sweep can find, and a row
+  // never exists for a balance that did not move.
+  const { hold, pending } = await withTransaction(async () => {
+    const hold = await creditService.holdCredits(
+      {
+        userId,
+        organizationId: billingOrganizationId ?? null,
+        requiredCredits,
+        featureLabel,
+        logger: req.logger,
+        // Re-checked against the roster holdCredits just fetched - no extra query.
+        assertBillable: (billingUser, billingOrg) =>
+          assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
+      },
+      holdAdapters
+    );
+    const expiresAt = new Date(Date.now() + CREDIT_HOLD_TTL_MS);
+    return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
+  });
+
+  const logHoldError = (message: string, err?: unknown) =>
+    req.logger.error(`${featureLabel} ${message}`, {
+      holdId: pending.id,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
+      reservedCredits: hold.reservedCredits,
+      ...(err === undefined ? {} : { error: err instanceof Error ? err.message : 'Unknown error' }),
+    });
 
   return {
     ownerId: hold.ownerId,
@@ -105,17 +135,45 @@ export async function reserveRequestCredits({
     reservedCredits: hold.reservedCredits,
     refund: async () => {
       try {
-        await creditService.releaseCreditHold(hold, holdAdapters);
-      } catch (err) {
-        req.logger.error(`${featureLabel} refund failed - caller charged for a failed request`, {
-          ownerId: hold.ownerId,
-          ownerType: hold.ownerType,
-          reservedCredits: hold.reservedCredits,
-          error: err instanceof Error ? err.message : 'Unknown error',
+        // Claim and release commit together: a failed release keeps the row, and the sweep refunds it later.
+        const refunded = await withTransaction(async () => {
+          if (!(await pendingCreditHoldRepository.claim(pending.id))) return false;
+          await creditService.releaseCreditHold(hold, holdAdapters);
+          return true;
         });
+        if (!refunded) {
+          req.logger.warn(`${featureLabel} refund found its credit hold already swept`, { holdId: pending.id });
+        }
+      } catch (err) {
+        logHoldError('refund failed - left for the expired-hold sweep', err);
       }
     },
-    settle: (chargedCredits, entry) =>
-      creditService.settleCreditHold(hold, chargedCredits, entry, { featureLabel, logger: req.logger }, holdAdapters),
+    settle: async (chargedCredits, entry) => {
+      // Not one transaction with the settlement: its ledger write runs outside any caller session. Only
+      // the claimant may settle, so a settle that cannot claim leaves the row for the sweep to refund.
+      let claimed: PendingCreditHold | null = null;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          claimed = await pendingCreditHoldRepository.claim(pending.id);
+          break;
+        } catch (err) {
+          if (attempt >= SETTLE_CLAIM_ATTEMPTS) {
+            logHoldError('settle could not claim its credit hold - request not charged, left for the sweep', err);
+            return 0;
+          }
+        }
+      }
+      if (!claimed) {
+        logHoldError('settle found its credit hold already swept - request not charged');
+        return 0;
+      }
+      return creditService.settleCreditHold(
+        hold,
+        chargedCredits,
+        entry,
+        { featureLabel, logger: req.logger },
+        holdAdapters
+      );
+    },
   };
 }
