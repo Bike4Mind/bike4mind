@@ -67,7 +67,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 // Mock Atlassian config
-vi.mock('@server/integrations/jira/atlassianConfig', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({
     clientId: 'atlassian-client-id',
     redirectUri: 'https://app.test.com/api/mcp-servers/atlassian/callback',

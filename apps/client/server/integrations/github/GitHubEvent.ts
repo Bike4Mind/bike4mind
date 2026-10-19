@@ -7,7 +7,7 @@
 
 import { cacheRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { GitHubEventType, GitHubWebhookPayload } from './types';
+import { GitHubEventType, GitHubWebhookPayload } from '@bike4mind/server-utils/integrations/github/types';
 
 /**
  * Deduplication window for GitHub webhook events

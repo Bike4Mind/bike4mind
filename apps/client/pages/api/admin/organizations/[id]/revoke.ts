@@ -1,11 +1,11 @@
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
@@ -47,26 +47,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('No active admin grant to revoke');
     }
 
-    await subscriptionRepository.update({
-      id: adminGrant.id,
-      status: 'canceled',
-      canceledAt: new Date(),
-    });
+    // Cancel and audit commit together: a strict audit failure rolls the cancel back, so a retry can still succeed.
+    await withTransaction(async () => {
+      await subscriptionRepository.update({
+        id: adminGrant.id,
+        status: 'canceled',
+        canceledAt: new Date(),
+      });
 
-    await logAuditEvent(
-      {
-        userId: organization.userId,
-        action: AdminOrgAuditEvents.ORG_REVOKED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
+      await recordAdminActionFromRequest(req, {
+        action: 'org.revoked',
+        target: { kind: 'organization', id: organization.id, displayName: organization.name },
+        summary: 'revoked admin grant',
         reason,
-        metadata: {
-          organizationId: organization.id,
-          subscriptionId: adminGrant.id,
-        },
-      },
-      req.logger
-    );
+        changes: [{ field: 'subscription.status', before: adminGrant.status, after: 'canceled' }],
+        details: { subscriptionId: adminGrant.id, ownerId: organization.userId },
+      });
+    });
 
     await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',

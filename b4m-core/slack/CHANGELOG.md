@@ -1,5 +1,35 @@
 # @bike4mind/slack
 
+## 4.0.1
+
+### Patch Changes
+
+- Updated dependencies [[`b45a2df`](https://github.com/Bike4Mind/bike4mind/commit/b45a2df434429731ec156d60fce971b3b3987913), [`b85ca8b`](https://github.com/Bike4Mind/bike4mind/commit/b85ca8bc9edddc0c85be7403d6c99a44b537a3d3), [`e421f9a`](https://github.com/Bike4Mind/bike4mind/commit/e421f9aab9419637a5baefcddf2ffc7d9725bb0b), [`f144377`](https://github.com/Bike4Mind/bike4mind/commit/f144377e6e845c5e7c0e6d9787c4d5172f6ea3a1), [`57b5c68`](https://github.com/Bike4Mind/bike4mind/commit/57b5c689bfcab1d87f40aed39b17cd0566694c8d), [`2549cb9`](https://github.com/Bike4Mind/bike4mind/commit/2549cb91c4e7fb9064ed8db28bbaafc9b439bc61)]:
+  - @bike4mind/services@18.1.0
+  - @bike4mind/common@16.1.0
+  - @bike4mind/utils@8.0.1
+  - @bike4mind/agents@1.2.4
+  - @bike4mind/fab-pipeline@2.1.4
+  - @bike4mind/llm-adapters@1.2.1
+  - @bike4mind/mcp@2.1.4
+
+## 4.0.0
+
+### Major Changes
+
+- [#4937](https://github.com/Bike4Mind/bike4mind/pull/4937) [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c) Thanks [@onoya](https://github.com/onoya)! - bill org-owned file storage to the organization
+
+### Patch Changes
+
+- Updated dependencies [[`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498), [`5ea1b6b`](https://github.com/Bike4Mind/bike4mind/commit/5ea1b6b9dfa604c2f869860febdfd83f7c6bf837), [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c), [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f), [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5), [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661), [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d), [`e774b4a`](https://github.com/Bike4Mind/bike4mind/commit/e774b4ab69877762a15cb7ac59edd082fdc93320), [`d42b0c6`](https://github.com/Bike4Mind/bike4mind/commit/d42b0c62ef7e22ea0c63cffb66ed05402a7d9178), [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41), [`f33b246`](https://github.com/Bike4Mind/bike4mind/commit/f33b246c31f172ec274d965e4950856490f5c45b), [`d83ce3a`](https://github.com/Bike4Mind/bike4mind/commit/d83ce3a92238e271112af4a0546886ccdcfa27a6), [`e3663a6`](https://github.com/Bike4Mind/bike4mind/commit/e3663a6252e51a7ef27e90be92e28d785d85964e), [`6a2291f`](https://github.com/Bike4Mind/bike4mind/commit/6a2291f29592aff2a57f1d48b88d105b90d10a7b), [`06f2578`](https://github.com/Bike4Mind/bike4mind/commit/06f2578e3753ee70ad8df59b3b3ed16fd6c754a1), [`9921022`](https://github.com/Bike4Mind/bike4mind/commit/9921022be285f866f81fe6c4a5b552595880ec50), [`b5d867e`](https://github.com/Bike4Mind/bike4mind/commit/b5d867e9db4783f5100564f60f122e1fdc252d69)]:
+  - @bike4mind/common@16.0.0
+  - @bike4mind/llm-adapters@1.2.0
+  - @bike4mind/services@18.0.0
+  - @bike4mind/utils@8.0.0
+  - @bike4mind/fab-pipeline@2.1.3
+  - @bike4mind/agents@1.2.3
+  - @bike4mind/mcp@2.1.3
+
 ## 3.0.2
 
 ### Patch Changes

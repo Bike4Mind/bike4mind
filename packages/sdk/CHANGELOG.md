@@ -1,5 +1,11 @@
 # @bike4mind/sdk
 
+## 1.1.0
+
+### Minor Changes
+
+- [#4654](https://github.com/Bike4Mind/bike4mind/pull/4654) [`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498) Thanks [@jebie](https://github.com/jebie)! - native tool search on direct Anthropic
+
 ## 1.0.1
 
 ### Patch Changes

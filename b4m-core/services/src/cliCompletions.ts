@@ -57,6 +57,7 @@ import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { prepareWireTools } from './cliCompletionsToolSearch';
+import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 
 export interface CompletionParams {
   userId: string;
@@ -488,6 +489,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // existing caller (CLI/API clients execute tools locally).
   const useServerTools = (params.serverTools?.length ?? 0) > 0;
 
+  // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
+  // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  const thinking = withOllamaThinkingDefault(
+    options?.thinking?.enabled && modelInfo?.can_think
+      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+      : undefined,
+    modelInfo
+  );
+
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
@@ -501,11 +511,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
-    // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
-    // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
-    ...(options?.thinking?.enabled && modelInfo?.can_think
-      ? { thinking: { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 } }
-      : {}),
+    ...(thinking ? { thinking } : {}),
   };
 
   if (options?.response_format) {

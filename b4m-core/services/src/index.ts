@@ -95,3 +95,4 @@ export * from './audienceVariants';
 export * from './prReportService';
 export * as prReportService from './prReportService';
 export * as ncmecService from './ncmecService';
+export * as adminAuditService from './adminAuditService';

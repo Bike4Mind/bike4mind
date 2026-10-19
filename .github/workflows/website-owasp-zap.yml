@@ -46,8 +46,8 @@ jobs:
         uses: actions/checkout@v6
 
       # Both dispatch inputs are load-bearing: `stage` selects which ingest host
-      # receives the summarized report, and `target` is fetched with the WAF
-      # bypass token attached. Constrain them before anything reads them, and
+      # receives the summarized report, and `target` is the host the scan runs
+      # against. Constrain them before anything reads them, and
       # publish the resolved target so later steps consume the checked value
       # rather than re-deriving it.
       - name: Validate scan inputs
@@ -106,14 +106,12 @@ jobs:
       - name: Verify target is reachable (2xx/3xx only)
         id: pre-check
         env:
-          ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
           TARGET: ${{ steps.inputs.outputs.target }}
         run: |
           echo "Target URL: $TARGET"
           REACHABLE=false
           for attempt in 1 2 3; do
-            HTTP_STATUS=$(curl --silent --max-time 30 --output /dev/null --write-out "%{http_code}" \
-              -H "X-ZAP-Scanner:$ZAP_BYPASS_TOKEN" "$TARGET" || echo "000")
+            HTTP_STATUS=$(curl --silent --max-time 30 --output /dev/null --write-out "%{http_code}" "$TARGET" || echo "000")
             echo "Attempt $attempt: HTTP status = $HTTP_STATUS"
             # Only accept 2xx/3xx — a 403 means WAF blocked the runner IP,
             # which causes ZAP to scan WAF error pages and file false positives.
@@ -141,8 +139,6 @@ jobs:
         # We don't rely on the GitHub artifact, only on the JSON report for our ingest step,
         # so mark this step as non-fatal so the summarizer still runs.
         continue-on-error: true
-        env:
-          ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
         with:
           target: ${{ steps.inputs.outputs.target }}
           cmd_options: '-a -T 180'

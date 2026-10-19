@@ -91,12 +91,12 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
 }
 
 /**
- * Connect a GitHub repository to an EXISTING org data lake, then show it as the lake's source card:
+ * Connect a GitHub repository to an EXISTING data lake (org or personal), then show it as the lake's source card:
  * sync status, last synced commit, counts, re-sync, disconnect, and "Ask about this repo" once synced. Connecting leaves the app for GitHub's OAuth authorize page; the
  * GitHubLakeCallbackPage route exchanges the return and opens the repository picker to finish it.
  * Create mode has no lake id to sign into the flow, so it is not offered there.
  *
- * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
+ * Callers gate this on EnableDataLakeGitHub and canConnectLakeConnector (an org lake's manager, a personal lake's creator), as for Drive.
  *
  * The start route refuses a lake that is not connector-fed (githubLakeConnection.ts), so a curated or
  * unknown origin asks to switch it first; an absent origin reads as curated, the stored default. The
@@ -104,9 +104,12 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  */
 export default function GitHubConnectAction({
   lake,
+  startChatForLake,
   onChatStarted,
 }: {
   lake: LakeSourcePanelLake;
+  /** Lets a surface own lake-scoped session creation instead of navigating away. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding this card handle "Ask about this repo" itself instead of navigating away. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 }) {
@@ -135,9 +138,10 @@ export default function GitHubConnectAction({
   }
 
   if (isError || (!connection && !canManage)) {
-    // Same as DriveConnectAction: the read admits an appointed org admin, but connecting is owner/manager only.
+    // Same as DriveConnectAction: on an org lake the read admits an appointed org admin, but connecting is
+    // owner/manager only.
     return (
-      <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake.">
+      <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake, and to the creator of a personal one.">
         <span>
           <Button
             data-testid="github-connect-unavailable-btn"
@@ -242,6 +246,7 @@ export default function GitHubConnectAction({
             lake={lake}
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
             testId="github-ask-about-repo-btn"
+            startChatForLake={startChatForLake}
             onChatStarted={onChatStarted}
           >
             Ask about this repo

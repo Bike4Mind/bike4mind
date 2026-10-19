@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DATA_LAKE_STATUSES } from '@bike4mind/common';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 // Unit-level test of the connect handler's gate + org-credential capture. The repository layer,
 // AWS/SQS, auth gate, and crypto are mocked; the Drive folder-id validation runs for real.
@@ -41,7 +41,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 // Records which flags the route gates on, so a test can pin that the GitHub flag is not one of them.
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
@@ -66,7 +66,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
   };
 });
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
-vi.mock('@server/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'queue-url' } } }));
 vi.mock('@bike4mind/database', async importOriginal => {

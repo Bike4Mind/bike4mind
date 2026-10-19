@@ -47,6 +47,8 @@ export async function grantIndividualAdminSubscription(params: {
   grantedReason?: string;
   skipIfAnyActiveIndividual?: boolean;
   subscriptionId?: string;
+  /** Runs inside the grant transaction, so a throw rolls the grant back (used for strict audit writes). */
+  onGranted?: (grant: { credits: number }) => Promise<void>;
 }): Promise<GrantIndividualAdminSubscriptionResult> {
   const { userId, priceId, durationMonths, grantedBy, grantedReason, skipIfAnyActiveIndividual } = params;
 
@@ -108,6 +110,8 @@ export async function grantIndividualAdminSubscription(params: {
         }
       );
       currentCredits = holder?.currentCredits ?? null;
+
+      await params.onGranted?.({ credits });
     });
   } catch (error) {
     if (params.subscriptionId && isDuplicateKeyError(error)) return { status: 'already_granted' };

@@ -1,4 +1,4 @@
-import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 
 /**
@@ -74,6 +74,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.OAuthClients]: 'oauth-clients',
   [AdminTab.GrowthPricing]: 'growth-pricing',
   [AdminTab.IntegrationDemand]: 'integration-demand',
+  [AdminTab.AuditLog]: ADMIN_AUDIT_LOG_TAB_SLUG,
 };
 
 /**

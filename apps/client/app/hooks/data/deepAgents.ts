@@ -6,7 +6,7 @@
  * tweak is a type error on both sides instead of silent drift.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AgentRosterItem, AgentDetail } from '@server/deepAgent/consoleReads';
+import type { AgentRosterItem, AgentDetail } from '@bike4mind/server-utils/deepAgent/consoleReads';
 import { api } from '@client/app/contexts/ApiContext';
 
 export type { AgentRosterItem, AgentDetail };

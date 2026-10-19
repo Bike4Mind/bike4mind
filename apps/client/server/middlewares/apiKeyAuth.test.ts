@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import { ApiKeyScope, CreditHolderType, ForbiddenError } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
-import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/managers/apiKeyUsageManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
 

@@ -21,7 +21,7 @@ import {
   voiceHoldSettleTransactionId,
   type VoiceHold,
 } from './settleVoiceHold';
-import { MAX_SESSION_SECONDS } from './voiceSessionLimits';
+import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

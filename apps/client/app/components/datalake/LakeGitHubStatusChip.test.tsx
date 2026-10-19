@@ -47,19 +47,25 @@ beforeEach(() => {
 
 describe('LakeGitHubStatusChip', () => {
   it('marks an org lake fed by a repository', () => {
-    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" isCreator={false} />);
     expect(screen.getByTestId('datalake-github-status-chip-lake1')).toHaveTextContent('acme/docs');
   });
 
-  it('never reads a personal lake', () => {
-    wrap(<LakeGitHubStatusChip lakeId="lake1" />);
+  it('marks a personal lake for its creator', () => {
+    wrap(<LakeGitHubStatusChip lakeId="lake1" isCreator />);
+    expect(h.queryEnabled).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId('datalake-github-status-chip-lake1')).toHaveTextContent('acme/docs');
+  });
+
+  it("never reads someone else's personal lake", () => {
+    wrap(<LakeGitHubStatusChip lakeId="lake1" isCreator={false} />);
     expect(h.queryEnabled).toHaveBeenCalledWith(false);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
   });
 
   it('never reads while EnableDataLakeGitHub is off, since the route would 403', () => {
     h.flag.current = false;
-    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" isCreator={false} />);
     expect(h.queryEnabled).toHaveBeenCalledWith(false);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
   });
@@ -67,13 +73,13 @@ describe('LakeGitHubStatusChip', () => {
   it('renders nothing with the flag off even when a stale cached connection is returned', () => {
     h.flag.current = false;
     h.ignoreEnabled.current = true;
-    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" isCreator={false} />);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
   });
 
   it('renders nothing when the lake has no repository', () => {
     h.connection.current = null;
-    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+    wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" isCreator={false} />);
     expect(screen.queryByTestId('datalake-github-status-chip-lake1')).toBeNull();
   });
 
@@ -81,7 +87,7 @@ describe('LakeGitHubStatusChip', () => {
     vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
     try {
       h.connection.current = { ...connection, lastSyncedAt: '2026-01-01T11:00:00Z' };
-      wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" />);
+      wrap(<LakeGitHubStatusChip lakeId="lake1" organizationId="org-1" isCreator={false} />);
       const chip = screen.getByTestId('datalake-github-status-chip-lake1');
       fireEvent.mouseOver(chip);
       act(() => {

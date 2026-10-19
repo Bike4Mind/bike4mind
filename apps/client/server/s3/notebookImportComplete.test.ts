@@ -79,9 +79,9 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 // dispatch-idempotency test stays isolated (the moderation path is not exercised here).
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
+vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
 vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
-vi.mock('@server/s3/storageCharge', () => ({
+vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
   stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
   chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
 }));

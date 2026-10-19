@@ -10,7 +10,7 @@ import {
   validateHighlightsTemplate,
   escapeHighlightsContent,
 } from './whatsNewHighlights.prompt';
-import type { ModalForHighlights } from './whatsNewHighlights.types';
+import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 
 describe('whatsNewHighlights.prompt', () => {
   // Sample modal data for testing

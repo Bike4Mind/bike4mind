@@ -21,6 +21,15 @@ describe('stripLyricTimestamps', () => {
     expect(stripLyricTimestamps('[1.0:2.0] One\n[2.0:3.0]\n[3.0:4.0] Two')).toBe('One\nTwo');
   });
 
+  it('drops the empty [:] marker too, as the provider grammar does', () => {
+    expect(stripLyricTimestamps('[:] One\n[:]\n[:] Two')).toBe('One\nTwo');
+  });
+
+  it('leaves a stamp that is not at the start of the line unchanged', () => {
+    const lyrics = 'hold on [:] and [1:2]';
+    expect(stripLyricTimestamps(lyrics)).toBe(lyrics);
+  });
+
   it('leaves lyrics without stamps, and brackets mid-line, unchanged', () => {
     const lyrics = '[Chorus 2]\nhold on [x2]\n12:30 at night';
     expect(stripLyricTimestamps(lyrics)).toBe(lyrics);

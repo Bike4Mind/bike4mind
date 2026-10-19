@@ -3,7 +3,7 @@ import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { driveConnectionOwnerOf, type DriveConnectionOwner } from '@bike4mind/common';
+import { lakeConnectionOwnerOf, type LakeConnectionOwner } from '@bike4mind/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
@@ -184,7 +184,7 @@ async function personalRefreshTokenOf(userId: string): Promise<string | null> {
  * profile (which now genuinely revokes). A credential the user no longer holds has no such owner, so
  * this connection is its last live handle and it does get revoked.
  */
-export async function releaseDriveConnection(connectionId: string, owner: DriveConnectionOwner): Promise<boolean> {
+export async function releaseDriveConnection(connectionId: string, owner: LakeConnectionOwner): Promise<boolean> {
   const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) return false;
 
@@ -223,7 +223,7 @@ export async function releaseDriveConnection(connectionId: string, owner: DriveC
 export async function releaseDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
   const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return false;
-  return releaseDriveConnection(connection.id, driveConnectionOwnerOf(connection));
+  return releaseDriveConnection(connection.id, lakeConnectionOwnerOf(connection));
 }
 
 /**
@@ -342,7 +342,7 @@ export async function getValidUserDriveAccessToken(
  */
 export async function getValidConnectionDriveAccessToken(
   connectionId: string,
-  owner: DriveConnectionOwner,
+  owner: LakeConnectionOwner,
   options: { forceRefresh?: boolean } = {}
 ): Promise<string> {
   const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);

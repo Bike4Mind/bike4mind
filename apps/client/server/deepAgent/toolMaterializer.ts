@@ -29,7 +29,7 @@ import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import type { ToolMaterializer } from '@bike4mind/agents';
-import { buildSystemApiKeyTable } from './resolveBackend';
+import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 /**
  * Builds the owner-scoped b4m toolbelt for a deep agent's act step.

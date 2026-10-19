@@ -12,6 +12,8 @@
  * a server caller prepends the origin with toAbsoluteUrl().
  */
 
+import { AuditLogFiltersSchema, type AuditLogFilters } from '../types/entities/adminAuditQuery';
+
 /** Search-param names. Shared so a builder and its reader cannot drift onto different spellings. */
 export const ADMIN_TAB_PARAM = 'tab';
 export const FEEDBACK_ID_PARAM = 'feedbackId';
@@ -32,6 +34,21 @@ export function adminFeedbackRecordPath(feedbackId: string): string {
     [ADMIN_TAB_PARAM]: ADMIN_FEEDBACK_TAB_SLUG,
     [FEEDBACK_ID_PARAM]: feedbackId,
   });
+  return `/admin?${params.toString()}`;
+}
+
+/** Admin console Audit Log tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_AUDIT_LOG_TAB_SLUG = 'audit-log';
+export const AUDIT_ENTRY_ID_PARAM = 'entryId';
+
+/** Deep link to the Audit Log tab, optionally pre-filtered and/or opened on one entry. */
+export function adminAuditLogPath(filters: AuditLogFilters = {}, entryId?: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_AUDIT_LOG_TAB_SLUG });
+  for (const key of Object.keys(AuditLogFiltersSchema.shape) as Array<keyof AuditLogFilters>) {
+    const value = filters[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  if (entryId) params.set(AUDIT_ENTRY_ID_PARAM, entryId);
   return `/admin?${params.toString()}`;
 }
 

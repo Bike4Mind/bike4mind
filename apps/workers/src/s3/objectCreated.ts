@@ -9,7 +9,7 @@ import {
   writeModerationVerdict,
   type ModerationVerdictPatch,
 } from '@server/s3/moderationScan';
-import { chargeUploadedObject } from '@server/s3/storageCharge';
+import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';

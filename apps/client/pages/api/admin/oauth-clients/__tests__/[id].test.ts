@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, BadRequestError, NotFoundError } from '@bike4mind/common';
 
-const { handlers, configs, db, logAuditEvent } = vi.hoisted(() => ({
+const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() => ({
   configs: {} as Record<string, unknown>,
   handlers: {} as Record<string, Record<string, (req: unknown, res: unknown) => unknown>>,
   db: { updateOAuthClient: vi.fn(), rotateOAuthClientSecret: vi.fn() },
-  logAuditEvent: vi.fn(),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
 // Each route module calls baseApi() once; record its handlers under the module being imported.
@@ -27,10 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => db);
-vi.mock('@server/utils/auditLog', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/auditLog')>()),
-  logAuditEvent,
-}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 const view = (over: Record<string, unknown> = {}) => ({
   id: 'c1',
@@ -86,13 +83,16 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().redirectUris).toEqual(uris);
-    expect(logAuditEvent).toHaveBeenCalledWith(
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
       expect.objectContaining({
-        action: 'OAUTH_CLIENT_UPDATED',
-        oldConfig: { redirectUris: ['https://app.example.test/cb'], isActive: true },
-        newConfig: { redirectUris: uris, isActive: true },
-      }),
-      undefined
+        action: 'oauth_client.updated',
+        target: expect.objectContaining({ kind: 'oauthClient', id: 'c1' }),
+        changes: [
+          { field: 'redirectUris', before: ['https://app.example.test/cb'], after: uris },
+          { field: 'isActive', before: true, after: true },
+        ],
+      })
     );
   });
 
@@ -100,9 +100,9 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ isActive: false }) });
     const { req, res } = makeReqRes('PATCH', { body: { isActive: false } });
     await handlers.update.patch(req, res);
-    expect(logAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'OAUTH_CLIENT_DEACTIVATED' }),
-      undefined
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'oauth_client.deactivated' })
     );
   });
 
@@ -110,9 +110,9 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     db.updateOAuthClient.mockResolvedValue({ before: view({ isActive: false }), after: view() });
     const { req, res } = makeReqRes('PATCH', { body: { isActive: true } });
     await handlers.update.patch(req, res);
-    expect(logAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'OAUTH_CLIENT_ACTIVATED' }),
-      undefined
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'oauth_client.activated' })
     );
   });
 
@@ -120,7 +120,10 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });
     const { req, res } = makeReqRes('PATCH', { body: { isActive: true } });
     await handlers.update.patch(req, res);
-    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'OAUTH_CLIENT_UPDATED' }), undefined);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'oauth_client.updated' })
+    );
   });
 
   it.each([{}, { id: ['a', 'b'] }])('rejects a missing or non-string id %j with 400', async query => {
@@ -133,7 +136,7 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     db.updateOAuthClient.mockRejectedValue(new NotFoundError('OAuth client not found'));
     const { req, res } = makeReqRes('PATCH', { body: { isActive: false } });
     await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 404 });
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('rejects a body that tries to change anything but redirect URIs and active state', async () => {
@@ -158,11 +161,11 @@ describe('POST /api/admin/oauth-clients/[id]/rotate-secret', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().clientSecret).toBe(SECRET);
     expect(res.getHeader('Cache-Control')).toBe('no-store');
-    expect(logAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'OAUTH_CLIENT_SECRET_ROTATED' }),
-      undefined
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'oauth_client.secret_rotated' })
     );
-    expect(JSON.stringify(logAuditEvent.mock.calls)).not.toContain(SECRET);
+    expect(JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, input]) => input))).not.toContain(SECRET);
   });
 
   it.each([{}, { id: ['a', 'b'] }])('rejects a missing or non-string id %j with 400', async query => {
@@ -175,13 +178,13 @@ describe('POST /api/admin/oauth-clients/[id]/rotate-secret', () => {
     db.rotateOAuthClientSecret.mockRejectedValue(new NotFoundError('OAuth client not found'));
     const { req, res } = makeReqRes('POST');
     await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 404 });
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('returns 400 and writes no audit event when the client is public', async () => {
     db.rotateOAuthClientSecret.mockRejectedValue(new BadRequestError('public client'));
     const { req, res } = makeReqRes('POST');
     await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 400 });
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

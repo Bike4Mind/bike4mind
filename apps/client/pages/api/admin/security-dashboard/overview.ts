@@ -2,7 +2,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
-import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
+import {
+  computeCategoryScoreAndCounts,
+  computeDeterministicStatus,
+} from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { ApiKeyScope } from '@bike4mind/common';
 
 export type SecurityCheckStatus = 'pass' | 'warning' | 'fail' | 'disabled';

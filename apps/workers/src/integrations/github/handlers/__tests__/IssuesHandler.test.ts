@@ -36,7 +36,7 @@ vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
 
 import { IssuesHandler } from '@workers/integrations/github/handlers/IssuesHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
-import type { GitHubIssuesPayload } from '@server/integrations/github/types';
+import type { GitHubIssuesPayload } from '@bike4mind/server-utils/integrations/github/types';
 import type { IMcpServerDocument } from '@bike4mind/common';
 
 function createIssuesPayload(

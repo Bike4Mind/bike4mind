@@ -2,7 +2,7 @@
 import { listMusicModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getMusicJobDeps } from '@server/generationJobs/wiring';
-import { listUsableMusicModels } from '@server/musicGenerations/listUsableMusicModels';
+import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listMusicModelsContract, {

@@ -2690,6 +2690,7 @@ export class ChatService {
         const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
         let moved = false;
+        let ownContent = false;
         // Set once the turn has stopped waiting on this call. Its work may still be running, and
         // nothing it reports from then on may reach the renderer or the next request.
         let abandoned = false;
@@ -2720,6 +2721,9 @@ export class ChatService {
           moved: () => {
             moved = true;
           },
+          ownContent: () => {
+            ownContent = true;
+          },
         };
         let startedAt = Date.now();
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
@@ -2730,6 +2734,7 @@ export class ChatService {
           ...(attachments.length > 0 ? { media: attachments } : {}),
           ...(notice ? { notice } : {}),
           ...(label ? { label } : {}),
+          ...(ownContent ? { ownContent: true as const } : {}),
           // The one channel above that is NOT kept on a call that failed. A write tool only
           // reports a diff once the bytes are down, so there is nothing to drop here in
           // practice - the condition is what makes that a property of this loop rather than
@@ -2815,7 +2820,13 @@ export class ChatService {
         // A failed call is not a quiet one: an MCP server puts its error in the result body, and
         // `toolResultContent` sends that text to the model like any other, so only a call the
         // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (!abandoned && scope.directories && !scope.directories.untrusted && readsUntrusted(request.name)) {
+        if (
+          !abandoned &&
+          scope.directories &&
+          !scope.directories.untrusted &&
+          !settled.ownContent &&
+          readsUntrusted(request.name)
+        ) {
           scope.directories.untrusted = request.name;
         }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
@@ -3537,9 +3548,10 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
-    // Once this reply has read web, MCP or skill content, an injected instruction may be steering
-    // it, so a call that can send data out is asked whatever "always" was answered before.
-    const tainted = mode === 'auto' && sendsOut(call.name) ? directories.untrusted : undefined;
+    // Once this reply has read web, MCP or account-skill content, an injected instruction may be
+    // steering it, so a call that can send data out is asked whatever "always" was answered
+    // before - unless the shell scan proved the command has nowhere to send it.
+    const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
@@ -3904,7 +3916,8 @@ export class ChatService {
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
    * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted), or a path outside the project the user has not allowed.
+   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
+   * project the user has not allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -4825,7 +4838,7 @@ interface DirectoryTurn {
  * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
  */
 function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
-  const source = calls.find(call => call.status !== 'denied' && readsUntrusted(call.name));
+  const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
   return source ? { untrusted: source.name } : {};
 }
 

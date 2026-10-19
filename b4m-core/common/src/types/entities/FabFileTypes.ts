@@ -473,7 +473,7 @@ export interface IFabFile {
   /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
-   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows
    * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
    * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.

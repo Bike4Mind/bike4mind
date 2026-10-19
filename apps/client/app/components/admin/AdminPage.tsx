@@ -80,6 +80,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
   ssr: false,
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
+const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -606,6 +607,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.WebhookAuditLogs}>
                 {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
               <TabPanel value={AdminTab.GitHubConnection}>
                 {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
               </TabPanel>

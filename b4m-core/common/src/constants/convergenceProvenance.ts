@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Provenance vocabulary for the convergence kill switch (#1676). Kept dependency-light (zod only)
  * so a background PRODUCER can stamp a message without pulling in the enforcement path's services
- * graph - the actual read/halt logic lives in `apps/client/server/dataLakes/convergenceKillSwitch.ts`,
+ * graph - the actual read/halt logic lives in `packages/server-utils/src/dataLakes/convergenceKillSwitch.ts`,
  * which builds on this.
  *
  * Lives in common, not next to that enforcement path, because producers outside apps/client have to

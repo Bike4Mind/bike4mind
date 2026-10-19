@@ -1,7 +1,7 @@
 import type { LakeAuditPrincipal } from '@bike4mind/common';
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
  * A `ManageActor` that has to SAY what it attributes to, even if the answer is `undefined`.

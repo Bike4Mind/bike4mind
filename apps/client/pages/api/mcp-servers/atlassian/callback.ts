@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
+import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { Config } from '@server/utils/config';
 import crypto from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';

@@ -2,7 +2,7 @@ import { Button, Tooltip } from '@mui/joy';
 import CloudIcon from '@mui/icons-material/Cloud';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 
-/** Why Drive is offered disabled on a personal lake the caller did not create - the personal half of canConnectLakeDrive. */
+/** Why Drive is offered disabled on a personal lake the caller did not create - the personal half of canConnectLakeConnector. */
 export const DRIVE_PERSONAL_OWNER_ONLY_REASON = `Only the person who created a personal ${DATA_LAKE} can connect a Google Drive folder to it.`;
 
 /**

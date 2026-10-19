@@ -4,7 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
-import type { WhatsNewHighlightsPayload } from '@server/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 
 const logger = new Logger({ metadata: { service: 'whatsNewHighlightsCron' } });
 

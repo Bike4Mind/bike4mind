@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { WhatsNewForkFetcher, ImportModalResult } from '@server/services/whatsNewForkFetcher';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';
 import { z } from 'zod';
@@ -117,20 +117,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       };
 
       // Log audit event
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.WHATS_NEW_SYNC_TRIGGERED,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-          metadata: {
-            type: 'selective_import',
-            modalKeys,
-            summary,
-          },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.synced',
+        target: { kind: 'settings', id: 'whats-new-sync', displayName: "What's New sync" },
+        summary: `imported ${modalKeys.length} modals`,
+        details: { type: 'selective_import', modalKeys, summary },
+      });
 
       req.logger?.info("What's New modals imported", { summary, modalKeys });
 

@@ -26,10 +26,10 @@ vi.mock('@bike4mind/database', () => ({
   memoryPrincipalKeyRepository: {},
 }));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
-vi.mock('./ledgerMemoryStore', () => ({
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: mocks.readProfile }),
 }));
-vi.mock('./mementoQueryEmbedding', () => ({ embedMementoQuery: mocks.embedMementoQuery }));
+vi.mock('@bike4mind/server-utils/memory/mementoQueryEmbedding', () => ({ embedMementoQuery: mocks.embedMementoQuery }));
 
 const belief = (id: string) => ({ id, fact: `fact ${id}`, sources: ['doc-1'], shredded: false });
 

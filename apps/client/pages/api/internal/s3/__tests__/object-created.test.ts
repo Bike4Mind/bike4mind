@@ -45,7 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: getSettingsValueMock },
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
-vi.mock('@server/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
+vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: getMetadataMock }) }));
 vi.mock('@server/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),

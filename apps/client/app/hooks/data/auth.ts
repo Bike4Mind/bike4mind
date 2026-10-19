@@ -24,7 +24,7 @@ interface LoginError {
 // OTC login response: successful login, MFA required, MFA setup required, or, for an
 // email with no account, a signal to collect a username and finish registration inline.
 // The refresh token is absent from every shape: login endpoints set it as an HttpOnly cookie
-// (server/auth/refreshCookie.ts) rather than returning it.
+// (packages/server-utils/src/auth/refreshCookie.ts) rather than returning it.
 type OTCVerifyResponse =
   | (IUserDocument & { accessToken: string })
   | { mfaRequired: true; userId: string; accessToken: string; passkeyAvailable?: boolean }

@@ -40,7 +40,7 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@server/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test', SECRET_ENCRYPTION_KEY: 'key' },
 }));
-vi.mock('@server/security/secretEncryption', () => ({ decryptSecret: () => TOKEN }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => TOKEN }));
 vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
   postSreFixSuccessMessage: mocks.postSreFixSuccessMessage,
   postSreFixFailureMessage: vi.fn(),

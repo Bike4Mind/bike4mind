@@ -34,7 +34,9 @@ vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyGrants(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../verify-email');
 
@@ -57,6 +59,13 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
     await h.handler!(makeReq(), { json });
 
     expect(h.update).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.email.verified',
+        target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      })
+    );
     expect(h.update).toHaveBeenCalledWith({
       id: 'user-1',
       emailVerified: true,

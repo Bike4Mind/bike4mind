@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -19,7 +19,7 @@ import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeList
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
 
@@ -38,6 +38,10 @@ describe('adminTabToSlug', () => {
 describe('adminTabFromSlug', () => {
   it('resolves the feedback slug to the feedback tab', () => {
     expect(adminTabFromSlug(ADMIN_FEEDBACK_TAB_SLUG)).toBe(AdminTab.Feedback);
+  });
+
+  it('resolves the audit log slug to the audit log tab', () => {
+    expect(adminTabFromSlug(ADMIN_AUDIT_LOG_TAB_SLUG)).toBe(AdminTab.AuditLog);
   });
 
   /**
