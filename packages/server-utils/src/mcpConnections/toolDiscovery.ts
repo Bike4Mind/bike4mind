@@ -44,7 +44,7 @@ export const MCP_TOOL_NAME_MAX_LENGTH = 64 - '__'.length - 20;
 export const MCP_TOOL_NAME_PATTERN = new RegExp(`^[A-Za-z0-9_-]{1,${MCP_TOOL_NAME_MAX_LENGTH}}$`);
 
 const TITLE_MAX_CHARS = MCP_CONNECTION_LIMITS.serverInfoFieldLength;
-/** Per string value and per key inside an input schema. */
+/** Per prose string (`description`, `title`, `$comment`) inside an input schema. */
 export const MCP_SCHEMA_TEXT_MAX_CHARS = 512;
 /** Nesting allowed in an input schema; a deeper one drops the tool as `schema_invalid`. */
 export const MCP_SCHEMA_MAX_DEPTH = 32;
@@ -136,20 +136,65 @@ function cleanAnnotations(raw: unknown): IMcpConnectionToolAnnotations | undefin
 
 class InvalidSchemaError extends Error {}
 
-function cleanSchemaValue(value: unknown, depth: number): unknown {
+/** Human prose in a schema object: rewritten like a description. Every other string is a value. */
+const SCHEMA_PROSE_KEYS: ReadonlySet<string> = new Set(['description', 'title', '$comment']);
+/** Keywords whose children are property names, not schema keywords. */
+const SCHEMA_NAME_MAP_KEYS: ReadonlySet<string> = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+]);
+/** Keywords whose contents are data the model or server reads verbatim. */
+const SCHEMA_DATA_KEYS: ReadonlySet<string> = new Set(['enum', 'const', 'default', 'examples']);
+
+type SchemaPosition = 'schema' | 'names' | 'data';
+
+/**
+ * Whether a machine-read string (a key, an enum member, a default, a pattern...) carries what the
+ * cleaner would strip. Such a string is never rewritten, since that would change what the server
+ * receives; the tool is refused instead. Tag-shaped tokens are looked for in the NFKC form (so
+ * fullwidth brackets count) without rewriting the string, and not in a regex `pattern`, where
+ * `(?<name>...)` is legitimate syntax.
+ */
+function machineStringIsHostile(value: string, isPattern: boolean): boolean {
+  for (const re of [CONTROL_CHARS, INVISIBLE_BMP, INVISIBLE_ASTRAL]) if (value.search(re) !== -1) return true;
+  if (isPattern) return false;
+  const folded = value.normalize('NFKC');
+  return [HTML_COMMENT, MARKUP_TAG, TEMPLATE_TOKEN].some(re => folded.search(re) !== -1);
+}
+
+function cleanSchemaValue(value: unknown, depth: number, position: SchemaPosition, key?: string): unknown {
   if (depth > MCP_SCHEMA_MAX_DEPTH) throw new InvalidSchemaError('too deep');
-  if (typeof value === 'string') return cleanMcpToolText(value, MCP_SCHEMA_TEXT_MAX_CHARS);
-  if (Array.isArray(value)) return value.map(item => cleanSchemaValue(item, depth + 1));
+  if (typeof value === 'string') {
+    if (position === 'schema' && key !== undefined && SCHEMA_PROSE_KEYS.has(key)) {
+      return cleanMcpToolText(value, MCP_SCHEMA_TEXT_MAX_CHARS);
+    }
+    if (machineStringIsHostile(value, position === 'schema' && key === 'pattern')) {
+      throw new InvalidSchemaError('hostile value');
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    // Array members inherit the keyword: `enum`/`examples` members are data, `allOf` members schemas.
+    return value.map(item => cleanSchemaValue(item, depth + 1, position === 'names' ? 'schema' : position, key));
+  }
   if (value && typeof value === 'object') {
-    const seen = new Set<string>();
     const entries: [string, unknown][] = [];
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      if (key.includes('\u0000')) throw new InvalidSchemaError('NUL in key');
-      const cleanKey = cleanMcpToolText(key, MCP_SCHEMA_TEXT_MAX_CHARS);
-      // Two keys that clean to the same text would silently merge two arguments.
-      if (seen.has(cleanKey)) throw new InvalidSchemaError('colliding keys');
-      seen.add(cleanKey);
-      entries.push([cleanKey, cleanSchemaValue(item, depth + 1)]);
+    for (const [childKey, item] of Object.entries(value as Record<string, unknown>)) {
+      if (machineStringIsHostile(childKey, false)) throw new InvalidSchemaError('hostile key');
+      const childPosition: SchemaPosition =
+        position === 'data'
+          ? 'data'
+          : position === 'names'
+            ? 'schema'
+            : SCHEMA_DATA_KEYS.has(childKey)
+              ? 'data'
+              : SCHEMA_NAME_MAP_KEYS.has(childKey)
+                ? 'names'
+                : 'schema';
+      entries.push([childKey, cleanSchemaValue(item, depth + 1, childPosition, childKey)]);
     }
     // fromEntries defines own properties, so a `__proto__` key stays data instead of a prototype.
     return Object.fromEntries(entries);
@@ -158,15 +203,17 @@ function cleanSchemaValue(value: unknown, depth: number): unknown {
 }
 
 /**
- * The schema with every key and string value (descriptions, titles, enums, defaults, examples)
- * cleaned like a description, since all of it reaches the model. Null when the schema is nested
- * deeper than {@link MCP_SCHEMA_MAX_DEPTH}, has a key containing NUL, or has keys that collide once
- * cleaned. A missing or non-object schema becomes an empty object schema.
+ * The schema with its prose (`description`, `title`, `$comment`) cleaned like a description, since
+ * it reaches the model. Keys and every other string are values the model or server reads verbatim,
+ * so they are never rewritten. Null (the tool is dropped as `schema_invalid`) when the schema is
+ * nested deeper than {@link MCP_SCHEMA_MAX_DEPTH} or a key or value carries control, invisible,
+ * bidi or tag characters or a tag-like injection token. A missing or non-object schema becomes an
+ * empty object schema.
  */
 function cleanInputSchema(raw: unknown): Record<string, unknown> | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { type: 'object' };
   try {
-    return cleanSchemaValue(raw, 0) as Record<string, unknown>;
+    return cleanSchemaValue(raw, 0, 'schema') as Record<string, unknown>;
   } catch (error) {
     if (error instanceof InvalidSchemaError) return null;
     throw error;
