@@ -232,13 +232,17 @@ export function createAiLatencySuite({
       prompt(i);
     }
 
-    // Runs last in this serial describe, so it judges every prompt including retries. Reads the
-    // merged file rather than collectedResults, which a worker recycle after a failed prompt resets.
+    // Runs last in this describe (mode 'default', so a failed prompt does not retry the group), so it
+    // judges every prompt including retries. Reads the merged file rather than collectedResults,
+    // which a worker recycle after a failed prompt resets.
     test(LATENCY_GATE_TITLE, () => {
       let results: PromptResult[] = [];
       try {
         const persisted = JSON.parse(fs.readFileSync(resultsPath, 'utf-8'));
-        if (Array.isArray(persisted.results)) results = persisted.results;
+        // Drop rows left on disk by earlier local runs that picked different prompts.
+        const selectedIds = new Set(selectedPrompts.map(p => p.id));
+        if (Array.isArray(persisted.results))
+          results = persisted.results.filter((r: PromptResult) => selectedIds.has(r.id));
       } catch {
         // No file: no prompt recorded a timing, so there is nothing to judge.
       }

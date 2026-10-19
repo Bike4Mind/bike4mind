@@ -348,6 +348,12 @@ describe('latencyBreach', () => {
     expect(breach).not.toContain('exceeds');
   });
 
+  it('reports both causes when the average is over and a prompt never finished', () => {
+    expect(latencyBreach([text('a', 30), incompleteResult(scenario({ id: 'c' }), 5000)], 10)).toBe(
+      'Latency breach - average AI latency 17.5s exceeds the 10s threshold; 1 prompt(s) never finished: c [a=30s, c=5s (incomplete)]'
+    );
+  });
+
   it('ignores deliverable prompts and reports no breach when nothing is gated', () => {
     const slowImage = completedResult(scenario({ id: 'img', expectsImage: true }), {
       response: '',
@@ -355,6 +361,9 @@ describe('latencyBreach', () => {
       renderTimeMs: 0,
     });
     expect(latencyBreach([text('a', 5), slowImage], 10)).toBeNull();
+    expect(
+      latencyBreach([text('a', 1), incompleteResult(scenario({ id: 'img', expectsImage: true }), 5000)], 10)
+    ).toBeNull();
     expect(latencyBreach([slowImage], 10)).toBeNull();
     expect(latencyBreach([], 10)).toBeNull();
   });
