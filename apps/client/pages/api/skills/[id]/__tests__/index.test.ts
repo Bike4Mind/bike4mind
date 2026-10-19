@@ -81,7 +81,7 @@ function skillDoc(overrides: Record<string, unknown> = {}) {
 
 function makeReqRes(method: string, userId: string, body: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: method as 'PUT', query: { id: 'skill-1' }, body });
-  (req as unknown as { user: unknown }).user = { id: userId, isAdmin: false };
+  (req as unknown as { user: unknown }).user = { id: userId, isAdmin: false, createdAt: new Date(0) };
   (req as unknown as { logger: unknown }).logger = { info: mockLogInfo, warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
@@ -228,6 +228,24 @@ describe('/api/skills/[id] PUT - global skill content changes go through the Ski
     );
     expect(error).toBeInstanceOf(HTTPError);
     expect((error as HTTPError).statusCode).toBe(503);
+    expect(mockUpdateGuarded).not.toHaveBeenCalled();
+  });
+
+  it('refuses a change from an account younger than the Public minimum, before any scan', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, { body: 'changed' });
+    (req as unknown as { user: { createdAt: Date } }).user.createdAt = new Date();
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockRateLimit).not.toHaveBeenCalled();
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(mockUpdateGuarded).not.toHaveBeenCalled();
+  });
+
+  it('refuses a rename of a global skill from an account younger than the Public minimum', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true }));
+    const { req, res } = makeReqRes('PUT', OWNER, { name: 'renamed' });
+    (req as unknown as { user: { createdAt: Date } }).user.createdAt = new Date();
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockUpdateGuarded).not.toHaveBeenCalled();
   });
 

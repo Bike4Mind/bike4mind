@@ -83,6 +83,21 @@ export async function loadMarketSettings(): Promise<MarketSettings> {
   };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether an account is old enough to put content in front of everyone: publishing a Public listing
+ * (publish.ts) and saving a global skill (globalSkillUpdate.ts). Super-admins always pass.
+ */
+export function meetsPublicAccountAge(
+  user: { isAdmin?: boolean; createdAt?: Date | string },
+  settings: Pick<MarketSettings, 'publicMinAccountAgeDays'>
+): boolean {
+  if (user.isAdmin) return true;
+  const ageDays = (Date.now() - new Date(user.createdAt ?? Number.NaN).getTime()) / DAY_MS;
+  return ageDays >= settings.publicMinAccountAgeDays;
+}
+
 /** Orgs whose Organization listings the user may see: any membership, plus orgs they run. */
 export async function memberOrgIdsFor(userId: string): Promise<string[]> {
   const [member, administered] = await Promise.all([

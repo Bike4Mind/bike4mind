@@ -1,8 +1,15 @@
-import { BadRequestError, HTTPError, HttpStatus, type ISkill, type ISkillScanFinding } from '@bike4mind/common';
+import {
+  BadRequestError,
+  ForbiddenError,
+  HTTPError,
+  HttpStatus,
+  type ISkill,
+  type ISkillScanFinding,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { RequestHandler } from 'express';
 import type { GlobalSkillScan } from '@server/utils/skillAccess';
-import { enforceSubmitRateLimits, loadMarketSettings, toSnapshot } from './market';
+import { enforceSubmitRateLimits, loadMarketSettings, meetsPublicAccountAge, toSnapshot } from './market';
 import { reviewStatusFor, runDeterministicScan } from './scanRules';
 import { scanSkillSnapshot, type ScanDeps } from './submitVersion';
 
@@ -17,8 +24,8 @@ const refuse = (lead: string, findings: ISkillScanFinding[]): never => {
  * Gate for a non-admin update to a global skill (`globalSkillScanFor` in skillAccess.ts picks the
  * mode). `content` runs the same Skill Market scan a listing version gets, held to the Public bar
  * since a global skill reaches everyone: only a result the market would publish to Public without a
- * human reviewer saves. It shares the market's submit rate limits, since each scan may cost a
- * classifier call. `name` runs only the deterministic rules over the new name (no LLM call).
+ * human reviewer saves, and only from an account old enough to publish to Public. It shares the
+ * market's submit rate limits, since each scan may cost a classifier call. `name` runs only the deterministic rules over the new name (no LLM call).
  * Throws on anything that may not save.
  *
  * Global saves have no listing version, so they can't join the market's audit queue; every content
@@ -32,6 +39,11 @@ export async function scanGlobalSkillUpdate(
   deps: Pick<ScanDeps, 'getClassifier' | 'random'> & { logger: Logger; actorId: string }
 ): Promise<void> {
   const settings = await loadMarketSettings();
+  if (!meetsPublicAccountAge(req.user!, settings)) {
+    throw new ForbiddenError(
+      `New accounts can change skills shared with everyone after ${settings.publicMinAccountAgeDays} days.`
+    );
+  }
   const rules = { highRiskTools: settings.highRiskTools, urlAllowlist: settings.urlAllowlist };
 
   if (mode === 'name') {
