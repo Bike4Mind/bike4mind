@@ -181,6 +181,7 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import { stopUnfundedIteration } from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
@@ -1062,7 +1063,11 @@ async function processExecution(
     const resolvedModelId = resolveDeprecatedModelId(execution.model, 'agentExecutor');
     const modelInfo = models.find((m: { id: string }) => m.id === resolvedModelId);
     const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
-    if (modelInfo && !runnableModels.includes(modelInfo)) {
+    // An aggregation-only wake is exempt: its children have already been paid for and only the
+    // wrap-up iteration that returns their results is left, so a transient settings read or a
+    // model disabled mid-run must not strand that work. Same exemption as the credit floor and
+    // the member cap below.
+    if (modelInfo && !runnableModels.includes(modelInfo) && !isAggregationOnlyWake) {
       logger.warn('[AgentExecutor] Model is disabled or not accessible to this user; refusing execution', {
         model: resolvedModelId,
       });
@@ -1078,8 +1083,9 @@ async function processExecution(
 
     // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration
     // (nextIterationCredits), the same bar the loop re-checks before every later one. An
-    // aggregation-only wake keeps the plain floor, like the member cap below: its children already
-    // spent from this balance, and refusing it would strand their paid-for results.
+    // aggregation-only wake keeps the plain floor here, like the member cap below: its children
+    // already spent from this balance, and refusing it would strand their paid-for results. Its
+    // loop iteration is exempted too (see `aggregationWakeStartIteration`).
     const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
     // Resumed runs price the next request at the size of the last one they sent.
     let lastInputTokens = isNewExecution
@@ -1088,8 +1094,9 @@ async function processExecution(
     const userCredits = (user as IUserDocument).currentCredits ?? 0;
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
-    const gateIterations = enforceCredits && Boolean(modelInfo) && !isAggregationOnlyWake;
-    const requiredCredits = gateIterations && modelInfo ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
+    const gateIterations = enforceCredits && Boolean(modelInfo);
+    const requiredCredits =
+      gateIterations && modelInfo && !isAggregationOnlyWake ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
     if (availableCredits <= 0 || availableCredits < requiredCredits) {
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
@@ -2503,6 +2510,10 @@ async function processExecution(
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
+    // An aggregation-only wake gets one ungated wrap-up iteration to return its children's
+    // already-paid-for results. Anything past that is gated like any other iteration, so a parent
+    // with a low balance cannot keep running on unconditional debits in the same Lambda.
+    const aggregationWakeStartIteration = isAggregationOnlyWake ? iterationIndex : -1;
 
     // Captured once and reused below at `displayAnswer` - the truncation message needs to know
     // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
@@ -2715,38 +2726,31 @@ async function processExecution(
       }
 
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
-      // balance cannot cover rather than letting the run carry the balance below zero.
-      if (gateIterations && modelInfo) {
-        const holder = organization
-          ? await organizationRepository.findById(organization.id)
-          : await userRepository.findById((user as IUserDocument).id);
-        const balance = holder?.currentCredits ?? 0;
-        const uncoveredCredits = uncoveredIterationCredits(balance, modelInfo, lastInputTokens);
-        if (uncoveredCredits !== undefined) {
-          logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
-            balance,
-            requiredCredits: uncoveredCredits,
-            iterationIndex,
-          });
-          const checkpoint = agent.toCheckpoint();
-          const partialAnswer = extractFinalAnswer(checkpoint.steps);
-          await agentExecutionRepository.markFailed(executionId, {
-            message: 'Insufficient credits to continue agent execution',
-          });
-          await sendWs('failed', { executionId, reason: 'insufficient_credits', partialResult: checkpoint.steps });
-          await persistRunAsQuest(
+      // balance cannot cover rather than letting the run carry the balance below zero. The one
+      // aggregation-only wake extension is exempt for its first iteration only.
+      if (gateIterations && modelInfo && iterationIndex !== aggregationWakeStartIteration) {
+        const stopped = await stopUnfundedIteration(
+          {
             executionId,
-            partialAnswer
-              ? `Stopped: out of credits. Partial response:\n\n${partialAnswer}`
-              : 'Stopped: out of credits.',
+            iterationIndex,
+            userId: (user as IUserDocument).id,
+            organization,
+            modelInfo,
+            lastInputTokens,
+            snapshot: () => {
+              const checkpoint = agent.toCheckpoint();
+              return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+            },
+          },
+          {
+            markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+            sendWs,
+            persistRunAsQuest: (id, message) =>
+              persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
             logger,
-            generatedImages,
-            undefined,
-            allSideEffects,
-            retrievalSummary
-          );
-          return;
-        }
+          }
+        );
+        if (stopped) return;
       }
 
       // Run one iteration. The `[ATTACHED FILES]` preamble is gated to
