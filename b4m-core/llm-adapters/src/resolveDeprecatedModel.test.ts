@@ -242,6 +242,24 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     expect(badTargets, `mappings pointing at a deprecated model: ${badTargets.join(', ')}`).toEqual([]);
   });
 
+  it('never chains: no target is itself a key, so a redirect is one hop with no loops', () => {
+    const chained = Object.entries(DEPRECATED_MODEL_MAP)
+      .filter(([, target]) => target in DEPRECATED_MODEL_MAP)
+      .map(([from, target]) => `${from} -> ${target}`);
+
+    expect(chained, `mappings whose target is itself redirected: ${chained.join(', ')}`).toEqual([]);
+  });
+
+  it('only maps to a model the static catalog holds', async () => {
+    const { ids } = await staticCatalog();
+
+    const missing = Object.entries(DEPRECATED_MODEL_MAP)
+      .filter(([, target]) => !ids.has(target))
+      .map(([from, target]) => `${from} -> ${target}`);
+
+    expect(missing, `mappings pointing at a model not in the catalog: ${missing.join(', ')}`).toEqual([]);
+  });
+
   it('never maps a model to a disabled one, which no caller can run', async () => {
     const { disabled } = await staticCatalog();
 
@@ -349,6 +367,15 @@ describe('Bedrock Claude retirements', () => {
     const resolved = models.find(m => m.id === successor) as ModelInfo;
     expect(isModelDeprecated(resolved, now)).toBe(false);
     expect(resolved.disabled).toBeFalsy();
+  });
+
+  it('maps Bedrock Sonnet 4.5, Legacy on Bedrock, to the live Sonnet 4.6 profile', async () => {
+    const models = await bedrockModels();
+    const successor = models.find(m => m.id === 'global.anthropic.claude-sonnet-4-6') as ModelInfo;
+
+    expect(resolveDeprecatedModelId('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(successor.id);
+    expect(isModelDeprecated(successor, now)).toBe(false);
+    expect(successor.disabled).toBeFalsy();
   });
 
   it('hides Opus 4.1 via disabled (Legacy lapse) and maps a pin to a live successor', async () => {

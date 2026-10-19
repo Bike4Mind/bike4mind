@@ -8,6 +8,7 @@ import unknownEnum from './__fixtures__/bedrock/unknown-enum.json';
 import { abortedContext, makeContext } from './__fixtures__/testSupport';
 import {
   BEDROCK_AVAILABILITY_CONCURRENCY,
+  bedrockLifecycleGaps,
   createBedrockSource,
   normalizeBedrockModels,
   type BedrockAvailability,
@@ -163,13 +164,174 @@ describe('bedrock normalization', () => {
     expect(records[1]?.patch.lifecycle).toEqual({ status: 'legacy' });
   });
 
-  it('ignores a lifecycle status this build has never seen rather than guessing at it', () => {
+  it('treats a lifecycle status this build has never seen as legacy, keeping its dates', () => {
     const record = normalizeBedrockModels({
       summaries: unknownEnum.modelSummaries as BedrockFoundationModelSummary[],
     })[0];
-    expect(record?.patch).not.toHaveProperty('lifecycle');
+    expect(record?.patch.lifecycle).toEqual({ status: 'legacy', deprecationDate: '2027-01-01' });
+    expect(record?.lifecycleEvidence).toBe('typed');
     expect(record?.patch.type).toBe('text');
     expect(record?.patch.supportsVision).toBe(true);
+  });
+
+  it('treats a null lifecycle date as absent, not as the epoch', () => {
+    const record = normalizeBedrockModels({
+      summaries: [
+        {
+          modelId: 'meta.llama3-70b-instruct-v1:0',
+          modelLifecycle: { status: 'ACTIVE', legacyTime: null, endOfLifeTime: null },
+        } as unknown as BedrockFoundationModelSummary,
+      ],
+    })[0];
+    expect(record?.patch.lifecycle).toEqual({ status: 'active' });
+  });
+
+  describe('inference profile ids', () => {
+    const legacyBase: BedrockFoundationModelSummary = {
+      modelId: 'anthropic.claude-sonnet-4-5-20250929-v1:0',
+      outputModalities: ['TEXT'],
+      modelLifecycle: {
+        status: 'LEGACY',
+        legacyTime: '2026-10-08T08:00:00Z',
+        endOfLifeTime: '2027-04-08T08:00:00Z',
+      },
+    };
+    const undatedBase: BedrockFoundationModelSummary = {
+      modelId: 'meta.llama3-70b-instruct-v1:0',
+      outputModalities: ['TEXT'],
+    };
+
+    it('gives every catalogued profile id its base model lifecycle and nothing else', () => {
+      const records = byId({
+        summaries: [legacyBase],
+        catalogModelIds: [
+          'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          'eu.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        ],
+      });
+      for (const id of [
+        'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'eu.anthropic.claude-sonnet-4-5-20250929-v1:0',
+      ]) {
+        expect(records.get(id)).toEqual({
+          modelId: id,
+          lifecycleEvidence: 'typed',
+          patch: { lifecycle: { status: 'legacy', deprecationDate: '2026-10-08', retirementDate: '2027-04-08' } },
+        });
+      }
+    });
+
+    it('emits nothing for a profile id that is not in the catalog', () => {
+      const records = byId({ summaries: [legacyBase], catalogModelIds: [] });
+      expect([...records.keys()]).toEqual(['anthropic.claude-sonnet-4-5-20250929-v1:0']);
+    });
+
+    it('leaves a profile id alone when its base is not listed or carries no lifecycle', () => {
+      const records = byId({
+        summaries: [legacyBase, undatedBase],
+        catalogModelIds: ['us.meta.llama3-70b-instruct-v1:0', 'us.deepseek.r1-v1:0', 'anthropic.claude-opus-9'],
+      });
+      expect([...records.keys()].sort()).toEqual([
+        'anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'meta.llama3-70b-instruct-v1:0',
+      ]);
+    });
+  });
+
+  describe('lifecycle edge cases', () => {
+    const base = (modelLifecycle: BedrockFoundationModelSummary['modelLifecycle']): BedrockFoundationModelSummary => ({
+      modelId: 'anthropic.claude-x-v1:0',
+      outputModalities: ['TEXT'],
+      modelLifecycle,
+    });
+    const lifecycleOfBase = (modelLifecycle: BedrockFoundationModelSummary['modelLifecycle']) =>
+      byId({ summaries: [base(modelLifecycle)] }).get('anthropic.claude-x-v1:0')?.patch.lifecycle;
+
+    it.each([
+      ['active', 'ACTIVE', 'us.anthropic.claude-x-v1:0'],
+      ['active', 'ACTIVE', 'apac.anthropic.claude-x-v1:0'],
+      ['legacy', 'LEGACY', 'global.anthropic.claude-x-v1:0'],
+    ])('propagates an %s base to %s', (status, rawStatus, profileId) => {
+      const records = byId({ summaries: [base({ status: rawStatus })], catalogModelIds: [profileId] });
+      expect(records.get(profileId)?.patch.lifecycle).toEqual({ status });
+    });
+
+    it.each([
+      ['unknown scope prefix', 'jp.anthropic.claude-x-v1:0', 'jp.anthropic.claude-x-v1:0'],
+      ['foundation model not listed', 'us.meta.llama-9', 'meta.llama-9'],
+    ])('drops a profile id with %s and reports it as not in the listing', (_label, profileId, foundationId) => {
+      const facts = { summaries: [base({ status: 'ACTIVE' })], catalogModelIds: [profileId] };
+      const expected = [
+        {
+          source: 'bedrock',
+          modelId: profileId,
+          reason: `foundation model ${foundationId} is not in the Bedrock listing; no lifecycle propagated`,
+        },
+      ];
+      expect(byId(facts).has(profileId)).toBe(false);
+      expect(bedrockLifecycleGaps(facts)).toEqual(expected);
+    });
+
+    it('makes no claim for an unknown status without legacyTime, but reports the raw value', () => {
+      const summary = base({ status: 'SUNSETTING' });
+      expect(lifecycleOfBase({ status: 'SUNSETTING' })).toBeUndefined();
+      expect(bedrockLifecycleGaps({ summaries: [summary] })).toEqual([
+        {
+          source: 'bedrock',
+          modelId: 'anthropic.claude-x-v1:0',
+          reason: 'unrecognized Bedrock lifecycle status "SUNSETTING"; no lifecycle claim',
+        },
+      ]);
+    });
+
+    it('reads an unknown status with a parseable legacyTime as legacy', () => {
+      expect(lifecycleOfBase({ status: 'SUNSETTING', legacyTime: '2027-01-01T00:00:00Z' })).toEqual({
+        status: 'legacy',
+        deprecationDate: '2027-01-01',
+      });
+    });
+
+    it('reads status case- and whitespace-insensitively', () => {
+      expect(lifecycleOfBase({ status: 'legacy' })).toEqual({ status: 'legacy' });
+      expect(lifecycleOfBase({ status: ' LEGACY ' })).toEqual({ status: 'legacy' });
+      expect(bedrockLifecycleGaps({ summaries: [base({ status: ' legacy ' })] })).toEqual([]);
+    });
+
+    it('ignores and reports a date that does not parse', () => {
+      const summary = base({ status: 'LEGACY', legacyTime: 'garbage' });
+      expect(lifecycleOfBase({ status: 'LEGACY', legacyTime: 'garbage' })).toEqual({ status: 'legacy' });
+      expect(bedrockLifecycleGaps({ summaries: [summary] })).toEqual([
+        {
+          source: 'bedrock',
+          modelId: 'anthropic.claude-x-v1:0',
+          reason: 'unparseable Bedrock legacyTime "garbage"; date ignored',
+        },
+      ]);
+    });
+
+    it('takes the UTC calendar day of an offset timestamp', () => {
+      expect(lifecycleOfBase({ status: 'LEGACY', legacyTime: '2026-10-08T23:00:00-08:00' })).toEqual({
+        status: 'legacy',
+        deprecationDate: '2026-10-09',
+      });
+    });
+
+    it('reports a missing lifecycle only for a model a catalog id depends on', () => {
+      const summaries = [{ modelId: 'meta.llama3-70b-instruct-v1:0', outputModalities: ['TEXT'] }];
+      expect(bedrockLifecycleGaps({ summaries })).toEqual([]);
+      expect(
+        bedrockLifecycleGaps({ summaries, catalogModelIds: ['us.meta.llama3-70b-instruct-v1:0'] }).map(
+          gap => gap.modelId
+        )
+      ).toEqual(['meta.llama3-70b-instruct-v1:0']);
+    });
+
+    it('adds no record for a bare id in catalogModelIds', () => {
+      const records = byId({ summaries: [base({ status: 'ACTIVE' })], catalogModelIds: ['anthropic.claude-x-v1:0'] });
+      expect([...records.keys()]).toEqual(['anthropic.claude-x-v1:0']);
+    });
   });
 
   it('returns nothing for an empty listing', () => {
@@ -288,6 +450,40 @@ describe('bedrock source fetch', () => {
     expect(asked).not.toHaveBeenCalled();
     // The listing itself still succeeded, so the run keeps what it verified.
     expect(result.ok).toBe(true);
+  });
+
+  it('passes catalogued profile ids through, and returns the lifecycle gaps with one summary warning', async () => {
+    const warnings: string[] = [];
+    const client = fakeClient({
+      listFoundationModels: async () => [
+        {
+          modelId: 'anthropic.claude-opus-6-v1:0',
+          outputModalities: ['TEXT'],
+          modelLifecycle: { status: 'SUNSETTING', legacyTime: '2027-01-01T00:00:00Z' },
+        },
+      ],
+    });
+    const result = await createBedrockSource({
+      client,
+      catalogModelIds: () => new Set(['us.anthropic.claude-opus-6-v1:0']),
+    }).fetch(makeContext({ logger: { info: () => {}, warn: message => warnings.push(message), error: () => {} } }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.records.map(record => record.modelId)).toEqual([
+      'anthropic.claude-opus-6-v1:0',
+      'us.anthropic.claude-opus-6-v1:0',
+    ]);
+    expect(result.dropped).toHaveLength(1);
+    expect(warnings.filter(message => message.includes('1 lifecycle gaps'))).toHaveLength(1);
+    expect(result.dropped?.[0]?.reason).toContain('SUNSETTING');
+  });
+
+  it('warns once when the catalog supplies no ids', async () => {
+    const warnings: string[] = [];
+    const logger = { info: () => {}, warn: (message: string) => warnings.push(message), error: () => {} };
+    await createBedrockSource({ client: fakeClient(), catalogModelIds: () => [] }).fetch(makeContext({ logger }));
+    expect(warnings.filter(message => message.includes('no catalog ids'))).toHaveLength(1);
   });
 
   it('fails when the listing throws, rather than reporting an empty backend', async () => {

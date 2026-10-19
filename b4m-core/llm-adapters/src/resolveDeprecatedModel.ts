@@ -50,6 +50,8 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'us.anthropic.claude-opus-4-20250514-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-opus-4-1-20250805-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-sonnet-4-20250514-v1:0': 'global.anthropic.claude-sonnet-4-6',
+  // Legacy on Bedrock, so discovery hides it; Sonnet 4.6 costs the same.
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': 'global.anthropic.claude-sonnet-4-6',
   // Anthropic-hosted models
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',

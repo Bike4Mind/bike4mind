@@ -836,6 +836,11 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     runId,
   });
 
+  for (const source of succeeded) {
+    const r = results.get(source.name)?.result;
+    if (r?.ok) catalog.dropped.push(...(r.dropped ?? []));
+  }
+
   const priceRowsAtRunStart = input.priceRowsAtRunStart ?? priceRowsInForce;
   const prices = planPriceWrites({
     contributions,

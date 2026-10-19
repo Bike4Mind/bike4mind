@@ -1,10 +1,11 @@
-import { ModelBackend, type ModelRecord } from '@bike4mind/common';
+import { ModelBackend, bedrockFoundationIdOf, type ModelRecord } from '@bike4mind/common';
 import { limitConcurrency } from '../concurrency';
 import type {
   DiscoveredModel,
   DiscoveryCredentials,
   DiscoveryFetchContext,
   DiscoverySource,
+  DroppedSourceRecord,
   SourceResult,
 } from '../types';
 import { PAGINATED_SOURCE_DEADLINE_MS } from '../runModelDiscovery';
@@ -27,10 +28,11 @@ import { compact, text } from './http';
 export interface BedrockModelLifecycle {
   /** 'ACTIVE' | 'LEGACY' as the SDK spells it; read as a free string for forward compat. */
   status?: string;
-  startOfLifeTime?: Date | string;
-  legacyTime?: Date | string;
-  publicExtendedAccessTime?: Date | string;
-  endOfLifeTime?: Date | string;
+  // The wire sends null for a date that does not apply.
+  startOfLifeTime?: Date | string | null;
+  legacyTime?: Date | string | null;
+  publicExtendedAccessTime?: Date | string | null;
+  endOfLifeTime?: Date | string | null;
 }
 
 export interface BedrockFoundationModelSummary {
@@ -69,8 +71,8 @@ const LIFECYCLE_STATUS: Readonly<Record<string, NonNullable<ModelRecord['lifecyc
   LEGACY: 'legacy',
 };
 
-const calendarDay = (value: Date | string | undefined): string | undefined => {
-  if (value === undefined) return undefined;
+const calendarDay = (value: Date | string | null | undefined): string | undefined => {
+  if (value == null) return undefined;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : undefined;
 };
@@ -88,34 +90,56 @@ function inferType(summary: BedrockFoundationModelSummary): ModelRecord['type'] 
   return undefined;
 }
 
+const rawStatusOf = (summary: BedrockFoundationModelSummary): string | undefined =>
+  text(summary.modelLifecycle?.status)?.toUpperCase();
+
+type Lifecycle = NonNullable<ModelRecord['lifecycle']>;
+
 /**
- * The lifecycle block, or undefined when Bedrock says nothing. `legacyTime` is
- * the deprecation date and `endOfLifeTime` the retirement date - the mapping is
- * one-to-one, which is what makes a Bedrock model transition on the first run
- * rather than after the K-miss absence wait.
+ * The lifecycle block (undefined when Bedrock makes no usable claim) plus the problems found
+ * reading it. An unknown status reads as legacy only with a parseable `legacyTime`.
  */
-function lifecycleOf(summary: BedrockFoundationModelSummary): ModelRecord['lifecycle'] | undefined {
+function readLifecycle(summary: BedrockFoundationModelSummary): {
+  lifecycle?: Lifecycle;
+  issues: string[];
+  statusless: boolean;
+} {
   const raw = summary.modelLifecycle;
-  const status = LIFECYCLE_STATUS[(raw?.status ?? '').toUpperCase()];
-  if (!status) return undefined;
-  return compact<NonNullable<ModelRecord['lifecycle']>>({
-    status,
-    deprecationDate: calendarDay(raw?.legacyTime),
-    retirementDate: calendarDay(raw?.endOfLifeTime),
-  });
+  const rawStatus = rawStatusOf(summary);
+  const deprecationDate = calendarDay(raw?.legacyTime);
+  const known = rawStatus ? LIFECYCLE_STATUS[rawStatus] : undefined;
+  const status = known ?? (rawStatus && deprecationDate ? 'legacy' : undefined);
+  const lifecycle = status
+    ? compact<Lifecycle>({ status, deprecationDate, retirementDate: calendarDay(raw?.endOfLifeTime) })
+    : undefined;
+
+  const issues: string[] = [];
+  if (rawStatus && !known) {
+    issues.push(
+      `unrecognized Bedrock lifecycle status "${raw?.status}"; ${lifecycle ? 'treated as legacy' : 'no lifecycle claim'}`
+    );
+  }
+  const checkDate = (field: string, value: Date | string | null | undefined) => {
+    if (value != null && calendarDay(value) === undefined) {
+      issues.push(`unparseable Bedrock ${field} ${JSON.stringify(value)}; date ignored`);
+    }
+  };
+  checkDate('legacyTime', raw?.legacyTime);
+  checkDate('endOfLifeTime', raw?.endOfLifeTime);
+  return { lifecycle, issues, statusless: !rawStatus };
 }
 
 export interface BedrockFacts {
   summaries: readonly BedrockFoundationModelSummary[];
   /** Availability by model id; a model absent from the map simply was not asked about. */
   availability?: ReadonlyMap<string, BedrockAvailability>;
+  /** Catalog ids; each region-prefixed profile id among them gets its foundation model's lifecycle. */
+  catalogModelIds?: Iterable<string>;
 }
 
 /**
- * Bedrock lists some models (every Claude 4.x among them) under a bare foundation-model id it will
- * not serve on demand - only through a cross-region inference profile (`us.`/`global.`-prefixed) or
- * provisioned throughput. The bare id is rejected by every InvokeModel/Converse call, so offering it
- * guarantees a dispatch failure; the profile id is a separate catalog row this source never touches.
+ * Bedrock lists some models (every Claude 4.x) under a bare id it will not serve on demand, only
+ * through a region-prefixed inference profile or provisioned throughput; offering the bare id guarantees a dispatch failure.
  *
  * Keyed on the ABSENCE of ON_DEMAND rather than on a profile value: the SDK's InferenceType enum
  * names only ON_DEMAND and PROVISIONED, so the profile spelling is not a contract. An absent or
@@ -140,8 +164,19 @@ const isConfirmedInvocable = (
   entitlement.entitlementAvailability === 'AVAILABLE' &&
   entitlement.regionAvailability === 'AVAILABLE';
 
-export function normalizeBedrockModels({ summaries, availability }: BedrockFacts): DiscoveredModel[] {
+export const normalizeBedrockModels = (facts: BedrockFacts): DiscoveredModel[] => readBedrock(facts).records;
+
+export const bedrockLifecycleGaps = (facts: BedrockFacts): DroppedSourceRecord[] => readBedrock(facts).gaps;
+
+/** One pass over the listing and the catalog ids: the records to write and the lifecycle data this source could not use. */
+function readBedrock({ summaries, availability, catalogModelIds }: BedrockFacts): {
+  records: DiscoveredModel[];
+  gaps: DroppedSourceRecord[];
+} {
   const records: DiscoveredModel[] = [];
+  const gaps: DroppedSourceRecord[] = [];
+  const gap = (modelId: string, reason: string) => gaps.push({ source: 'bedrock', modelId, reason });
+  const listed = new Map<string, { lifecycle?: Lifecycle; statusless: boolean }>();
 
   for (const summary of summaries) {
     const id = text(summary?.modelId);
@@ -159,7 +194,9 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
         entitlement.entitlementAvailability === 'NOT_AVAILABLE' ||
         entitlement.regionAvailability === 'NOT_AVAILABLE');
     const notOnDemand = isNotOnDemand(summary);
-    const lifecycle = lifecycleOf(summary);
+    const { lifecycle, issues, statusless } = readLifecycle(summary);
+    listed.set(id, { lifecycle, statusless });
+    for (const reason of issues) gap(id, reason);
 
     records.push(
       compact<DiscoveredModel>({
@@ -195,7 +232,26 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
     );
   }
 
-  return records.sort((a, b) => a.modelId.localeCompare(b.modelId));
+  const missing = new Map<string, Set<string>>();
+  for (const catalogId of catalogModelIds ?? []) {
+    const foundationId = bedrockFoundationIdOf(catalogId);
+    const baseId = foundationId ?? catalogId;
+    const base = listed.get(baseId);
+    if (!base) {
+      gap(catalogId, `foundation model ${baseId} is not in the Bedrock listing; no lifecycle propagated`);
+    } else if (base.lifecycle) {
+      if (foundationId !== null) {
+        records.push({ modelId: catalogId, lifecycleEvidence: 'typed', patch: { lifecycle: base.lifecycle } });
+      }
+    } else if (base.statusless) {
+      missing.set(baseId, (missing.get(baseId) ?? new Set()).add(catalogId));
+    }
+  }
+  for (const [baseId, dependents] of missing) {
+    gap(baseId, `Bedrock listed no lifecycle for a model the catalog depends on (${[...dependents].join(', ')})`);
+  }
+
+  return { records: records.sort((a, b) => a.modelId.localeCompare(b.modelId)), gaps };
 }
 
 export interface BedrockSourceOptions {
@@ -206,6 +262,8 @@ export interface BedrockSourceOptions {
    * the naive call pattern that alone can exceed the function timeout (sec 6.3).
    */
   activeModelIds?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
+  /** See BedrockFacts.catalogModelIds. */
+  catalogModelIds?: () => Iterable<string> | Promise<Iterable<string>>;
 }
 
 export function createBedrockSource(options: BedrockSourceOptions): DiscoverySource {
@@ -236,12 +294,18 @@ export function createBedrockSource(options: BedrockSourceOptions): DiscoverySou
       }
 
       const availability = await checkAvailability(client, summaries, options, ctx);
+      const catalogModelIds = await options.catalogModelIds?.();
+      const catalogIds = [...(catalogModelIds ?? [])];
+      if (catalogIds.length === 0) {
+        ctx.logger.warn('[model-discovery] bedrock got no catalog ids; profile lifecycle propagation is off');
+      }
+      const { records, gaps } = readBedrock({ summaries, availability, catalogModelIds: catalogIds });
+      if (gaps.length > 0) {
+        const sample = gaps.slice(0, 3).map(gap => gap.modelId);
+        ctx.logger.warn(`[model-discovery] bedrock ${gaps.length} lifecycle gaps, e.g. ${sample.join(', ')}`);
+      }
 
-      return {
-        ok: true,
-        records: normalizeBedrockModels({ summaries, availability }),
-        authoritativeFor: [ModelBackend.Bedrock],
-      };
+      return { ok: true, records, authoritativeFor: [ModelBackend.Bedrock], dropped: gaps };
     },
   };
 }
