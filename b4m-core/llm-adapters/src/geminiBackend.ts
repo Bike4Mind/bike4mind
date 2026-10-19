@@ -45,8 +45,11 @@ import { withAbortListener } from './withAbortListener';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 
-// Headroom for thinking tokens, which count against maxOutputTokens; also the 2.5 budget when the cap binds.
+// Headroom for thinking tokens, which count against maxOutputTokens.
 const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
+// Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
+const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
 
 type ToolCall = {
   id: string;
@@ -376,7 +379,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 2097152, // 2M context window
         supportsImageVariation: false,
-        max_tokens: 65536,
+        max_tokens: 8192,
         can_stream: true,
         can_think: true,
         pricing: {
@@ -451,7 +454,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 2097152, // 2M context window
         supportsImageVariation: false,
-        max_tokens: 65536,
+        max_tokens: 8192,
         can_stream: true,
         can_think: true, // Enhanced thinking and reasoning
         pricing: {
@@ -473,7 +476,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 1048576, // 1M context window
         supportsImageVariation: false,
-        max_tokens: 65536,
+        max_tokens: 8192,
         can_stream: true,
         can_think: true, // Adaptive thinking capabilities
         pricing: {
@@ -1454,10 +1457,6 @@ export class GeminiBackend implements ICompletionBackend {
           // of which model the history was originally fetched for. Scoped to the gemini-3 family:
           // that is the one this repo has observed actually rejects a missing signature (see the
           // pre-existing warn below this branch), so a 2.x/1.x model isn't degraded for no reason.
-          // /^gemini-3(\D|$)/ rather than a plain substring match: matches gemini-3-pro-preview,
-          // gemini-3.1-pro-preview, gemini-3.5-flash (a non-digit or end follows "gemini-3" in
-          // every real id), but not a hypothetical future gemini-30/gemini-33 family, which this
-          // repo has never observed to need the guard.
           //
           // This formatter runs on every recursive round of a live tool-calling turn too, and a
           // live round's own just-minted tool_use block can ALSO lack a thought_signature (see the
@@ -1467,7 +1466,7 @@ export class GeminiBackend implements ICompletionBackend {
           // former so the guard cannot silently swallow a block this same completion chain just
           // generated.
           const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
-          if (isReplayed && /^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          if (isReplayed && isGemini3(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
@@ -1649,13 +1648,10 @@ export class GeminiBackend implements ICompletionBackend {
     const maxOutputTokens = Math.min(ceiling, wanted);
     if (wanted >= ceiling) return { maxOutputTokens };
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
-    // 2.5 takes thinkingBudget, 3.x thinkingLevel (the API 400s on both); other ids get neither.
-    const thinkingConfig = model.id.startsWith('gemini-2.5')
-      ? { thinkingBudget: GEMINI_THINKING_RESERVE_TOKENS }
-      : model.id.startsWith('gemini-3')
-        ? { thinkingLevel: ThinkingLevel.LOW }
-        : undefined;
-    return thinkingConfig ? { maxOutputTokens, thinkingConfig } : { maxOutputTokens };
+    // Only 3.x takes thinkingLevel; other ids get the cap alone.
+    return isGemini3(model.id)
+      ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+      : { maxOutputTokens };
   }
 
   pushToolMessages(

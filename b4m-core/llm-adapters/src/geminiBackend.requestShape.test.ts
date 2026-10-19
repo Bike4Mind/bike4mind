@@ -105,18 +105,12 @@ describe.each([
 
   describe('thinking models', () => {
     const LOW = { thinkingLevel: 'LOW' };
-    const BUDGET = { thinkingBudget: 16000 };
     it.each<{ model: ChatModels; maxTokens?: number; maxOutputTokens: number; thinkingConfig?: object }>([
       { model: THINKING_MODEL, maxTokens: 50, maxOutputTokens: 16050, thinkingConfig: LOW },
       { model: THINKING_MODEL, maxTokens: undefined, maxOutputTokens: 24192, thinkingConfig: LOW },
       { model: THINKING_MODEL, maxTokens: 49535, maxOutputTokens: 65535, thinkingConfig: LOW },
       { model: THINKING_MODEL, maxTokens: 49536, maxOutputTokens: 65536 },
       { model: THINKING_MODEL, maxTokens: 65536, maxOutputTokens: 65536 },
-      { model: ChatModels.GEMINI_2_5_PRO, maxTokens: 50, maxOutputTokens: 16050, thinkingConfig: BUDGET },
-      { model: ChatModels.GEMINI_2_5_PRO, maxTokens: 60000, maxOutputTokens: 65536 },
-      { model: ChatModels.GEMINI_2_5_PRO, maxTokens: 65536, maxOutputTokens: 65536 },
-      { model: ChatModels.GEMINI_2_5_FLASH, maxTokens: 50, maxOutputTokens: 16050, thinkingConfig: BUDGET },
-      { model: ChatModels.GEMINI_2_5_FLASH, maxTokens: 65535, maxOutputTokens: 65535 },
     ])(
       '$model with cap $maxTokens sends maxOutputTokens $maxOutputTokens and thinkingConfig $thinkingConfig',
       async ({ model, maxTokens, maxOutputTokens, thinkingConfig }) => {
@@ -175,7 +169,7 @@ describe.each([
     });
 
     it.each<{ name: string; overrides: Partial<ModelInfo>; thinkingConfig?: object }>([
-      { name: '2.5 id', overrides: { id: 'gemini-2.5-x' as ChatModels }, thinkingConfig: { thinkingBudget: 16000 } },
+      { name: '2.5 id', overrides: { id: 'gemini-2.5-x' as ChatModels } },
       { name: '3.x id', overrides: { id: 'gemini-3-x' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
       { name: 'unrecognised id', overrides: { id: 'gemini-flash-latest' as ChatModels } },
       {
