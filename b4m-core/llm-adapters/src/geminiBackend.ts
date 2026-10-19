@@ -14,6 +14,7 @@ import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
+  estimateStreamedOutputTokens,
   ImageModels,
   MessageContentImageUrl,
   MessageContentInlineImage,
@@ -714,6 +715,12 @@ export class GeminiBackend implements ICompletionBackend {
     let turnCacheReadTokens = 0;
     const turnCacheReads = (usage: { cachedContentTokenCount?: number } | undefined) =>
       forwardsCacheReads ? (usage?.cachedContentTokenCount ?? 0) : 0;
+    const setTurnUsage = (usage: GenerateContentResponse['usageMetadata']) => {
+      turnInputTokens = usage?.promptTokenCount ?? 0;
+      turnOutputTokens = geminiOutputTokens(usage);
+      turnCacheReadTokens = turnCacheReads(usage);
+      turnReasoningTokens = reasoningTokensFromUsage(usage);
+    };
     // Running totals plus this turn, and this turn appended to the per-request breakdown.
     const usageSoFar = () => ({
       ...splitCacheInclusiveInput(accumInputTokens + turnInputTokens, accumCacheReadTokens + turnCacheReadTokens),
@@ -725,11 +732,19 @@ export class GeminiBackend implements ICompletionBackend {
     let streamedRoundText = '';
 
     if (options.stream) {
+      // Read by the catch below: usage and output seen while the stream loop was still open.
+      let streamLoopOpen = true;
+      let streamedChars = 0;
+      let latestUsage: GenerateContentResponse['usageMetadata'];
       try {
-        const result = await this._api.models.generateContentStream(request);
+        const result = await this._api.models.generateContentStream({
+          ...request,
+          config: { ...request.config, abortSignal: options.abortSignal },
+        });
 
         let lastChunk: any = null;
         for await (const chunk of result) {
+          if (chunk.usageMetadata) latestUsage = chunk.usageMetadata;
           // Check for abort signal
           if (options.abortSignal?.aborted) {
             throw new Error('Request aborted');
@@ -750,7 +765,10 @@ export class GeminiBackend implements ICompletionBackend {
                 // Accumulate text if multiple parts have text
                 streamedText[i] = (streamedText[i] || '') + part.text;
                 if (!part.thought) streamedRoundText += part.text;
+                streamedChars += part.text.length;
               }
+              const callArgs = (part.functionCall ?? part.function_call)?.args;
+              if (callArgs) streamedChars += JSON.stringify(callArgs).length;
 
               // Check for functionCall in various possible formats
               if (part.functionCall) {
@@ -774,6 +792,8 @@ export class GeminiBackend implements ICompletionBackend {
             await callback(streamedText, { toolsUsed });
           }
         }
+
+        streamLoopOpen = false;
 
         // At completion, send token usage info but NO text (already streamed)
         // IMPORTANT: Gemini may send function calls ONLY in the final chunk
@@ -811,10 +831,7 @@ export class GeminiBackend implements ICompletionBackend {
             }
           }
 
-          turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
-          turnOutputTokens = geminiOutputTokens(lastChunk.usageMetadata);
-          turnCacheReadTokens = turnCacheReads(lastChunk.usageMetadata);
-          turnReasoningTokens = reasoningTokensFromUsage(lastChunk.usageMetadata);
+          setTurnUsage(lastChunk.usageMetadata);
           const finishReason = normalizeGeminiFinishReason(lastChunk.candidates?.[0]?.finishReason);
           // Emit accum + this turn's tokens. When the call recurses below,
           // the inner call's terminal emit will overwrite this with the full
@@ -1044,6 +1061,23 @@ export class GeminiBackend implements ICompletionBackend {
       } catch (error) {
         // Check if error is due to abort signal
         if (options.abortSignal?.aborted || (error as Error).message.includes('aborted')) {
+          // Only an abort inside the stream loop: past it the turn's usage is already emitted,
+          // and an abort in tool execution or the recursive call is accounted for there.
+          if (streamLoopOpen && options.abortSignal?.aborted) {
+            setTurnUsage(latestUsage);
+            // Same call-2+ only estimate as anthropicBackend's withAbortedOutputEstimate: on a first
+            // call ChatCompletionProcess estimates the whole reply itself.
+            if (!turnOutputTokens && accumTurnUsage?.length && streamedChars > 0) {
+              turnOutputTokens = estimateStreamedOutputTokens(streamedChars, modelName);
+            }
+            if (turnInputTokens || turnOutputTokens) {
+              try {
+                await callback([], { ...usageSoFar(), toolsUsed, stopReason: 'aborted' });
+              } catch (callbackError) {
+                this.logger.warn('[Gemini] Aborted-usage callback failed:', callbackError);
+              }
+            }
+          }
           throw new Error('Request aborted');
         }
         throw error;
@@ -1101,10 +1135,7 @@ export class GeminiBackend implements ICompletionBackend {
           });
         });
 
-        turnInputTokens = r.usageMetadata?.promptTokenCount ?? 0;
-        turnOutputTokens = geminiOutputTokens(r.usageMetadata);
-        turnCacheReadTokens = turnCacheReads(r.usageMetadata);
-        turnReasoningTokens = reasoningTokensFromUsage(r.usageMetadata);
+        setTurnUsage(r.usageMetadata);
         const finishReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
         // Emit accum + this turn's tokens. The recursive call below (if any)
         // will overwrite via the same accum+thisTurn shape, ending at the
