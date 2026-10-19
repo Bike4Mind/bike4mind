@@ -20,19 +20,32 @@ export class FleetUsageExportTooLargeError extends Error {
   }
 }
 
+/**
+ * `disabled` means this stage has no usable token+scope pair, so the route should not exist there;
+ * `denied` means it is provisioned and the presented credential does not match.
+ */
+export type FleetUsageExportAuthorization =
+  { status: 'disabled' } | { status: 'denied' } | { status: 'authorized'; scope: FleetUsageExportScope };
+
 export function authorizeFleetUsageExport(
   authorization: string | undefined,
   env: { FLEET_USAGE_EXPORT_TOKEN?: string; FLEET_USAGE_EXPORT_SCOPE?: string }
-): FleetUsageExportScope | null {
+): FleetUsageExportAuthorization {
   const token = env.FLEET_USAGE_EXPORT_TOKEN;
-  if (!token || token.length < 32 || token.trim() !== token || token.length > 4096) return null;
-  if (!authorization || authorization.length > 4103) return null;
+  if (!token || token.length < 32 || token.trim() !== token || token.length > 4096) return { status: 'disabled' };
+  const scope = parseScope(env.FLEET_USAGE_EXPORT_SCOPE);
+  if (!scope) return { status: 'disabled' };
+  if (!authorization || authorization.length > 4103) return { status: 'denied' };
   const presented = /^Bearer (\S+)$/i.exec(authorization)?.[1];
-  if (!presented) return null;
+  if (!presented) return { status: 'denied' };
   const digest = (value: string) => createHash('sha256').update(value).digest();
-  if (!timingSafeEqual(digest(token), digest(presented))) return null;
+  if (!timingSafeEqual(digest(token), digest(presented))) return { status: 'denied' };
+  return { status: 'authorized', scope };
+}
+
+function parseScope(raw: string | undefined): FleetUsageExportScope | null {
   try {
-    const scope = FleetUsageExportScopeSchema.safeParse(JSON.parse(env.FLEET_USAGE_EXPORT_SCOPE ?? ''));
+    const scope = FleetUsageExportScopeSchema.safeParse(JSON.parse(raw ?? ''));
     return scope.success ? scope.data : null;
   } catch {
     return null;

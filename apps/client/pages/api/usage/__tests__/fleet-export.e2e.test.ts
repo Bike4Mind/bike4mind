@@ -8,7 +8,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { CounterLog, UsageEvent, User } from '@bike4mind/database';
+import { connectDB, CounterLog, UsageEvent, User } from '@bike4mind/database';
 import { FLEET_USAGE_MAX_ROWS, resolveApiCompletionSource } from '@bike4mind/common';
 import handler from '../fleet-export';
 
@@ -211,12 +211,25 @@ describe('Fleet export route against real Mongo', () => {
     expect((await call()).body.days.every((day: { rows: unknown[] }) => day.rows.length === 0)).toBe(true);
   });
 
-  it('denies wrong/missing/default credentials and scope and persists denial audits', async () => {
+  it('denies wrong/missing credentials into one aggregated denial audit per window', async () => {
     await UsageEvent.collection.insertOne(event());
     const read = vi.spyOn(UsageEvent, 'find');
     for (const authorization of ['', 'Bearer wrong', 'Bearer ordinary-api-key']) {
       expect((await call({ authorization })).status).toBe(401);
     }
+    expect(read).not.toHaveBeenCalled();
+    const denials = await CounterLog.find({ 'metadata.outcome': 'deny' }).lean();
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      counterName: 'Fleet Usage Export Access',
+      userId: 'fleet-usage-export',
+      counterValue: 3,
+    });
+  });
+
+  it('answers 404 without connecting or auditing when the route is not provisioned', async () => {
+    vi.mocked(connectDB).mockClear();
+    const read = vi.spyOn(UsageEvent, 'find');
     for (const config of [
       '',
       '{}',
@@ -225,13 +238,15 @@ describe('Fleet export route against real Mongo', () => {
       JSON.stringify({ ...scope, owners: [] }),
     ]) {
       vi.stubEnv('FLEET_USAGE_EXPORT_SCOPE', config);
-      expect((await call()).status).toBe(401);
+      expect((await call()).status).toBe(404);
     }
     vi.stubEnv('FLEET_USAGE_EXPORT_SCOPE', JSON.stringify(scope));
     vi.stubEnv('FLEET_USAGE_EXPORT_TOKEN', undefined);
-    expect((await call()).status).toBe(401);
+    expect((await call()).status).toBe(404);
+    expect((await call({ authorization: '' })).status).toBe(404);
     expect(read).not.toHaveBeenCalled();
-    expect(await CounterLog.countDocuments({ 'metadata.outcome': 'deny' })).toBe(9);
+    expect(connectDB).not.toHaveBeenCalled();
+    expect(await CounterLog.countDocuments({})).toBe(0);
   });
 
   it('refuses caller-selected scope, invalid ranges, and non-GET methods before reading usage', async () => {
