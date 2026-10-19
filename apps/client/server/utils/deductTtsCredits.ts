@@ -18,9 +18,9 @@ export interface DeductTtsArgs {
 
 /**
  * Settle one successful TTS synthesis against its hold. Cost is per input
- * character, provider+model aware (voicePricing). A fallback vendor that costs
- * more than the held quote is charged the quote: the substitution is ours, not
- * the caller's. Non-fatal: synthesis already succeeded, so a billing failure is
+ * character, provider+model aware (voicePricing). The hold covers every candidate
+ * vendor; settlement charges the actual cost and refunds the rest.
+ * Non-fatal: synthesis already succeeded, so a billing failure is
  * logged for ops (inside hold.settle) rather than surfaced to the caller.
  */
 export async function deductTtsCredits({

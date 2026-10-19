@@ -525,9 +525,27 @@ describe('processExecution tool deps', () => {
       const { markFailed } = await runWithModels([runModel]);
 
       expect(markFailed).toHaveBeenCalledWith('exec-1', {
-        message: 'Model "claude-sonnet-5" is not available to this user',
+        message: 'Unable to load model configuration. Please retry.',
       });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves an aggregation-only wake when model configuration cannot be read', async () => {
+      const { adminSettingsRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        status: 'awaiting_dag_children',
+        dagSpec: { nodes: [] },
+        waitingOnDagChildren: { toolUseId: 'tool-1' },
+      } as never);
+
+      const { markFailed } = await runWithModels([runModel]);
+
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Unable to load model configuration. Please retry.',
+      });
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
     });
   });
 

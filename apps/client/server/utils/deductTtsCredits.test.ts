@@ -63,7 +63,7 @@ describe('deductTtsCredits', () => {
     });
   });
 
-  it('records what the hold actually charged, which a fallback vendor cannot push past the quote', async () => {
+  it('records the settled charge returned by the hold', async () => {
     mocks.computeTtsUsd.mockReturnValue(0.05);
     mocks.usdToCredits.mockReturnValue(25);
     mocks.settle.mockResolvedValue(5);

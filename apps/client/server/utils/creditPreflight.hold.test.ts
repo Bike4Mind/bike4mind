@@ -31,6 +31,8 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 import { holdPreflightCredits, InsufficientCreditsPreflightError } from './creditPreflight';
+import { estimateTtsCreditCost } from '@bike4mind/common';
+import { estimateTtsHoldCredits } from './ttsCandidates';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const hold = (estimatedCredits: number) =>
@@ -82,6 +84,28 @@ describe('holdPreflightCredits', () => {
 
     await expect(held.settle(50, entry)).resolves.toBe(6);
     expect(balance.current).toBe(0);
+  });
+
+  it('charges the full cost of a pricier TTS fallback and refunds a successful primary', async () => {
+    const reservedCredits = estimateTtsHoldCredits('openai', 'tts-1', 1000);
+    const fallbackCredits = estimateTtsCreditCost('elevenlabs', 'eleven_multilingual_v2', 1000);
+    const primaryCredits = estimateTtsCreditCost('openai', 'tts-1', 1000);
+    balance.current = reservedCredits;
+
+    const fallbackHold = await hold(reservedCredits);
+    await expect(fallbackHold.settle(fallbackCredits, { ...entry, model: 'eleven_multilingual_v2' })).resolves.toBe(
+      fallbackCredits
+    );
+    expect(balance.current).toBe(0);
+    expect(mocks.createTransaction).toHaveBeenLastCalledWith(
+      'text_to_speech_usage',
+      expect.objectContaining({ credits: -fallbackCredits, model: 'eleven_multilingual_v2' })
+    );
+
+    balance.current = reservedCredits;
+    const primaryHold = await hold(reservedCredits);
+    await expect(primaryHold.settle(primaryCredits, entry)).resolves.toBe(primaryCredits);
+    expect(balance.current).toBe(reservedCredits - primaryCredits);
   });
 
   it('keeps the whole hold, and still writes its ledger row, on a non-finite charge', async () => {

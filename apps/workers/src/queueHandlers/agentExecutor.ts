@@ -1078,7 +1078,15 @@ async function processExecution(
     // miss the lookup and throw instead of running on the mapped replacement.
     const resolvedModelId = resolveDeprecatedModelId(execution.model, 'agentExecutor');
     const modelInfo = models.find((m: { id: string }) => m.id === resolvedModelId);
-    const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
+    const modelAccess = await loadRunnableModels(models, user as IUserDocument, logger);
+    if (!modelAccess.ok && !isAggregationOnlyWake) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Unable to load model configuration. Please retry.',
+      });
+      await sendWs('failed', { executionId, reason: modelAccess.reason });
+      return;
+    }
+    const runnableModels = modelAccess.ok ? modelAccess.models : [];
     const modelRunnable = modelInfo ? runnableModels.includes(modelInfo) : false;
     // An aggregation-only wake is exempt: its children have already been paid for and only the
     // wrap-up iteration that returns their results is left, so a transient settings read or a
@@ -3402,12 +3410,18 @@ async function fireDagNodeTerminalOnRefusal(args: {
   }
 }
 
+type RunnableModelAccess = { ok: true; models: ModelInfo[] } | { ok: false; reason: 'model_configuration_unavailable' };
+
 /**
  * The catalog models this user may run: the admission rule a chat turn applies to its
  * model (`ChatCompletionInvoke`), via `filterRunnableModels`. Runs and subagents are
  * refused, or fall back to the parent's model, rather than run on anything else.
  */
-async function loadRunnableModels(models: ModelInfo[], user: IUserDocument, logger: Logger): Promise<ModelInfo[]> {
+async function loadRunnableModels(
+  models: ModelInfo[],
+  user: IUserDocument,
+  logger: Logger
+): Promise<RunnableModelAccess> {
   let setting: Awaited<ReturnType<typeof adminSettingsRepository.findOne>>;
   try {
     setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' });
@@ -3417,7 +3431,7 @@ async function loadRunnableModels(models: ModelInfo[], user: IUserDocument, logg
     logger.warn('[AgentExecutor] failed to read model configurations; treating every model as unavailable', {
       err,
     });
-    return [];
+    return { ok: false, reason: 'model_configuration_unavailable' };
   }
   const configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
   const isAdmin = user.isAdmin ?? false;
@@ -3428,7 +3442,7 @@ async function loadRunnableModels(models: ModelInfo[], user: IUserDocument, logg
         return [];
       })
     : [];
-  return filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys);
+  return { ok: true, models: filterRunnableModels(models, configurations, user.tags ?? [], isAdmin, entitlementKeys) };
 }
 
 /**
@@ -3680,10 +3694,13 @@ async function processSubagentDispatch(
     // The parent's admission rules, applied to this child's own model and balance: the model
     // must be runnable by this user, and with enforcement on the balance must cover the first
     // iteration (see `nextIterationCredits`), not merely be above zero.
-    const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
-    const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
-    const refusal =
-      modelInfo && !runnableModels.includes(modelInfo)
+    const modelAccess = await loadRunnableModels(models, user as IUserDocument, logger);
+    const runnableModels = modelAccess.ok ? modelAccess.models : [];
+    const enforceCredits =
+      modelAccess.ok && (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
+    const refusal = !modelAccess.ok
+      ? { message: 'Unable to load model configuration. Please retry.', error: modelAccess.reason }
+      : modelInfo && !runnableModels.includes(modelInfo)
         ? { message: `Model "${childModel}" is not available to this user`, error: 'model_unavailable' }
         : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }

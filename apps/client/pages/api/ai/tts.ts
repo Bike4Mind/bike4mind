@@ -4,8 +4,6 @@ import {
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
-  estimateTtsCreditCost,
-  TTS_DEFAULT_MODEL,
   DEFAULT_TTS_PROVIDER,
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
@@ -13,6 +11,7 @@ import {
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
 import {
   holdPreflightCredits,
   InsufficientCreditsPreflightError,
@@ -71,7 +70,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     try {
       hold = await holdPreflightCredits({
         userId,
-        estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
+        estimatedCredits: estimateTtsHoldCredits(vendor, model, text.length),
         featureLabel: 'text-to-speech',
         logger: req.logger,
       });

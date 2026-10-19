@@ -179,6 +179,21 @@ describe('POST /api/ai/tts', () => {
     );
   });
 
+  it('holds the pricier fallback quote before synthesis, using its default model', async () => {
+    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 15 : 100));
+    okSynthesis('elevenlabs', 'openai');
+
+    const { promise } = run({ text: 'hello', provider: 'openai', model: 'tts-1-hd' });
+    await promise;
+
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ estimatedCredits: 100 }));
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ vendor: 'elevenlabs', hold: heldCredits })
+    );
+  });
+
   it('holds the estimate before synthesis and settles that same hold', async () => {
     mocks.synthesizeTts.mockImplementation(async () => {
       expect(mocks.holdPreflightCredits).toHaveBeenCalledTimes(1);

@@ -312,6 +312,20 @@ describe('processSubagentDispatch admission and billing', () => {
     expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a configuration read failure separately from model access and still terminates the DAG node', async () => {
+    const { adminSettingsRepository } = await import('@bike4mind/database');
+    vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
+
+    const { markFailed } = await dispatch();
+
+    expect(markFailed).toHaveBeenCalledWith('child-1', {
+      message: 'Unable to load model configuration. Please retry.',
+    });
+    expect(delegateToAgentMock).not.toHaveBeenCalled();
+    expect(deductCreditsMock).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a subagent on a model gated to an entitlement the user does not hold', async () => {
     const { adminSettingsRepository } = await import('@bike4mind/database');
     vi.mocked(adminSettingsRepository.findOne).mockResolvedValueOnce({
