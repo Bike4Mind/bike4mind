@@ -79,6 +79,15 @@ describe('verifyOrgOwner', () => {
     await expect(verifyOrgAccess({ id: MANAGER, isAdmin: false }, ORG)).resolves.toBe(org);
   });
 
+  // Same boundary for an adminUserIds manager on the roster: the owner-only routes (spend,
+  // integration secrets) refuse them although every verifyOrgAccess route admits them.
+  it('404s an org manager on the roster, who passes verifyOrgAccess', async () => {
+    const rostered = { ...org, adminUserIds: [APPOINTED_ADMIN], users: [{ userId: APPOINTED_ADMIN }] };
+    mockFindById.mockResolvedValue(rostered);
+    await expect(verifyOrgOwner({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
+  });
+
   it('404s a non-owner (same error as missing, to prevent enumeration)', async () => {
     await expect(verifyOrgOwner({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
   });
@@ -174,8 +183,19 @@ describe('verifyOrgAdminRead', () => {
     await expect(verifyOrgAdminRead(user, ORG)).resolves.toEqual({ org: orgWithAdmins, canManage: true });
   });
 
-  // The whole point of the tier: the appointed admin passes the read gate but not verifyOrgAccess.
-  it('admits an appointed admin for reading but reports canManage false', async () => {
+  // A manager with a current users[] row operates too: canManage and the write gate both admit them.
+  it('reports canManage for a manager on the roster, whom verifyOrgAccess also admits', async () => {
+    const rostered = { ...orgWithAdmins, users: [{ userId: APPOINTED_ADMIN }] };
+    mockFindById.mockResolvedValue(rostered);
+    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
+      org: rostered,
+      canManage: true,
+    });
+    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
+  });
+
+  // The whole point of the tier: a manager whose users[] row has lapsed may read but not operate.
+  it('admits a manager with no users[] row for reading but reports canManage false', async () => {
     await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
       org: orgWithAdmins,
       canManage: false,

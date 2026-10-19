@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
-  canManageOrgGitHubIntegration,
+  canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
@@ -173,11 +173,11 @@ describe('Organization Permissions', () => {
     });
   });
 
-  // Usage (credit spend) and the GitHub API / Webhooks tabs (integration secrets) share the
+  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs share the
   // verifyOrgOwner tier: owner or platform admin, never a manager.
   describe.each([
     ['canViewOrgUsage', canViewOrgUsage],
-    ['canManageOrgGitHubIntegration', canManageOrgGitHubIntegration],
+    ['canManageOrgIntegrations', canManageOrgIntegrations],
   ])('%s', (_name, gate) => {
     const org = {
       userId: 'owner123',
@@ -347,7 +347,7 @@ describe('resolveAccessibleTab', () => {
     canManageOrg: true,
     canViewUsage: true,
     canViewAnalysis: true,
-    canManageGitHubIntegration: true,
+    canManageIntegrations: true,
     canManageGroups: true,
     canViewBilling: true,
   };
@@ -365,7 +365,7 @@ describe('resolveAccessibleTab', () => {
 
   // A manager: Analysis is open to them, Usage (credit spend) is owner-only.
   it('bounces Usage but keeps Analysis for a manager', () => {
-    const manager = { ...all, canViewUsage: false, canManageGitHubIntegration: false, canViewBilling: false };
+    const manager = { ...all, canViewUsage: false, canManageIntegrations: false, canViewBilling: false };
     expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Analysis, manager)).toBe(OrganizationTabs.Analysis);
   });
@@ -384,17 +384,18 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // Same shape for the GitHub API and Webhooks tabs: every route behind them is verifyOrgOwner.
-  it('bounces GitHub API and Webhooks for a caller who may manage the org but is not its owner', () => {
-    const managing = { ...all, canManageGitHubIntegration: false };
+  // Same shape for the Integrations, GitHub API and Webhooks tabs: every route behind them is
+  // verifyOrgOwner.
+  it('bounces Integrations, GitHub API and Webhooks for a caller who may manage the org but is not its owner', () => {
+    const managing = { ...all, canManageIntegrations: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.GitHub, managing)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Webhooks, managing)).toBe(OrganizationTabs.Overview);
   });
 
-  it('keeps the other manage-pinned tabs reachable for that same caller', () => {
-    const managing = { ...all, canViewBilling: false, canManageGitHubIntegration: false };
+  it('keeps Settings reachable for that same caller', () => {
+    const managing = { ...all, canViewBilling: false, canManageIntegrations: false };
     expect(resolveAccessibleTab(OrganizationTabs.Settings, managing)).toBe(OrganizationTabs.Settings);
-    expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Integrations);
   });
 
   it('still bounces the manage-pinned tabs and Groups', () => {
@@ -411,7 +412,7 @@ describe('resolveAccessibleTab', () => {
       canManageOrg: false,
       canViewUsage: false,
       canViewAnalysis: false,
-      canManageGitHubIntegration: false,
+      canManageIntegrations: false,
       canManageGroups: false,
       canViewBilling: false,
     };

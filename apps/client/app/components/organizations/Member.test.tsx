@@ -152,6 +152,21 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: true, revoke: true });
   });
 
+  // revokeAccess refuses a manager removing another manager (it would edit the Managers list).
+  it('withholds Revoke on another manager card from a manager', () => {
+    renderMembers(
+      buildOrg({
+        adminUserIds: ['viewer', 'm1'],
+        users: [
+          { userId: 'viewer', permissions: [Permission.read] },
+          { userId: 'm1', permissions: [Permission.read] },
+        ] as IOrganizationDocument['users'],
+      })
+    );
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-revoke')).toBe('false');
+    expect(screen.getByTestId('member-card-p1').getAttribute('data-revoke')).toBe('true');
+  });
+
   it('gives a stale manager entry with no users[] row nothing', () => {
     renderMembers(buildOrg({ adminUserIds: ['viewer'] }));
     expectControls({ invite: false, revoke: false });

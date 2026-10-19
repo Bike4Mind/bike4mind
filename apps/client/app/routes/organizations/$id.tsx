@@ -47,7 +47,7 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import {
-  canManageOrgGitHubIntegration,
+  canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
@@ -94,12 +94,12 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
-  // Usage (credit spend) and the GitHub API / Webhooks tabs (integration secrets) are owner-only;
+  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs are owner-only;
   // Analysis is open to managers. None of them follows the permission set - see orgTabAccess.ts.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
   const canViewAnalysis = useMemo(() => canViewOrgAnalysis(currentUser, organization), [currentUser, organization]);
-  const canManageGitHubIntegration = useMemo(
-    () => canManageOrgGitHubIntegration(currentUser, organization),
+  const canManageIntegrations = useMemo(
+    () => canManageOrgIntegrations(currentUser, organization),
     [currentUser, organization]
   );
 
@@ -132,7 +132,7 @@ const OrganizationPage: FC = () => {
     canManageOrg,
     canViewUsage,
     canViewAnalysis,
-    canManageGitHubIntegration,
+    canManageIntegrations,
     canManageGroups,
     canViewBilling,
   });
@@ -235,14 +235,12 @@ const OrganizationPage: FC = () => {
                 Billing
               </Tab>
             )}
-            {canManageOrg && (
-              <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
-                Integrations
-              </Tab>
-            )}
-            {canManageGitHubIntegration && (
+            {canManageIntegrations && (
               <>
+                <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
+                  Integrations
+                </Tab>
                 <Tab value={OrganizationTabs.GitHub} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <VpnKeyOutlinedIcon sx={{ fontSize: 16 }} />
                   GitHub API
@@ -303,16 +301,14 @@ const OrganizationPage: FC = () => {
                 <OrganizationBillingSection organization={organization} />
               </TabPanel>
             )}
-            {canManageOrg && (
-              <TabPanel value={OrganizationTabs.Integrations}>
-                <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
-                  Integrations
-                </Typography>
-                <OrgSlackIntegration organization={organization} />
-              </TabPanel>
-            )}
-            {canManageGitHubIntegration && (
+            {canManageIntegrations && (
               <>
+                <TabPanel value={OrganizationTabs.Integrations}>
+                  <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
+                    Integrations
+                  </Typography>
+                  <OrgSlackIntegration organization={organization} />
+                </TabPanel>
                 <TabPanel value={OrganizationTabs.GitHub}>
                   <OrgGitHubConnectionTab orgId={organization.id} />
                 </TabPanel>

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { revokeAccess } from './revokeAccess';
 import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { Permission } from '@bike4mind/common';
 
 describe('organizationService - revokeAccess', () => {
@@ -188,6 +188,64 @@ describe('organizationService - revokeAccess', () => {
     await revokeAccess(mockManagerUser as IUserDocument, revokeParams, mockAdapters);
 
     expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
+
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+  });
+
+  it('lets an org manager (adminUserIds, on the roster) revoke a plain member', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['user2'],
+    });
+
+    await revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+  });
+
+  // Removal purges adminUserIds, so this would let a manager edit the Managers list.
+  it('refuses a manager removing another manager, and removes nothing', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['user1', 'user2'],
+    });
+
+    await expect(
+      revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters)
+    ).rejects.toThrow(ForbiddenError);
+
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('refuses the legacy managerId removing an org manager', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      managerId: 'manager1',
+      adminUserIds: ['user1'],
+    });
+
+    await expect(
+      revokeAccess({ id: 'manager1' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters)
+    ).rejects.toThrow(ForbiddenError);
+
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('lets the billing owner remove a manager', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: [...existingOrganization.userDetails!],
+      adminUserIds: ['user1', 'user2'],
+    });
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
     expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
   });

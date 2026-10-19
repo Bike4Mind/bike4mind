@@ -1,5 +1,11 @@
-import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import {
+  canRevokeOrgMember,
+  IGroupRepository,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { purgeOrgMembershipArtifacts, type PurgeOrgMembershipAdapters } from './purgeOrgMembership';
 import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
@@ -35,7 +41,7 @@ export const revokeAccess = async (
   const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError(`Organization not found for id: ${id}`);
 
-  // Only owner, manager, or admin can revoke access. Shares the predicate with addMember so the
+  // Only owner, a manager, or admin can revoke access. Shares the predicate with addMember so the
   // two halves of the membership lifecycle cannot drift on who may change the roster.
   if (!canAdministerOrganization(user, organization)) {
     throw new NotFoundError(`Organization not found for id: ${id}`); // Return same error to avoid info leakage
@@ -67,6 +73,11 @@ export const revokeAccess = async (
   // given account exists or belongs here.
   if (!isCurrentOrgMember(organization, userId)) {
     throw new NotFoundError(`Organization not found for id: ${id}`);
+  }
+
+  // Removing a manager edits the Managers list, which only the owner may do (see canRevokeOrgMember).
+  if (!canRevokeOrgMember(user, organization, userId)) {
+    throw new ForbiddenError('Only the organization owner can remove a manager');
   }
 
   organization.users = organization.users.filter(user => user.userId.toString() !== userId);

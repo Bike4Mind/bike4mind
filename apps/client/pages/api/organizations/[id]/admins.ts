@@ -1,6 +1,6 @@
 // PUT /api/organizations/:id/admins
-// Set the org's appointed admins (adminUserIds). Billing owner or platform admin only -
-// an org admin cannot appoint further admins (org-groups #1172 authorization matrix).
+// Set the org's managers (stored as adminUserIds). Billing owner or platform admin only -
+// a manager cannot add or remove managers (org-groups #1172 authorization matrix).
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';

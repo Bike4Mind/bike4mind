@@ -13,7 +13,8 @@ import {
   Input,
   styled,
 } from '@mui/joy';
-import { IOrganization, IOrganizationDocument, WithId, canAdministerOrganization } from '@bike4mind/common';
+import { IOrganization, IOrganizationDocument, WithId } from '@bike4mind/common';
+import { orgManagerNames } from './orgManagerNames';
 import GroupsIcon from '@mui/icons-material/Groups';
 import SportsMartialArtsIcon from '@mui/icons-material/SportsMartialArts';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
@@ -84,10 +85,8 @@ const OrganizationProfile: React.FC<OrganizationProfileProps> = ({ org, onClose,
       return lastLoginDate && lastLoginDate >= thresholdDate;
     }).length || 0;
 
-  // The org's own managers - the members its write gate admits besides the owner - not members whose
-  // platform-wide `level` happens to be Manager/Admin.
-  const managers =
-    org.users?.filter(({ userId }) => userId !== org.userId && canAdministerOrganization({ id: userId }, org)) ?? [];
+  // The org's own managers, not members whose platform-wide `level` happens to be Manager/Admin.
+  const managerNames = orgManagerNames(org);
 
   const handleChange = (field: keyof IOrganizationDocument, value: any) => {
     setEditedOrg(prev => ({ ...prev, [field]: value }));
@@ -214,14 +213,12 @@ const OrganizationProfile: React.FC<OrganizationProfileProps> = ({ org, onClose,
                   />
                 </FormControl>
               </Stack>
-              <Tooltip title={managers.map(manager => manager.user?.name).join(', ')}>
+              <Tooltip title={managerNames.join(', ')}>
                 <Stack direction="row" spacing={1}>
                   <ManageAccountsIcon />
                   <Typography level="body-sm">Managers:</Typography>
-                  <Typography textColor={managers.length > 0 ? 'primary' : 'danger.500'}>
-                    {managers.length > 0
-                      ? `${managers.map(manager => manager.user?.name).join(', ')}`
-                      : '<none assigned>'}
+                  <Typography textColor={managerNames.length > 0 ? 'primary' : 'danger.500'}>
+                    {managerNames.length > 0 ? managerNames.join(', ') : '<none assigned>'}
                   </Typography>
                 </Stack>
               </Tooltip>
