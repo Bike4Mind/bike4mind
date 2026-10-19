@@ -25,6 +25,11 @@ describe('stripLyricTimestamps', () => {
     expect(stripLyricTimestamps('[:] One\n[:]\n[:] Two')).toBe('One\nTwo');
   });
 
+  it('leaves a stamp that is not at the start of the line unchanged', () => {
+    const lyrics = 'hold on [:] and [1:2]';
+    expect(stripLyricTimestamps(lyrics)).toBe(lyrics);
+  });
+
   it('leaves lyrics without stamps, and brackets mid-line, unchanged', () => {
     const lyrics = '[Chorus 2]\nhold on [x2]\n12:30 at night';
     expect(stripLyricTimestamps(lyrics)).toBe(lyrics);
