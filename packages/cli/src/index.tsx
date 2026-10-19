@@ -44,7 +44,7 @@ import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
-import { ReActAgent } from '@bike4mind/agents';
+import { ReActAgent, createToolSearchTool } from '@bike4mind/agents';
 import { ToolCatalog } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
@@ -164,7 +164,6 @@ import { createResumeAgentTool } from './agents/resumeAgentTool.js';
 import { createCoordinateTaskTool } from './agents/coordinatorTool.js';
 import { parseAgentConfig } from './tools/skillTool.js';
 import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
-import { createToolSearchTool } from './tools/toolSearchTool.js';
 import {
   createWriteTodosTool,
   createTodoStore,
@@ -1010,11 +1009,15 @@ function CliApp() {
       const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
       const toolSearchTool =
         deferredToolRegistry.size() > 0
-          ? createToolSearchTool(() => {
-              if (!agentToolsRef.current) {
-                throw new Error('tool_search invoked before agent context was wired');
-              }
-              return agentToolsRef.current;
+          ? createToolSearchTool({
+              registry: deferredToolRegistry,
+              logger,
+              toolListAccessor: () => {
+                if (!agentToolsRef.current) {
+                  throw new Error('tool_search invoked before agent context was wired');
+                }
+                return agentToolsRef.current;
+              },
             })
           : null;
 

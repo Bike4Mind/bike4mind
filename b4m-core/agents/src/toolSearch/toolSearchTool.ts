@@ -1,7 +1,6 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { z } from 'zod';
-import { deferredToolRegistry } from './deferredToolRegistry.js';
-import { logger } from '../utils/Logger.js';
+import type { DeferredToolRegistry, ToolSearchLogger } from './DeferredToolRegistry';
 
 /**
  * Default number of tools returned for a keyword search. Matches Claude
@@ -30,6 +29,29 @@ const HARD_MAX_RESULTS = 20;
  * available to subsequent iterations.
  */
 export type ToolListAccessor = () => ICompletionOptionTools[];
+
+/** A `tool_reference` content block, as Anthropic expects inside a `tool_result`. */
+export interface ToolReferenceBlock {
+  type: 'tool_reference';
+  tool_name: string;
+}
+
+/**
+ * How matched tools reach the model:
+ * - `mutateTools` (default): push the schemas into the live agent tool list so they
+ *   are callable next iteration, and echo them as text.
+ * - `toolReference`: leave the tool list alone and answer with `tool_reference` blocks,
+ *   which a provider with native tool search expands server-side.
+ */
+export type ToolLoadStrategyName = 'mutateTools' | 'toolReference';
+
+export type ToolSearchToolOptions = {
+  registry: DeferredToolRegistry;
+  logger?: ToolSearchLogger;
+} & (
+  | { loadStrategy?: 'mutateTools'; toolListAccessor: ToolListAccessor }
+  | { loadStrategy: 'toolReference'; toolListAccessor?: undefined }
+);
 
 /**
  * Runtime validation for tool_search params. The LLM produces these
@@ -83,14 +105,30 @@ function renderToolsBlock(tools: ICompletionOptionTools[]): string {
   return `<functions>\n${lines.join('\n')}\n</functions>`;
 }
 
+/** Push matched tools into the live list, skipping ones already loaded. Returns the count added. */
+function mutateTools(toolListAccessor: ToolListAccessor, matched: ICompletionOptionTools[]): number {
+  const liveTools = toolListAccessor();
+  const liveNames = new Set(liveTools.map(t => t.toolSchema.name));
+  let added = 0;
+  for (const tool of matched) {
+    if (!liveNames.has(tool.toolSchema.name)) {
+      liveTools.push(tool);
+      added++;
+    }
+  }
+  return added;
+}
+
 /**
- * Build the tool_search meta-tool. The returned tool has a closure over
- * the supplied `toolListAccessor`, which it uses to push newly-resolved
- * tool schemas into the live agent context.
+ * Build the tool_search meta-tool over the supplied registry. With the default
+ * `mutateTools` strategy the returned tool closes over `toolListAccessor` to push
+ * newly-resolved schemas into the live agent context.
  *
  * Idempotent: re-loading a tool that's already in the context is a no-op.
  */
-export function createToolSearchTool(toolListAccessor: ToolListAccessor): ICompletionOptionTools {
+export function createToolSearchTool(options: ToolSearchToolOptions): ICompletionOptionTools {
+  const { registry, logger } = options;
+
   return {
     toolSchema: {
       name: 'tool_search',
@@ -116,7 +154,7 @@ export function createToolSearchTool(toolListAccessor: ToolListAccessor): ICompl
       const parsedParams = ToolSearchParamsSchema.safeParse(params ?? {});
       if (!parsedParams.success) {
         const issue = parsedParams.error.issues[0];
-        return `tool_search: invalid parameters — ${issue.path.join('.') || 'params'}: ${issue.message}`;
+        return `tool_search: invalid parameters \u2014 ${issue.path.join('.') || 'params'}: ${issue.message}`;
       }
       const { query, max_results } = parsedParams.data;
       const parsed = parseQuery(query);
@@ -124,14 +162,14 @@ export function createToolSearchTool(toolListAccessor: ToolListAccessor): ICompl
       let matched: ICompletionOptionTools[];
       let unmatched: string[] = [];
       if (parsed.mode === 'select') {
-        matched = deferredToolRegistry.getByNames(parsed.names);
+        matched = registry.getByNames(parsed.names);
         const foundNames = new Set(matched.map(t => t.toolSchema.name));
         unmatched = parsed.names.filter(n => !foundNames.has(n));
       } else {
         // max_results only applies to keyword search; `select:` returns
         // whatever names matched regardless of count.
         const max = max_results ?? DEFAULT_MAX_RESULTS;
-        matched = deferredToolRegistry.searchByKeywords(parsed.text, max);
+        matched = registry.searchByKeywords(parsed.text, max);
       }
 
       if (matched.length === 0) {
@@ -142,18 +180,18 @@ export function createToolSearchTool(toolListAccessor: ToolListAccessor): ICompl
         return hint;
       }
 
-      // Inject schemas into the live agent context. Idempotent - skip
-      // tools that are already loaded.
-      const liveTools = toolListAccessor();
-      const liveNames = new Set(liveTools.map(t => t.toolSchema.name));
-      let added = 0;
-      for (const tool of matched) {
-        if (!liveNames.has(tool.toolSchema.name)) {
-          liveTools.push(tool);
-          added++;
-        }
+      if (options.loadStrategy === 'toolReference') {
+        const references: ToolReferenceBlock[] = matched.map(t => ({
+          type: 'tool_reference',
+          tool_name: t.toolSchema.name,
+        }));
+        logger?.debug(`[tool_search] query="${query}" matched=${matched.length} strategy=toolReference`);
+        // toolFn is typed to return a string, so the blocks travel serialized.
+        return JSON.stringify(references);
       }
-      logger.debug(
+
+      const added = mutateTools(options.toolListAccessor, matched);
+      logger?.debug(
         `[tool_search] query="${query}" matched=${matched.length} added=${added} alreadyLoaded=${matched.length - added}`
       );
 

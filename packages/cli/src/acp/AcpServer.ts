@@ -19,6 +19,7 @@
 import { randomUUID } from 'crypto';
 import { Mutex } from 'async-mutex';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { createToolSearchTool } from '@bike4mind/agents';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 
@@ -42,7 +43,6 @@ import type { InteractionMode } from '../bootstrap/types.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { NotifyingLlmBackend } from '../llm/NotifyingLlmBackend.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
-import { createToolSearchTool } from '../tools/toolSearchTool.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
 import { createBackgroundAgentTools } from '../agents/backgroundTools.js';
@@ -599,9 +599,13 @@ export class AcpServer {
     const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
     const toolSearchTool =
       deferredToolRegistry.size() > 0
-        ? createToolSearchTool(() => {
-            if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-            return agentToolsRef.current;
+        ? createToolSearchTool({
+            registry: deferredToolRegistry,
+            logger,
+            toolListAccessor: () => {
+              if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
+              return agentToolsRef.current;
+            },
           })
         : null;
 
