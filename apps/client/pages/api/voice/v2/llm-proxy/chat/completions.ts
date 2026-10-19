@@ -34,7 +34,7 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { baseApi } from '@server/middlewares/baseApi';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
-import { voiceSessionTokenExpiresAtMs } from '@server/voice/voiceSessionLimits';
+import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,

@@ -102,7 +102,7 @@ vi.mock('@bike4mind/voice', () => ({
 }));
 
 import handler from '../completions';
-import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@server/voice/voiceSessionLimits';
+import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 // Minimal SSE-response double: only setHeader/write/end/on are ever touched by the
 // success path this test drives.
