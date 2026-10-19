@@ -199,6 +199,8 @@ import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-in
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureAdminAuditLogReadIndexes from './20260921235942_ensure-adminauditlog-read-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -346,6 +348,7 @@ const coreMigrations: MigrationFile[] = [
   SetUserAuthAuditLogRetention,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
+  EnsureAdminAuditLogReadIndexes,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
