@@ -16,7 +16,7 @@ type StartLakeChatButtonProps = {
   ariaLabel?: string;
   testId: string;
   sx?: SxProps;
-  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. */
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. Takes precedence over onChatStarted, which is not called when this is set. */
   startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding this button handle the created session instead of navigating to the notebook. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;

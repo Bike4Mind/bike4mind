@@ -58,6 +58,26 @@ describe('StartLakeChatButton', () => {
     expect(h.startChatWithLake).not.toHaveBeenCalled();
   });
 
+  it('prefers caller-owned creation over a supplied completion', async () => {
+    const startChatForLake = vi.fn().mockResolvedValue(undefined);
+    const onChatStarted = vi.fn();
+    renderButton({ startChatForLake, onChatStarted });
+    await clickAndSettle();
+
+    expect(startChatForLake).toHaveBeenCalledWith('lake1');
+    expect(h.startChatWithLake).not.toHaveBeenCalled();
+    expect(onChatStarted).not.toHaveBeenCalled();
+  });
+
+  it('toasts a failure when caller-owned creation rejects', async () => {
+    const startChatForLake = vi.fn().mockRejectedValue(new Error('create failed'));
+    renderButton({ startChatForLake });
+    await clickAndSettle();
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('Could not start a chat with this lake'));
+    expect(h.startChatWithLake).not.toHaveBeenCalled();
+  });
+
   it('hands a caller-supplied completion to the chat hook', async () => {
     const onChatStarted = vi.fn();
     renderButton({ onChatStarted });

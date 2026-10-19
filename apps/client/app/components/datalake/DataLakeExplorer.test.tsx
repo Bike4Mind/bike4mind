@@ -211,6 +211,18 @@ vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () =>
 // The rail viewer mounts KnowledgeViewer, which pulls in the websocket/session/artifact chain.
 // What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
 // the wrapper is stubbed with the same test ids it renders.
+// Wraps the real empty state so a test can read which props the Explorer forwards to it.
+const emptyStateProps = vi.hoisted(() => ({ last: undefined as { startChatForLake?: unknown } | undefined }));
+vi.mock('./DataLakeTreeEmptyState', async importOriginal => {
+  const actual = await importOriginal<typeof import('./DataLakeTreeEmptyState')>();
+  const Actual = actual.default;
+  return {
+    default: (props: React.ComponentProps<typeof Actual>) => {
+      emptyStateProps.last = props;
+      return <Actual {...props} />;
+    },
+  };
+});
 vi.mock('./DataLakeRailViewer', () => ({
   default: () => <div data-testid="datalake-rail-viewer" />,
 }));
@@ -1333,6 +1345,16 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'all-lakes-empty');
     expect(tree()).toHaveAttribute('data-segments', '');
+  });
+
+  it('forwards a caller-owned lake chat creator to the empty state', () => {
+    const startChatForLake = vi.fn().mockResolvedValue(undefined);
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
+    renderExplorer({ startChatForLake });
+
+    expect(emptyStateProps.last?.startChatForLake).toBe(startChatForLake);
   });
 
   describe('lake-prefix lookup handed to the tree', () => {
