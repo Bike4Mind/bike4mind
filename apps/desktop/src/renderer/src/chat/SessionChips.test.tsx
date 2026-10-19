@@ -693,3 +693,239 @@ describe("the folder chip's recent folders", () => {
     expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['thing']);
   });
 });
+
+describe('the chip row on one line', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const removeContextDirectory = vi.fn();
+  /** Every live ResizeObserver's callback; jsdom has no layout to fire them from. */
+  const observers = new Set<() => void>();
+  let frames: FrameRequestCallback[] = [];
+
+  // px: the fixed chips, each folder chip and the `+n` chip, beside the row's gap of 6.
+  const FIXED = 300;
+  const DIRECTORY = 100;
+  const MORE = 30;
+  let rowWidth = 800;
+
+  const folders = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `/Users/someone/shared/folder${index + 1}`);
+
+  function widthOf(element: HTMLElement): number {
+    const testid = element.dataset.testid;
+    if (testid === 'session-chip-row') return rowWidth;
+    if (testid === 'session-chip-fixed') return FIXED;
+    if (element.parentElement?.dataset.testid === 'session-chip-measure')
+      return element.tagName === 'BUTTON' ? MORE : DIRECTORY;
+    return 0;
+  }
+
+  async function show(contextDirectories: string[], granted: string[] = []): Promise<void> {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories })}
+          grantedDirectories={granted}
+          binding={{ ...binding, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+  }
+
+  /** What a real width change does: the observers after layout, then the frame they asked for. */
+  async function resize(width: number): Promise<void> {
+    rowWidth = width;
+    await act(async () => {
+      for (const fire of observers) fire();
+      const due = frames;
+      frames = [];
+      for (const frame of due) frame(0);
+    });
+  }
+
+  const shown = (): string[] =>
+    Array.from(
+      host.querySelectorAll<HTMLElement>('[data-testid="session-chip-context"]'),
+      chip => chip.textContent ?? ''
+    );
+  const more = (): HTMLElement | null => host.querySelector('[data-testid="session-chip-more-dirs-btn"]');
+  const menuItems = (): HTMLElement[] =>
+    Array.from(document.body.querySelectorAll<HTMLElement>('[data-testid="session-chip-more-dirs-item"]'));
+
+  async function openMore(): Promise<void> {
+    await act(async () => more()?.click());
+    await act(async () => undefined);
+  }
+
+  beforeEach(() => {
+    inspectProject.mockReset().mockResolvedValue(inspection());
+    removeContextDirectory.mockReset().mockResolvedValue(undefined);
+    rowWidth = 800;
+    frames = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+    vi.stubGlobal('cancelAnimationFrame', () => undefined);
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        private readonly fire: () => void;
+        constructor(callback: () => void) {
+          this.fire = () => callback();
+          observers.add(this.fire);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {
+          observers.delete(this.fire);
+        }
+      }
+    );
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = widthOf(this);
+      return { x: 0, y: 0, width, height: 28, top: 0, left: 0, right: width, bottom: 28, toJSON: () => ({}) };
+    });
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('draws no +n with no folders shared', async () => {
+    await show([]);
+
+    expect(shown()).toEqual([]);
+    expect(more()).toBeNull();
+  });
+
+  it('draws every folder and no +n when they fit', async () => {
+    // 300 fixed + 3 x (6 + 100) = 618, inside 800.
+    await show(folders(3));
+
+    expect(shown()).toEqual(['.../shared/folder1', '.../shared/folder2', '.../shared/folder3']);
+    expect(more()).toBeNull();
+  });
+
+  it('draws as many folders as leave room for +n, counting the rest', async () => {
+    rowWidth = 600;
+    // 300 left: two chips (212) and +n (36) fit, a third chip would not.
+    await show(folders(5));
+
+    expect(shown()).toEqual(['.../shared/folder1', '.../shared/folder2']);
+    expect(more()?.textContent).toBe('+3');
+  });
+
+  it('keeps one folder, cut short, beside +n while there is room for it', async () => {
+    rowWidth = 420;
+    // 120 left: no whole chip fits beside +n, but 78px of one does.
+    await show(folders(5));
+
+    expect(shown()).toEqual(['.../shared/folder1']);
+    expect(more()?.textContent).toBe('+4');
+  });
+
+  it('cuts a lone folder short rather than hiding it, keeping no room for a +n it does not need', async () => {
+    rowWidth = 380;
+    // 80 left: too narrow for the chip and +n, but 74px of the chip alone is enough.
+    await show(folders(1));
+
+    expect(shown()).toEqual(['.../shared/folder1']);
+    expect(more()).toBeNull();
+  });
+
+  it('draws +n alone when not even a cut-short folder fits, and never hides the fixed chips', async () => {
+    rowWidth = 380;
+    await show(folders(5));
+
+    expect(shown()).toEqual([]);
+    expect(more()?.textContent).toBe('+5');
+    const fixed = host.querySelector('[data-testid="session-chip-fixed"]');
+    for (const testid of ['session-chip-project', 'session-chip-branch', 'session-chip-add-context'])
+      expect(fixed?.querySelector(`[data-testid="${testid}"]`)).not.toBeNull();
+  });
+
+  it('re-measures when the row changes width', async () => {
+    await show(folders(5));
+    expect(more()?.textContent).toBe('+1');
+
+    await resize(600);
+    expect(more()?.textContent).toBe('+3');
+
+    await resize(1000);
+    expect(shown()).toHaveLength(5);
+    expect(more()).toBeNull();
+  });
+
+  it('re-measures when a folder is added', async () => {
+    rowWidth = 600;
+    await show(folders(2));
+    expect(more()).toBeNull();
+
+    await show(folders(3));
+    expect(shown()).toHaveLength(2);
+    expect(more()?.textContent).toBe('+1');
+  });
+
+  it('counts a folder that is both recorded and granted once', async () => {
+    rowWidth = 600;
+    const [first, second, third] = folders(3);
+    await show([first, second, third], [third, first]);
+
+    expect(shown()).toHaveLength(2);
+    expect(more()?.textContent).toBe('+1');
+  });
+
+  it('lists the hidden folders in the +n menu, with the full path on hover', async () => {
+    rowWidth = 600;
+    const all = folders(5);
+    await show(all);
+    await openMore();
+
+    expect(document.body.querySelector('[data-testid="session-chip-more-dirs-menu"]')).not.toBeNull();
+    expect(menuItems().map(item => item.dataset.path)).toEqual(all.slice(2));
+    expect(menuItems().map(item => item.textContent)).toEqual([
+      '.../shared/folder3',
+      '.../shared/folder4',
+      '.../shared/folder5',
+    ]);
+  });
+
+  it('takes a folder back from the menu, keeps the menu open and recounts', async () => {
+    rowWidth = 600;
+    const all = folders(5);
+    await show(all);
+    await openMore();
+
+    const remove = menuItems()[0].querySelector<HTMLElement>('[data-testid="session-chip-more-dirs-remove-btn"]');
+    await act(async () => remove?.click());
+
+    expect(removeContextDirectory).toHaveBeenCalledWith(all[2]);
+    await show(all.filter(directory => directory !== all[2]));
+    expect(more()?.textContent).toBe('+2');
+    expect(menuItems().map(item => item.dataset.path)).toEqual(all.slice(3));
+  });
+
+  it('takes the focused folder back on Enter', async () => {
+    rowWidth = 600;
+    const all = folders(5);
+    await show(all);
+    await openMore();
+
+    const item = menuItems()[1];
+    await act(async () => {
+      item.focus();
+      item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    expect(removeContextDirectory).toHaveBeenCalledWith(all[3]);
+    expect(document.activeElement).toBe(menuItems()[2]);
+  });
+});

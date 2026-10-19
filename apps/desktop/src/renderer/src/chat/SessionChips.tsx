@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -94,6 +103,7 @@ const ROW_HEIGHT = 28;
 const pillSx: SxProps = {
   display: 'flex',
   alignItems: 'center',
+  minWidth: 0,
   minHeight: ROW_HEIGHT,
   borderRadius: '999px',
   border: '1px solid',
@@ -112,6 +122,7 @@ const chipSx: SxProps = {
 const pillButtonSx: SxProps = {
   fontWeight: 'normal',
   minHeight: 22,
+  minWidth: 0,
   px: 1,
   '--Button-gap': '6px',
   borderRadius: '999px',
@@ -119,6 +130,28 @@ const pillButtonSx: SxProps = {
 
 /** Chip tooltips put a path on a line of its own; the width cap is in theme.ts. */
 const chipTooltipSx: SxProps = { whiteSpace: 'pre-line' };
+
+/** The row's `gap: 0.75`, in px, for the arithmetic in `fittingDirectories`. */
+const ROW_GAP = 6;
+
+/** The narrowest a lone folder chip is still drawn at, cut short: its X and a few letters. */
+const MIN_DIRECTORY_CHIP = 64;
+
+/**
+ * Marks a label the row may cut short with an ellipsis. The measurement adds back what each one
+ * has lost, so the fixed chips are measured at the width they want, not the one they were given.
+ */
+const CLIPPABLE_LABEL = 'session-chip-clippable';
+
+/** The `+n` chip: a MenuButton drawn as the folder chips are, at their size and weight. */
+const moreChipSx: SxProps = {
+  minHeight: ROW_HEIGHT,
+  minWidth: 0,
+  px: '8px',
+  flexShrink: 0,
+  borderRadius: '999px',
+  fontWeight: 'md',
+};
 
 function lastSegments(path: string, count = 2): string {
   const parts = path.split('/').filter(Boolean);
@@ -231,7 +264,7 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
       <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
         {/* Wrapped for the same reason as the worktree toggle below: a disabled button takes no
             pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
-        <Box sx={{ display: 'flex' }}>
+        <Box sx={{ display: 'flex', minWidth: 0 }}>
           <MenuButton
             size="sm"
             variant={unset ? 'soft' : 'outlined'}
@@ -241,7 +274,7 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
             sx={{ ...pillButtonSx, minHeight: ROW_HEIGHT }}
             slotProps={{ root: { 'data-testid': 'session-chip-project' } }}
           >
-            <Typography level="body-xs" textColor="inherit" noWrap>
+            <Typography level="body-xs" textColor="inherit" noWrap className={CLIPPABLE_LABEL}>
               {folder.label}
             </Typography>
           </MenuButton>
@@ -331,7 +364,7 @@ function BranchChip({
         <Tooltip title={branchChip.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
           {/* Wrapped for the same reason as the worktree toggle: once locked the button is
               disabled, and the tooltip is then the only place its branch and reason are read. */}
-          <Box sx={{ display: 'flex' }}>
+          <Box sx={{ display: 'flex', minWidth: 0 }}>
             <MenuButton
               size="sm"
               variant="plain"
@@ -341,7 +374,7 @@ function BranchChip({
               sx={pillButtonSx}
               slotProps={{ root: { 'data-testid': 'session-chip-branch-btn' } }}
             >
-              <Typography level="body-xs" textColor="inherit" noWrap>
+              <Typography level="body-xs" textColor="inherit" noWrap className={CLIPPABLE_LABEL}>
                 {branchChip.label}
               </Typography>
             </MenuButton>
@@ -448,12 +481,12 @@ function BranchChip({
         </Menu>
       </Dropdown>
 
-      <Box sx={{ width: '1px', alignSelf: 'stretch', my: 0.5, bgcolor: 'neutral.outlinedBorder' }} />
+      <Box sx={{ width: '1px', flexShrink: 0, alignSelf: 'stretch', my: 0.5, bgcolor: 'neutral.outlinedBorder' }} />
 
       <Tooltip title={worktree.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
         {/* The Box, not the Checkbox, carries the tooltip: a disabled input takes no pointer
             events, so the reason it is disabled would be unreadable on the one it applies to. */}
-        <Box sx={{ px: 1, display: 'flex', alignItems: 'center' }}>
+        <Box sx={{ px: 1, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
           <Checkbox
             size="sm"
             label={
@@ -551,50 +584,276 @@ function ElsewhereConfirm({
   );
 }
 
-/**
- * The extra folders this session may read, and the button that adds one.
- *
- * The grants are drawn rather than hidden behind the button: they widen what the tools can
- * reach, and a permission nobody can see is one nobody can take back.
- */
-function ContextChips({
-  project,
-  granted,
-  binding,
-}: {
-  project: ChatProject | null;
-  granted: readonly string[];
-  binding: ChipBinding;
-}) {
+/** The button that grants this session another folder; the grants themselves are drawn by `ChipRow`. */
+function AddContextButton({ binding }: { binding: ChipBinding }) {
   const { addContext } = binding.chips;
-  const directories = [...(project?.contextDirectories ?? []), ...granted];
 
   return (
-    <>
-      <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
-        {/* Wrapped for the same reason as the worktree toggle: a disabled button shows no tooltip. */}
-        <Box sx={{ display: 'flex' }}>
-          <IconButton
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            disabled={binding.busy || !addContext.enabled}
-            onClick={() => void binding.addContextDirectory()}
-            aria-label={addContext.label}
-            sx={{ borderRadius: '999px', minWidth: ROW_HEIGHT, minHeight: ROW_HEIGHT }}
-            data-testid="session-chip-add-context"
-          >
-            <FolderPlusIcon />
-          </IconButton>
-        </Box>
-      </Tooltip>
+    <Tooltip title={addContext.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+      {/* Wrapped for the same reason as the worktree toggle: a disabled button shows no tooltip. */}
+      <Box sx={{ display: 'flex', flexShrink: 0 }}>
+        <IconButton
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={binding.busy || !addContext.enabled}
+          onClick={() => void binding.addContextDirectory()}
+          aria-label={addContext.label}
+          sx={{ borderRadius: '999px', minWidth: ROW_HEIGHT, minHeight: ROW_HEIGHT }}
+          data-testid="session-chip-add-context"
+        >
+          <FolderPlusIcon />
+        </IconButton>
+      </Box>
+    </Tooltip>
+  );
+}
 
-      {directories
-        .filter((directory, index) => directories.indexOf(directory) === index)
-        .map(directory => (
-          <DirectoryChip key={directory} directory={directory} onRemove={binding.removeContextDirectory} />
+/**
+ * How many folder chips to draw in `space`, the row's width less the fixed chips': all of them
+ * if they fit, else as many as leave room for the `+n` chip after them, else one cut short
+ * beside it, else none and `+n` alone. Every chip, `+n` included, is preceded by a gap.
+ */
+function fittingDirectories(space: number, widths: readonly number[], more: number): number {
+  const all = widths.reduce((sum, width) => sum + ROW_GAP + width, 0);
+  if (all <= space) return widths.length;
+
+  let used = ROW_GAP + more;
+  let count = 0;
+  for (const width of widths) {
+    if (used + ROW_GAP + width > space) break;
+    used += ROW_GAP + width;
+    count++;
+  }
+  if (count > 0) return count;
+  // A lone folder cut short leaves nothing hidden, so it needs no room kept for `+n`.
+  const left = widths.length > 1 ? space - used : space;
+  return left - ROW_GAP >= MIN_DIRECTORY_CHIP ? 1 : 0;
+}
+
+/**
+ * How many of `count` folder chips fit beside the fixed ones.
+ *
+ * Measured from a hidden strip holding every chip at its natural width, so a chip can be counted
+ * before it is drawn and no layout is read during render. A change of folders is measured before
+ * paint; a change of width - window, browser or terminal pane, a branch label git has just
+ * answered - comes through the one observer and is read at most once a frame.
+ */
+function useFittingDirectories(count: number, key: string) {
+  const row = useRef<HTMLDivElement>(null);
+  const fixed = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const [fitting, setFitting] = useState(count);
+
+  const measure = useCallback(() => {
+    if (!row.current || !fixed.current || !strip.current) return;
+    const rowWidth = row.current.getBoundingClientRect().width;
+    // Not laid out (a hidden pane, or no layout engine at all): keep the last answer.
+    if (!rowWidth) return;
+    const clipped = Array.from(fixed.current.querySelectorAll<HTMLElement>(`.${CLIPPABLE_LABEL}`)).reduce(
+      (sum, label) => sum + Math.max(0, label.scrollWidth - label.clientWidth),
+      0
+    );
+    const widths = Array.from(strip.current.children, child => child.getBoundingClientRect().width);
+    const more = widths.pop() ?? 0;
+    setFitting(fittingDirectories(rowWidth - fixed.current.getBoundingClientRect().width - clipped, widths, more));
+  }, []);
+
+  useLayoutEffect(measure, [measure, key]);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
+    for (const element of [row.current, fixed.current, strip.current]) if (element) observer.observe(element);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [measure]);
+
+  return { row, fixed, strip, fitting: Math.min(fitting, count) };
+}
+
+/**
+ * The fixed chips, then the extra folders this session may read - on one line, however many.
+ *
+ * The grants are drawn rather than hidden behind the button: they widen what the tools can
+ * reach, and a permission nobody can see is one nobody can take back. So those that do not fit
+ * are still counted, in a `+n` chip whose menu lists them and takes each one back.
+ *
+ * The fixed chips never go into `+n`. They only give up width, by cutting their labels short,
+ * once no folder chip is left to give it up first.
+ */
+function ChipRow({
+  children,
+  directories,
+  onRemove,
+}: {
+  children: ReactNode;
+  directories: readonly string[];
+  onRemove: (directory: string) => Promise<void>;
+}) {
+  const { row, fixed, strip, fitting } = useFittingDirectories(directories.length, directories.join('\n'));
+  const hidden = directories.slice(fitting);
+
+  return (
+    <Box
+      ref={row}
+      sx={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.75,
+        minWidth: 0,
+        // Clip, not hidden: a hidden box can still be scrolled sideways by focusing a chip in it.
+        // The margin keeps the focus ring of a chip on the row's edge.
+        overflow: 'clip',
+        overflowClipMargin: '4px',
+      }}
+      data-testid="session-chip-row"
+    >
+      <Box
+        ref={fixed}
+        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0, flexShrink: fitting > 0 ? 0 : 1 }}
+        data-testid="session-chip-fixed"
+      >
+        {children}
+      </Box>
+
+      {directories.slice(0, fitting).map(directory => (
+        <DirectoryChip key={directory} directory={directory} onRemove={onRemove} />
+      ))}
+      {hidden.length > 0 && <HiddenDirectoriesMenu directories={hidden} onRemove={onRemove} />}
+
+      <Box
+        ref={strip}
+        aria-hidden
+        sx={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: 'max-content',
+          display: 'flex',
+          visibility: 'hidden',
+          pointerEvents: 'none',
+          '& > *': { flexShrink: 0 },
+        }}
+        data-testid="session-chip-measure"
+      >
+        {directories.map(directory => (
+          <Chip key={directory} size="sm" variant="soft" color="neutral" endDecorator={<CloseIcon />} sx={chipSx}>
+            {lastSegments(directory)}
+          </Chip>
         ))}
-    </>
+        {directories.length > 0 && (
+          <Button size="sm" variant="soft" color="neutral" tabIndex={-1} sx={moreChipSx}>
+            <Typography level="body-xs" textColor="inherit">
+              +{directories.length}
+            </Typography>
+          </Button>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
+const keepMenuOpen = (event: SyntheticEvent) => {
+  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
+};
+
+/**
+ * The folders the row had no room for, behind a `+n` chip. Each is taken back the way its chip
+ * would be: a click, Enter, Delete or its X.
+ */
+function HiddenDirectoriesMenu({
+  directories,
+  onRemove,
+}: {
+  directories: readonly string[];
+  onRemove: (directory: string) => Promise<void>;
+}) {
+  const home = useHomeDirectory();
+
+  // The removed item unmounts with the focus in it, which would leave the menu deaf to the
+  // keyboard: arrows, Enter and Escape are all heard on the list. So focus moves on first.
+  const remove = (directory: string, item: Element | null): void => {
+    const items = Array.from(item?.parentElement?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    const at = items.findIndex(entry => entry === item);
+    (items[at + 1] ?? items[at - 1])?.focus();
+    void onRemove(directory);
+  };
+
+  return (
+    <Dropdown>
+      <MenuButton
+        size="sm"
+        variant="soft"
+        color="neutral"
+        aria-label={`${directories.length} more shared folders`}
+        sx={moreChipSx}
+        slotProps={{ root: { 'data-testid': 'session-chip-more-dirs-btn' } }}
+      >
+        <Typography level="body-xs" textColor="inherit" noWrap>
+          +{directories.length}
+        </Typography>
+      </MenuButton>
+
+      <Menu
+        size="sm"
+        placement="top-start"
+        sx={{ maxHeight: 360, overflow: 'auto', width: FOLDER_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
+        data-testid="session-chip-more-dirs-menu"
+      >
+        {directories.map(directory => (
+          <Tooltip
+            key={directory}
+            title={displayPath(directory, home, Number.POSITIVE_INFINITY)}
+            size="sm"
+            variant="soft"
+            placement="right"
+            sx={chipTooltipSx}
+          >
+            <MenuItem
+              onClick={event => {
+                if (directories.length > 1) keepMenuOpen(event);
+                remove(directory, event.currentTarget);
+              }}
+              onKeyDown={event => {
+                if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+                event.preventDefault();
+                remove(directory, event.currentTarget);
+              }}
+              data-testid="session-chip-more-dirs-item"
+              data-path={directory}
+            >
+              <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                {lastSegments(directory)}
+              </Typography>
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                aria-label={`Stop sharing ${lastSegments(directory)}`}
+                tabIndex={-1}
+                onClick={event => {
+                  event.stopPropagation();
+                  remove(directory, event.currentTarget.closest('[role="menuitem"]'));
+                }}
+                sx={{ '--IconButton-size': '22px' }}
+                data-testid="session-chip-more-dirs-remove-btn"
+              >
+                <CloseIcon />
+              </IconButton>
+            </MenuItem>
+          </Tooltip>
+        ))}
+      </Menu>
+    </Dropdown>
   );
 }
 
@@ -616,7 +875,7 @@ function DirectoryChip({ directory, onRemove }: { directory: string; onRemove: (
         color="neutral"
         endDecorator={<CloseIcon />}
         onClick={() => void onRemove(directory)}
-        sx={chipSx}
+        sx={{ ...chipSx, minWidth: 0 }}
         data-testid="session-chip-context"
       >
         {lastSegments(directory)}
@@ -748,6 +1007,9 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
   return directory && `${directory}\n${workingDirectory ?? directory}`;
 }
 
+/** Shared, so a session with no grants hands `directories` the same array every render. */
+const NO_DIRECTORIES: readonly string[] = [];
+
 /**
  * What a Code session is grounded in, above the composer, editable at any point in the session.
  *
@@ -757,7 +1019,7 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
  */
 export function SessionChips({
   project,
-  grantedDirectories = [],
+  grantedDirectories = NO_DIRECTORIES,
   binding,
   settledTurns,
   inUse = false,
@@ -812,6 +1074,12 @@ export function SessionChips({
 
   const dismiss = useCallback(() => binding.dismissError(), [binding]);
 
+  const contextDirectories = project?.contextDirectories;
+  const directories = useMemo(() => {
+    const all = [...(contextDirectories ?? []), ...grantedDirectories];
+    return all.filter((directory, index) => all.indexOf(directory) === index);
+  }, [contextDirectories, grantedDirectories]);
+
   return (
     <Box sx={{ ...contentColumnSx, pt: 1 }}>
       {binding.error?.elsewhere ? (
@@ -831,11 +1099,11 @@ export function SessionChips({
         )
       )}
 
-      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
+      <ChipRow directories={directories} onRemove={binding.removeContextDirectory}>
         <ProjectChip binding={bound} current={project?.directory ?? null} />
         <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} home={home} />
-        <ContextChips project={project} granted={grantedDirectories} binding={bound} />
-      </Stack>
+        <AddContextButton binding={bound} />
+      </ChipRow>
     </Box>
   );
 }
