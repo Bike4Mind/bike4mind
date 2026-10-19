@@ -71,4 +71,34 @@ describe('AuditEntryDrawer', () => {
     fireEvent.click(screen.getByTestId('audit-drawer-close-btn'));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('activates a related row with Enter', () => {
+    const related = makeAuditEntry({ id: 'rel-1' });
+    const onSelectRelated = vi.fn();
+    render(
+      <AuditEntryDrawer
+        entry={makeAuditEntry()}
+        onClose={vi.fn()}
+        relatedEntries={[related]}
+        onSelectRelated={onSelectRelated}
+      />,
+      { wrapper: TestWrapper }
+    );
+    const row = screen.getByTestId('audit-drawer-related-row-rel-1');
+    expect(row.getAttribute('role')).toBe('button');
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onSelectRelated).toHaveBeenCalledWith(related);
+  });
+
+  it('renders null and undefined before/after values without crashing', () => {
+    const entry = makeAuditEntry({
+      changes: [
+        { field: 'note', before: null, after: undefined },
+        { field: 'note', before: 'a', after: 'b' },
+      ],
+    });
+    render(<AuditEntryDrawer entry={entry} onClose={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByText('null')).toBeTruthy();
+    expect(screen.getAllByText('note')).toHaveLength(2);
+  });
 });

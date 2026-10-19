@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Box, Button, IconButton, Sheet, Stack, Table, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import type { AuditChange, AuditEntry } from '@bike4mind/common';
+import { activateOnKey } from './activateOnKey';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 
 export const DrawerSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
@@ -28,6 +29,8 @@ export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> 
   </Stack>
 );
 
+const WRAP_STYLE = { overflowWrap: 'anywhere' } as const;
+
 const formatValue = (value: unknown): string => {
   if (typeof value === 'string') return value;
   if (value === undefined) return '';
@@ -44,11 +47,11 @@ export const ChangesTable: React.FC<{ changes: AuditChange[] }> = ({ changes }) 
       </tr>
     </thead>
     <tbody>
-      {changes.map(change => (
-        <tr key={change.field}>
-          <td>{change.field}</td>
-          <td>{formatValue(change.before)}</td>
-          <td>{formatValue(change.after)}</td>
+      {changes.map((change, index) => (
+        <tr key={`${change.field}-${index}`}>
+          <td style={WRAP_STYLE}>{change.field}</td>
+          <td style={WRAP_STYLE}>{formatValue(change.before)}</td>
+          <td style={WRAP_STYLE}>{formatValue(change.after)}</td>
         </tr>
       ))}
     </tbody>
@@ -84,7 +87,18 @@ export const CollapsibleJson: React.FC<{ value: Record<string, unknown> }> = ({ 
       </Button>
       {expanded && (
         <Sheet variant="soft" sx={{ p: 1, borderRadius: 'sm', overflow: 'auto' }}>
-          <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(value, null, 2)}</pre>
+          <pre
+            style={{
+              margin: 0,
+              fontSize: 12,
+              overflowWrap: 'anywhere',
+              whiteSpace: 'pre-wrap',
+              maxHeight: 400,
+              overflow: 'auto',
+            }}
+          >
+            {JSON.stringify(value, null, 2)}
+          </pre>
         </Sheet>
       )}
     </Box>
@@ -98,8 +112,16 @@ export const RelatedEventRow: React.FC<{ entry: AuditEntry; onSelect?(entry: Aud
   <Sheet
     variant="outlined"
     data-testid={`audit-drawer-related-row-${entry.id}`}
+    role="button"
+    tabIndex={0}
     onClick={() => onSelect?.(entry)}
-    sx={{ p: 1, borderRadius: 'sm', cursor: onSelect ? 'pointer' : 'default' }}
+    onKeyDown={activateOnKey(() => onSelect?.(entry))}
+    sx={{
+      p: 1,
+      borderRadius: 'sm',
+      cursor: onSelect ? 'pointer' : 'default',
+      '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.500' },
+    }}
   >
     <Typography level="body-sm">{entry.summary}</Typography>
     <Typography level="body-xs">{new Date(entry.occurredAt).toLocaleString()}</Typography>

@@ -2,6 +2,7 @@ import { Box, Button, Chip, IconButton, Sheet, Stack, Table, Tooltip, Typography
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import type { AuditEntry, AuditTarget } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
+import { activateOnKey } from './activateOnKey';
 import { AuditActorLabel } from './AuditActorLabel';
 import { AuditSeverityChip } from './AuditSeverityChip';
 
@@ -48,7 +49,13 @@ const AuditRow: React.FC<
   const { userId } = entry.actor;
 
   return (
-    <tr data-testid={`audit-table-row-${entry.id}`} onClick={() => onSelectEntry(entry)} style={{ cursor: 'pointer' }}>
+    <tr
+      data-testid={`audit-table-row-${entry.id}`}
+      onClick={() => onSelectEntry(entry)}
+      tabIndex={0}
+      onKeyDown={activateOnKey(() => onSelectEntry(entry))}
+      style={{ cursor: 'pointer' }}
+    >
       <td>
         <Tooltip title={occurredAt.toLocaleString()}>
           <Typography level="body-sm" noWrap>
@@ -125,7 +132,12 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
   emptyMessage = 'No audit events found',
 }) => (
   <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
-    <Table hoverRow stickyHeader data-testid="audit-table">
+    <Table
+      hoverRow
+      stickyHeader
+      data-testid="audit-table"
+      sx={{ '& tbody tr:focus-visible': { outline: '2px solid', outlineColor: 'primary.500', outlineOffset: -2 } }}
+    >
       <thead>
         <tr>
           <th style={{ width: 120 }}>Time</th>

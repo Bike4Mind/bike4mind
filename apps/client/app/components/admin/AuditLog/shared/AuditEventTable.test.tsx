@@ -93,4 +93,18 @@ describe('AuditEventTable', () => {
     });
     expect(screen.getByTestId('audit-table-empty').textContent).toContain('Nothing here');
   });
+
+  it('opens an entry with Enter or Space on a focused row, but not from a nested filter button', () => {
+    const onSelectEntry = vi.fn();
+    render(<AuditEventTable {...baseProps} onSelectEntry={onSelectEntry} onFilterActor={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    const row = screen.getByTestId('audit-table-row-entry-1');
+    expect(row.getAttribute('tabindex')).toBe('0');
+    fireEvent.keyDown(row, { key: 'Enter' });
+    fireEvent.keyDown(row, { key: ' ' });
+    expect(onSelectEntry).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getAllByTestId('audit-table-actor-filter-btn')[0], { key: 'Enter' });
+    expect(onSelectEntry).toHaveBeenCalledTimes(2);
+  });
 });
