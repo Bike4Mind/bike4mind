@@ -58,7 +58,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './useAgentExecution';
+import { useAgentExecutionSubscriptions, useAgentExecutionDispatch, failedRunReply } from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
@@ -706,5 +706,46 @@ describe('useAgentExecutionSubscriptions -- write preview raised mid-run', () =>
       pages: Array<{ data: Array<{ pendingAction?: unknown }> }>;
     };
     expect(cached.pages[0].data[0].pendingAction).toEqual(pendingAction);
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- failed run reply', () => {
+  const questsKey = ['quests', 'session', 's1'];
+  const latestReplies = (queryClient: QueryClient) =>
+    (queryClient.getQueryData(questsKey) as { pages: Array<{ data: Array<{ replies?: string[] }> }> }).pages[0].data[0]
+      .replies;
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('names the denied tool instead of reporting a crash when the user clicks Deny', async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'post to slack', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['failed']({
+      action: 'failed',
+      executionId: 'e1',
+      reason: 'tool_denied',
+      toolName: 'slack_post',
+      message: 'Execution stopped: you denied "slack_post".',
+    });
+
+    expect(latestReplies(queryClient)).toEqual(['Stopped: "slack_post" was denied.']);
+  });
+
+  it('keeps the generic message for any other failure reason', () => {
+    expect(failedRunReply('error')).toBe('Agent execution failed.');
+    expect(failedRunReply('timeout', 'slack_post')).toBe('Agent execution failed.');
+  });
+
+  it('still reads as a denial when the frame carries no tool name', () => {
+    expect(failedRunReply('tool_denied')).toBe('Stopped: a tool call was denied.');
   });
 });
