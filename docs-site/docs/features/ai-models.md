@@ -120,8 +120,6 @@ Controls response length:
 - Context-aware limits to prevent overflow
 - Model-specific maximums respected
 
-Gemini thinking models run at Google's default output limit, so this setting does not apply to them.
-
 ### Advanced Settings
 
 #### Streaming
@@ -136,7 +134,7 @@ Gemini thinking models run at Google's default output limit, so this setting doe
 
 #### Thinking Models
 - Explicit reasoning steps before responding
-- Configurable token budget
+- Token budget configurable for Anthropic and OpenAI models; Gemini uses a fixed thinking reserve
 - Available for models flagged with thinking support, including o3, recent GPT models, the Claude Opus, Sonnet, Haiku, and Fable families, and the Gemini 3.x models
 
 ## Model Selection Best Practices

@@ -5,6 +5,7 @@ import {
   GenerateContentResponse,
   GoogleGenAI,
   Part,
+  ThinkingLevel,
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
@@ -39,9 +40,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
+import { usableTokenCount } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+
+// Headroom for thinking tokens, which count against maxOutputTokens; also the 2.5 budget when the cap binds.
+const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
 
 type ToolCall = {
   id: string;
@@ -371,7 +376,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 2097152, // 2M context window
         supportsImageVariation: false,
-        max_tokens: 8192,
+        max_tokens: 65536,
         can_stream: true,
         can_think: true,
         pricing: {
@@ -446,7 +451,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 2097152, // 2M context window
         supportsImageVariation: false,
-        max_tokens: 8192,
+        max_tokens: 65536,
         can_stream: true,
         can_think: true, // Enhanced thinking and reasoning
         pricing: {
@@ -468,7 +473,7 @@ export class GeminiBackend implements ICompletionBackend {
         backend: ModelBackend.Gemini,
         contextWindow: 1048576, // 1M context window
         supportsImageVariation: false,
-        max_tokens: 8192,
+        max_tokens: 65536,
         can_stream: true,
         can_think: true, // Adaptive thinking capabilities
         pricing: {
@@ -1630,15 +1635,27 @@ export class GeminiBackend implements ICompletionBackend {
   private getGenerationConfig(
     model: ModelInfo,
     options: Partial<ICompletionOptions>
-  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
-    // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
-    // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
-    // so a caller's small cap would starve the visible reply.
-    if (model.can_think) return {};
-    return {
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      maxOutputTokens: options.maxTokens ?? 8192,
-    };
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const callerCap = options.maxTokens ?? 8192;
+    if (!model.can_think) {
+      return {
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        maxOutputTokens: callerCap,
+      };
+    }
+    // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
+    const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+    const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
+    const maxOutputTokens = Math.min(ceiling, wanted);
+    if (wanted >= ceiling) return { maxOutputTokens };
+    // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
+    // 2.5 takes thinkingBudget, 3.x thinkingLevel (the API 400s on both); other ids get neither.
+    const thinkingConfig = model.id.startsWith('gemini-2.5')
+      ? { thinkingBudget: GEMINI_THINKING_RESERVE_TOKENS }
+      : model.id.startsWith('gemini-3')
+        ? { thinkingLevel: ThinkingLevel.LOW }
+        : undefined;
+    return thinkingConfig ? { maxOutputTokens, thinkingConfig } : { maxOutputTokens };
   }
 
   pushToolMessages(
