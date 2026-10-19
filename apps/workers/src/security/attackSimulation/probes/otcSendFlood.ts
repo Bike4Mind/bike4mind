@@ -1,4 +1,4 @@
-import type { AttackSimulationFinding } from '@server/security/attackSimulation/types';
+import type { AttackSimulationFinding } from '@bike4mind/server-utils/security/attackSimulation/types';
 import { buildFingerprint } from '../fingerprint';
 import { assertTargetUrlIsSafe, probeFetch } from './probeUtils';
 

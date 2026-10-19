@@ -54,7 +54,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: h.releaseGitHubLakeConnectionForLake,
 }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: h.getFilesStorage }));
 

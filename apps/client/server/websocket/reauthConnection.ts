@@ -2,7 +2,7 @@ import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { ForbiddenError, NotFoundError, ReauthConnectionAction, UnauthorizedError } from '@bike4mind/common';
 import { Connection, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { closeConnection } from '@server/websocket/closeConnection';
+import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessTokenClaims } from '@server/websocket/verifyWsAccessToken';

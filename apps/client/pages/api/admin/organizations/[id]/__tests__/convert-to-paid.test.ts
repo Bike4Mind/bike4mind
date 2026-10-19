@@ -42,7 +42,7 @@ vi.mock('@server/services/organizationService', () => ({
   resolveSubscriptionSource: (...args: unknown[]) => mockResolveSubscriptionSource(...args),
 }));
 
-vi.mock('@server/services/teamPlanSettings', () => ({
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: async () => ({ minSeats: 3, maxSeats: 100 }),
 }));
 

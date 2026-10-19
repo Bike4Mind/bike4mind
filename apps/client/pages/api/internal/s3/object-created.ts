@@ -5,7 +5,7 @@ import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage } from '@server/utils/storage';
-import { chargeUploadedObject } from '@server/s3/storageCharge';
+import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';

@@ -10,7 +10,7 @@ import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkou
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Config } from '@server/utils/config';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';

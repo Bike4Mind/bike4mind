@@ -15,16 +15,16 @@ import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
   taxonomyRateLimitKey,
-} from '@server/dataLakes/taxonomyRateLimit';
+} from '@bike4mind/server-utils/dataLakes/taxonomyRateLimit';
 import {
   LAKE_MEMORY_DAILY_CAP,
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
   lakeMemoryRateLimitKey,
-} from '@server/dataLakes/lakeMemoryRateLimit';
+} from '@bike4mind/server-utils/dataLakes/lakeMemoryRateLimit';
 import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/utils/sqsDelivery';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
  * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any

@@ -7,7 +7,10 @@ import {
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewGenerationPayloadSchema, WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
+import {
+  WhatsNewGenerationPayloadSchema,
+  WhatsNewGenerationPayload,
+} from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';

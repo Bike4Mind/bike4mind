@@ -5,8 +5,11 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewHighlightsPayloadSchema } from '@server/whatsNew/whatsNewHighlights.types';
-import type { WhatsNewHighlightsConfig, HighlightsRunStatus } from '@server/whatsNew/whatsNewHighlights.types';
+import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type {
+  WhatsNewHighlightsConfig,
+  HighlightsRunStatus,
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
 import {
   buildHighlightsPrompt,

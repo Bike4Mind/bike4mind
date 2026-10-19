@@ -146,7 +146,7 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
 };
 
 // Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
-// (hasUsableKey in server/videoGenerations/listUsableVideoModels.ts).
+// (hasUsableKey in packages/server-utils/src/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
   const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
   // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.

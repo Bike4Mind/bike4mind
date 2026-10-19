@@ -15,7 +15,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 

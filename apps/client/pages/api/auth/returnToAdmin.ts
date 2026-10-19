@@ -12,7 +12,7 @@ import {
   readAdminReturnCookie,
   readRefreshCookie,
   setRefreshCookie,
-} from '@server/auth/refreshCookie';
+} from '@bike4mind/server-utils/auth/refreshCookie';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';

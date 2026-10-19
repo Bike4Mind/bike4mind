@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/database';
 import type { IntegrationName } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
-import { getStatus } from '@server/services/integrationCircuitBreaker';
+import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
 import { rateLimit } from '@server/middlewares/rateLimit';
 

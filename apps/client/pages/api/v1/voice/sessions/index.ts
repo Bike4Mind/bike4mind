@@ -35,7 +35,7 @@ import {
 import { isValidObjectId } from '@server/utils/objectId';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
-import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 

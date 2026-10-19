@@ -45,13 +45,13 @@ vi.mock('@server/cli/auth', () => ({
 
 // Keep the real validateToolRequest (pure), stub only executeToolWithLogging
 // so we can drive the result/handled-failure branches deterministically.
-vi.mock('@server/cli/toolsHandler.shared', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/cli/toolsHandler.shared')>();
+vi.mock('@bike4mind/server-utils/cli/toolsHandler.shared', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/cli/toolsHandler.shared')>();
   return { ...actual, executeToolWithLogging: vi.fn() };
 });
 
 import { handleToolRequest } from './tools';
-import { executeToolWithLogging, SUPPORTED_TOOLS } from '@server/cli/toolsHandler.shared';
+import { executeToolWithLogging, SUPPORTED_TOOLS } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { REQUEST_ID_HEADER, ToolExecutionRequestSchema } from '@bike4mind/common';
 

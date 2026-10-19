@@ -13,7 +13,7 @@ import { resolveCatalogRecords, resolveDispatchForRecord } from '@bike4mind/llm-
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { createBedrockControlPlane } from './bedrockControlPlane';
+import { createBedrockControlPlane } from '@bike4mind/server-utils/modelDiscovery/bedrockControlPlane';
 
 type ModelDiscoveryAdapters = modelDiscoveryService.ModelDiscoveryAdapters;
 type DiscoveryEnv = modelDiscoveryService.DiscoveryEnv;

@@ -1,4 +1,4 @@
-// Redundant since server/** defaults to node (see apps/client/vitest.config.mts), but kept as
+// Redundant since this package runs vitest under node (see ../../vitest.config.mts), but kept as
 // the record of WHY this suite cannot run under jsdom: jsdom runs in a separate vm realm whose
 // Buffer isn't `instanceof` that realm's Uint8Array, and `file-type`'s `fileTypeFromBuffer`
 // relies on that check.

@@ -95,7 +95,7 @@ describe('resolveEffectiveEmbeddingModel', () => {
     getSettingsValue.mockResolvedValue(ADA);
     resolveEmbeddingWithKeylessFallback.mockReturnValue({ model: ADA, missing: null, config: {} });
 
-    await resolveEffectiveEmbeddingModel('user-1', { llmKeys: { voyageai: 'pa-live' } });
+    await resolveEffectiveEmbeddingModel('user-1', { llmKeys: { voyageai: 'pa-live' } as never });
 
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, { voyageai: 'pa-live' });
@@ -108,7 +108,7 @@ describe('resolveEffectiveEmbeddingModel', () => {
     getSettingsValue.mockResolvedValue(ADA);
     resolveEmbeddingWithKeylessFallback.mockReturnValue({ model: TITAN, missing: null, config: {} });
 
-    expect(await resolveEffectiveEmbeddingModel('user-1', { llmKeys: {} })).toBe(TITAN);
+    expect(await resolveEffectiveEmbeddingModel('user-1', { llmKeys: {} as never })).toBe(TITAN);
 
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, {});
@@ -124,7 +124,7 @@ describe('resolveEffectiveEmbeddingModel', () => {
     getSettingsValue.mockResolvedValue(ADA);
     resolveEmbeddingWithKeylessFallback.mockReturnValue({ model: ADA, missing: null, config: {} });
 
-    await resolveEffectiveEmbeddingModel('user-1', { llmKeys: null } as { llmKeys?: undefined });
+    await resolveEffectiveEmbeddingModel('user-1', { llmKeys: null } as unknown as { llmKeys?: undefined });
 
     expect(getEffectiveLLMApiKeys).toHaveBeenCalledWith('user-1', expect.anything());
     expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, { openai: 'sk-live' });

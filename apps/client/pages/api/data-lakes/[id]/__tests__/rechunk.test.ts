@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
@@ -44,7 +44,7 @@ vi.mock('@bike4mind/services', () => ({
     MAX_REBUILD_WAVE: 200,
   },
 }));
-vi.mock('@server/embeddings/effectiveEmbeddingModel', () => ({
+vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: h.resolveEffectiveEmbeddingModel,
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -68,7 +68,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/dataLakes/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
+vi.mock('@bike4mind/server-utils/dataLakes/convergenceKillSwitch', () => ({
+  isConvergenceHalted: h.isConvergenceHalted,
+}));
 
 import handler from '../rechunk';
 

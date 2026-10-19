@@ -55,7 +55,9 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, getAvailableModels: vi.fn().mockResolvedValue([]) };
 });
-vi.mock('./resolveBackend', () => ({ buildSystemApiKeyTable: vi.fn().mockResolvedValue({}) }));
+vi.mock('@bike4mind/server-utils/deepAgent/resolveBackend', () => ({
+  buildSystemApiKeyTable: vi.fn().mockResolvedValue({}),
+}));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({}),

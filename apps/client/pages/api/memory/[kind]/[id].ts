@@ -28,11 +28,11 @@ import {
   purgeUserMemory,
   shredBelief,
   shredPrincipalMemory,
-} from '@server/memory/ledgerMemoryStore';
+} from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
-import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
-import { createSurvivingSourcesResolver } from '@server/memory/lakeSourceReachability';
+import { createUserMementoMemoryStore } from '@bike4mind/server-utils/memory/userMementoMemoryStore';
+import { createSurvivingSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';

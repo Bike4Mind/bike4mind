@@ -18,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveApiKey: h.getEffectiveApiKey } }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
-vi.mock('@server/dataLakes/runTaxonomyInference', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/runTaxonomyInference', () => ({
   runTaxonomyInference: h.runTaxonomyInference,
   sampleFabFilesForTaxonomy: (files: unknown[]) => files,
 }));

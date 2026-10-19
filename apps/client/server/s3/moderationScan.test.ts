@@ -24,7 +24,7 @@ vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationS
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ download: h.download, downloadRange: h.downloadRange, getMetadata: h.getMetadata }),
 }));
-vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
+vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 
 import {
   claimModerationScan,

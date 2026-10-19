@@ -1,6 +1,6 @@
 import { CliToolRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
-import { validateToolRequest, executeToolWithLogging } from '@server/cli/toolsHandler.shared';
+import { validateToolRequest, executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';

@@ -27,7 +27,7 @@ vi.mock('@server/websocket/verifyWsAccessToken', () => ({
 vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: (...args: unknown[]) => mocks.assertSessionActive(...args),
 }));
-vi.mock('@server/websocket/closeConnection', () => ({
+vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({
   closeConnection: (...args: unknown[]) => mocks.closeConnection(...args),
 }));
 vi.mock('@server/websocket/utils', () => ({

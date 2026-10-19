@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
-import { getStatus, clearCache } from '@server/services/integrationCircuitBreaker';
+import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { getAllBreakerStates, resetBreaker } from '@server/services/mcpCircuitBreakers';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {

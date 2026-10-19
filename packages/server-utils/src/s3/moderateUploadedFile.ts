@@ -9,7 +9,7 @@ import {
   BARE_UPLOAD_MIME_TYPE,
   GENERATE_UPLOAD_BLOCK_REASON,
   type GenerateUploadConstraint,
-} from '@server/files/generateUploadMarker';
+} from '../files/generateUploadMarker';
 
 /**
  * Bytes needed for `file-type` to reliably sniff most binary formats from their magic

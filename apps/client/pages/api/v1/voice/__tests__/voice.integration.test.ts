@@ -147,7 +147,7 @@ import endHandler from '../sessions/[id]/end';
 import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
-import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { MAX_SESSION_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
