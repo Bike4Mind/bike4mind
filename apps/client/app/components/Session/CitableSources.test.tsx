@@ -44,6 +44,20 @@ describe('CitableSources numbering', () => {
     renderWith({ citationIndex });
     expect(screen.queryByTestId('citable-source-number')).not.toBeInTheDocument();
   });
+
+  it('does not number a list where any source is unstamped', () => {
+    render(
+      <TestWrapper>
+        <CitableSources
+          citables={[
+            { ...baseCitable, id: 'a', title: 'A', metadata: { citationIndex: 1 } },
+            { ...baseCitable, id: 'b', title: 'B', metadata: {} },
+          ]}
+        />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('citable-source-number')).not.toBeInTheDocument();
+  });
 });
 
 describe('CitableSources truncation badge', () => {
