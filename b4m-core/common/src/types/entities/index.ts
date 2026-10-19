@@ -126,3 +126,4 @@ export * from './WorkItemTypes';
 export * from './QaTypes';
 export * from './AdminAuditLogTypes';
 export * from './adminAuditCatalogue';
+export * from './adminAuditQuery';

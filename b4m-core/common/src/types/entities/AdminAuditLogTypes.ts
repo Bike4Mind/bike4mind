@@ -36,7 +36,7 @@ export const AuditContextSchema = z.object({
 });
 export type AuditContext = z.infer<typeof AuditContextSchema>;
 
-const AdminAuditCategorySchema = z.enum([
+export const AdminAuditCategorySchema = z.enum([
   'credits',
   'access',
   'identity',
@@ -46,7 +46,7 @@ const AdminAuditCategorySchema = z.enum([
   'support',
 ]) satisfies z.ZodType<AdminAuditCategory>;
 
-const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
+export const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
 
 export const AuditEntrySchema = z.object({
   id: z.string(),

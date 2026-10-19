@@ -44,6 +44,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
+
+  'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;
