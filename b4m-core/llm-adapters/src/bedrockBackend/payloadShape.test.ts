@@ -66,6 +66,27 @@ describe('describePayloadShape', () => {
     expect(JSON.stringify(shape)).not.toContain('venue');
   });
 
+  it('keeps a server tool block type instead of collapsing it to a placeholder', () => {
+    const body = JSON.stringify({
+      messages: [
+        { role: 'user', content: SECRET_PROMPT },
+        { role: 'assistant', content: [{ type: 'server_tool_use', name: 'web_search' }] },
+        { role: 'user', content: [{ type: 'web_search_tool_result' }] },
+      ],
+    });
+    const shape = describePayloadShape(body);
+    expect(shape.roles).toBe('user,assistant,user');
+    expect(shape.lastMessageBlocks).toEqual(['web_search_tool_result']);
+  });
+
+  it('caps the top-level field list at 30', () => {
+    const fields = Object.fromEntries(Array.from({ length: 35 }, (_, i) => [`f${i}`, i]));
+    const shape = describePayloadShape(JSON.stringify(fields));
+    expect(Object.keys(shape.fields ?? {})).toHaveLength(30);
+    expect(shape.fields?.f29).toBe(29);
+    expect(shape.fields?.f30).toBeUndefined();
+  });
+
   it('caps the role list to the tail of a long conversation', () => {
     const messages = Array.from({ length: 50 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'x' }));
     messages[0].role = 'system';

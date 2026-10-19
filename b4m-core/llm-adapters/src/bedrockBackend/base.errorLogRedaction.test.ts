@@ -29,6 +29,9 @@ const BODY = JSON.stringify({
 });
 
 class TestBedrockBackend extends BaseBedrockBackend {
+  /** One body per complete() turn, in call order. The last entry is reused for further turns. */
+  payloadBodies: string[] = [BODY];
+
   protected override updateClientForModel(): void {
     // keep the test-injected _bedrockRuntime mock
   }
@@ -39,7 +42,9 @@ class TestBedrockBackend extends BaseBedrockBackend {
     return messages;
   }
   getPayload() {
-    return { modelId: 'test', contentType: 'application/json', accept: 'application/json', body: BODY };
+    const next = this.payloadBodies.length > 1 ? this.payloadBodies.shift() : undefined;
+    const body = next ?? this.payloadBodies[0];
+    return { modelId: 'test', contentType: 'application/json', accept: 'application/json', body };
   }
   translateStreamChunk(): { done: boolean; chunk?: ICompletionResponseChunk } {
     return { done: true };
@@ -117,6 +122,12 @@ describe('BaseBedrockBackend error log redaction', () => {
     const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
     let callIndex = 0;
     const backend = new TestBedrockBackend();
+    // The outer turn sends a single message; the nested turn after the tool result sends three.
+    // Only the nested body can produce the shape asserted below.
+    backend.payloadBodies = [
+      JSON.stringify({ messages: [{ role: 'user', content: SECRET_PROMPT }] }),
+      BODY,
+    ];
     (backend as unknown as { _bedrockRuntime: { send: () => Promise<unknown> } })._bedrockRuntime = {
       send: async () => {
         if (callIndex++ === 0) return { body: new TextEncoder().encode(JSON.stringify(toolCallChunk())) };
@@ -135,5 +146,9 @@ describe('BaseBedrockBackend error log redaction', () => {
 
     expect(callIndex).toBe(2);
     expect(errorSpy).toHaveBeenCalledTimes(1);
+    // The log describes the failing (innermost) request, not the outer turn that succeeded.
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(logged).toContain('"messageCount":3');
+    expect(logged).toContain('"lastMessageBlocks":["tool_result"]');
   });
 });
