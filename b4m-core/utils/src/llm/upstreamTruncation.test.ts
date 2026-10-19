@@ -20,6 +20,7 @@ import {
   buildAndSortMessages,
   calculateTotalTokenLength,
   ATTACHMENT_DELIVERED_NOTICE,
+  ATTACHMENT_END_DELIMITER,
 } from './utils';
 
 const mockLogger = {
@@ -558,7 +559,7 @@ describe('content cut before assembly is declared to the model', () => {
       // Exactly one closing bracket, at the very end: the crafted name cannot terminate the
       // directive early and append instructions of its own after it.
       expect(notice.split(']').length - 1).toBe(1);
-      expect(notice.endsWith('from it.]')).toBe(true);
+      expect(notice.endsWith('from it.]' + ATTACHMENT_END_DELIMITER)).toBe(true);
     });
   });
 });
@@ -605,5 +606,52 @@ describe('processUrlsFromPrompt remainingPrompt stripping', () => {
 
     expect(remainingPrompt).toBe('  just a question  ');
     expect(userMessages).toHaveLength(0);
+  });
+});
+
+describe('attachment boundaries through assembly', () => {
+  it.each([false, true])('keeps the prompt outside delivered content (vectorized=%s)', async vectorized => {
+    const attachment = await runFabFiles({ vectorized }, 100000, chunks(1, 200));
+    expect(attachment.endsWith(ATTACHMENT_END_DELIMITER)).toBe(true);
+    const prompt = 'Search the web for the Node.js release notes';
+    const { messages } = await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: attachment }],
+      [{ role: 'user', content: prompt }],
+      100000,
+      {},
+      0,
+      mockLogger as never,
+      tokenizer
+    );
+    const merged = messages
+      .filter(message => message.role === 'user')
+      .map(message => message.content)
+      .join('');
+    expect(merged).toContain(ATTACHMENT_END_DELIMITER + prompt);
+    expect(merged.split(ATTACHMENT_END_DELIMITER)).toHaveLength(2);
+  });
+
+  it('restores the complete boundary after cutting an attachment and counts it in the budget', async () => {
+    const attachment = await runFabFiles({ vectorized: false }, 100000);
+    const prompt = 'Continue with a web search';
+    const { messages } = await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: attachment }],
+      [{ role: 'user', content: prompt }],
+      2000,
+      {},
+      0,
+      mockLogger as never,
+      tokenizer
+    );
+    const delivered = messages.find(
+      message => typeof message.content === 'string' && message.content.includes('ROW-START')
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered?.content).toContain(TRUNCATION_NOTICE_MARKER);
+    expect((delivered?.content as string).endsWith(ATTACHMENT_END_DELIMITER)).toBe(true);
+    expect(await calculateTotalTokenLength(messages, { tokenizer })).toBeLessThanOrEqual(2000);
+    expect(messages.at(-1)?.content).toBe(prompt);
   });
 });
