@@ -30,9 +30,6 @@ import type {
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
-  CreateSessionRequest,
-  CreatedSession,
-  CreateCodeSessionResult,
   ProjectInspection,
   RecentFolder,
   ContextBoundaryResult,
@@ -389,6 +386,31 @@ export interface BrowserTabRequest {
   tabId?: number;
 }
 
+/** The request half of starting a session; see CreatedSession for the reply. */
+export interface CreateSessionRequest {
+  /**
+   * The user sidebar section the new session belongs to. Main assigns it right after minting the
+   * id and before replying, so the row never shows in the default groups first.
+   */
+  sectionId?: string;
+}
+
+/**
+ * A new session, plus the sidebar sections as main left them when the request named a section.
+ * The renderer applies both together, so the row's first render is already inside the section.
+ *
+ * `placementFailed` means a section was asked for but the change could not be saved; the
+ * session still exists and starts in the default groups.
+ */
+export interface CreatedSession {
+  session: ChatSessionSummary;
+  sidebarSections?: SidebarSectionsState;
+  placementFailed?: boolean;
+}
+
+/** A Code session's create reply - `ok: false` never carries placement. */
+export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
+
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>;
@@ -478,7 +500,7 @@ export interface DesktopApi {
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
      */
-    createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
+    createCodeSession(request: CreateCodeSessionRequest & { sectionId?: string }): Promise<CreateCodeSessionIpcResult>;
     /**
      * Ground a Code session that already exists: its first directory, or a different directory,
      * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.

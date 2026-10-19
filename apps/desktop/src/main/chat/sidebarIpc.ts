@@ -35,23 +35,28 @@ export function registerSidebarIpc(
   });
 }
 
+/** The result of filing a new session: the state main wrote, or why it could not. */
+export interface PlacementOutcome {
+  sections?: SidebarSectionsState;
+  failed: boolean;
+}
+
 /**
- * Puts a session main has just created into the section the renderer asked for, before the reply
- * naming it leaves main, so its row is never drawn in the default groups first. No section asked
- * for is no state. A failed write is reported and answered with no state: the session exists
- * either way, and simply starts in the default groups.
+ * Files a session main has just created into the section the renderer asked for; see
+ * CreateSessionRequest for why this happens before the reply. A failed write is reported and
+ * answered as `failed`: the session exists either way and starts in the default groups.
  */
 export async function placeNewSession(
   store: Pick<SidebarSectionStore, 'move'>,
   sessionId: string,
   sectionId: unknown,
   onError: (error: unknown) => void
-): Promise<SidebarSectionsState | undefined> {
-  if (!isText(sectionId)) return undefined;
+): Promise<PlacementOutcome> {
+  if (!isText(sectionId)) return { failed: false };
   try {
-    return await store.move(sessionId, sectionId);
+    return { sections: await store.move(sessionId, sectionId), failed: false };
   } catch (error) {
     onError(error);
-    return undefined;
+    return { failed: true };
   }
 }

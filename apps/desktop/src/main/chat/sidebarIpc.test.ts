@@ -90,7 +90,7 @@ describe('placeNewSession', () => {
     const store = { move: vi.fn(() => Promise.resolve(placed)) };
     const onError = vi.fn();
 
-    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toBe(placed);
+    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toEqual({ sections: placed, failed: false });
 
     expect(store.move).toHaveBeenCalledWith('fresh', 's1');
     expect(onError).not.toHaveBeenCalled();
@@ -99,17 +99,17 @@ describe('placeNewSession', () => {
   it.each([undefined, null, 42, {}])('writes nothing when the section is %j', async sectionId => {
     const store = { move: vi.fn(() => Promise.resolve(current)) };
 
-    await expect(placeNewSession(store, 'fresh', sectionId, vi.fn())).resolves.toBeUndefined();
+    await expect(placeNewSession(store, 'fresh', sectionId, vi.fn())).resolves.toEqual({ failed: false });
 
     expect(store.move).not.toHaveBeenCalled();
   });
 
-  it('reports a failed write and answers no state, so the create still succeeds', async () => {
+  it('reports a failed write and marks the placement failed, so the create still succeeds', async () => {
     const failure = new Error('disk full');
     const store = { move: vi.fn(() => Promise.reject(failure)) };
     const onError = vi.fn();
 
-    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toBeUndefined();
+    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toEqual({ failed: true });
 
     expect(onError).toHaveBeenCalledWith(failure);
   });

@@ -166,6 +166,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     sections: userSections,
     actions: sectionActions,
     adopt: adoptSections,
+    placementFailed: reportPlacementFailure,
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
@@ -440,7 +441,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     [mode, create, createCode, clearCodeError]
   );
 
-  /** New, from the sidebar: it makes a session, opens it, and opens nothing else. */
+  /**
+   * New, from the sidebar: it makes a session, opens it, and opens nothing else.
+   *
+   * It deliberately does not follow the open session into its section. What it makes would then
+   * depend on which row happens to be selected, which nothing on the button shows, and a user
+   * who wanted a loose session would have to move it back out.
+   */
   const onCreate = useCallback(async () => {
     setScreen('conversation');
     const created = await startSession();
@@ -450,18 +457,18 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   /**
    * New, from a user section's header or menu: the same session New makes, but in that section
    * from the moment main mints its id - see CreateSessionRequest.
-   *
-   * The global New deliberately does not follow the open session into its section. What it
-   * makes would then depend on which row happens to be selected, which nothing on the button
-   * shows, and a user who wanted a loose session would have to move it back out.
    */
   const onCreateInSection = useCallback(
     async (sectionId: string) => {
       setScreen('conversation');
-      const created = await startSession({ sectionId, placed: adoptSections });
+      const created = await startSession({
+        sectionId,
+        placed: adoptSections,
+        failed: reportPlacementFailure,
+      });
       if (created) setActiveId(created);
     },
-    [startSession, adoptSections]
+    [startSession, adoptSections, reportPlacementFailure]
   );
 
   /**

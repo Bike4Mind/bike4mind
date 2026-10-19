@@ -22,10 +22,6 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
-  CreateCodeSessionRequest,
-  CreateCodeSessionResult,
-  CreateSessionRequest,
-  CreatedSession,
   ProjectInspection,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
@@ -50,6 +46,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -471,32 +468,21 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
-  const placeInSection = (sessionId: string, sectionId: unknown) =>
-    placeNewSession(sidebarSections, sessionId, sectionId, error =>
-      logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
-    );
-  ipcMain.handle(
-    IPC_CHANNELS.chatCreateSession,
-    async (_event, request: CreateSessionRequest | undefined): Promise<CreatedSession> => {
-      const session = await service.createSession();
-      return { session, sidebarSections: await placeInSection(session.id, request?.sectionId) };
-    }
-  );
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
     recentFolders
       .record(directory)
       .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
   };
-  ipcMain.handle(
-    IPC_CHANNELS.chatCreateCodeSession,
-    async (_event, request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> => {
-      const result = await service.createCodeSession(request);
-      rememberFolder(folderToRemember(request, result));
-      if (!result.ok) return result;
-      return { ...result, sidebarSections: await placeInSection(result.session.id, request.sectionId) };
-    }
-  );
+  registerSessionCreateIpc(ipcMain, {
+    createSession: () => service.createSession(),
+    createCodeSession: request => service.createCodeSession(request),
+    place: (sessionId, sectionId) =>
+      placeNewSession(sidebarSections, sessionId, sectionId, error =>
+        logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
+      ),
+    rememberFolder,
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
     const result = await service.updateProject(request);

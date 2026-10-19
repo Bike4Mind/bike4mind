@@ -11,12 +11,12 @@ import type {
   ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
-  CreatedSession,
   ModelPhase,
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
+import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
@@ -57,6 +57,8 @@ export interface SessionPlacement {
   sectionId: string;
   /** Gets main's section state in the same update that adds the row, so it is drawn in place. */
   placed: (sections: SidebarSectionsState) => void;
+  /** Main could not save the placement; the row still exists and starts in the default groups. */
+  failed: () => void;
 }
 
 export function useSessions(): SessionsController {
@@ -90,6 +92,7 @@ export function useSessions(): SessionsController {
   // together and the row never shows in the default groups on its way into its section.
   const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
     if (created.sidebarSections) placement?.placed(created.sidebarSections);
+    else if (created.placementFailed) placement?.failed();
     setSessions(current => [created.session, ...current]);
   }, []);
 

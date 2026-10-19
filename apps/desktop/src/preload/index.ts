@@ -11,7 +11,6 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
-  CreateSessionRequest,
   ReasoningEffortSetting,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
@@ -28,6 +27,7 @@ import {
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
+  type CreateSessionRequest,
   type DesktopApi,
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
