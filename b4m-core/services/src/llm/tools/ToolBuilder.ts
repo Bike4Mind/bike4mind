@@ -521,6 +521,8 @@ export class ToolBuilder {
   /** Each invocation owns its estimate, including when same-name calls finish out of order. */
   private readonly gatedToolCredits = new Map<string, Map<symbol, number>>();
 
+  private trackGatedCalls(tools: ICompletionOptionTools[]): ICompletionOptionTools[];
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined;
   private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
     return tools?.map(tool => {
       const name = tool.toolSchema.name;
@@ -1132,7 +1134,7 @@ export class ToolBuilder {
         toolAvailability,
         // Subagents get the same wrapper the returned array does, so a failed inner call drops
         // its gate estimate instead of leaving this turn looking over-committed.
-        wrapChildTools: childTools => this.trackGatedCalls(childTools) ?? childTools,
+        wrapChildTools: childTools => this.trackGatedCalls(childTools),
       }
     );
     return this.trackGatedCalls(tools);

@@ -309,10 +309,8 @@ export interface BuildSharedToolsOptions {
    */
   toolAvailability?: ToolAvailability;
   /**
-   * Wraps the tools handed to in-process subagents (`parentTools`), the same way the caller
-   * wraps the array this function returns for the parent. Without it, a subagent call that
-   * fails before settling leaves the parent turn's committed gate estimate inflated, because
-   * it ran the unwrapped originals and only the parent's own copies drop one on return.
+   * Applied to the tools handed to in-process subagents (`parentTools`), before the denylist.
+   * Callers pass the same wrapper they apply to the array this function returns for the parent.
    */
   wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }

@@ -12,6 +12,13 @@ vi.mock('./base/utils', async importOriginal => {
   return { ...actual, validateImageCredits: vi.fn() };
 });
 vi.mock('../../imageCost', () => ({ estimateImageCredits: vi.fn() }));
+const buildSharedToolsCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock('../sharedToolBuilder', () => ({
+  buildSharedTools: vi.fn((_deps: unknown, _callbacks: unknown, options: Record<string, unknown>) => {
+    buildSharedToolsCalls.push(options);
+    return [];
+  }),
+}));
 const mockValidateImageCredits = vi.mocked(validateImageCredits);
 const mockEstimateImageCredits = vi.mocked(estimateImageCredits);
 
@@ -176,5 +183,35 @@ describe('a failed image call followed by a successful retry', () => {
     );
     const billed = settled.reduce((sum, call) => sum + (call.creditsUsed ?? 0), 0);
     expect(billed).toBe(400);
+  });
+});
+
+describe('ToolBuilder.buildTools child tools', () => {
+  it('wraps the tools handed to in-process subagents, so a failed child call drops its estimate', () => {
+    const { builder } = makeBuilder();
+    type Tracked = { toolFn: (val: unknown) => Promise<unknown> };
+    buildSharedToolsCalls.length = 0;
+
+    builder.buildTools({ quest: asQuest(quest()) as never, saveQuest: async () => null, llm: {} as never, config: {} });
+
+    const wrapChildTools = buildSharedToolsCalls.at(-1)?.wrapChildTools as (tools: unknown[]) => Tracked[];
+    expect(wrapChildTools).toBeTypeOf('function');
+
+    const [tool] = wrapChildTools([
+      {
+        toolSchema: { name: 'image_generation' },
+        toolFn: async () => {
+          await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+          throw new Error('content policy');
+        },
+      },
+    ]);
+
+    return expect(tool.toolFn({}))
+      .rejects.toThrow('content policy')
+      .then(() => {
+        const committed = (builder as unknown as { committedToolCredits(): number }).committedToolCredits();
+        expect(committed).toBe(0);
+      });
   });
 });
