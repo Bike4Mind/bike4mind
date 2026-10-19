@@ -1,15 +1,28 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import type { ChatQueuedMessage, ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { WorkspaceResolution } from './project/workspace';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+// A worktree cut that holds until a test releases it; every other call is the real resolver.
+const cut = vi.hoisted(() => ({ hold: null as Promise<WorkspaceResolution> | null }));
+vi.mock('./project/workspace', async importOriginal => {
+  const actual = await importOriginal<typeof import('./project/workspace')>();
+  return {
+    ...actual,
+    resolveWorkspace: (...args: Parameters<typeof actual.resolveWorkspace>) =>
+      cut.hold ?? actual.resolveWorkspace(...args),
+  };
+});
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -19,7 +32,12 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
   return frame({ type: 'tool_use', tools: [{ id, name, arguments: JSON.stringify(input) }] });
 }
 
-function harness(store: SessionStore, streams: PassThrough[], events: ChatStreamEvent[]) {
+function harness(
+  store: SessionStore,
+  streams: PassThrough[],
+  events: ChatStreamEvent[],
+  deps: { protectedPaths?: readonly string[] } = {}
+) {
   const post = vi.fn().mockImplementation(() => {
     const stream = new PassThrough();
     streams.push(stream);
@@ -38,6 +56,7 @@ function harness(store: SessionStore, streams: PassThrough[], events: ChatStream
       }) as unknown as AuthenticatedApiClient,
     getEnvironmentUrl: () => 'http://localhost:3000',
     emit: event => events.push(event),
+    ...deps,
   });
   const body = (callIndex: number) => post.mock.calls[callIndex][1];
   const toolNames = (callIndex: number): string[] =>
@@ -192,18 +211,94 @@ describe('ChatService.shareDirectory', () => {
     await h.awaitRound(3);
     expect(h.lastToolResult(2)).toContain(`no longer shared: ${outside}`);
   });
+
+  it('keeps a folder shared while the first turn is still cutting its worktree', async () => {
+    const id = await codeSession();
+    const unbound = (await store.get(id))?.project;
+    if (!unbound) throw new Error('no project');
+    await store.setProject(id, { ...unbound, workspace: true, branch: 'main' });
+    const worktree = join(base, 'worktree');
+    await mkdir(worktree);
+    let release: (resolution: WorkspaceResolution) => void = () => {};
+    cut.hold = new Promise(resolve => {
+      release = resolve;
+    });
+    try {
+      const sent = h.service.send(id, 'go');
+      await vi.waitUntil(() => events.some(event => event.type === 'workspace' && event.running), {
+        timeout: 5000,
+        interval: 5,
+      });
+
+      expect(await h.service.shareDirectory(id, outside)).toMatchObject({ status: 'added' });
+      release({ workingDirectory: worktree, branch: 'session/work', outcome: 'created' });
+      await sent;
+      await h.awaitRound(1);
+    } finally {
+      cut.hold = null;
+    }
+
+    const saved = (await store.get(id))?.project;
+    expect(saved?.workingDirectory).toBe(worktree);
+    expect(saved?.contextDirectories).toEqual([outside]);
+  });
+
+  it('refuses the app data folder, which the model must never be handed', async () => {
+    const guarded = harness(store, streams, events, { protectedPaths: [outside] });
+    const created = await guarded.service.createCodeSession({ directory: project, branch: '', workspace: false });
+    if (!created.ok) throw new Error(created.error);
+    const id = created.session.id;
+
+    const result = await guarded.service.shareDirectory(id, outside);
+
+    expect(result.status).toBe('refused');
+    expect((await store.get(id))?.project?.contextDirectories).toEqual([]);
+    guarded.service.dispose();
+  });
+
+  it('refuses a conversation that no longer exists', async () => {
+    expect(await h.service.shareDirectory('gone', outside)).toMatchObject({ status: 'refused' });
+  });
+
+  it('refuses a relative path in a Chat session, which has no working directory', async () => {
+    const chat = await h.service.createSession();
+
+    expect((await h.service.shareDirectory(chat.id, 'outside')).status).toBe('refused');
+    expect((await store.get(chat.id))?.grantedDirectories).toBeUndefined();
+  });
+
+  it('does not run a call written for a removed first folder in the next one', async () => {
+    const chat = await h.service.createSession();
+    const second = join(base, 'second');
+    await mkdir(second);
+    await h.service.shareDirectory(chat.id, outside);
+    await h.service.shareDirectory(chat.id, second);
+    await h.service.send(chat.id, 'list it');
+    await h.awaitRound(1);
+
+    await h.service.removeContextDirectory(chat.id, outside);
+    streams[0].write(toolTurn('sh-1', 'bash_execute', { command: 'touch ran.txt' }));
+    streams[0].write(frame('[DONE]'));
+
+    expect((await awaitSettled('sh-1')).status).toBe('denied');
+    expect(existsSync(join(second, 'ran.txt'))).toBe(false);
+    await h.awaitRound(2);
+    expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
+  });
 });
 
 /** A spawned session's seed run has nobody to answer a card; a turn the user types into it does. */
 describe('request_directory in a spawned session', () => {
   let store: SessionStore;
   let streams: PassThrough[];
+  let events: ChatStreamEvent[];
   let h: ReturnType<typeof harness>;
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-share-spawn-')), 'test-model');
     streams = [];
-    h = harness(store, streams, []);
+    events = [];
+    h = harness(store, streams, events);
   });
 
   afterEach(() => {
@@ -233,5 +328,33 @@ describe('request_directory in a spawned session', () => {
 
     expect(h.toolNames(0)).toContain('request_directory');
     expect(h.systemPrompt(0)).toContain('call request_directory');
+    expect(h.toolNames(0)).not.toContain('session_suggestion_update');
+  });
+
+  const queued = (id: string, extra: Partial<ChatQueuedMessage>): ChatQueuedMessage => ({
+    id: 'q1',
+    sessionId: id,
+    text: 'from elsewhere',
+    queuedAt: new Date().toISOString(),
+    ...extra,
+  });
+
+  it.each([
+    ['a relayed message', { relay: { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 } }],
+    [
+      'an auto-fix turn',
+      { automatic: { kind: 'auto-fix' as const, prUrl: 'https://example.test/pr/1', prNumber: 1, summary: 'x' } },
+    ],
+  ])('is withheld from %s, and clears the attended flag a typed turn set', async (_name, extra) => {
+    const id = await spawned();
+    await h.service.send(id, 'typed by the user');
+    await h.awaitRound(1);
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
+
+    await h.service.send(id, 'from elsewhere', [], queued(id, extra));
+    await vi.waitUntil(() => streams.length >= 2, { timeout: 5000, interval: 5 });
+
+    expect(h.toolNames(1)).not.toContain('request_directory');
   });
 });
