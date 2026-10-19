@@ -35,6 +35,8 @@ export type CommandArgExtra = {
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
+  /** See LLMCommandArgs.messageOnlyFileIds. */
+  messageOnlyFileIds?: string[];
   questId?: string; // If we want to retry a quest response we pass the questId
   // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
   // sends a new turn carrying the user's correction and links it to the answer it corrects.

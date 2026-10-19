@@ -82,6 +82,7 @@ describe('researchTaskService - process', () => {
       delete: vi.fn(),
       count: vi.fn(),
       updateMany: vi.fn(),
+      addWarning: vi.fn(),
     };
     mockFabFileRepo = {
       create: vi.fn(),
@@ -211,6 +212,7 @@ describe('researchTaskService - process', () => {
     expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
       id: taskId,
       status: ResearchTaskStatus.PROCESSING,
+      warnings: [],
     });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     // Check that scraper.fetch was called with the first URL from the urls array
@@ -1012,6 +1014,67 @@ describe('researchTaskService - process', () => {
           maxProgress: 100, // Should be 100 when canDiscoverLinks is false
         })
       );
+    });
+
+    it('tells the user when a re-crawl keeps the previous copy because storage is full', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: true,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        '\u26a0\ufe0f [1/1] Storage limit reached: kept the previous copy of https://example.com',
+        0
+      );
+      expect(mockResearchTaskRepo.addWarning).toHaveBeenCalledWith(
+        taskId,
+        'Storage limit reached: kept the previous copy of https://example.com'
+      );
+    });
+
+    it('clears the previous run warnings when a run starts', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue({ ...mockTask, warnings: ['old'] });
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+        id: taskId,
+        status: ResearchTaskStatus.PROCESSING,
+        warnings: [],
+      });
+    });
+
+    it('sends no storage message when a re-crawl fits', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      (findOrUpdateExistingResearchData as any).mockResolvedValue({
+        file: { id: 'existing-file-id', fileName: 'existing.md' },
+        researchData: { id: 'existing-research-data-id' },
+        storageLimitReached: false,
+      });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(mockSendStatusUpdate).not.toHaveBeenCalledWith(
+        expect.stringContaining('Storage limit'),
+        expect.anything()
+      );
+      expect(mockResearchTaskRepo.addWarning).not.toHaveBeenCalled();
     });
 
     it('should distribute progress evenly across multiple URLs within 0-40% range', async () => {

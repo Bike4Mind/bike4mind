@@ -1420,7 +1420,7 @@ describe('Context Management Tests', () => {
       const mockWarn = vi.fn();
       stripAllToolBlocks(messages as IMessage[], { log: vi.fn(), warn: mockWarn });
 
-      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Stripped 2 tool_use and 2 tool_result blocks'));
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Stripped 2 tool_use, 2 tool_result and 0 server tool blocks'));
     });
 
     it('should handle mixed content in user messages (text + tool_result)', () => {

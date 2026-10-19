@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
+import {
+  buildCompletionStreamEvent,
+  buildMetaEvent,
+  buildPublicSSEEvent,
+  buildSSEEvent,
+  formatSSEError,
+  serializeSSEEvent,
+} from './sseEvents';
+import { CompletionStreamEventSchema } from '../schemas/cliCompletions';
 
 describe('buildPublicSSEEvent', () => {
   // `text` is indexed by the provider's content-block/choice index, not by channel.
@@ -179,6 +187,23 @@ describe('buildSSEEvent', () => {
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
   });
 
+  it('carries text written at index 2+ (after a tool search) instead of blanking it', () => {
+    const sparse: string[] = [];
+    sparse[3] = 'Found it.';
+    expect(buildSSEEvent(sparse).text).toBe('Found it.');
+  });
+
+  it('keeps the [1]-over-[0] read for the shapes that depend on it', () => {
+    expect(buildSSEEvent(['first', 'second']).text).toBe('second');
+    expect(buildSSEEvent(['only']).text).toBe('only');
+  });
+
+  it('still blanks a reasoning frame written at index 2+', () => {
+    const sparse: string[] = [];
+    sparse[2] = 'interleaved thought';
+    expect(buildSSEEvent(sparse, { channel: 'reasoning' }).text).toBe('');
+  });
+
   it('projects tools down to name/arguments/id, dropping returnValue and success', () => {
     const e = buildSSEEvent(['', 'the answer'], {
       toolsUsed: [
@@ -209,6 +234,30 @@ describe('toolStarted', () => {
 
   it('stays off the public stream, which names no tools', () => {
     expect(buildPublicSSEEvent([], info)).not.toHaveProperty('toolStarted');
+  });
+});
+
+describe('buildCompletionStreamEvent', () => {
+  const block = { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: {} };
+
+  it('sends a provider block as its own provider_block frame', () => {
+    const event = buildCompletionStreamEvent([], { providerBlock: { provider: 'anthropic', block } });
+    expect(event).toEqual({ type: 'provider_block', provider: 'anthropic', block });
+    expect(CompletionStreamEventSchema.safeParse(event).success).toBe(true);
+    expect(serializeSSEEvent(event)).toBe(
+      `data: ${JSON.stringify({ type: 'provider_block', provider: 'anthropic', block })}\n\n`
+    );
+  });
+
+  it('builds the usual content frame for everything else', () => {
+    expect(buildCompletionStreamEvent(['hi'], { outputTokens: 1 })).toEqual(buildSSEEvent(['hi'], { outputTokens: 1 }));
+  });
+
+  it('keeps provider blocks off the public builder', () => {
+    expect(buildPublicSSEEvent([], { providerBlock: { provider: 'anthropic', block } })).toEqual({
+      type: 'content',
+      text: '',
+    });
   });
 });
 

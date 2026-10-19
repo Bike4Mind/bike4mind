@@ -59,7 +59,9 @@ export async function findExistingResearchData(
  * @param user - The user who owns the research task
  * @param adapters - Service adapters containing repositories and storage
  * @param logger - Optional logger for tracking operations
- * @returns the file and matching research data if a duplicate already existed (content re-uploaded), or null when no existing record was found
+ * @returns the file and matching research data if a duplicate already existed (content re-uploaded), or null when no existing record was found.
+ * `storageLimitReached` is true when the owner's quota refused the new content and the previous crawl was kept;
+ * callers tell the user, since the task itself still succeeds.
  */
 export async function findOrUpdateExistingResearchData(
   url: string,
@@ -77,7 +79,7 @@ export async function findOrUpdateExistingResearchData(
     storage: CreateFabFileAdapters['storage'];
   },
   logger?: Pick<ILogger, 'info'> & Partial<Pick<ILogger, 'warn'>>
-): Promise<{ file: IFabFileDocument; researchData: IResearchData } | null> {
+): Promise<{ file: IFabFileDocument; researchData: IResearchData; storageLimitReached: boolean } | null> {
   const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
   // Find existing research data using the standardized lookup
@@ -93,6 +95,7 @@ export async function findOrUpdateExistingResearchData(
       try {
         await assertRewriteFits(existingFile, newSize, adapters.db, user);
       } catch (error) {
+        // Relies on isStorageLimitError matching the redacted refusal a non-owner actor gets too.
         if (!isStorageLimitError(error)) throw error;
         // Background path: keep the previous crawl rather than fail (and retry) the whole task, but
         // still refresh its url below.
@@ -145,7 +148,7 @@ export async function findOrUpdateExistingResearchData(
         );
       }
 
-      return { file: existingFile, researchData: existingResearchData };
+      return { file: existingFile, researchData: existingResearchData, storageLimitReached: !fits };
     } else {
       throw new Error('Existing file not found');
     }

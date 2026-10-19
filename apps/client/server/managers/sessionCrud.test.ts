@@ -98,7 +98,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 vi.mock('@bike4mind/common', async importOriginal => ({
-  resolveAttachScope: (await importOriginal<typeof import('@bike4mind/common')>()).resolveAttachScope,
+  isSessionPinnableAttachment: (await importOriginal<typeof import('@bike4mind/common')>()).isSessionPinnableAttachment,
   Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
   // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
   NotFoundError: class NotFoundError extends Error {},
@@ -376,6 +376,17 @@ describe('sessionCrud', () => {
       });
 
       expect(result.session).toBe(existing);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('still creates the session when the message attachment lookup fails', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+      fabFileFindMetadataByIds.mockRejectedValueOnce(new Error('db'));
+
+      const result = await getOrCreateSession({ messageFileIds: ['doc'], user, logger });
+
+      expect(result.wasCreated).toBe(true);
+      expect(createSessionService.mock.calls[0][1].knowledgeIds).toEqual([]);
       expect(logger.warn).toHaveBeenCalled();
     });
 

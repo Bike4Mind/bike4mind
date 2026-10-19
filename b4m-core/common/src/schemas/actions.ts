@@ -14,6 +14,7 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
+import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -101,24 +102,8 @@ export const CliCompletionRequestAction = z.object({
       temperature: z.number().optional(),
       maxTokens: z.number().optional(),
       stream: z.boolean().optional(),
-      tools: z.array(z.unknown()).optional(),
-      // structured-output contract. Mirrors ResponseFormatSchema in
-      // schemas/cliCompletions.ts. Defined inline here to avoid an import cycle
-      // between actions.ts and cliCompletions.ts.
-      response_format: z
-        .discriminatedUnion('type', [
-          z.object({ type: z.literal('text') }),
-          z.object({
-            type: z.literal('json_schema'),
-            json_schema: z.object({
-              name: z.string(),
-              description: z.string().optional(),
-              schema: z.record(z.string(), z.any()),
-              strict: z.boolean().optional().default(true),
-            }),
-          }),
-        ])
-        .optional(),
+      tools: z.array(CompletionToolSchema).optional(),
+      response_format: ResponseFormatSchema.optional(),
     })
     .optional(),
 });
@@ -617,19 +602,22 @@ export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedA
 export const CliCompletionChunkAction = z.object({
   action: z.literal('cli_completion_chunk'),
   requestId: z.string(),
-  chunk: z.object({
-    type: z.enum(['content', 'tool_use']),
-    text: z.string(),
-    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-    tools: z.array(z.unknown()).optional(),
-    usage: z
-      .object({
-        inputTokens: z.number().optional(),
-        outputTokens: z.number().optional(),
-      })
-      .optional(),
-    thinking: z.array(z.unknown()).optional(),
-  }),
+  chunk: z.union([
+    z.object({
+      type: z.enum(['content', 'tool_use']),
+      text: z.string(),
+      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
+      tools: z.array(z.unknown()).optional(),
+      usage: z
+        .object({
+          inputTokens: z.number().optional(),
+          outputTokens: z.number().optional(),
+        })
+        .optional(),
+      thinking: z.array(z.unknown()).optional(),
+    }),
+    CompletionProviderBlockEventSchema,
+  ]),
 });
 export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
 
@@ -651,6 +639,8 @@ export const CliCompletionErrorAction = z.object({
   error: z.string(),
   /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
   retryAfter: z.number().optional(),
+  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
+  errorCode: z.string().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BadRequestError, NotFoundError, STORAGE_CHARGE_STAMP_CUTOFF, type IUserDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+  StorageLimitError,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 
 const MB = 1_000_000;
@@ -161,12 +167,29 @@ describe('assertRewriteFits', () => {
     await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow(NotFoundError);
   });
 
+  it.each([
+    ['uploader', 'storage_limit_exceeded', 'user', stored],
+    ['org', 'org_storage_limit_exceeded', 'org', { ...stored, organizationId: 'org-1' }],
+  ])("redacts the %s pool's refusal for a non-owner actor", async (_label, errorCode, poolOwner, storedRow) => {
+    const db = makeDb(null, storedRow);
+    db.users.findById.mockResolvedValue(owner(0.9 * MB));
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', storageLimit: 1, currentStorageSize: 0.9 * MB });
+    const editor = { id: 'editor' } as unknown as IUserDocument;
+
+    const error = await assertRewriteFits(row, 1.2 * MB, db, editor).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(StorageLimitError);
+    expect((error as StorageLimitError).additionalInfo).toStrictEqual({ errorCode, owner: poolOwner });
+  });
+
   it('measures against the owner, not an update-share editor', async () => {
     const db = makeDb(null, stored);
     db.users.findById.mockResolvedValue(owner(0.9 * MB));
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
-    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toThrow('File size exceeds storage limit');
+    await expect(assertRewriteFits(row, 1.2 * MB, db, editor)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', owner: 'user' },
+    });
     expect(db.users.findById).toHaveBeenCalledWith('owner');
   });
 

@@ -1,6 +1,8 @@
 import {
   chargedBytes,
+  isStorageLimitError,
   NotFoundError,
+  redactStorageLimitError,
   storageOwnerOf,
   type IFabFileRepository,
   type IOrganizationRepository,
@@ -32,7 +34,8 @@ export type RewriteStorageDb = {
  * owning org's pool for an org-owned row (storageOwnerOf), else the uploader's. A shrinking or
  * same-size rewrite never throws. Measures against the stored row (findChargeState), not `row`, which
  * may be a stale copy. `actor` is reused when it is the uploader, else the uploader is loaded (an
- * update-share editor is not charged).
+ * update-share editor is not charged). An editor's refusal keeps its error code but drops the byte
+ * counts, which are the owner's usage.
  */
 export async function assertRewriteFits(
   row: { id: string },
@@ -44,11 +47,17 @@ export async function assertRewriteFits(
   if (!stored) return;
   const growth = newSize - chargedBytes(stored);
   if (growth <= 0) return;
-  const uploader = actor && actor.id === stored.userId ? actor : await db.users.findById(stored.userId);
+  const uploaderIsActor = actor?.id === stored.userId;
+  const uploader = uploaderIsActor ? actor : await db.users.findById(stored.userId);
   if (!uploader) throw new NotFoundError('File owner not found');
-  await checkStorageLimitForOwner({ user: uploader, organizationId: stored.organizationId }, growth, id =>
-    db.organizations.findById(id)
-  );
+  try {
+    await checkStorageLimitForOwner({ user: uploader, organizationId: stored.organizationId }, growth, id =>
+      db.organizations.findById(id)
+    );
+  } catch (error) {
+    // Any pool's refusal (the org's or the uploader's): its byte counts are not the actor's to see.
+    throw !uploaderIsActor && isStorageLimitError(error) ? redactStorageLimitError(error) : error;
+  }
 }
 
 /**
