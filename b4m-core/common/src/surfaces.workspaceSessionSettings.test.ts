@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   applyWorkspaceSessionSettings,
+  defineWorkspaceSessionSettingsTable,
   stripSurfaceOwnedFields,
   surfaceOwnedFields,
+  userSetSessionFields,
   type WorkspaceSessionSettingsTable,
 } from './surfaces';
 
@@ -137,5 +139,67 @@ describe('surfaceOwnedFields', () => {
       'temperature',
     ]);
     expect(surfaceOwnedFields(session({ surface: undefined }), table)).toEqual([]);
+  });
+});
+
+describe('applyWorkspaceSessionSettings with a failing resolver', () => {
+  it('rethrows naming the workspace instead of falling back to the stored settings', async () => {
+    const cause = new Error('lookup failed');
+    const table: WorkspaceSessionSettingsTable = {
+      [WORKSPACE]: { ownedFields: ['temperature'], resolve: vi.fn(async () => Promise.reject(cause)) },
+    };
+    const warn = vi.fn();
+
+    const result = applyWorkspaceSessionSettings(session(), { user: null, logger: { warn } }, table);
+
+    await expect(result).rejects.toThrow(`"${WORKSPACE}"`);
+    await expect(result).rejects.toMatchObject({ cause });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(WORKSPACE), cause);
+  });
+});
+
+describe('userSetSessionFields', () => {
+  const { table } = makeTable();
+
+  it('records every owned field a session off any workspace sets', () => {
+    expect(userSetSessionFields(session({ surface: undefined }), table)).toEqual([
+      'systemPromptText',
+      'enabledTools',
+      'temperature',
+      'maxToolCalls',
+    ]);
+  });
+
+  it('records only the fields the workspace does not own, plus carried ones it still sets', () => {
+    expect(userSetSessionFields(session(), table)).toEqual(['maxToolCalls']);
+    expect(userSetSessionFields(session(), table, ['temperature', 'disableUserIntegrations'])).toEqual([
+      'temperature',
+      'maxToolCalls',
+    ]);
+  });
+
+  it('records only carried fields on a workspace when no table is given', () => {
+    expect(userSetSessionFields(session(), undefined, ['temperature'])).toEqual(['temperature']);
+  });
+});
+
+describe('defineWorkspaceSessionSettingsTable', () => {
+  const resolve = async () => ({});
+
+  it('returns a well-formed table', () => {
+    const entries = { [WORKSPACE]: { ownedFields: ['temperature'], resolve } };
+
+    expect(defineWorkspaceSessionSettingsTable(entries)).toBe(entries);
+  });
+
+  it.each([
+    ['missing ownedFields', { resolve }],
+    ['an unknown owned field', { ownedFields: ['temperature', 'name'], resolve }],
+    ['a non-array ownedFields', { ownedFields: 'temperature', resolve }],
+    ['a missing resolve', { ownedFields: ['temperature'] }],
+    ['a non-function resolve', { ownedFields: ['temperature'], resolve: {} }],
+    ['an undefined entry', undefined],
+  ])('throws at load for %s', (_label, entry) => {
+    expect(() => defineWorkspaceSessionSettingsTable({ [WORKSPACE]: entry })).toThrow(`"${WORKSPACE}"`);
   });
 });

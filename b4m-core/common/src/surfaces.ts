@@ -273,7 +273,14 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
 ): Promise<TSession> {
   const owned = ownedFieldsFor(session, table);
   if (!owned || owned.fields.length === 0) return session;
-  const resolved = await owned.entry.resolve({ ...ctx, session });
+  const surface = normalizeSurfaceId(session.surface);
+  let resolved: Partial<SurfaceOwnableSessionSettings>;
+  try {
+    resolved = await owned.entry.resolve({ ...ctx, session });
+  } catch (error) {
+    ctx.logger?.warn(`Workspace session settings resolver for "${surface}" failed`, error);
+    throw new Error(`Workspace session settings resolver for "${surface}" failed`, { cause: error });
+  }
   const effective = { ...session } as Record<string, unknown>;
   for (const field of owned.fields) {
     const value = resolved && Object.prototype.hasOwnProperty.call(resolved, field) ? resolved[field] : undefined;
@@ -306,4 +313,43 @@ export function surfaceOwnedFields(
   table: WorkspaceSessionSettingsTable | null | undefined
 ): SurfaceOwnableSessionField[] {
   return ownedFieldsFor(session, table)?.fields ?? [];
+}
+
+/**
+ * The owned fields `session` sets that are the user's own: those its workspace does not own, plus the
+ * `carried` entries (a copy's source's) it still sets. Without a table a session on a workspace records
+ * only `carried`, so values a workspace's own create path bakes in stay the workspace's.
+ */
+export function userSetSessionFields(
+  session: SurfaceSettingsSession,
+  table: WorkspaceSessionSettingsTable | null | undefined,
+  carried: readonly string[] | null | undefined = []
+): SurfaceOwnableSessionField[] {
+  const id = normalizeSurfaceId(session.surface);
+  const owned: ReadonlySet<string> | null =
+    id === null
+      ? new Set()
+      : !table
+        ? null
+        : new Set(Object.prototype.hasOwnProperty.call(table, id) ? table[id].ownedFields : []);
+  const carriedSet = new Set(carried ?? []);
+  return SURFACE_OWNABLE_SESSION_FIELDS.filter(
+    field => session[field] !== undefined && (carriedSet.has(field) || (owned !== null && !owned.has(field)))
+  );
+}
+
+/** Checks a contributed table once, at load, so a malformed entry fails at startup rather than every turn. */
+export function defineWorkspaceSessionSettingsTable(entries: Record<string, unknown>): WorkspaceSessionSettingsTable {
+  for (const [id, entry] of Object.entries(entries)) {
+    const { ownedFields, resolve } = (entry ?? {}) as Partial<Record<keyof WorkspaceSessionSettingsEntry, unknown>>;
+    if (!Array.isArray(ownedFields) || !ownedFields.every(field => OWNABLE_FIELD_SET.has(field))) {
+      throw new Error(
+        `Workspace session settings for "${id}": ownedFields must be an array of ${SURFACE_OWNABLE_SESSION_FIELDS.join(', ')}`
+      );
+    }
+    if (typeof resolve !== 'function') {
+      throw new Error(`Workspace session settings for "${id}": resolve must be a function`);
+    }
+  }
+  return entries as WorkspaceSessionSettingsTable;
 }

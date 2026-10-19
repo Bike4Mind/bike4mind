@@ -92,6 +92,7 @@ describe('premium workspace session settings', () => {
     expect(out).toContain("import { workspaceSessionSettings as settings1 } from '@bike4mind/premium-beta/settings';");
     expect(out).toContain('"example-workspace": settings0,');
     expect(out).toContain('"other_space": settings1,');
+    expect(out).toContain('= defineWorkspaceSessionSettingsTable({');
   });
 
   it('rejects a contribution that is not an object', () => {

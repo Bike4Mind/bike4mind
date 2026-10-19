@@ -45,7 +45,16 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  renameSync,
+  realpathSync,
+} from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -115,9 +124,7 @@ function isLinkedIntoClient(pkgName) {
   const segments = pkgName.split('/');
   // Check for package.json, not just the dir: an empty/broken dir would satisfy
   // existsSync while still failing real module resolution.
-  return [CLIENT_ROOT, REPO_ROOT].some(root =>
-    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
-  );
+  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments, 'package.json')));
 }
 
 // --- Generate helpers ---
@@ -276,9 +283,7 @@ function generateRouteIndexing(packages) {
   const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
 
   const contributors = packages.filter(p => p.contributions.routeIndexingExport);
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport'));
 
   if (contributors.length === 0) {
     writeFile(
@@ -289,9 +294,7 @@ function generateRouteIndexing(packages) {
   }
 
   const imports = contributors
-    .map(
-      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
-    )
+    .map((p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`)
     .join('\n');
 
   const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
@@ -339,7 +342,11 @@ const LEGACY_SIDENAV_PATH = '/opti';
 const ROUTE_PATH_RE = /^\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/;
 
 function assertRoutePath(value, pkgName, field) {
-  if (typeof value !== 'string' || !ROUTE_PATH_RE.test(value) || value.split('/').some(seg => seg === '..' || seg === '.')) {
+  if (
+    typeof value !== 'string' ||
+    !ROUTE_PATH_RE.test(value) ||
+    value.split('/').some(seg => seg === '..' || seg === '.')
+  ) {
     throw new Error(
       `[codegen] invalid ${field} path from package "${pkgName}": ` +
         `${JSON.stringify(value)} is not an origin-relative route path of lower-case [a-z0-9/._-]`
@@ -374,9 +381,7 @@ function generateNotebookSidenavs(packages) {
   rmSync(join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts'), { force: true });
   const typeImport = `import type { PremiumNotebookSidenavEntry } from '../premiumContract';`;
 
-  const contributors = packages
-    .map(p => ({ pkg: p, sidenav: readSidenavContribution(p) }))
-    .filter(c => c.sidenav);
+  const contributors = packages.map(p => ({ pkg: p, sidenav: readSidenavContribution(p) })).filter(c => c.sidenav);
 
   if (contributors.length === 0) {
     writeFile(
@@ -406,8 +411,9 @@ function generateNotebookSidenavs(packages) {
   }
 
   const imports = chosen
-    .map(({ sidenav }, i) =>
-      `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
+    .map(
+      ({ sidenav }, i) =>
+        `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
     )
     .join('\n');
 
@@ -1093,9 +1099,7 @@ function generateSystemPrompts(packages) {
     return;
   }
 
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
     .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
@@ -1202,7 +1206,8 @@ function generateWorkspaceSessionSettings(packages) {
 
   writeFile(
     outPath,
-    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {\n${entries}\n};\n`
+    `${GENERATED_BANNER}\n${typeImport}\nimport { defineWorkspaceSessionSettingsTable } from '@bike4mind/common';\n${imports}\n\n` +
+      `export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = defineWorkspaceSessionSettingsTable({\n${entries}\n});\n`
   );
 }
 
@@ -1229,10 +1234,7 @@ function generateMigrations(packages) {
   const contributors = packages.filter(p => p.contributions.migrationsExport);
 
   if (contributors.length === 0) {
-    writeFile(
-      outPath,
-      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
-    );
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`);
     return;
   }
 
@@ -1265,9 +1267,7 @@ function generateMigrations(packages) {
     return rel;
   });
 
-  const imports = relSpecs
-    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
-    .join('\n');
+  const imports = relSpecs.map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`).join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
 
@@ -1420,8 +1420,8 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
     if (!expectedDirs.includes(dir)) {
       console.warn(
         `[codegen] WARNING: packages/premium/${dir} declares b4mContributions.infra ` +
-        `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
-        `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
+          `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
+          `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
       );
     }
   }
@@ -1430,14 +1430,19 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 // --- Main ---
 
 const packages = discoverPremiumPackages();
-console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
+console.log(
+  `[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`
+);
 
 // Bare-specifier glue only for packages that will actually resolve. Unlinked
 // packages get the absent form so a hydrated-but-unlinked tree still typechecks,
 // instead of failing every build with cannot-find-module errors.
 const linkedPackages = [];
 for (const pkg of packages) {
-  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  if (isLinkedIntoClient(pkg.name)) {
+    linkedPackages.push(pkg);
+    continue;
+  }
   console.warn(
     `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
       `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
