@@ -108,6 +108,15 @@ const el = (testId: string) => {
   return found;
 };
 
+/** What the sidebar draws inside one user section; throws when the section is not there. */
+const inSection = (sectionId: string, testId: string) => {
+  const found = document.querySelector<HTMLElement>(
+    `[data-testid="sidebar-section"][data-section-id="${sectionId}"] [data-testid="${testId}"]`
+  );
+  if (!found) throw new Error(`no ${testId} in section ${sectionId}`);
+  return found;
+};
+
 async function mount() {
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -131,5 +140,16 @@ describe("starting a new session from a section's header", () => {
 
     expect(createSession).toHaveBeenCalledWith({ sectionId: 'work' });
     expect(el('chat-session-title').textContent).toBe('Fresh thread');
+    expect(inSection('work', 'chat-session-title-text').textContent).toBe('Fresh thread');
+  });
+
+  it('says so when main could not save the placement', async () => {
+    createSession.mockResolvedValue({ session: FRESH, placementFailed: true });
+    await mount();
+
+    await act(async () => el('sidebar-section-new-btn').click());
+    await act(async () => undefined);
+
+    expect(el('chat-section-error').textContent).toBe('Could not put the new session in its section.');
   });
 });
