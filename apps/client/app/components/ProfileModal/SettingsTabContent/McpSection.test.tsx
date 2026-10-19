@@ -40,8 +40,10 @@ const valueInputAt = (index: number) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The LinkedIn server shares a key with the add-new form's defaults, so the cancel test can
+  // tell a cleared stored-keys set from a stale one.
   mocks.servers = [
-    { id: 's1', name: 'notion', envVariables: [{ key: 'NOTION_ACCESS_TOKEN' }], enabled: true, tools: [] },
+    { id: 's1', name: 'linkedin', envVariables: [{ key: 'LINKEDIN_ACCESS_TOKEN' }], enabled: true, tools: [] },
   ];
 });
 
