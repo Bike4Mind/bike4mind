@@ -59,4 +59,16 @@ describe('OrganizationStorageUsage', () => {
 
     expect(refetch).toHaveBeenCalled();
   });
+
+  it('shows a full bar when the limit is zero but storage is used', () => {
+    mockUseOrgStorageUsage.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { organizationId: 'o1', usedBytes: 5_000_000, limitBytes: 0, uploaders: [], uploadersTruncated: false },
+    });
+
+    renderPanel();
+
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100');
+  });
 });

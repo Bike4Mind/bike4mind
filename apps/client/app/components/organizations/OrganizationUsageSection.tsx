@@ -14,7 +14,8 @@ type UsageTab = 'usage' | 'ledger' | 'storage';
  * Org owner/manager surface for their own org's AI spend: the same Usage and
  * Ledger dashboards as the admin Credit Analytics tab, but pinned to this org
  * (picker hidden), plus the org's storage pool. Access is enforced server-side via verifyOrgAccess plus the
- * owner-scoped queries; this is only rendered for owner/manager/admin.
+ * owner-scoped queries; this is only rendered for owner/manager/admin. Storage reads go through
+ * verifyOrgAdminRead (the read tier in orgAccess.ts).
  */
 const OrganizationUsageSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const [tab, setTab] = useState<UsageTab>('usage');

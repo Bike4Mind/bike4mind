@@ -3,8 +3,10 @@ import { Box, Button, CircularProgress, LinearProgress, Stack, Typography } from
 import prettyBytes from 'pretty-bytes';
 import { useOrgStorageUsage } from '@client/app/hooks/data/useOrgStorageUsage';
 
-const percentOf = (bytes: number, totalBytes: number) =>
-  totalBytes > 0 ? Math.min(100, (Math.max(bytes, 0) / totalBytes) * 100) : 0;
+const percentOf = (bytes: number, totalBytes: number) => {
+  if (totalBytes <= 0) return bytes > 0 ? 100 : 0;
+  return Math.min(100, (Math.max(bytes, 0) / totalBytes) * 100);
+};
 
 /** The org's shared storage pool against its limit, and which members' uploads fill it. */
 const OrganizationStorageUsage: FC<{ organizationId: string }> = ({ organizationId }) => {
