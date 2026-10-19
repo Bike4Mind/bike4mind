@@ -37,10 +37,12 @@ requested scopes differ, and returns the minted scopes in the response's `scope`
 ## Grant enforcement and rollout
 
 The SST `production` and `dev` stages, and preview stages, enforce grants
-automatically. Other stages (self-host, local) use grace mode unless `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing
-grants or scope gaps produce warnings rather than rejection. Setting
+automatically. Other stages (self-host, local) use grace mode unless
+`OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing grants or scope gaps
+produce warnings rather than rejection. Setting
 `OAUTH_AI_TOKEN_ENFORCE_GRANT=false` (or any value other than `true`) overrides
-the stage default and disables enforcement, including on `production`, `dev` and previews.
+the stage default and disables enforcement, including on `production`, `dev`
+and previews.
 
 In enforcement mode, relying-party clients need a durable OAuth grant for the
 user/client pair, and the grant must cover every scope the exchange mints. An
