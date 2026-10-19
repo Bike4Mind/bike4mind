@@ -41,7 +41,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerDocument, IMcpServerResponse } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerResponse } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -91,7 +91,7 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
     'Requires an embeddings API key (VoyageAI or OpenAI) in Profile > API Keys (add, then activate) or Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
 };
 
-type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { name: string };
+type McpServerOption = Pick<IMcpServerResponse, 'id' | 'enabled' | 'tools'> & { name: string };
 
 /**
  * Resolves, for a given tool id, why it's unavailable - either a missing API key
