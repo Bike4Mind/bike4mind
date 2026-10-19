@@ -171,7 +171,8 @@ describe.each([
     it.each<{ name: string; overrides: Partial<ModelInfo>; thinkingConfig?: object }>([
       { name: '2.5 id', overrides: { id: 'gemini-2.5-x' as ChatModels } },
       { name: '3.x id', overrides: { id: 'gemini-3-x' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
-      { name: 'unrecognised id', overrides: { id: 'gemini-4-argon' as ChatModels } },
+      { name: 'unrecognised id', overrides: { id: 'gemini-exp-1206' as ChatModels } },
+      { name: '4.x id', overrides: { id: 'gemini-4-argon' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
       {
         name: 'gemini-flash-latest alias',
         overrides: { id: 'gemini-flash-latest' as ChatModels },
