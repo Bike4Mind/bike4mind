@@ -92,6 +92,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import migration, {
+  BACKFILLED_COUNTER_NAMES,
   mapCounterLogRowToEntry,
   mapLedgerRowToEntry,
   resolveCounterLogActorId,
@@ -553,6 +554,9 @@ describe('backfill-admin-audit-log up()', () => {
     expect(state.ledgerFilters[0]).toMatchObject({
       type: { $in: ['generic_add', 'generic_deduct'] },
       reason: 'admin_adjustment',
+    });
+    expect(state.counterFilters[0]).toMatchObject({
+      counterName: { $in: BACKFILLED_COUNTER_NAMES },
     });
     expect(state.counterFilters[0]).toMatchObject({
       counterName: { $in: expect.arrayContaining(['ORG_TOPPED_UP', 'OAUTH_CLIENT_CREATED']) },
