@@ -41,6 +41,8 @@ describe('AdminAuditLogModel', () => {
     ['deleteOne', () => AdminAuditLogModel.deleteOne({})],
     ['deleteMany', () => AdminAuditLogModel.deleteMany({})],
     ['findOneAndDelete', () => AdminAuditLogModel.findOneAndDelete({})],
+    ['bulkWrite updateOne', () => AdminAuditLogModel.bulkWrite([{ updateOne: { filter: {}, update: { summary: 'x' } } }])],
+    ['bulkWrite deleteMany', () => AdminAuditLogModel.bulkWrite([{ deleteMany: { filter: {} } }])],
   ];
 
   it.each(immutableOperations)('rejects %s', async (_name, operation) => {
@@ -78,6 +80,16 @@ describe('AdminAuditLogModel', () => {
 
     await expect(adminAuditLogRepository.appendBackfill([invalid])).rejects.toThrow();
     expect(await AdminAuditLogModel.countDocuments({})).toBe(0);
+  });
+
+  it('appendBackfill rejects a batch with an invalid row even when other rows are already present', async () => {
+    const existing = { ...buildEntry(), id: new Types.ObjectId().toString() };
+    const invalid = { ...buildEntry(), id: new Types.ObjectId().toString(), action: undefined as unknown as string };
+    const fresh = { ...buildEntry(), id: new Types.ObjectId().toString() };
+    await adminAuditLogRepository.appendBackfill([existing]);
+
+    await expect(adminAuditLogRepository.appendBackfill([existing, invalid, fresh])).rejects.toThrow();
+    expect(await AdminAuditLogModel.countDocuments({})).toBe(1);
   });
 
   it('declares the query indexes', async () => {

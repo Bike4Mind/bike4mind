@@ -110,6 +110,9 @@ AdminAuditLogSchema.pre(
   throwImmutable
 );
 
+// bulkWrite skips query middleware, so it needs its own guard.
+AdminAuditLogSchema.pre('bulkWrite', throwImmutable);
+
 AdminAuditLogSchema.pre('save', function () {
   if (!this.isNew) throwImmutable();
 });
@@ -169,6 +172,10 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     if (entries.length === 0) return { inserted: 0, duplicates: 0 };
 
     const docs = entries.map(({ id, ...entry }) => ({ ...entry, _id: new Types.ObjectId(id) }));
+    // Validate up front: on a re-run, duplicate-key errors would otherwise mask an invalid row from the same batch.
+    for (const doc of docs) {
+      await new this.auditLogModel(doc).validate();
+    }
     try {
       await this.auditLogModel.insertMany(docs, { ordered: false, throwOnValidationError: true });
       return { inserted: docs.length, duplicates: 0 };

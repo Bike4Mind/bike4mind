@@ -8,8 +8,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
 const mockOrgFindById = vi.fn();
+const mockWithTransaction = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: (...args: unknown[]) => mockOrgFindById(...args) },
+  withTransaction: (fn: () => Promise<unknown>) => mockWithTransaction(fn),
 }));
 
 const mockFindActiveByOwner = vi.fn();
@@ -26,6 +28,7 @@ vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { sendToClient } from '@server/websocket/utils';
 import handler from '../revoke';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -35,6 +38,18 @@ describe('POST /api/admin/organizations/[id]/revoke', () => {
     vi.clearAllMocks();
     mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Acme' });
     mockFindActiveByOwner.mockResolvedValue([{ id: 'sub-1' }]);
+    mockWithTransaction.mockImplementation(fn => fn());
+  });
+
+  it('fails the request without notifying when the strict audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: {} });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow('audit down');
+
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it('records org.revoked against the organization after cancelling the grant', async () => {

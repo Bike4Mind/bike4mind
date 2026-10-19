@@ -72,6 +72,7 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { sendToClient } from '@server/websocket/utils';
 import handler from '../grant-subscription';
 
 function call(seats: number) {
@@ -114,6 +115,14 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
         organizationId: 'org-1',
       })
     );
+  });
+
+  it('fails the request without notifying when the strict audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { run } = call(5);
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -173,6 +182,21 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
       })
     );
+  });
+
+  it('records the audit inside the grant transaction', async () => {
+    const { run } = callIndividual(plan.priceId);
+    await run();
+    expect(insideTransactionAtAudit).toBe(true);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the request without notifying when the strict audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { run } = callIndividual(plan.priceId);
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it('rejects when the user already has an active subscription for the plan', async () => {

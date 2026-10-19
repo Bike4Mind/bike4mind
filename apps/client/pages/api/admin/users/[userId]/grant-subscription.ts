@@ -89,6 +89,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
+        onGranted: async ({ credits }) => {
+          await recordAdminActionFromRequest(req, {
+            action: 'user.subscription.granted',
+            target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+            summary: `granted individual subscription for ${durationMonths} month(s)`,
+            details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+          });
+        },
       });
       if (grant.status === 'unknown_plan') {
         throw new BadRequestError('Invalid subscription plan');
@@ -104,13 +112,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         credits: grant.credits,
         durationMonths,
-      });
-
-      await recordAdminActionFromRequest(req, {
-        action: 'user.subscription.granted',
-        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
-        summary: `granted individual subscription for ${durationMonths} month(s)`,
-        details: { subscriptionType: 'individual', priceId, credits: grant.credits, durationMonths },
       });
 
       // Notify user
