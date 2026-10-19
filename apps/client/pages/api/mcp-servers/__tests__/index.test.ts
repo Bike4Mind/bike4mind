@@ -175,6 +175,20 @@ describe('GET /api/mcp-servers', () => {
     expect(body.envVariables).toEqual([]);
     expect(body.metadata).toBeNull();
   });
+
+  it('drops legacy env items without a string key instead of failing the list', async () => {
+    mockFind.mockResolvedValue([
+      server({
+        envVariables: [{ key: 'NOTION_ACCESS_TOKEN' }, null, { value: 'orphan-value' }],
+        toolSchemasFetchedAt: new Date(),
+      }),
+    ]);
+
+    const res = await run();
+
+    const [body] = res._getJSONData();
+    expect(body.envVariables).toEqual([{ key: 'NOTION_ACCESS_TOKEN' }]);
+  });
 });
 
 describe('POST /api/mcp-servers', () => {

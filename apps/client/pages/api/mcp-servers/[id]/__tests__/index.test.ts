@@ -170,6 +170,19 @@ describe('PUT /api/mcp-servers/[id]', () => {
     expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
   });
 
+  it('ignores legacy stored items without a key', async () => {
+    mockFindById.mockResolvedValue({
+      id: SERVER_ID,
+      userId: 'u1',
+      envVariables: [{ key: 'NOTION_ACCESS_TOKEN', value: STORED_TOKEN }, null, { value: 'orphan-value' }],
+    });
+    bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: '' }]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: STORED_TOKEN }]);
+  });
+
   it('returns 404 when the update finds no server', async () => {
     mockFindOneAndUpdate.mockResolvedValue(null);
 
