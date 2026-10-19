@@ -1,6 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { IChatHistoryItemDocument } from './SessionTypes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 
 export type QuestItem = {
   quest: string; // The description of the quest
@@ -33,6 +34,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     sessionId: string,
     data: Partial<IChatHistoryItemDocument> & { id: string }
   ) => Promise<IChatHistoryItemDocument | null>;
+  // `update` that matches only while the stored status is not terminal ('done' / 'stopped'); null otherwise.
+  updateIfUnfinished: (
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ) => Promise<IChatHistoryItemDocument | null>;
   // Lightweight method for status checks
   findByIdWithStatus: (id: string) => Promise<Pick<IChatHistoryItemDocument, 'id' | 'status'> | null>;
   // Flag a quest as stopped so an in-flight pipeline's cancellation watcher aborts it.
@@ -44,6 +49,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
+  // The subset of `keys` referenced as generated media (`images`/`videos`) by a quest in this session.
+  findGeneratedMediaKeysInSession: (sessionId: string, keys: string[]) => Promise<string[]>;
+  // Atomic $addToSet onto `generationJobs`, so a chat's job card survives the chat process dying.
+  addGenerationJobs: (questId: string, jobs: GenerationJobRef[]) => Promise<void>;
 }
 
 /**

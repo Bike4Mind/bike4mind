@@ -103,8 +103,28 @@ const DispatchProfileWrite = z.strictObject({
   betaHeaders: z.array(z.string()).optional(),
 });
 
+/** Lowest to furthest along the road to retirement; a fold across sources keeps the furthest. */
+const LIFECYCLE_STATUS_ORDER = ['discovered', 'active', 'legacy', 'deprecated', 'retired'] as const;
+
+/** 'unlisted' is deliberately unranked: a visibility flag, not a point on the road to retirement. */
+export const LIFECYCLE_STATUSES = [...LIFECYCLE_STATUS_ORDER, 'unlisted'] as const;
+type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number];
+
+/** Statuses a model is on its way out in, and therefore not promotable. */
+export const LIFECYCLE_SUNSET_STATUSES: ReadonlySet<string> = new Set<LifecycleStatus>([
+  'legacy',
+  'deprecated',
+  'retired',
+]);
+
+/** Position in LIFECYCLE_STATUS_ORDER, or undefined for an unranked, unknown or missing status. */
+export const lifecycleStatusRank = (status: unknown): number | undefined => {
+  const rank = (LIFECYCLE_STATUS_ORDER as readonly unknown[]).indexOf(status);
+  return rank === -1 ? undefined : rank;
+};
+
 const LifecycleWrite = z.strictObject({
-  status: z.enum(['discovered', 'active', 'legacy', 'deprecated', 'retired', 'unlisted']),
+  status: z.enum(LIFECYCLE_STATUSES),
   deprecationDate: CALENDAR_DATE.optional(),
   retirementDate: CALENDAR_DATE.optional(),
   /** Successor id; feeds resolveDeprecatedModelId ahead of the static map. */
@@ -112,6 +132,8 @@ const LifecycleWrite = z.strictObject({
   // Absence bookkeeping (miss counters) lives in ModelDiscoveryState, not here:
   // a per-run counter must not append a catalog row per run forever.
 });
+
+export const LIFECYCLE_DATE_KEYS = ['deprecationDate', 'retirementDate'] as const;
 
 /**
  * The canonical model record. One row's belief about one model, merged per
@@ -176,7 +198,7 @@ const ModelRecordFields = z.strictObject({
   /** Operator-owned block. Discovery may never set or clear it. */
   disabled: z.boolean().optional(),
   disabledReason: z.string().optional(),
-  /** Discovery-owned block ("discovered, awaiting price"). Operators may never clear it. */
+  /** Discovery-owned block (e.g. "discovered, awaiting price"). Operators may never clear it. */
   autoDisabled: z.boolean().optional(),
   autoDisabledReason: z.string().optional(),
   private: z.boolean().optional(),
@@ -306,9 +328,10 @@ export const FIELD_GROUP_OF: Record<keyof ModelRecord, FieldGroup> = {
 /**
  * ModelInfo fields that never come from a catalog row. `pricing` is supplied by
  * applyModelPriceCatalog from the ModelPrice collection; a catalog row carrying
- * a price is a spec violation the write schema rejects.
+ * a price is a spec violation the write schema rejects. `image` is derived from the
+ * model id by getImageModelCapabilities when GET /api/models lists the model.
  */
-export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing'] as const;
+export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'image'] as const;
 
 /**
  * Which record group each ModelInfo field is derived from. Exhaustive by
@@ -823,6 +846,8 @@ export const ModelDiscoveryRun = z.object({
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),
+  /** Bedrock profile ids whose foundation id a covered listing omitted: neither sighted nor missed. */
+  frozenProfileIds: z.array(z.string()).optional(),
   changes: DiscoveryRunChanges.optional(),
   /** Convergence passes the run made; the cap being hit is worth seeing. */
   passes: z.number().int().nonnegative().optional(),

@@ -20,6 +20,7 @@
  * first events. Subscriptions live at the WebsocketProvider scope now.
  */
 
+import { settleMirroredPinsOnAgentStart } from '@client/app/utils/messageFilePins';
 import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,7 +38,12 @@ import {
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
-import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
+import {
+  addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
+  appendReplyToLatestOptimisticBubble,
+  swapOptimisticPromptBubbleId,
+} from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
@@ -69,6 +75,8 @@ interface AgentExecuteStart {
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];
+  /** The subset of `messageFileIds` scoped to this message only; the rest are pinned to the session. */
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   // LLM runtime knobs.
   temperature?: number;
@@ -112,6 +120,13 @@ interface AgentExecuteStart {
    * (classifier- or rule-based complexity-routed).
    */
   routingSource?: 'mention' | 'agent_literal' | 'toggle' | 'classifier' | 'user-default' | 'complexity';
+  /**
+   * Extra system context for this run only (a programmatic launch's `systemContext`). The
+   * executor appends it to the run's system message. Kept off the execution doc's own fields
+   * and the Quest; carried in the server-only checkpoint so continuations keep it.
+   * Server-capped at `PROMPT_TEXT_MAX`.
+   */
+  systemContext?: string;
 }
 
 interface AgentExecuteAbort {
@@ -209,16 +224,11 @@ export function useAgentExecutionSubscriptions(): void {
   // that caller. Cheap by construction: it fires only on a socket transition
   // and only when the store holds an active run, so an idle tab sends nothing.
   //
-  // Each request carries its executionId, which is what keeps a sweep over
-  // several runs from mis-pairing: the responses come from independent handler
-  // invocations whose latency scales with each run's child count, so they
-  // routinely arrive out of order (see `consumePendingReconnect`).
-  //
   // The dispatcher is read through a ref and the effect is keyed on `readyState`
   // alone: the dispatcher's identity is memoised over `sendJsonMessage`, which
   // churns whenever the access token refreshes, and holding it in the deps would
   // re-send the whole sweep each time it did. Same guard, same reason, as the
-  // mount-time caller in `ActiveAgentExecutions`.
+  // mount-time caller in `useSessionReconnectProbe`.
   const reconnectRef = useRef(reconnect);
   useEffect(() => {
     reconnectRef.current = reconnect;
@@ -254,6 +264,7 @@ export function useAgentExecutionSubscriptions(): void {
         // Pair this execution with the sessionId the dispatcher enqueued.
         // FIFO match works because WS preserves emit order per connection.
         const sessionId = store().consumePendingDispatch();
+        settleMirroredPinsOnAgentStart(sessionId, true);
         store().startExecution(msg.executionId, sessionId);
         // Swap the optimistic prompt bubble's fake id for the real persisted
         // Quest id so the bubble survives a mid-run reload. Only
@@ -307,6 +318,14 @@ export function useAgentExecutionSubscriptions(): void {
           // tool callbacks). Guard at the client so a typo or new upstream
           // value can't silently corrupt store state.
           store().setStatus(msg.executionId, msg.status as AgentExecutionStatus);
+        }
+        // sessionId is set by `execution_started`, which the worker sends before any tool can start a job.
+        const sessionId = store().executions[msg.executionId]?.sessionId;
+        if (sessionId && msg.questId && msg.generationJobs?.length) {
+          addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
+        }
+        if (sessionId && msg.questId && msg.pendingAction) {
+          setPendingActionOnRunBubble(queryClient, sessionId, msg.questId, msg.pendingAction);
         }
       })
     );
@@ -384,8 +403,9 @@ export function useAgentExecutionSubscriptions(): void {
           store().markFailed(msg.executionId, 'agent_error', msg.message);
         } else {
           // Pre-creation rejection - drain the orphaned sessionId so the next
-          // `execution_started` pairs with the correct session, not this stale one.
-          store().consumePendingDispatch();
+          // `execution_started` pairs with the correct session, not this stale one. The server
+          // pinned nothing for a refused start, so the send's workbench mirror goes too.
+          settleMirroredPinsOnAgentStart(store().consumePendingDispatch(), false);
         }
       })
     );
@@ -421,26 +441,12 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
-        // Always drain a pending entry, even on a `found: false` response;
-        // otherwise the queue would carry a stale entry and pair it with the
-        // next reconnect, mis-attributing the execution to the wrong session.
-        //
-        // A found:false carries no executionId on the wire - `handleReconnect`
-        // sends a bare {action, found:false} on EITHER miss branch (no such run,
-        // or a userId mismatch) - so what it drains is the oldest UN-KEYED entry.
-        // That is NOT necessarily the caller it answers: a keyed sweep request
-        // whose run is gone server-side comes back un-keyed too, and drains a
-        // concurrent mount probe's entry instead. The probe's own response then
-        // finds nothing queued, so its run stays unattributed until the next
-        // reconnect. A residual, not a steal: no session is stamped onto the
-        // wrong run, which is the failure this queue exists to prevent.
-        //
-        // It goes away when the server echoes `sessionId` on `reconnect_result`
-        // and the correlation queue can be deleted outright; `handleReconnect`
-        // already holds `execution.sessionId`. Follow-up, not this change.
-        const sessionId = store().consumePendingReconnect(msg.executionId);
         if (!msg.found || !msg.executionId || !msg.status) return;
         const executionId = msg.executionId;
+        // Taken from the response, never from request order: responses to a
+        // sweep or to concurrent mount probes arrive in any order, and a
+        // `found: false` answers no particular request.
+        const sessionId = msg.sessionId;
 
         // Step replay. The server includes `steps` inline when the
         // checkpoint fits in the WS frame budget; otherwise it sets
@@ -754,26 +760,13 @@ export function useAgentExecutionDispatch() {
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
-      reconnect: (sessionId?: string, executionId?: string) => {
-        // Queue an entry for every request that can be answered, not only the ones
-        // carrying a sessionId. A request sent WITHOUT an entry is the dangerous
-        // case: its keyed response would miss on the id and drain the oldest
-        // un-keyed entry - a concurrent mount-time probe's - stamping that session
-        // onto the wrong run. An entry with no sessionId takes nothing from anyone
-        // by contrast: consuming it returns undefined and hydrate falls back to
-        // the execution's own stored sessionId - which for a synthesised orphan is
-        // also undefined, so the run stays unattributed rather than being
-        // recovered. Harmless, not a recovery.
-        if (sessionId || executionId) {
-          useAgentExecutionStore.getState().registerPendingReconnect(sessionId, executionId);
-        }
+      reconnect: (sessionId?: string, executionId?: string) =>
         sendJsonMessage({
           action: 'agent_execute',
           command: 'reconnect',
           sessionId,
           executionId,
-        } as unknown as Parameters<typeof sendJsonMessage>[0]);
-      },
+        } as unknown as Parameters<typeof sendJsonMessage>[0]),
     }),
     [sendJsonMessage]
   );

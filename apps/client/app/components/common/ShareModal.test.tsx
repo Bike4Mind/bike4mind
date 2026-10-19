@@ -4,7 +4,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { InviteType, IFabFileDocument } from '@bike4mind/common';
+import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
+import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 import ShareDocumentModal from './ShareModal';
 
 // ShareModal pulls in several data/context hooks. Stub them so the modal renders
@@ -14,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
   mutateAsync: vi.fn(),
   shareDocumentOptions: null as { onError?: (error: unknown) => void } | null,
+  shareData: undefined as { link: string } | undefined,
+  cancelInvite: vi.fn(),
+  confirm: vi.fn(),
+  apiPost: vi.fn(),
   currentUser: { id: 'u1', email: 'me@test.com', username: 'me' } as {
     id: string;
     email: string;
@@ -24,8 +29,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: (options: { onError?: (error: unknown) => void }) => {
     mocks.shareDocumentOptions = options;
-    return { mutate: vi.fn(), mutateAsync: mocks.mutateAsync, data: undefined };
+    return { mutate: vi.fn(), mutateAsync: mocks.mutateAsync, data: mocks.shareData };
   },
+  useCancelInvite: () => ({ mutate: mocks.cancelInvite, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useUserRevokeSharing: () => ({ mutate: vi.fn() }),
@@ -34,13 +40,13 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
   useCopyToClipboard: () => ({ copied: false, handleCopyToClipboard: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmation: () => vi.fn(),
+  useConfirmation: () => mocks.confirm,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: mocks.currentUser }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: {},
+  api: { post: mocks.apiPost },
 }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
@@ -49,13 +55,20 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderModal = (files?: IFabFileDocument[]) =>
+const renderModal = (files?: IFabFileDocument[], ownerId = 'u1') =>
   render(
     <TestWrapper>
       {files ? (
         <ShareDocumentModal files={files} type={InviteType.FabFile} open onClose={vi.fn()} />
       ) : (
-        <ShareDocumentModal id="notebook-1" name="My Notebook" type={InviteType.Session} open onClose={vi.fn()} />
+        <ShareDocumentModal
+          id="notebook-1"
+          name="My Notebook"
+          type={InviteType.Session}
+          ownerId={ownerId}
+          open
+          onClose={vi.fn()}
+        />
       )}
     </TestWrapper>
   );
@@ -71,6 +84,7 @@ const rejectWith = (error: unknown) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mutateAsync.mockResolvedValue({});
+  mocks.shareData = undefined;
   mocks.currentUser = { id: 'u1', email: 'me@test.com', username: 'me' };
 });
 
@@ -91,6 +105,111 @@ describe('ShareModal - By Link tab', () => {
   it('enables the Generate button with an empty Description (description is not required)', () => {
     renderModal();
     expect(screen.getByTestId('share-modal-submit-button')).not.toBeDisabled();
+  });
+
+  it('tells a notebook owner the link reaches its shareable attached files, before anything is generated', () => {
+    renderModal();
+    expect(screen.queryByTestId('share-modal-generated-link')).not.toBeInTheDocument();
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
+    );
+  });
+
+  it('keeps the file note free of the notebook-only attached-files wording', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent(
+      'Anyone with the link can open this item after signing in, and can share it on. Links keep working until you turn them off.'
+    );
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('does not promise an off switch to a file sharer who is not the owner', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u2" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this item after signing in, and can share it on. Links don't expire."
+    );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
+  it('describes a bulk link as covering these items, without the attached-files wording', () => {
+    renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent(
+      "Anyone with the link can open these items after signing in, and can share it on. Links don't expire."
+    );
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('tells a bulk notebook sharer the link reaches the notebooks and their shareable attached files', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal
+          sessions={[
+            { id: 'notebook-1', name: 'One' } as ISessionDocument,
+            { id: 'notebook-2', name: 'Two' } as ISessionDocument,
+          ]}
+          type={InviteType.Session}
+          open
+          onClose={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
+    );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
+  it('lets a file owner turn off links for that file after confirmation', async () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    mocks.confirm.mock.calls[0][0].onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'file-1', type: InviteType.FabFile });
+  });
+
+  it('shows the whole generated link as text next to a labelled copy button', () => {
+    const link = 'https://app.example.com/share/0123456789abcdef0123456789abcdef';
+    mocks.shareData = { link };
+    renderModal();
+    expect(screen.getByTestId('share-modal-generated-link')).toHaveTextContent(link);
+    expect(screen.getByTestId('share-modal-copy-button')).toHaveAccessibleName('Copy link');
+  });
+
+  it('turns off links for the document only after confirmation', async () => {
+    renderModal();
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('share-modal-turn-off-links-button'));
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelInvite).not.toHaveBeenCalled();
+    mocks.confirm.mock.calls[0][0].onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'notebook-1', type: InviteType.Session });
+  });
+
+  it('offers no off switch to a sharee, since the cancel route is owner-only', () => {
+    renderModal(undefined, 'someone-else');
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links don't expire."
+    );
+  });
+
+  it('offers no off switch for a bulk share', () => {
+    renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
   });
 });
 
@@ -218,5 +337,59 @@ describe('ShareModal - By Users tab', () => {
     // one that should fire; the per-item onError toast must stay suppressed for bulk shares.
     expect(mocks.toast.warning).toHaveBeenCalledTimes(1);
     expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShareModal - Email tab', () => {
+  const openEmailTab = async () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByText('Email'));
+    return user;
+  };
+
+  const addRecipients = async (user: ReturnType<typeof userEvent.setup>, count: number) => {
+    const input = screen.getByTestId('share-modal-recipients-input');
+    for (let i = 0; i < count; i++) {
+      await user.type(input, `u${i}@example.com{Enter}`);
+    }
+  };
+
+  it('blocks more recipients than the server accepts without calling the API', async () => {
+    const user = await openEmailTab();
+    await addRecipients(user, MAX_EMAIL_RECIPIENTS + 1);
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(MAX_EMAIL_RECIPIENTS_ERROR));
+    expect(mocks.apiPost).not.toHaveBeenCalled();
+  });
+
+  it('sends a recipient list at the maximum', async () => {
+    mocks.apiPost.mockResolvedValue({ data: { success: true, message: 'sent' } });
+    const user = await openEmailTab();
+    await addRecipients(user, MAX_EMAIL_RECIPIENTS);
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPost.mock.calls[0][1].recipients).toHaveLength(MAX_EMAIL_RECIPIENTS);
+  });
+
+  it('caps the personal message at the server limit', async () => {
+    await openEmailTab();
+    expect(screen.getByTestId('share-modal-email-message-input')).toHaveAttribute(
+      'maxLength',
+      String(MAX_EMAIL_MESSAGE_LENGTH)
+    );
+  });
+
+  it('shows how much of the message limit is used', async () => {
+    const user = await openEmailTab();
+    expect(screen.getByTestId('share-modal-email-message-count')).toHaveTextContent(`0/${MAX_EMAIL_MESSAGE_LENGTH}`);
+    await user.type(screen.getByTestId('share-modal-email-message-input'), 'hello');
+    expect(screen.getByTestId('share-modal-email-message-count')).toHaveTextContent(`5/${MAX_EMAIL_MESSAGE_LENGTH}`);
   });
 });

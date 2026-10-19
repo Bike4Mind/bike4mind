@@ -84,9 +84,10 @@ const UserCard: FC<{
     return options;
   }, [inviteStatus, onDelete, onRevoke, isDeleting, isRevoking, user.name, confirm]);
 
-  // Resolve the correct user id for profile link
+  // Resolve the correct user id for profile link. A pending row from the member picker carries no
+  // email to resolve, but its id is already the user's own.
   const resolvedUserId = useMemo(() => {
-    return inviteStatus === 'pending' ? userByEmail?.id : user.id;
+    return inviteStatus === 'pending' ? (userByEmail?.id ?? user.id) : user.id;
   }, [inviteStatus, userByEmail?.id, user.id]);
 
   return (
@@ -209,6 +210,7 @@ const UserCard: FC<{
           <Tooltip className="user-card-view-tooltip" title="View">
             <IconButton
               className="user-card-view-button"
+              data-testid="user-card-view-btn"
               onClick={() => navigate({ to: '/profile/$id', params: { id: resolvedUserId } })}
               variant="outlined"
               sx={{

@@ -11,6 +11,7 @@ import {
   fabFileRepository,
   fabFileChunkRepository,
   userRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -21,7 +22,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
-import type { DataLakeCleanupMessage } from '@server/queueHandlers/dataLakeCleanup';
+import type { DataLakeCleanupMessage } from '@server/dataLakes/dataLakeCleanupPayload';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import {
@@ -47,7 +48,7 @@ const retrievalIndex = () =>
     : undefined;
 
 /**
- * POST /api/data-lakes/:id/lifecycle  { action }
+ * POST /api/data-lakes/:id/lifecycle  { action }  (`:id` must be the lake id, not its slug)
  * Drives the lake lifecycle through the service layer so the required side effects
  * (cancel in-flight batch, archive/soft-delete files, dedup on restore, stat
  * recompute, best-effort index removal) always run. Writes are owner/admin only.
@@ -60,8 +61,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const ctx = await toAccessContext(req);
 
     // Resolve + access-gate the lake first (not-found-style denial). Writes are then
-    // further restricted to owner/admin inside each service.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // further restricted to owner/admin inside each service. By id only: a slug skips a deleted
+    // lake, so a retried delete by slug would land on the next lake sharing it.
+    const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     dataLakeService.assertLakeWritable(lake);
@@ -108,6 +110,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
           },
           enableDriveConnection: async ({ dataLakeId }) => {
@@ -156,6 +159,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
             // A restore puts the lake's files back inside every lake read, which is a membership
             // join the change log has to carry - the delete side already logged their removals.
@@ -180,6 +184,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             fabFiles: fabFileRepository,
             fabFileChunks: fabFileChunkRepository,
             users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
             // The teardown's soft delete takes every member file out of every lake read, which is
             // a membership departure - the restore door records the matching rejoins.

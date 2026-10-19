@@ -17,13 +17,7 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import {
-  DATA_LAKES,
-  STATIC_LAKE_IDS,
-  getAccessibleDataLakes,
-  hasDeveloperUserTag,
-  isImageServeable,
-} from '@bike4mind/common';
+import { DATA_LAKES, STATIC_LAKE_IDS, getAccessibleDataLakes, hasDeveloperUserTag } from '@bike4mind/common';
 import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -40,6 +34,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
 import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
 import { firstQueryValue } from './firstQueryValue';
+import { narrowAccessibleLakes } from './narrowAccessibleLakes';
 
 export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
 
@@ -111,14 +106,13 @@ export interface DataLakeArticlesQuery {
   // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
   // route segment, so `id` comes purely from the query string and is repeatable.
   id?: string | string[];
+  lakeId?: string | string[];
   tags?: string | string[];
   search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
   sortDir?: string;
-  /** 'true' narrows to the merged-tree Uncategorized bucket - see queryDataLakeArticles. */
-  uncategorized?: string | string[];
 }
 
 /**
@@ -236,10 +230,33 @@ export async function queryDataLakeArticles(
   lakes: DataLakeConfig[],
   query: DataLakeArticlesQuery
 ): Promise<{ data: unknown[]; total: number; hasMore: boolean; grantedLakeIds?: string[] }> {
-  if (lakes.length === 0) return { data: [], total: 0, hasMore: false };
+  const scopedLakes = narrowAccessibleLakes(lakes, query.lakeId);
+  if (scopedLakes.length === 0) return { data: [], total: 0, hasMore: false };
 
-  const dataLakeTags = lakes.map(dl => dl.datalakeTag);
-  const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
+  const adapter = {
+    db: {
+      fabFiles: fabFileRepository,
+      users: userRepository,
+      adminSettings: adminSettingsRepository,
+      projects: projectRepository,
+    },
+    storage: {
+      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
+      generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        try {
+          return await getFilesStorage().getSignedUrl(path, 'get', {
+            expiresIn: expireInSeconds,
+            audience: 'browser',
+          });
+        } catch {
+          return null;
+        }
+      },
+    },
+  };
+
+  const dataLakeTags = scopedLakes.map(dl => dl.datalakeTag);
+  const { openTagPrefixes } = splitTagPrefixes(scopedLakes);
 
   // Single-article fetch (deep link) - authorize it against the accessible lakes.
   // Access = the file carries an accessible lake's unique meta-tag (covers dynamic
@@ -252,18 +269,12 @@ export async function queryDataLakeArticles(
   const articleId = firstQueryValue(query.id);
   if (articleId) {
     const file = await fabFileRepository.findById(articleId);
-    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
+    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(scopedLakes, file.tags?.map(t => t.name) ?? []) : [];
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
     }
-    const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
-    // A held/blocked uploaded image must not hand out its cached URL via the
-    // deep-link/single-id branch. Keep the metadata (so the client can render a
-    // placeholder) but strip the servable URL fields, mirroring fabFileService/get.ts.
-    if (!isImageServeable(file)) {
-      delete metadata.fileUrl;
-      delete metadata.fileUrlExpireAt;
-    }
+    const signedFile = await fabFilesService.generateSignedUrl(file, adapter);
+    const { content, chunks, vector, ...metadata } = signedFile as unknown as Record<string, unknown>;
     // Surfaced so the caller's own access-audit attribution can reuse this SAME grantingLakes
     // result (this is the sound, single-authorized-file case) instead of recomputing it - see
     // apps/client/pages/api/data-lakes/articles.ts.
@@ -282,16 +293,9 @@ export async function queryDataLakeArticles(
   // Dynamic-lake arms, each anchored to that lake's creator (#2243). Registry scopes are dropped
   // because these all land in one cross-lake `$or` - see dynamicMembershipScopesFor.
   const lakeMemberships = dynamicMembershipScopesFor(
-    await buildLakeMembershipScopes(lakes, 'data-lake-articles-browse', req.logger)
+    await buildLakeMembershipScopes(scopedLakes, 'data-lake-articles-browse', req.logger)
   );
 
-  // The merged tree's Uncategorized bucket: lake members categorized under NONE of the accessible
-  // prefixes, so a file categorized in any one lake stays out of it (it is already reachable under
-  // that lake's branch). `restrictToDataLake` is not optional here - the narrowing is a top-level
-  // AND, so without it the broad owner/shared arms stay in and the "bucket" would be every
-  // personal file the caller owns that happens to carry none of these prefixes.
-  const uncategorizedOnly = firstQueryValue(query.uncategorized) === 'true';
-  const allTagPrefixes = [...openTagPrefixes, ...scopedTagPrefixes];
   const result = await fabFilesService.search(
     user.id,
     {
@@ -304,23 +308,7 @@ export async function queryDataLakeArticles(
         excludeContent: true,
       },
     },
-    {
-      db: {
-        fabFiles: fabFileRepository,
-        users: userRepository,
-        adminSettings: adminSettingsRepository,
-        projects: projectRepository,
-      },
-      storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
-          try {
-            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-          } catch {
-            return null;
-          }
-        },
-      },
-    },
+    adapter,
     // Resolved from the lakes this caller can actually reach, never from the query string
     // (see SearchFabFilesServerOptions).
     {
@@ -329,7 +317,7 @@ export async function queryDataLakeArticles(
       dataLakeTags,
       dataLakeTagPrefixes: openTagPrefixes,
       lakeMemberships,
-      ...(uncategorizedOnly ? { restrictToDataLake: true, lacksContentPrefixTags: allTagPrefixes } : {}),
+      restrictToDataLake: query.lakeId !== undefined,
     }
   );
 
@@ -337,7 +325,7 @@ export async function queryDataLakeArticles(
 }
 
 /**
- * Tag-occurrence + unique-file counts that drive the Explorer's tag tree and the
+ * Per-tree-path + unique-file counts that drive the Explorer's tag tree and the
  * KB-article stats. Serves `/api/data-lakes/tag-counts`.
  */
 export async function queryDataLakeTagCounts(
@@ -355,7 +343,6 @@ export async function queryDataLakeTagCounts(
   lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
   uncategorizedFileCounts: Record<string, number>;
   totalLakeFileCount: number;
-  totalUncategorizedFileCount: number;
 }> {
   if (lakes.length === 0) {
     return {
@@ -365,7 +352,6 @@ export async function queryDataLakeTagCounts(
       lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
-      totalUncategorizedFileCount: 0,
     };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
@@ -402,24 +388,13 @@ export async function queryDataLakeTagCounts(
   //   uncategorizedFileCounts[tag]  - the slice of it the prefix-keyed tree cannot render, so the
   //                                   tree can offer it as a bucket instead of dropping it
   //   totalLakeFileCount            - the all-lakes row, DISTINCT across lakes
-  //   totalUncategorizedFileCount   - the MERGED tree's bucket: distinct members categorized under
-  //                                   no accessible prefix, so a file categorized in any one lake
-  //                                   stays out of it
   // `uniqueArticleCounts` stays prefix-based: it sizes the tag TREE, which is prefix-keyed.
-  const [
-    tagCounts,
-    uniqueArticleCounts,
-    membershipCounts,
-    lakeArmCounts,
-    totalLakeFileCount,
-    totalUncategorizedFileCount,
-  ] = await Promise.all([
+  const [tagCounts, uniqueArticleCounts, membershipCounts, lakeArmCounts, totalLakeFileCount] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
     fabFileRepository.countDataLakeFilesByMembershipArm(membershipScopes),
     fabFileRepository.countDistinctDataLakeFilesByMembership(membershipScopes),
-    fabFileRepository.countDistinctUncategorizedDataLakeFilesByMembership(membershipScopes, allPrefixes),
   ]);
 
   const lakeFileCounts: Record<string, number> = {};
@@ -436,6 +411,46 @@ export async function queryDataLakeTagCounts(
     lakeArmCounts,
     uncategorizedFileCounts,
     totalLakeFileCount,
-    totalUncategorizedFileCount,
   };
+}
+
+/**
+ * Tree counts for the lakes the Explorer has SELECTED, counted over their membership alone.
+ * Serves `/api/data-lakes/tag-counts?lakeId=...`.
+ *
+ * The unscoped tree above is merged by prefix, and prefixes are unique only per creator or org,
+ * so another creator's lake (or the viewer's own non-member files) carrying the same prefix would
+ * land in a selected lake's tree. `restrictToDataLake` drops the base-access arms, leaving only
+ * the selected lakes' own arms.
+ *
+ * Several selected lakes are counted as one union, not per lake: a member of selected lake B that
+ * carries selected lake A's prefix shows under A's branch. Exact per-lake trees would need one
+ * aggregate branch per lake - the fan-out countDataLakeFilesByMembership has to chunk.
+ *
+ * `selected` must come from `narrowAccessibleLakes` over `resolveAccessibleLakes`, so a requested
+ * id only ever narrows: one the caller cannot reach selects nothing and returns an empty tree.
+ */
+export async function queryScopedDataLakeTagCounts(
+  req: EntitlementRequest,
+  selected: DataLakeConfig[]
+): Promise<{ tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>> }> {
+  if (selected.length === 0) return { tagCounts: [] };
+
+  const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(selected);
+  const membershipScopes = await buildLakeMembershipScopes(selected, 'data-lake-tag-counts-scoped', req.logger);
+  const user = req.user!;
+  // Every selected lake contributes a `dataLakeTags` arm, so the builder's "restrict with no
+  // arms" guard cannot fire.
+  const tagCounts = await fabFileRepository.countDataLakeTagsByPrefix(
+    user.id,
+    [...openTagPrefixes, ...scopedTagPrefixes],
+    {
+      userGroups: user.groups ?? [],
+      dataLakeTags: selected.map(dl => dl.datalakeTag),
+      dataLakeTagPrefixes: openTagPrefixes,
+      lakeMemberships: dynamicMembershipScopesFor(membershipScopes),
+      restrictToDataLake: true,
+    }
+  );
+  return { tagCounts };
 }

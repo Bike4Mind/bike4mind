@@ -8,6 +8,8 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
+import type { ApiKeyInfo } from '@server/cli/auth';
+import { requestTurnAuth, type TurnAuth } from '@server/auth/turnAuth';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
@@ -69,6 +71,9 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
   return holdsApiKeyScope(req, DATA_LAKE_READ_SCOPES);
 }
 
+/** The slice of `req.apiKeyInfo` the lake-tool gate and run attribution read. */
+export type ApiKeyCredential = Pick<ApiKeyInfo, 'keyId' | 'scopes'>;
+
 /**
  * The chat tools a caller may not be offered on this request: the data-lake write tools when an
  * API key lacks datalake:write, and the read tool too when it also lacks datalake:read (JWT/browser
@@ -79,6 +84,20 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
 export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
   if (holdsApiKeyScope(req, DATA_LAKE_WRITE_SCOPES)) return [];
   return holdsDataLakeReadScope(req) ? [...DATA_LAKE_WRITE_TOOL_NAMES] : [...DATA_LAKE_TOOL_NAMES];
+}
+
+/**
+ * The persisted run fields derived from the request's credential (`req.apiKeyInfo`, undefined for a
+ * signed-in session): always the turn auth, plus the scope denials when there are any.
+ */
+export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
+  scopeDeniedTools?: string[];
+} {
+  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
+  return {
+    ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
+    ...requestTurnAuth({ apiKeyInfo }),
+  };
 }
 
 export function assertDataLakeWriteScope(req: ScopedRequest): void {

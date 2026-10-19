@@ -7,8 +7,13 @@ export interface IUserDetails {
   id: string;
   email?: string;
   name: string;
+  /** Credits spent in the period starting at `periodStart`. */
   usedCredits: number;
   lastCreditUsedAt: Date | null;
+  /** Start of the UTC calendar month `usedCredits` belongs to; missing or older reads as 0 spent. */
+  periodStart?: Date | null;
+  /** Per-member monthly cap overriding the org's `maxCreditsPerMember`; null/absent inherits it. */
+  maxCredits?: number | null;
 }
 
 export interface IOrganization extends ICreditHolder, IModelConfig {
@@ -44,7 +49,14 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  storageLimit?: number /** Storage limit in MBs */;
+  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  storageLimit?: number;
+
+  /**
+   * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
+   * as 0. Mirrors IUser.currentStorageSize for personal files.
+   */
+  currentStorageSize?: number;
 
   /**
    * Organization-wide system prompt that applies to all conversations for team members.
@@ -54,8 +66,9 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   systemPrompt?: string;
 
   /**
-   * Optional per-member credit spending cap. When set, members cannot spend more than
-   * this many credits from the org pool. Observability-only if unset (no limit enforced).
+   * Optional default monthly per-member credit budget. When set, a member cannot spend more
+   * than this many credits from the org pool per UTC calendar month, unless their
+   * `userDetails[].maxCredits` override says otherwise. Observability-only if unset.
    * Known TOCTOU: pre-check and atomic increment are separate operations;
    * concurrent requests can exceed the limit by one. Accepted: window is tiny, stakes are low.
    */
@@ -115,6 +128,21 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null>;
 
   /**
+   * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.
+   * Same contract as IUserRepository.incrementCurrentStorage.
+   */
+  incrementCurrentStorage(organizationId: string, bytes: number): Promise<void>;
+
+  /** Same contract as IUserRepository.setCurrentStorageIfUnchanged, for the org counter. */
+  setCurrentStorageIfUnchanged(organizationId: string, expected: number, next: number): Promise<boolean>;
+
+  /** The org's `currentStorageSize` (missing counts as 0), or null when the org does not exist. */
+  findCurrentStorageSize(organizationId: string): Promise<number | null>;
+
+  /** One keyset page of organization ids in `_id` order, starting after `afterId` (null = first page). */
+  listOrganizationIdsAfter(afterId: string | null, limit: number): Promise<string[]>;
+
+  /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
    * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add owner-inclusive
    * team size (owner + members, #1423; never a double-raise). The raise is clamped so that size stays
@@ -127,7 +155,9 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    */
   addMemberRaisingSeats(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IOrganizationDocument['users'][number],
+    /** The resolved `teamPlanMaxSeats` setting; defaults to ORGANIZATION_SUBSCRIPTION_MAX_SEATS. */
+    maxSeats?: number
   ): Promise<IOrganizationDocument | null>;
 
   /**
@@ -158,6 +188,14 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * `user.organizationId`, which is a display preference.
    */
   findMembershipOrgIds(userId: string): Promise<string[]>;
+
+  /**
+   * IDs of every organization whose plan applies to the user: everything `findMembershipOrgIds`
+   * returns PLUS orgs where the user is the manager (`managerId`) or an appointed admin
+   * (`adminUserIds`) without a member row. For plan/entitlement resolution ONLY - never feed it
+   * into data access (lake scope, `AccessContext.organizationIds`).
+   */
+  findPlanHolderOrgIds(userId: string): Promise<string[]>;
 
   /**
    * Every user id whose org-stamped content belongs in this org's reports, plus the disagreement
@@ -198,18 +236,27 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
-   * Update a user's usage details within an organization.
-   * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt.
+   * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the
+   * org default). Targeted positional `$set`; returns false when the member has no row to update or is no longer a member (owner, manager or a
+   * `users[]` row). The repository's Mongo `$or` must stay in sync with `isCurrentOrgMember`.
+   */
+  setMemberMaxCredits(organizationId: string, userId: string, maxCredits: number | null): Promise<boolean>;
+
+  /**
+   * Record spend against a member's monthly budget within an organization, atomically resetting
+   * the row first when its `periodStart` belongs to an earlier month.
    * The caller must ensure the row exists first (see `ensureUserDetails`); the positional update
    * cannot create a missing row and no-ops if one is absent.
    *
    * @param organizationId - The ID of the organization
    * @param userId - The ID of the user within the organization
-   * @param updates - creditsDelta uses $inc for atomicity, lastCreditUsedAt uses $set
+   * @param updates - creditsDelta is added to the current period's usage; lastCreditUsedAt is set
+   * @param now - clock for the period boundary (defaults to the current time)
    */
   updateUserDetails(
     organizationId: string,
     userId: string,
-    updates: { creditsDelta?: number; lastCreditUsedAt?: Date }
+    updates: { creditsDelta?: number; lastCreditUsedAt?: Date },
+    now?: Date
   ): Promise<void>;
 }

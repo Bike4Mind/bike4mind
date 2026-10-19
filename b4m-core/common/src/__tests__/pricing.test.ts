@@ -244,4 +244,89 @@ describe('pricing utils', () => {
       warn.mockRestore();
     });
   });
+
+  describe('getTextModelCreditsPer1M', () => {
+    let pricing: Awaited<ReturnType<typeof importPricing>>;
+    let models: typeof import('../models');
+
+    beforeAll(async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', undefined);
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', undefined);
+      pricing = await importPricing();
+      models = await import('../models');
+    });
+
+    afterAll(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    const nano = (): import('../models').ModelInfo => ({
+      id: 'gpt-4.1-nano-2025-04-14' as import('../models').ModelInfo['id'],
+      type: 'text',
+      name: 'GPT-4.1 Nano',
+      backend: models.ModelBackend.OpenAI,
+      contextWindow: 1_047_576,
+      max_tokens: 32_768,
+      supportsImageVariation: false,
+      pricing: { 1_047_576: { input: 0.1 / 1_000_000, output: 0.4 / 1_000_000 } },
+    });
+
+    it('equals what settlement charges for 1M tokens, at the platform credits-per-USD rate', () => {
+      const model = nano();
+      const rates = pricing.getTextModelCreditsPer1M(model);
+      const rate = pricing.CREDITS_PER_USD_COST;
+
+      expect(rates?.input).toBeCloseTo(models.getTextModelCost(model, 1_000_000, 0) * rate, 6);
+      expect(rates?.output).toBeCloseTo(models.getTextModelCost(model, 0, 1_000_000) * rate, 6);
+      expect(rates?.cachedInput).toBeCloseTo(models.getTextModelCost(model, 0, 0, 1_000_000) * rate, 6);
+      // Stochastic settlement charges exactly the integer part when the fraction is 0.
+      expect(pricing.usdToCreditsStochastic(models.getTextModelCost(model, 1_000_000, 0), () => 0.5)).toBe(
+        rates?.input
+      );
+    });
+
+    it('keeps the precision a per-1K round-up loses for cheap models', () => {
+      expect(pricing.getTextModelCreditsPer1M(nano())).toEqual({ input: 200, output: 800, cachedInput: 20 });
+      expect(pricing.usdPerTokenToCreditsPer1M(0.0375 / 1_000_000)).toBe(75);
+      expect(pricing.usdPerTokenToCreditsPer1M(0.00001 / 1_000_000)).toBe(0.02);
+    });
+
+    it('quotes a Gemini or xAI cache rate only where the model publishes cache_read', () => {
+      const withRate = { 1_048_576: { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000, cache_read: 0.03 / 1_000_000 } };
+      const withoutRate = { 1_048_576: { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000 } };
+      for (const backend of [models.ModelBackend.Gemini, models.ModelBackend.XAI]) {
+        expect(pricing.getTextModelCreditsPer1M({ ...nano(), backend, pricing: withRate })?.cachedInput).toBe(
+          pricing.usdPerTokenToCreditsPer1M(0.03 / 1_000_000)
+        );
+        // Their adapters leave cached tokens in inputTokens here, so no cache rate settles.
+        expect(pricing.getTextModelCreditsPer1M({ ...nano(), backend, pricing: withoutRate })?.cachedInput).toBeNull();
+      }
+      // A Bedrock non-Claude family still reports no cache reads, published rate or not.
+      expect(
+        pricing.getTextModelCreditsPer1M({ ...nano(), backend: models.ModelBackend.Bedrock, pricing: withRate })
+          ?.cachedInput
+      ).toBeNull();
+    });
+
+    it('treats a pricing map as publishing a cache rate only when every tier carries one', () => {
+      const tier = { input: 2 / 1_000_000, output: 6 / 1_000_000 };
+      expect(pricing.publishesCacheReadRate({ pricing: { 200_000: { ...tier, cache_read: 0.3 / 1_000_000 } } })).toBe(
+        true
+      );
+      expect(
+        pricing.publishesCacheReadRate({
+          pricing: { 200_000: { ...tier, cache_read: 0.3 / 1_000_000 }, 500_000: tier },
+        })
+      ).toBe(false);
+      expect(pricing.publishesCacheReadRate({ pricing: {} })).toBe(false);
+      expect(pricing.publishesCacheReadRate(undefined)).toBe(false);
+    });
+
+    it('is null for an unpriced or non-text model', () => {
+      expect(pricing.getTextModelCreditsPer1M({ ...nano(), pricing: {} })).toBeNull();
+      expect(pricing.getTextModelCreditsPer1M({ ...nano(), pricing: { 0: { input: 0, output: 0 } } })).toBeNull();
+      expect(pricing.getTextModelCreditsPer1M({ ...nano(), type: 'image' })).toBeNull();
+    });
+  });
 });

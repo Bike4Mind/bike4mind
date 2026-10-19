@@ -5,11 +5,16 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  COMPLETION_SSE_ERROR_CODES,
   CompletionRequestSchema,
+  CompletionSseErrorEventSchema,
+  CompletionStreamEventSchema,
   CompletionToolSchema,
+  isCompletionServerTool,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 describe('ResponseFormatSchema', () => {
   it('accepts text mode', () => {
@@ -72,6 +77,82 @@ describe('CompletionToolSchema', () => {
         toolSchema: { name: 'add', description: '', parameters: { type: 'string' } },
       })
     ).toThrow();
+  });
+});
+
+describe('CompletionToolSchema tool search', () => {
+  const customTool = {
+    toolSchema: { name: 'get_weather', description: 'Weather', parameters: { type: 'object' } },
+  };
+
+  it('keeps defer_loading and cache_control on a custom tool', () => {
+    const parsed = CompletionToolSchema.parse({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(parsed).toEqual({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(isCompletionServerTool(parsed)).toBe(false);
+  });
+
+  it('parses a plain custom tool to the same shape as before', () => {
+    expect(CompletionToolSchema.parse(customTool)).toEqual(customTool);
+  });
+
+  it.each([
+    ['tool_search_tool_regex_20251119', 'tool_search_tool_regex'],
+    ['tool_search_tool_bm25_20251119', 'tool_search_tool_bm25'],
+  ])('accepts the %s server tool', (type, name) => {
+    const parsed = CompletionToolSchema.parse({ serverTool: { type, name } });
+    expect(parsed).toEqual({ serverTool: { type, name } });
+    expect(isCompletionServerTool(parsed)).toBe(true);
+  });
+
+  it.each([
+    ['an unknown server tool type', { type: 'web_search_20260209', name: 'web_search' }],
+    ['a name that does not match the type', { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_bm25' }],
+    ['a missing name', { type: 'tool_search_tool_bm25_20251119' }],
+  ])('rejects %s', (_label, serverTool) => {
+    expect(CompletionToolSchema.safeParse({ serverTool }).success).toBe(false);
+  });
+
+  it('rejects a non-boolean defer_loading', () => {
+    expect(
+      CompletionToolSchema.safeParse({ toolSchema: { ...customTool.toolSchema, defer_loading: 'yes' } }).success
+    ).toBe(false);
+  });
+
+  it('accepts a mixed tools[] in the request body', () => {
+    const out = CompletionRequestSchema.parse({
+      model: 'claude-opus-5-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [
+        { toolSchema: { ...customTool.toolSchema, defer_loading: true } },
+        { serverTool: { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' } },
+      ],
+    });
+    expect(out.tools).toHaveLength(2);
+  });
+});
+
+describe('CompletionStreamEventSchema provider_block', () => {
+  const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+
+  it('accepts a provider_block frame', () => {
+    expect(CompletionStreamEventSchema.parse({ type: 'provider_block', provider: 'anthropic', block })).toEqual({
+      type: 'provider_block',
+      provider: 'anthropic',
+      block,
+    });
+  });
+
+  it('rejects a provider_block frame from an unknown provider or without a block', () => {
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'openai', block }).success).toBe(
+      false
+    );
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'anthropic' }).success).toBe(
+      false
+    );
   });
 });
 
@@ -162,6 +243,20 @@ describe('CompletionRequestSchema', () => {
     expect(out.temperature).toBe(0.2);
     expect(out.max_tokens).toBe(512);
     expect(out.tools).toHaveLength(1);
+  });
+});
+
+describe('CompletionRequestSchema model length', () => {
+  const messages = [{ role: 'user', content: 'hi' }];
+
+  it('accepts a model id of exactly 256 characters', () => {
+    expect(CompletionRequestSchema.safeParse({ model: 'm'.repeat(256), messages }).success).toBe(true);
+  });
+
+  it('rejects a model id over 256 characters on the model field', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'm'.repeat(257), messages });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map(i => i.path)).toEqual([['model']]);
   });
 });
 
@@ -372,5 +467,74 @@ describe('normalizeCompletionRequest', () => {
     const normalized = normalizeCompletionRequest(parsed);
     expect(normalized.options?.temperature).toBe(0);
     expect(normalized.options?.maxTokens).toBe(0);
+  });
+});
+
+describe('CompletionRequestSchema options.reasoningEffort', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  it('keeps reasoningEffort on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'low' } });
+    expect(parsed.options?.reasoningEffort).toBe('low');
+  });
+
+  it('leaves reasoningEffort absent when not sent', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { temperature: 0.2 } });
+    expect(parsed.options).not.toHaveProperty('reasoningEffort');
+  });
+
+  it('rejects an unknown effort value', () => {
+    expect(() => CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'turbo' } })).toThrow();
+  });
+});
+
+describe('CompletionRequestSchema options.thinking', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  // Zod strips unknown keys, so before this field existed the option vanished here and a
+  // Claude turn never reached the adapter branch that applies reasoningEffort.
+  it('keeps thinking on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true } } });
+    expect(parsed.options?.thinking).toEqual({ enabled: true });
+  });
+
+  it('rejects a budget below the API minimum of 1024', () => {
+    expect(() =>
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1023 } } })
+    ).toThrow();
+    expect(
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1024 } } }).options
+        ?.thinking
+    ).toEqual({ enabled: true, budget_tokens: 1024 });
+  });
+});
+
+describe('CompletionSseErrorEventSchema', () => {
+  it('accepts the provider classifiers alongside the billing ones', () => {
+    for (const code of [
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]) {
+      expect(CompletionSseErrorEventSchema.safeParse({ type: 'error', message: 'm', code }).success).toBe(true);
+    }
+  });
+
+  it('rejects a code outside the frame vocabulary', () => {
+    const frame = { type: 'error', message: 'm', code: 'provider_not_configured' };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
+  it('leaves the persisted quest vocabulary unwidened', () => {
+    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
+    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
+      ...QUEST_ERROR_CODES,
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]);
   });
 });

@@ -78,6 +78,110 @@ describe('AnthropicBedrockBackend prompt caching guard (#8322)', () => {
   });
 });
 
+describe('AnthropicBedrockBackend current inference profiles', () => {
+  const profiles = [
+    [ChatModels.CLAUDE_5_OPUS_BEDROCK, 5, 25],
+    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 4, 20],
+    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 2, 10],
+    [ChatModels.CLAUDE_FABLE_5_BEDROCK, 10, 50],
+    [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 10, 50],
+  ] as const;
+
+  it.each(profiles)('lists %s as an adaptive-thinking Bedrock model', async (id, input, output) => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === id);
+
+    expect(model).toMatchObject({
+      id,
+      backend: 'bedrock',
+      can_think: true,
+      thinkingStyle: 'adaptive',
+      rank: expect.any(Number),
+    });
+    expect(model?.pricing[1_000_000]).toMatchObject({ input: input / 1_000_000, output: output / 1_000_000 });
+  });
+
+  it.each([ChatModels.CLAUDE_FABLE_5_BEDROCK, ChatModels.CLAUDE_FABLE_5_1_BEDROCK])(
+    'lists %s disabled, naming the aws_review data-retention mode it needs',
+    async id => {
+      const model = (await backend.getModelInfo()).find(candidate => candidate.id === id);
+
+      expect(model).toMatchObject({ disabled: true, disabledReason: expect.stringContaining('aws_review') });
+    }
+  );
+
+  it('lists Opus 4.1 disabled with its Legacy reason', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_4_1_OPUS_BEDROCK);
+
+    expect(model).toMatchObject({
+      disabled: true,
+      disabledReason: 'Legacy on Bedrock; account access lapsed after inactivity',
+    });
+  });
+
+  it('prices Opus 5.5 cache hits at 0.05x input ($0.20 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_5_5_OPUS_BEDROCK);
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.2 / 1_000_000);
+  });
+
+  it('prices Sonnet 5.5 cache hits at 0.05x input ($0.10 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_5_5_SONNET_BEDROCK
+    );
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.1 / 1_000_000);
+  });
+
+  it('prices Fable 5.1 cache hits at 0.025x input ($0.25 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_FABLE_5_1_BEDROCK
+    );
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.25 / 1_000_000);
+  });
+
+  it('leaves Fable 5 on the 0.1x default, matching the published $1.00 / 1M cache read', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_FABLE_5_BEDROCK);
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBeUndefined();
+  });
+
+  it('lists Haiku 5.5 as an adaptive Bedrock model priced by prompt length ($0.10/$0.50, then $0.50/$2.50 over 100K)', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_5_5_HAIKU_BEDROCK
+    );
+
+    expect(model).toMatchObject({ backend: 'bedrock', can_think: true, thinkingStyle: 'adaptive' });
+    expect(model?.pricing[100_000]).toEqual({ input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 });
+    expect(model?.pricing[1_000_000]).toEqual({ input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 });
+  });
+
+  it('omits sampling parameters for Haiku 5.5', () => {
+    const body = JSON.parse(
+      backend.getPayload(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, [{ role: 'user', content: 'Hello' }], {
+        temperature: 0.2,
+        topP: 0.8,
+        topK: 5,
+      }).body
+    ) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    // The Bedrock Anthropic body never carries top_k for any model; native top_k gating is pinned in anthropicBackend.dispatchModel.test.ts
+    expect(body).not.toHaveProperty('top_k');
+  });
+
+  it.each(profiles)('omits sampling parameters for %s', (id, _input, _output) => {
+    const body = JSON.parse(
+      backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8, topK: 5 }).body
+    ) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    expect(body).not.toHaveProperty('top_k');
+  });
+});
+
 /**
  * Characterization test for `translateStreamChunk` and its 11 stream type-guards.
  * These are the surface the `any`->`unknown`+`isRecord` refactor touched, and had no
@@ -101,6 +205,16 @@ describe('translateStreamChunk', () => {
     });
     expect(r.done).toBe(false);
     expect(r.chunk?.choices[0].usage?.input_tokens).toBe(10);
+  });
+
+  it('message_start does not forward the placeholder output_tokens', () => {
+    // base.ts keys its stopped-call estimate on a 0 output count, so forwarding the
+    // placeholder here would silently disable it - see the seed comment in anthropic.ts.
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_start',
+      message: { usage: { input_tokens: 10, output_tokens: 1 } },
+    });
+    expect(r.chunk?.choices[0].usage?.output_tokens).toBeUndefined();
   });
 
   it('content_block_start tool_use surfaces the tool name + id', () => {
@@ -223,4 +337,58 @@ describe('AnthropicBedrockBackend image content translation', () => {
     const payload = backend.getPayload(model, msgs, { cacheStrategy, tools, maxTokens: 1024 });
     return JSON.parse(payload.body) as Record<string, unknown>;
   }
+});
+
+describe('AnthropicBedrockBackend model id prefixing', () => {
+  const messages: IMessage[] = [{ role: 'user', content: 'hi' }];
+
+  it.each(['us.', 'eu.', 'apac.', 'global.'])('keeps a %s inference-profile id as is', scope => {
+    const model = `${scope}anthropic.claude-sonnet-4-6`;
+    expect(backend.getPayload(model, messages, { maxTokens: 1024 }).modelId).toBe(model);
+  });
+
+  it('prepends the anthropic vendor prefix to a bare model id', () => {
+    expect(backend.getPayload('claude-sonnet-4-6', messages, { maxTokens: 1024 }).modelId).toBe(
+      'anthropic.claude-sonnet-4-6'
+    );
+  });
+});
+
+describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
+  let backend: AnthropicBedrockBackend;
+  beforeEach(() => {
+    backend = new AnthropicBedrockBackend();
+  });
+
+  const refusalDelta = {
+    type: 'message_delta',
+    delta: { stop_reason: 'refusal' },
+    usage: { output_tokens: 0 },
+  };
+  const refusalResponse = {
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    content: [],
+    model: 'x',
+    stop_reason: 'refusal',
+    usage: { input_tokens: 1, output_tokens: 0 },
+  };
+
+  it('stream: throws a fallback-recognized error when Bedrock Fable refuses', () => {
+    expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta)).toThrow(
+      /safety classifier refusal/
+    );
+  });
+
+  it('non-stream: throws a fallback-recognized error when Bedrock Fable refuses', () => {
+    expect(() => backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse)).toThrow(
+      /safety classifier refusal/
+    );
+  });
+
+  it('does not throw for a refusal from a model outside the fallback set', () => {
+    expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
+    expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
+  });
 });

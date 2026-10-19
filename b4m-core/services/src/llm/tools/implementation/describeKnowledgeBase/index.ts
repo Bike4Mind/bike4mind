@@ -12,7 +12,13 @@ import {
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_ATTACHMENTS_LEAD,
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
@@ -429,6 +435,14 @@ export const describeKnowledgeBaseTool: ToolDefinition = {
         const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
+          if (await sessionExcludesLibrary(context)) {
+            if (!admittedAttachmentIds(context, true).length) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            return (
+              `${LIBRARY_OFF_ATTACHMENTS_LEAD}, so there is ` +
+              'no corpus shape to describe. The files attached to this chat are still searchable - use ' +
+              'count_knowledge_base for a total.'
+            );
+          }
           return (
             'You have no data lake / curated library available in this session, so there is no corpus shape ' +
             'to describe. Your knowledge base is your own and shared files - use count_knowledge_base for a total.'

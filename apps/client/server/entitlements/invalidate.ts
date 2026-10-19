@@ -43,3 +43,18 @@ export async function pushEntitlementInvalidation(userId: string, logger: Logger
     logger.warn('Failed to push entitlement invalidation:', error);
   }
 }
+
+/**
+ * Push `invalidate_query ['subscriptions']` after a server-side subscription grant that has no
+ * Stripe webhook behind it (mirrors the admin grant route). Best-effort like the entitlement push.
+ */
+export async function pushSubscriptionsInvalidation(userId: string, logger: Logger): Promise<void> {
+  try {
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'invalidate_query',
+      queryKey: ['subscriptions'],
+    });
+  } catch (error) {
+    logger.warn('Failed to push subscriptions invalidation:', error);
+  }
+}

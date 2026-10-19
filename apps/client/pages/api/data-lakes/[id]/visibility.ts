@@ -6,6 +6,7 @@ import {
   withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
@@ -45,7 +46,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     // Inside a transaction so a grant revoke committing mid-request collides on the lake doc and the
     // retry re-runs the gates against live grants (see the SERIALIZATION note on grantLakeAccess).
     const result = await withTransaction(async () => {
-      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      const lake = await dataLakeService.assertLakeAccessById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       dataLakeService.assertLakeWritable(lake);
@@ -68,6 +69,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             orgGoogleDriveConnections: orgGoogleDriveConnectionRepository,
+            orgGitHubLakeConnections: orgGitHubLakeConnectionRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

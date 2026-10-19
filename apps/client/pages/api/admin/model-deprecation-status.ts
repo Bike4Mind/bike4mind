@@ -12,8 +12,8 @@ import {
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { builtInAgentModelReferences } from '@bike4mind/services/llm';
-import { ApiKeyScope, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
+import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
+import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 
 /**
@@ -33,8 +33,6 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
  */
 
 /** Lifecycle statuses a row may carry; a suggestion outside them cannot be appended. */
-const LIFECYCLE_STATUSES = ['discovered', 'active', 'legacy', 'deprecated', 'retired', 'unlisted'] as const;
-
 /** The catalog's date format. A docs parser can produce anything, and the append throws on it. */
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -9,6 +9,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
+import { searxngUrl } from './searxng';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -22,7 +23,7 @@ export { imageProcessor };
  * (infra/chatCompletion.ts), not a Lambda.
  */
 export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
-  handler: 'apps/client/server/queueHandlers/slackQuestProcessor.handler',
+  handler: 'apps/workers/src/queueHandlers/slackQuestProcessor.handler',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '2048 MB',
@@ -42,13 +43,11 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     slackEventBus,
     imageProcessor,
   ],
-  logging: {
-    retention: '3 days',
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   permissions: [
     { actions: ['bedrock:*'], resources: ['*'] },

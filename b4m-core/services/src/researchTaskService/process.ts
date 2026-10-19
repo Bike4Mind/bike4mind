@@ -18,6 +18,7 @@ import {
   IResearchTaskDeepResearch,
   IApiKeyRepository,
   IOrganizationRepository,
+  assertAuthOriginMatchesApiKey,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -48,9 +49,12 @@ interface ResearchTaskProcessAdapters {
   db: {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
-    fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite' | 'findChargeState'
+    >;
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
-    users: Pick<IUserRepository, 'findById'>;
+    users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     adminSettings: IAdminSettingsRepository;
     // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
     // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
@@ -78,7 +82,10 @@ interface ResearchTaskProcessAdapters {
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    organizations: Pick<
+      IOrganizationRepository,
+      'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights' | 'incrementCurrentStorage'
+    >;
     // Optional, but wire it for the same reason as scopedSettings above: this `db` reaches
     // ToolContext.db, and without it a grant-reached lake drops out of the research tools'
     // retrieval while browse still shows it. All three methods, because the same object serves
@@ -136,7 +143,8 @@ export const process = async (
 
   // Update status to PROCESSING before starting (no transaction needed for single operation)
   researchTask.status = ResearchTaskStatus.PROCESSING;
-  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
+  researchTask.warnings = [];
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status, warnings: researchTask.warnings });
 
   logger?.info(`✅ [PROCESS_START] Processing research task ${researchTask.id} with status: ${researchTask.status}`);
 
@@ -382,7 +390,6 @@ const processScrape = async (
         content,
         type: KnowledgeType.TEXT,
         fileSize: Buffer.byteLength(content, 'utf8'),
-        organizationId: researchTask.organizationId,
         tags: arrTags,
       };
 
@@ -396,6 +403,14 @@ const processScrape = async (
         adapters,
         logger
       );
+
+      if (result?.storageLimitReached) {
+        await db.researchTasks.addWarning(researchTask.id, `Storage limit reached: kept the previous copy of ${url}`);
+        await sendStatusUpdate(
+          `\u26a0\ufe0f [${index}/${urls.length}] Storage limit reached: kept the previous copy of ${url}`,
+          0
+        );
+      }
 
       if (result?.file) {
         mainFile = result.file;
@@ -545,6 +560,8 @@ const processDeepResearch = async (
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
+      // Runs off the research-task queue, after whatever request created the task.
+      authOrigin: 'internal',
       db: adapters.db,
       storage: {
         upload: adapters.storage.upload,
@@ -576,6 +593,8 @@ const processDeepResearch = async (
         logger?.info(`🔬 [DEEP_RESEARCH_FINISHED] Research completed with ${state.findings.length} findings`);
       },
     };
+    // Built by hand rather than through generateTools, so check the auth pair here too.
+    assertAuthOriginMatchesApiKey(toolContext.authOrigin, toolContext.apiKeyId);
 
     const result = await performDeepResearch(
       toolContext,
@@ -613,7 +632,6 @@ const processDeepResearch = async (
       content: reportContent,
       type: KnowledgeType.TEXT,
       fileSize: Buffer.byteLength(reportContent, 'utf8'),
-      organizationId: researchTask.organizationId,
       tags: arrTags,
     };
 

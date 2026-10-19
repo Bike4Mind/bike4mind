@@ -1,20 +1,23 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { randomUUID } from 'node:crypto';
-import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
+import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
-import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
+import { settlePublication } from '@server/services/publish/settlePublication';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import {
+  REPLY_TITLE_MAX,
+  replyFirstLine,
+  stripInlineMarkdown,
+  truncateAtWord,
+} from '@server/services/publish/plainTitle';
 
 /**
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
  * page. Unlike bundles, replies skip the upload->S3->finalize dance: we snapshot
  * the reply markdown into the record (renderedBody) and serve it server-side at
- * /p/r/{publicId}. Re-publishing the same message returns the existing publicId.
+ * /p/r/{publicId}. Re-publishing the same message updates the owner's existing record in place
+ * (same publicId), including its scope and visibility.
  */
-
-function publicId(): string {
-  return randomUUID().replace(/-/g, '').slice(0, 12);
-}
 
 /**
  * Extract the assistant reply as markdown, mirroring the client's extractReplies:
@@ -120,57 +123,23 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
-  // Reuse an existing publication of the same message IN THE SAME SCOPE if
-  // present. Scoping by tier+scopeId avoids minting a duplicate publicId when
-  // the same reply is published into a different scope (which must be a new row).
-  const existing = await PublishedArtifact.findOne({
+  // One publication per owner+reply, rewritten in place on re-publish - see settlePublication.
+  const settled = await settlePublication({
+    ownerId: userId,
+    isAdmin: req.user.isAdmin,
+    source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
     tier,
     scopeId,
-    'source.kind': 'reply',
-    'source.sessionId': body.sessionId,
-    'source.messageId': body.messageId,
-    deletedAt: null,
-  }).lean<{ publicId: string; slug: string } | null>();
-
-  const id = existing?.publicId ?? publicId();
-  const slug = existing?.slug ?? `r-${id}`;
-
-  // Cumulative per-owner quota. Re-publishing the same reply (existing) overwrites
-  // in place, so exclude that key from usage; a fresh publish counts as a new row.
-  const quota = await checkPublishQuota({
-    ownerId: userId,
-    orgScopeId: tier === 'organization' ? scopeId : null,
-    isAdmin: req.user.isAdmin,
-    incoming: { bytes: Buffer.byteLength(markdown), fileCount: 0 },
-    replacing: existing ? { tier, scopeId, slug } : null,
+    visibility: viz.visibility,
+    title: body.title?.trim() || deriveTitle(markdown),
+    renderedBody: markdown,
+    extraSet: { citables: quest.promptMeta?.citables ?? undefined },
+    logger: req.logger,
   });
-  if (!quota.ok) {
-    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+  if (!settled.ok) {
+    return res.status(settled.status).json(settled.body);
   }
-
-  const title = body.title?.trim() || deriveTitle(markdown);
-  const now = new Date();
-
-  const saved = await PublishedArtifact.findOneAndUpdate(
-    { tier, scopeId, slug, deletedAt: null },
-    {
-      $set: {
-        publicId: id,
-        title,
-        visibility: viz.visibility,
-        lastPublishedBy: userId,
-        source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
-        storageKeyPrefix: '',
-        size: { totalBytes: Buffer.byteLength(markdown), fileCount: 0 },
-        manifest: [],
-        renderedBody: markdown,
-        citables: quest.promptMeta?.citables ?? undefined,
-        publishedAt: now,
-      },
-      $setOnInsert: { ownerId: userId },
-    },
-    { upsert: true, new: true }
-  );
+  const { saved, slug, publishedAt } = settled;
 
   req.logger.info(`[PUBLISH] reply session=${body.sessionId} msg=${body.messageId} → /p/r/${saved.publicId}`);
 
@@ -181,33 +150,32 @@ const handler = baseApi().post(async (req, res) => {
     scopeId,
     slug,
     visibility: viz.visibility,
-    publishedAt: now.toISOString(),
+    publishedAt: publishedAt.toISOString(),
   };
   return res.status(200).json(response);
 });
 
 /**
- * First non-empty markdown line (stripped of leading #/*), capped, as a title. Embedded
+ * First non-empty markdown line (stripped of leading #/* and inline markdown), capped, as a title. Embedded
  * `<artifact>` blocks are removed first so a reply that LEADS with an artifact doesn't take
  * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
- * artifact, fall back to the artifact's own title attribute.
+ * artifact, fall back to the artifact's own title attribute. Serve's displayReplyTitle
+ * (server/services/publish/plainTitle.ts) recognizes rows this cut before it stripped markers.
  */
 export function deriveTitle(markdown: string): string {
-  const { artifacts, cleanedContent } = parseArtifactsWithFallback(markdown);
-  const firstLine = cleanedContent
-    .split('\n')
-    .map(l => l.trim())
-    .find(Boolean);
+  const firstLine = replyFirstLine(markdown);
   if (firstLine) {
-    const cleaned = firstLine
-      .replace(/^#+\s*/, '')
-      .replace(/^[*_>-]+\s*/, '')
-      .slice(0, 120);
+    const cleaned = truncateAtWord(
+      stripInlineMarkdown(firstLine.slice(0, REPLY_TITLE_MAX * 4).replace(/^#+\s*/, '')).replace(/^[*_>-]+\s*/, ''),
+      REPLY_TITLE_MAX
+    );
     if (cleaned) return cleaned;
   }
-  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
-  return named?.title?.slice(0, 120) || 'Shared reply';
+  const named = parseArtifactsWithFallback(markdown).artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return (named?.title && truncateAtWord(named.title, REPLY_TITLE_MAX)) || 'Shared reply';
 }
+
+export { truncateAtWord };
 
 export const config = {
   api: { externalResolver: true },

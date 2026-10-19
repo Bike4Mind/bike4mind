@@ -14,6 +14,8 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 const h = vi.hoisted(() => ({
   selectedAccount: { current: null as { id: string; name: string; personal: boolean } | null },
   openFolderPicker: vi.fn(),
+  onBeforeRedirect: undefined as ((authUrl: string) => void) | undefined,
+  userId: 'user-1' as string | undefined,
 }));
 
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
@@ -23,13 +25,27 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 // The picker itself (OAuth prelude + Google Picker) is not the subject here; capture the callback
 // so a test can simulate a pick without a browser.
 vi.mock('@client/app/hooks/data/useDriveFolderPicker', () => ({
-  useDriveFolderPicker: (args: { onPicked: (f: { driveFolderId: string; folderName?: string }) => void }) => {
+  useDriveFolderPicker: (args: {
+    onPicked: (f: { driveFolderId: string; folderName?: string }) => void;
+    onBeforeRedirect?: (authUrl: string) => void;
+  }) => {
+    h.onBeforeRedirect = args.onBeforeRedirect;
     h.openFolderPicker.mockImplementation(() => args.onPicked({ driveFolderId: 'FOLDER1', folderName: 'Contracts' }));
     return { openFolderPicker: h.openFolderPicker, isPicking: false };
   },
 }));
 
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: { getState: () => ({ currentUser: h.userId ? { id: h.userId } : null }) },
+}));
+vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => 'org1' }));
+
 import DrivePendingConnectAction from './DrivePendingConnectAction';
+import {
+  consumeDriveConnectHandoff,
+  requestDrivePickerResume,
+  takeDrivePickerResume,
+} from '@client/app/utils/driveConnectHandoff';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -38,6 +54,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.selectedAccount.current = { id: 'org1', name: 'Acme', personal: false };
   useDataLakeWizardStore.getState().resetWizard();
+  h.userId = 'user-1';
+  sessionStorage.clear();
+  takeDrivePickerResume();
 });
 
 describe('DrivePendingConnectAction', () => {
@@ -98,5 +117,48 @@ describe('DrivePendingConnectAction', () => {
 
     expect(screen.getByTestId('drive-connect-btn')).toBeEnabled();
     expect(screen.queryByTestId('drive-connect-personal-scope-btn')).toBeNull();
+  });
+
+  it('saves the typed-in wizard config, bound to the consent URL state, before leaving for Google', () => {
+    wrap(<DrivePendingConnectAction />);
+    useDataLakeWizardStore.getState().setConfig({ name: 'Research' });
+
+    h.onBeforeRedirect?.('https://accounts.google.com/auth?state=st-1');
+
+    expect(consumeDriveConnectHandoff({ userId: 'user-1', organizationId: 'org1', oauthState: 'st-1' })).toMatchObject({
+      kind: 'createWizard',
+      config: { name: 'Research' },
+    });
+  });
+
+  it('saves nothing when no user is signed in', () => {
+    h.userId = undefined;
+    wrap(<DrivePendingConnectAction />);
+
+    h.onBeforeRedirect?.('https://accounts.google.com/auth?state=st-1');
+
+    expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
+  });
+
+  it('opens the folder picker once when mounted by a resumed wizard', () => {
+    requestDrivePickerResume('user-1');
+
+    const { unmount } = wrap(<DrivePendingConnectAction />);
+    expect(h.openFolderPicker).toHaveBeenCalledTimes(1);
+
+    unmount();
+    wrap(<DrivePendingConnectAction />);
+    expect(h.openFolderPicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open the picker from a signal raised for another user', () => {
+    requestDrivePickerResume('user-2');
+    wrap(<DrivePendingConnectAction />);
+    expect(h.openFolderPicker).not.toHaveBeenCalled();
+  });
+
+  it('does not open the picker on an ordinary mount', () => {
+    wrap(<DrivePendingConnectAction />);
+    expect(h.openFolderPicker).not.toHaveBeenCalled();
   });
 });

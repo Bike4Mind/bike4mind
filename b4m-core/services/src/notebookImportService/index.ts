@@ -244,9 +244,10 @@ export class NotebookImportService {
   private importingUser: IUserDocument | null = null;
 
   /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
-   * read once - uploaded bytes are only debited later, by the S3 objectCreated event - so several
-   * files that each pass against that stale value can overshoot the quota together. Same reason as
-   * the accumulator in b4m-core/slack/src/CommandHandler.ts. */
+   * read once - the caller charges imported bytes only once every file is admitted
+   * (apps/client/server/s3/storageCharge.ts) - so several files that each pass against that stale
+   * value can overshoot the quota together. Same reason as the accumulator in
+   * b4m-core/slack/src/CommandHandler.ts. */
   private admittedBytes = 0;
 
   /**
@@ -714,9 +715,8 @@ export class NotebookImportService {
           throw new Error(`exceeds the ${Math.floor(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
         }
 
-        // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
-        // path, and the org branch would be wrong anyway - orgs track no storage usage, so uploaded
-        // bytes are debited to the user.
+        // Per-user quota: imported notebooks are personal files (no organizationId is stamped on
+        // them), so the uploader's own quota applies.
         if (!this.importingUser) {
           throw new Error('no importing user resolved, refusing to skip the storage quota check');
         }
@@ -724,7 +724,7 @@ export class NotebookImportService {
 
         // Decoded once, here, and reused for the write, the accounting and the row. Booking anything
         // but the stored length breaks that: the credit reads the real object size
-        // (server/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
+        // (apps/workers/src/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
         // import-then-delete cycle would deduct bytes that were never stored.
         const bytes = Buffer.from(file.content, 'base64');
         const storedSize = bytes.byteLength;

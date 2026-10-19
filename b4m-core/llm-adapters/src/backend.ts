@@ -14,9 +14,15 @@ import {
   type CacheUsageStats,
   type ResponseFormat,
   type StreamChannel,
+  type ToolStarted,
+  type ToolSearchServerTool,
+  type ProviderBlock,
+  type TurnUsage,
 } from '@bike4mind/common';
+import type { AnthropicEffort } from './thinkingParams';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
+import type { DowngradedToolChoice } from './forcedToolChoice';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -32,6 +38,14 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   * While a tool is streaming, only `false` choices are forwarded to the client as text. An
+   * argument fragment (`true`) must arrive after the choice that carries its `tool` header.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -103,6 +117,8 @@ export interface ICompletionOptionTools {
       required?: string[];
     };
     strict?: boolean;
+    /** Anthropic tool search; set only by the completions path, which drops it for every other adapter. */
+    defer_loading?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
   /**
@@ -111,6 +127,13 @@ export interface ICompletionOptionTools {
    * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
    */
   artifactType?: string;
+  /**
+   * Fire-and-forget tool whose result the model never needs to read: when a round already
+   * streamed answer text and every tool it called carries this flag, the adapter ends the
+   * turn instead of making the follow-up model call (which would only restate the answer).
+   * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
+   */
+  endsTurnAfterText?: boolean;
 }
 
 export interface ICompletionOptions {
@@ -125,9 +148,20 @@ export interface ICompletionOptions {
   logprobs?: number;
   echo?: boolean;
   stream?: boolean;
+  /**
+   * Set when a caller renders reply text live (e.g. the CLI TUI). Backends that
+   * stream text out early must stop retrying once text has gone out, so callers
+   * with no live view leave this unset and keep full retry and fallback.
+   */
+  streamText?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
+  /**
+   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
+   */
+  providerTools?: ToolSearchServerTool[];
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
@@ -162,11 +196,22 @@ export interface ICompletionOptions {
    */
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
-   * Explicit reasoning effort level for OpenAI reasoning models (O1, O3, GPT-5 series)
+   * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
+   * Kimi (K3 only), DeepSeek and Anthropic (direct and Bedrock; see planReasoningEffort) backends;
+   * ignored by the others (Gemini, xAI, Ollama). An explicit `thinking`/questMaster request wins on Anthropic.
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Explicit effort for an Anthropic turn, in Anthropic's own five-level vocabulary
+   * (`output_config.effort`). Takes precedence over `reasoningEffort`, which is mapped
+   * into that vocabulary when this is unset; unset both and the turn runs at the backend
+   * default (see resolveAnthropicEffort). This exists alongside `reasoningEffort` rather
+   * than replacing it because Anthropic's 'max' has no OpenAI counterpart and
+   * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
+   */
+  anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).
@@ -199,6 +244,10 @@ export interface ICompletionOptions {
      */
     accumCacheReadTokens?: number;
     accumCacheWriteTokens?: number;
+    /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
+    accumTurnUsage?: TurnUsage[];
+    /** Stays undefined until a turn reports a count - see reasoningTokens.ts. */
+    accumReasoningTokens?: number;
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -239,14 +288,20 @@ export interface ICompletionOptions {
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
     };
+    /**
+     * A forced tool_choice the model cannot accept, downgraded to `auto` on the first turn and
+     * re-applied unchanged on every recursive turn (see forcedToolChoice.ts). Anthropic only.
+     * Internal - do not set manually.
+     */
+    downgradedToolChoice?: DowngradedToolChoice;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
   /**
    * Structured-output contract. When set to `{ type: 'json_schema', ... }`,
-   * native-mode providers (OpenAI) pass the schema through to the API; tool-mode
-   * providers (Anthropic) synthesize a single tool from the schema and force
-   * `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
+   * native-mode providers (OpenAI, and Anthropic models without forced tool use) pass the
+   * schema through to the API; tool-mode providers (Anthropic) synthesize a single tool from
+   * the schema and force `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
    * xAI, Ollama) inject a "respond with JSON matching this schema" instruction.
    * The selected mode is reported back via `CompletionInfo.responseFormatMode`
    * so callers can decide whether to post-validate.
@@ -308,8 +363,18 @@ export type CompletionInfo = {
    * instead of scanning content for markers that are themselves model text.
    */
   channel?: StreamChannel;
+  /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
+  toolStarted?: ToolStarted;
+  /** A provider-run block for the caller to echo back; see CompletionInfo.providerBlock in @bike4mind/common. */
+  providerBlock?: ProviderBlock;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Provider-reported reasoning/thinking tokens: a SUBSET of `outputTokens`, not
+   * additive, and never billed separately. Absent when the provider reported nothing.
+   * Same accumulate-across-tool-turns contract as the other token counts.
+   */
+  reasoningTokens?: number;
   creditsUsed?: number;
   usdCost?: number;
   toolsUsed?: Array<RecordableToolUse>;
@@ -327,18 +392,30 @@ export type CompletionInfo = {
     content: string;
     is_error?: boolean;
   }>;
-  /** Prompt caching statistics (if caching was enabled) */
+  /**
+   * Prompt caching statistics (if caching was enabled). Diagnostic only: no billing or token
+   * accounting reads it, because some adapters set it while keeping the cached tokens inside
+   * `inputTokens`. Accounting reads `cacheReadInputTokens`/`cacheCreationInputTokens` below.
+   */
   cacheStats?: CacheUsageStats;
   /**
-   * Anthropic-style cache token deltas. Surfaced separately from `inputTokens`
-   * so credit accounting can apply provider-specific multipliers (read: 0.1x,
-   * write: 1.25x of base input rate).
+   * Cache token counts in the billing convention: always disjoint from `inputTokens` (an adapter
+   * whose `inputTokens` includes cached tokens leaves these unset), so settlement prices each at
+   * its own rate. The fields `foldCompletionInfo` in @bike4mind/agents sums into agent totals.
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
   /**
+   * The same usage broken down per provider request (one entry per tool round-trip), in the
+   * same disjoint convention; summing it reproduces the aggregate fields above. Settlement prices
+   * it with getTurnsCost because providers pick a long-context tier per request. Absent on adapters
+   * that do not report it yet - callers then price the aggregates.
+   */
+  turnUsage?: TurnUsage[];
+  /**
    * How the backend honored `responseFormat`:
-   * - 'native': provider's native structured-output API (OpenAI's response_format)
+   * - 'native': provider's native structured-output API (OpenAI's response_format,
+   *   Anthropic's output_config.format)
    * - 'tool_use': synthesized tool with forced tool_choice (Anthropic)
    * - 'best-effort': prompt-only instruction (Bedrock, Gemini, xAI, Ollama)
    * Surfaced to the caller via the `X-B4M-Response-Format-Mode` SSE field so
@@ -428,7 +505,8 @@ export interface ICompletionBackend {
    * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
    * model this build has no id knowledge of get a correctly shaped request
    * instead of a 400. Optional: a backend whose request shape is id-independent
-   * has nothing to read.
+   * has nothing to read. Gemini and xAI also gate cache-read forwarding on this
+   * record, so for them it must be the record settlement prices with.
    */
   setDispatchModel?(info: ModelInfo): void;
 }

@@ -1,11 +1,12 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@server/utils/errors';
+import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
@@ -21,6 +22,7 @@ const handler = baseApi().post(
         db: {
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
+          realtimeConnections: realtimeConnectionRepository,
         },
         // Undefined for a browser/JWT caller (unrestricted: they hold the whole
         // account); the actual held scopes when an API key is rotating, which is when
@@ -46,6 +48,25 @@ const handler = baseApi().post(
       { ability: req.ability },
       req.logger
     );
+
+    if (rotatedKey.previousOwnerUserId) {
+      const REOWN_NOTIFY_TIMEOUT_MS = 5_000;
+      let timeoutId: NodeJS.Timeout;
+      const timeoutP = new Promise<void>(resolve => {
+        timeoutId = setTimeout(() => {
+          req.logger.warn('[userApiKey] re-own notification timed out; credential returned without send confirmation', {
+            previousOwnerUserId: rotatedKey.previousOwnerUserId,
+          });
+          resolve();
+        }, REOWN_NOTIFY_TIMEOUT_MS);
+      });
+      await Promise.race([
+        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger).finally(() =>
+          clearTimeout(timeoutId)
+        ),
+        timeoutP,
+      ]);
+    }
 
     return res.status(200).json(rotatedKey);
   })

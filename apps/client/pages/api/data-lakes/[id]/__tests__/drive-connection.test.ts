@@ -8,6 +8,7 @@ const STALE = new Date(Date.now() - 16 * 60 * 1000);
 
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
+  verifyOrgAdminRead: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
   connMarkDisconnecting: vi.fn(
@@ -24,6 +25,7 @@ const h = vi.hoisted(() => ({
   loadPrefixArmCandidateLakes: vi.fn(async () => []),
   sendToQueue: vi.fn(async () => 'msg-1'),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/drive-disconnect-purge'),
+  isDriveLakePollScheduled: vi.fn(async () => false),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -39,7 +41,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/utils/orgAccess', () => ({
+  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgAdminRead: h.verifyOrgAdminRead,
+}));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/database', async importOriginal => {
@@ -64,6 +69,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
     userRepository: { ...actual.userRepository, findById: h.userFindById },
   };
 });
+vi.mock('@server/integrations/google/drive/drivePollSchedule', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/google/drive/drivePollSchedule')>()),
+  isDriveLakePollScheduled: h.isDriveLakePollScheduled,
+}));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     findOtherLakeClaims: h.findOtherLakeClaims,
@@ -74,9 +83,9 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '../drive-connection';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 const makeRes = () => {
   const json = vi.fn();
@@ -94,6 +103,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: true });
     h.fabFilesCountByDriveConnectionIdInDataLake.mockResolvedValue(0);
     h.fabFilesFindLiveNonMembersByDriveConnectionId.mockResolvedValue([]);
     h.findOtherLakeClaims.mockResolvedValue({ metaTagNames: [], prefixArmLakes: [] });
@@ -101,6 +111,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.userFindById.mockImplementation(async (id: string) => ({ id }));
     h.connMarkDisconnecting.mockResolvedValue(MARK);
     h.sendToQueue.mockResolvedValue('msg-1');
+    h.isDriveLakePollScheduled.mockResolvedValue(false);
   });
 
   it('GET returns a credential-free connection view, with how many files it ingested', async () => {
@@ -127,6 +138,65 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     });
     expect(JSON.stringify(payload)).not.toContain('SHOULD-NOT-LEAK');
     expect(h.fabFilesCountByDriveConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1');
+  });
+
+  describe('GET last-synced time and sync schedule', () => {
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const conn = (over: Record<string, unknown> = {}) => ({
+      id: 'conn1',
+      organizationId: 'orgA',
+      driveFolderId: 'Folder123',
+      status: 'connected',
+      enabled: true,
+      ...over,
+    });
+    const getConnection = async () => {
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      return json.mock.calls[0][0].connection;
+    };
+
+    it('returns lastPolledAt as the last sync, distinct from lastUsedAt', async () => {
+      const lastPolledAt = new Date('2026-10-01T00:00:00Z');
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn({ lastPolledAt, lastUsedAt: new Date('2026-10-02T00:00:00Z') }));
+      const connection = await getConnection();
+      expect(connection.lastPolledAt).toEqual(lastPolledAt);
+      expect(connection.lastUsedAt).not.toEqual(lastPolledAt);
+    });
+
+    it('returns a null lastPolledAt for a connection no sync run has finished yet', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn());
+      expect((await getConnection()).lastPolledAt).toBeNull();
+    });
+
+    it('reports manual sync while the poll flags are off', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn());
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'manual' });
+    });
+
+    it.each([
+      ['connected', {}],
+      ['live syncing', { status: 'syncing', syncClaimedAt: new Date() }],
+    ])('reports the poll cadence for a %s connection', async (_label, over) => {
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'automatic', intervalMs: SIX_HOURS_MS });
+    });
+
+    it.each([
+      ['needs a reconnect', { status: 'needs_reconnect' }],
+      ['has a credential error', { status: 'credential_error' }],
+      ['is disabled', { enabled: false }],
+      // Stale claim: findDueForPoll only takes 'connected', so it waits on a Re-sync forever.
+      [
+        'is stuck syncing on a stale claim',
+        { status: 'syncing', syncClaimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      ],
+    ])('reports the automatic sync as paused when the connection %s', async (_label, over) => {
+      h.isDriveLakePollScheduled.mockResolvedValue(true);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn(over));
+      expect((await getConnection()).syncSchedule).toEqual({ mode: 'paused' });
+    });
   });
 
   it('GET count folds in the deletable orphans the purge will remove, and excludes the kept ones', async () => {
@@ -209,7 +279,17 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, json } = makeRes();
     await run(makeReq('GET'), res);
-    expect(json).toHaveBeenCalledWith({ connection: null });
+    expect(json).toHaveBeenCalledWith({ connection: null, canManage: true });
+  });
+
+  it('GET passes the canManage verdict from the read gate through to the response', async () => {
+    h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: false });
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', status: 'connected' });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(expect.anything(), 'orgA');
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(json.mock.calls[0][0]).toMatchObject({ connection: { id: 'conn1' }, canManage: false });
   });
 
   it('DELETE marks the connection disconnecting, enqueues the purge, and 202s without purging inline', async () => {
@@ -374,10 +454,13 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     }
   );
 
-  it('denies a caller who is not an org owner/manager', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new Error('Organization not found'));
+  it.each([
+    ['GET', 'verifyOrgAdminRead'],
+    ['DELETE', 'verifyOrgAccess'],
+  ] as const)('%s denies a caller the %s gate refuses', async (method, gate) => {
+    h[gate].mockRejectedValue(new Error('Organization not found'));
     const { res } = makeRes();
-    await expect(run(makeReq('GET'), res)).rejects.toThrow(/organization not found/i);
+    await expect(run(makeReq(method), res)).rejects.toThrow(/organization not found/i);
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
@@ -401,6 +484,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res, json } = makeRes();
     await run(makeReq('GET'), res);
     expect(json.mock.calls[0][0].connection).toMatchObject({ id: 'conn1', driveFolderId: 'Folder123' });
+    expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
   });
 
@@ -408,6 +492,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined, createdByUserId: 'someone-else' });
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
+    expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
@@ -423,7 +508,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res, status, json } = makeRes();
     await run(makeReq('DELETE'), res);
 
-    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'u1' };
+    const userOwner: LakeConnectionOwner = { kind: 'user', userId: 'u1' };
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/drive-disconnect-purge', {
       connectionId: 'conn1',
@@ -439,6 +524,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     h.dlFindById.mockResolvedValue(null);
     const { res } = makeRes();
     await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
+    expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
   });
 });

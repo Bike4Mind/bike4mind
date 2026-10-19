@@ -41,6 +41,15 @@ export class ProjectsPage extends BasePage {
     );
   }
 
+  /** Create opens the new project's page (#4585), not the list - assert we landed on it */
+  async expectOnProjectPage(name: string) {
+    await this.page.waitForURL(/\/projects\/.+/, { timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.page.getByTestId('project-tab-list')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(this.page.getByRole('main').getByRole('navigation').getByText(name, { exact: true })).toBeVisible({
+      timeout: TIMEOUTS.VISIBLE,
+    });
+  }
+
   async openProject(name: string) {
     const card = this.page
       .getByTestId('project-card')
@@ -239,10 +248,7 @@ export class ProjectsPage extends BasePage {
   }
 
   async openInbox() {
-    await this.page.getByTestId('profile-menu-card').click();
-    // Inbox now lives in the "More" flyout of the profile menu.
-    await this.page.getByTestId('profile-menu-more').click();
-    await this.page.getByTestId('profile-more-inbox').click();
+    await this.page.getByTestId('sidenav-header-inbox-btn').click();
     // Wait for the drawer to open - Invites tab is always visible in the inbox header
     await expect(this.page.getByRole('tab').filter({ hasText: /Invites/i })).toBeVisible({
       timeout: TIMEOUTS.MODAL,

@@ -14,10 +14,12 @@
  * /api/ai/v1/completions), so a key holding *either* scope passes.
  *
  * The handler is driven down its async path (wait defaults false) with an
- * explicit sessionId, so `ChatCompletionProcess` and the getSessionId lookups
- * never run - only `ChatCompletionInvoke.invoke` needs to return a quest.
+ * explicit sessionId, so `ChatCompletionProcess` and the session-resolution
+ * lookups/creation never run - only `ChatCompletionInvoke.invoke` needs to
+ * return a quest. The `session resolution` block below drops the explicit
+ * sessionId to exercise that resolution directly.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
@@ -34,6 +36,14 @@ const {
   mockResolveUserRateLimitPerMin,
   mockOrgFindAccessibleById,
   mockSystemPromptText,
+  mockCreateSession,
+  mockFindByIdAndUpdate,
+  mockDeleteSession,
+  mockSettleIfUnfinished,
+  mockQuestFindById,
+  mockReleaseReservedCredits,
+  mockSendStatusUpdate,
+  waitTurnLimits,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -46,9 +56,35 @@ const {
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  // Fresh-session creation for API-key / newConversation callers (see resolveChatSessionId).
+  mockCreateSession: vi.fn(),
+  // The lastNotebookId write on the JWT most-recent fallback: asserted NOT to run for
+  // API-key / newConversation callers.
+  mockFindByIdAndUpdate: vi.fn(),
+  // Cleanup of a notebook this request opened when invoke rejects the turn (unknown model).
+  mockDeleteSession: vi.fn(),
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
+  // The wait=true deadline's settle and credit-refund edges (see the over-budget describe).
+  mockSettleIfUnfinished: vi.fn(),
+  // The persisted row the deadline path decides the recovery from; null falls back to the
+  // in-memory quest (the row the handler already holds).
+  mockQuestFindById: vi.fn(),
+  mockReleaseReservedCredits: vi.fn(),
+  mockSendStatusUpdate: vi.fn(),
+  // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
+  waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
+}));
+
+vi.mock('@server/utils/waitTurnDeadline', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  get WAIT_TURN_BUDGET_MS() {
+    return waitTurnLimits.budgetMs;
+  },
+  get WAIT_TURN_WIND_DOWN_MS() {
+    return waitTurnLimits.windDownMs;
+  },
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -102,6 +138,11 @@ vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
   return {
     ...actual,
+    sessionService: {
+      ...(actual.sessionService as object),
+      // resolveChatSessionId creates a real notebook through this; the DB edge is stubbed here.
+      createSession: (...a: unknown[]) => mockCreateSession(...a),
+    },
     userApiKeyService: {
       ...(actual.userApiKeyService as object),
       validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
@@ -123,6 +164,8 @@ vi.mock('@bike4mind/services/llm', async orig => {
       return mockSystemPromptText.value;
     }
     process = (...a: unknown[]) => mockProcess(...a);
+    releaseReservedCredits = (...a: unknown[]) => mockReleaseReservedCredits(...a);
+    sendStatusUpdate = (...a: unknown[]) => mockSendStatusUpdate(...a);
   }
   return {
     ...actual,
@@ -148,7 +191,12 @@ vi.mock('@bike4mind/database', async orig => {
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
-    User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
+    User: Object.assign(Object.create(RealUser), {
+      findById: (...a: unknown[]) => mockFindById(...a),
+      // The JWT most-recent fallback writes lastNotebookId; the API-key / newConversation paths
+      // must never reach it.
+      findByIdAndUpdate: (...a: unknown[]) => mockFindByIdAndUpdate(...a),
+    }),
     cacheRepository: {
       ...(actual.cacheRepository as object),
       // Hoisted so tests can assert the per-user limiter actually ran, and drive
@@ -163,6 +211,17 @@ vi.mock('@bike4mind/database', async orig => {
         ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
         findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
       },
+    },
+    // Removes a notebook this request opened when invoke rejects the turn; createSession itself is
+    // stubbed (above), so this is the only session-repository edge the handler touches.
+    sessionRepository: {
+      ...(actual.sessionRepository as object),
+      delete: (...a: unknown[]) => mockDeleteSession(...a),
+    },
+    questRepository: {
+      ...(actual.questRepository as object),
+      findById: (...a: unknown[]) => mockQuestFindById(...a),
+      settleIfUnfinished: (...a: unknown[]) => mockSettleIfUnfinished(...a),
     },
   };
 });
@@ -184,7 +243,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../chat';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -242,6 +301,9 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockResolveUserRateLimitPerMin.mockResolvedValue(60);
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockCreateSession.mockResolvedValue({ id: 'new-session' });
+    mockFindByIdAndUpdate.mockResolvedValue(undefined);
+    mockDeleteSession.mockResolvedValue(undefined);
     // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
     mockResolveDefaultChatModel.mockImplementation(
       async ({ configuredModel }: { configuredModel?: string | null }) => ({
@@ -289,16 +351,53 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
   });
 
-  it('hands invoke() the authenticating key id, so a tool-driven lake write is audited as the key', async () => {
+  it('hands invoke() an apiKey origin and the key id, so a tool-driven lake write is audited as the key', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
     const { req, res } = fire();
     await handler(req, res);
-    expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBe('k1');
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
-  it('hands invoke() no key id for a JWT/browser caller', async () => {
+  describe.each([
+    {
+      name: 'a retired id is swapped for its successor',
+      browser: true,
+      requested: 'retired-model',
+      promptMeta: { model: { name: 'successor-model' }, redirectedFrom: 'retired-model' },
+      answered: 'successor-model',
+    },
+    {
+      name: 'nothing is redirected',
+      browser: false,
+      requested: 'requested-model',
+      promptMeta: { model: { name: 'requested-model' } },
+      answered: 'requested-model',
+    },
+    {
+      name: 'invoke reports no model',
+      browser: false,
+      requested: 'requested-model',
+      promptMeta: undefined,
+      answered: 'requested-model',
+    },
+  ])('response model when $name', ({ browser, requested, promptMeta, answered }) => {
+    it.each([false, true])('names the model that answered (wait: %s)', async wait => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued', promptMeta });
+      const { req, res } = fire({
+        apiKey: browser ? null : VALID_KEY,
+        body: { message: 'hello', sessionId: 'sess-1', model: requested, wait },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().model).toBe(answered);
+    });
+  });
+
+  it('hands invoke() a session origin and no key id for a JWT/browser caller', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { authOrigin?: string }).authOrigin).toBe('session');
     expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
   });
 
@@ -466,6 +565,27 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect((mockInvoke.mock.calls[0][0] as { body: { historyCount?: number } }).body.historyCount).toBe(10);
+    });
+  });
+
+  // Persisted on promptMeta by ChatCompletionInvoke so the tool-calling scorecard can split by it.
+  describe('toolMode forwarding', () => {
+    const invokedToolMode = () => (mockInvoke.mock.calls[0][0] as { body: { toolMode?: unknown } }).body.toolMode;
+
+    it.each(['fast', 'smart'] as const)('forwards a request toolMode of %s to the invoke body', async toolMode => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', toolMode } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedToolMode()).toBe(toolMode);
+    });
+
+    it('leaves toolMode unset when the request names none', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedToolMode()).toBeUndefined();
     });
   });
 
@@ -821,6 +941,146 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
     });
   });
+
+  // The bug: with no sessionId, the old getSessionId() fell back to User.lastNotebookId - the
+  // notebook the human last opened in the UI - so an API-key script posted into it. An API-key
+  // caller (and any newConversation call) must instead get its own notebook and leave that cursor
+  // alone. apiKeyAuth's user lookup and the JWT fallback share User.findById, so the fixture
+  // carries the open-notebook cursor here.
+  describe('session resolution (API key vs JWT vs newConversation)', () => {
+    const OPEN_NOTEBOOK = 'open-notebook';
+
+    const withOpenNotebook = () => {
+      mockFindById.mockReturnValue(
+        Promise.resolve({
+          id: 'user-1',
+          _id: 'user-1',
+          isBanned: false,
+          disputePending: false,
+          lastNotebookId: OPEN_NOTEBOOK,
+        })
+      );
+    };
+    const invokedSessionId = () => (mockInvoke.mock.calls[0][0] as { body: { sessionId?: string } }).body.sessionId;
+
+    it('API key with no sessionId creates a fresh notebook and never touches lastNotebookId', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('new-session');
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession.mock.calls[0][3]).toEqual({ origin: { channel: 'api', apiKeyId: 'k1' } });
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('newConversation: true from a JWT caller creates a fresh notebook despite an open one', async () => {
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey: null, body: { message: 'hi', newConversation: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('new-session');
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      // A JWT newConversation is a web notebook, not an API one.
+      expect(mockCreateSession.mock.calls[0][3]).toEqual({ origin: { channel: 'web' } });
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects newConversation together with sessionId (422) before creating anything', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', newConversation: true },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('API key with an explicit sessionId uses it unchanged and creates nothing', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'explicit-sess' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('explicit-sess');
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('JWT caller with no sessionId still gets the last open notebook, unchanged', async () => {
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey: null, body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe(OPEN_NOTEBOOK);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('echoes the newly created sessionId on the async ACK', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getJSONData().sessionId).toBe('new-session');
+    });
+
+    it('echoes the resolved sessionId on the wait: true body too', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().sessionId).toBe('new-session');
+    });
+
+    it('labels an API-created notebook so a human can spot it in the notebook list', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      const name = (mockCreateSession.mock.calls[0][1] as { name: string }).name;
+      expect(name).toMatch(/^API chat - /);
+    });
+
+    // A rejected organization must not have already minted a notebook: resolveActiveOrg runs
+    // BEFORE session resolution, so a 403/404 leaves no empty "API chat - ..." behind in the list.
+    it('does not create a notebook when the requested org is rejected (403)', async () => {
+      const orgId = new Types.ObjectId().toHexString();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockOrgFindAccessibleById.mockResolvedValue(null); // caller is not a member
+      const { req, res } = fire({ body: { message: 'hi', organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    // invoke rejects a caller-supplied model (unknown/disabled) before it creates the quest; the
+    // notebook this request opened must be removed, not left as an orphan in the notebook list.
+    it('removes the notebook it opened when invoke rejects the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockInvoke.mockRejectedValueOnce(new BadRequestError('Invalid model: "gpt-4o-typo" is not available'));
+      const { req, res } = fire({ body: { message: 'hi', model: 'gpt-4o-typo' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockDeleteSession).toHaveBeenCalledWith('new-session');
+    });
+
+    // A notebook the caller explicitly targeted is NOT ours to delete when the turn is rejected.
+    it('does not delete an explicitly supplied notebook when invoke rejects the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockInvoke.mockRejectedValueOnce(new BadRequestError('Invalid model: "nope" is not available'));
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'explicit-sess', model: 'nope' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockDeleteSession).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /api/chat (integration - wait path promptDetails exposure)', () => {
@@ -872,6 +1132,25 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
   });
 
+  it('surfaces the error quest fields in the wait: true response', async () => {
+    mockInvoke.mockResolvedValue({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      reply: 'You do not have access to this session',
+      replies: [],
+    });
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      response: 'You do not have access to this session',
+    });
+  });
+
   it('returns the prompt text when includeSystemPrompt is set', async () => {
     const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
     mockSystemPromptText.value = TEXT;
@@ -898,6 +1177,22 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ includeSystemPrompt: true }) })
     );
+  });
+
+  it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
+    );
+  });
+
+  it('hands process() a session origin and no key id for a JWT/browser caller', async () => {
+    const { req, res } = fire({ apiKey: null, body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    const { body } = mockProcess.mock.calls[0][0] as { body: { authOrigin?: string; apiKeyId?: string } };
+    expect(body.authOrigin).toBe('session');
+    expect(body.apiKeyId).toBeUndefined();
   });
 
   describe('toolPayloads (structured tool output for programmatic callers)', () => {
@@ -935,6 +1230,21 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(res._getJSONData()).not.toHaveProperty('promptDetails');
       expect(res._getJSONData().toolPayloads).toHaveLength(1);
     });
+  });
+
+  it('derives response from the streamed slots, since a successful turn leaves the scalar reply null', async () => {
+    // Models ChatCompletionProcess's success path: it nulls `reply` at turn start and streams
+    // only into `replies[]`, here a tool-using turn with a thinking-only slot.
+    const replies = ['<think>plan</think>', 'Answer part 1', ' part 2'];
+    mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+      prefetchedQuest.reply = null;
+      prefetchedQuest.replies = replies;
+    });
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.response).toBe('Answer part 1 part 2');
+    expect(body.responses).toEqual(replies);
   });
 
   it('accepts promptMode: raw at the HTTP boundary', async () => {
@@ -1025,6 +1335,174 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       // (see the quests/[id] integration suite) - a caller uses one branch for both surfaces.
       expect(body.type).toBe('message');
       expect(body).not.toHaveProperty('errorCode');
+    });
+  });
+
+  describe('over the wait=true deadline', () => {
+    type ProcessArgs = { prefetchedQuest: Record<string, unknown>; abortSignal: AbortSignal };
+
+    beforeEach(() => {
+      waitTurnLimits.budgetMs = 0;
+      waitTurnLimits.windDownMs = 20;
+      mockSettleIfUnfinished.mockResolvedValue(true);
+      // The invoke-created row the deadline path reads in production, before anything streamed.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockReleaseReservedCredits.mockResolvedValue(undefined);
+      mockSendStatusUpdate.mockReset().mockResolvedValue(undefined);
+      // A turn still mid-flight when the deadline fires: nothing streamed yet.
+      mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+    });
+    afterEach(() => {
+      waitTurnLimits.budgetMs = 45_000;
+      waitTurnLimits.windDownMs = 7_000;
+    });
+
+    const expectTimeoutResponse = (res: { _getStatusCode(): number; _getJSONData(): Record<string, unknown> }) => {
+      expect(res._getStatusCode()).toBe(504);
+      expect(res._getJSONData()).toMatchObject({
+        errorCode: 'request_timeout',
+        quest_id: 'quest-2',
+        // So a caller that sent no sessionId can continue the notebook it just opened.
+        sessionId: 'sess-1',
+      });
+      expect(res._getJSONData().error).toEqual(expect.any(String));
+    };
+
+    it('aborts a turn that honours the signal, settles it as timed out keeping what streamed, and answers 504', async () => {
+      // Models process()'s caller-abort path: it refunds or reconciles its own reservation and
+      // returns without writing the quest, leaving the partial reply in memory for the route.
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.reply = 'Partial answer';
+            prefetchedQuest.replies = ['Partial answer'];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done' }),
+        null,
+        expect.anything()
+      );
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({
+          status: 'done',
+          finishReason: 'timeout',
+          reply: expect.stringContaining('Partial answer'),
+        })
+      );
+    });
+
+    it('keeps text streamed after the last heartbeat, which lives only in memory', async () => {
+      // The heartbeat writes the row every ~10s, so text that streamed since then is not in it;
+      // the settle must write the in-memory copy rather than that stale snapshot.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: 'Part', replies: ['Part'] });
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.reply = 'Partial answer with a tail';
+            prefetchedQuest.replies = ['Partial answer', ' with a tail'];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({
+          status: 'done',
+          finishReason: 'timeout',
+          reply: expect.stringContaining('with a tail'),
+        })
+      );
+    });
+
+    it('settles a turn that ignores the abort as timed out and refunds its reservation itself', async () => {
+      mockProcess.mockImplementation(() => new Promise<never>(() => {}));
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockReleaseReservedCredits).toHaveBeenCalledWith('quest-2', expect.anything());
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done' }),
+        null,
+        expect.anything()
+      );
+      // TIMED_OUT_RUN on an empty quest: terminal error, so questTimeoutSweep has nothing to recover.
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
+      );
+    });
+
+    it('does not push a terminal state when the settle lost the race to another writer', async () => {
+      mockSettleIfUnfinished.mockResolvedValue(false);
+      mockProcess.mockImplementation(() => new Promise<never>(() => {}));
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSendStatusUpdate).not.toHaveBeenCalled();
+    });
+
+    it('answers 200 with the full reply when the turn finished before the deadline abort landed', async () => {
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.status = 'done';
+            prefetchedQuest.reply = 'Full answer';
+            prefetchedQuest.replies = ['Full answer'];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ response: 'Full answer' });
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', reply: 'Full answer' })
+      );
+      expect(mockSettleIfUnfinished.mock.calls[0][1]).not.toHaveProperty('finishReason');
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
+    });
+
+    it('leaves a turn that finishes inside the budget untouched', async () => {
+      waitTurnLimits.budgetMs = 45_000;
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: ProcessArgs) => {
+        prefetchedQuest.status = 'done';
+        prefetchedQuest.reply = 'hi';
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockSettleIfUnfinished).not.toHaveBeenCalled();
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
+    });
+
+    it('settles from the persisted row, so memory-only content cannot leave a done row with nothing to show', async () => {
+      // A tool result landed in the in-memory quest after the last save, and the abort fenced every
+      // later save, so the row the user will actually read has none of it.
+      mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.toolResults = [{ content: 'tool output' }];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
+      );
     });
   });
 });

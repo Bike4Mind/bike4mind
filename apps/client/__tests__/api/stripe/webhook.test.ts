@@ -27,6 +27,8 @@ const mockStampCreditLot = vi.fn();
 const mockClawbackCreditLotsByStripeRef = vi.fn();
 const mockUpdateTransactionStatus = vi.fn();
 const mockUpdateByStripeSubscriptionId = vi.fn();
+const mockMarkPastDue = vi.fn();
+const mockNotifyPaymentFailed = vi.fn();
 const mockPostMessageToSlack = vi.fn();
 const mockSendToClient = vi.fn();
 const mockStripeChargesRetrieve = vi.fn();
@@ -34,6 +36,7 @@ const mockConstructEvent = vi.fn();
 const mockDeactivateAll = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   creditLotRepository: {},
   creditTransactionRepository: {
     findByPaymentIntentId: (...args: unknown[]) => mockFindByPaymentIntentId(...args),
@@ -73,7 +76,14 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionId: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
+    markPastDue: (...args: unknown[]) => mockMarkPastDue(...args),
   },
+}));
+
+// The notices have their own suite (server/billing/paymentFailureNotice.test.ts).
+vi.mock('@server/billing/paymentFailureNotice', () => ({
+  notifyPaymentFailed: (...args: unknown[]) => mockNotifyPaymentFailed(...args),
+  notifyCanceledForNonPayment: vi.fn(),
 }));
 
 vi.mock('@server/integrations/slack/slack', () => ({
@@ -97,6 +107,25 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
 const mockVoidOpenSubscriptionInvoices = vi.fn();
 vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
+}));
+
+const mockLogEventSafe = vi.fn();
+vi.mock('@server/utils/analyticsLog', () => ({
+  logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
+}));
+
+const mockGrantCreditPurchase = vi.fn();
+vi.mock('@server/billing/grantCreditPurchase', () => ({
+  grantCreditPurchase: (...args: unknown[]) => mockGrantCreditPurchase(...args),
+}));
+
+// The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with an
+// ingest key for one made-up product.
+const mockEmitProductEvent = vi.fn();
+vi.mock('@server/analytics/emitActiveEvent', () => ({
+  HOST_PRODUCT_ID: 'bike4mind',
+  emitProductEvent: (...args: unknown[]) => mockEmitProductEvent(...args),
+  ingestKeyFor: (p: string) => (p === 'widgets' ? 'key' : undefined),
 }));
 
 const mockEmitMetric = vi.fn();
@@ -142,7 +171,8 @@ vi.mock('@bike4mind/common', async importOriginal => {
 });
 
 // Imports after mocks
-import { CreditPurchaseStatus } from '@bike4mind/common';
+import { CreditPurchaseEvents, CreditPurchaseStatus } from '@bike4mind/common';
+import { stableEventId } from '@server/analytics/signupEvents';
 
 // Load the module to trigger mock capture
 // This import triggers `baseApi().post(handler)` which populates capturedHandler
@@ -222,8 +252,10 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockUpdateTransactionStatus.mockResolvedValue(undefined);
     mockStampCreditLot.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue(undefined);
+    mockGrantCreditPurchase.mockResolvedValue('granted');
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
+    mockEmitProductEvent.mockResolvedValue(undefined);
   });
 
   describe('payment_intent.succeeded', () => {
@@ -243,26 +275,245 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       },
     };
 
-    it('grants credits through the atomic credit ledger keyed on the payment intent', async () => {
+    it('grants credits through the transactional purchase grant keyed on the payment intent', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+
+      const { res } = await invokeWebhookWithEvent(packEvent);
+
+      expect(mockGrantCreditPurchase).toHaveBeenCalledWith(
+        {
+          userId: 'user123',
+          paymentIntentId: 'pi_pack',
+          credits: 500,
+          amount: 999,
+          packageId: 'pkg_1',
+          environment: 'test',
+          paymentMethod: 'card',
+        },
+        expect.anything()
+      );
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(mockUserUpdate).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('acknowledges a redelivery whose grant already committed', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockResolvedValue('already_granted');
+
+      const { res } = await invokeWebhookWithEvent(packEvent);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(mockLogEventSafe).toHaveBeenCalledOnce();
+      expect(mockLogEventSafe).toHaveBeenCalledWith(
+        {
+          type: CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+          userId: 'user123',
+          metadata: { paymentIntentId: 'pi_pack', amount: 999, credits: 500 },
+        },
+        undefined,
+        expect.anything()
+      );
+      expect(mockLogEventSafe).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: CreditPurchaseEvents.CREDITS_GRANTED }),
+        undefined,
+        expect.anything()
+      );
+    });
+
+    it('fails the delivery so Stripe retries when the grant rolls back', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockRejectedValue(new Error('balance write failed'));
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('balance write failed');
+      expect(mockLogEventSafe).not.toHaveBeenCalled();
+      expect(mockEmitProductEvent).not.toHaveBeenCalled();
+    });
+
+    it('records the grant against the payment intent once credits are added', async () => {
       mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
 
       await invokeWebhookWithEvent(packEvent);
 
-      // The purchase path now delegates to creditService.addCredits, which records the
-      // transaction, atomically increments the balance, and stamps the pack lot - keyed
-      // idempotently on stripePaymentIntentId. No whole-document balance overwrite.
-      expect(mockAddCredits).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'purchase',
-          ownerId: 'user123',
-          credits: 500,
-          amount: 999,
-          stripePaymentIntentId: 'pi_pack',
-          packageId: 'pkg_1',
-        }),
+      expect(mockLogEventSafe).toHaveBeenCalledWith(
+        {
+          type: CreditPurchaseEvents.CREDITS_GRANTED,
+          userId: 'user123',
+          metadata: { paymentIntentId: 'pi_pack', amount: 999, credits: 500, packageId: 'pkg_1' },
+        },
+        undefined,
         expect.anything()
       );
-      expect(mockUserUpdate).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the metadata userId when no user holds the intent customer', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, userId: 'user123' } },
+        },
+      };
+
+      await invokeWebhookWithEvent(event);
+
+      expect(mockFindById).toHaveBeenCalledWith('user123');
+      expect(mockGrantCreditPurchase).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user123', paymentIntentId: 'pi_pack' }),
+        expect.anything()
+      );
+    });
+
+    it('flags a buyer mismatch but still grants to the customer user', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, userId: 'other456' } },
+        },
+      };
+
+      const { req } = await invokeWebhookWithEvent(event);
+
+      expect(req.logger!.error).toHaveBeenCalledWith(
+        expect.stringContaining('mismatch'),
+        expect.objectContaining({
+          step: 'user_mismatch',
+          paymentIntentId: 'pi_pack',
+          metadataUserId: 'other456',
+          customerUserId: 'user123',
+        })
+      );
+      expect(mockGrantCreditPurchase).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user123' }),
+        expect.anything()
+      );
+    });
+
+    it('does not flag a mismatch when the customer and metadata agree', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, userId: 'user123' } },
+        },
+      };
+
+      const { req } = await invokeWebhookWithEvent(event);
+
+      expect(req.logger!.error).not.toHaveBeenCalled();
+    });
+
+    it('logs an error and grants nothing when no user can be found for a paid intent', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue(null);
+      mockFindById.mockResolvedValue(null);
+
+      const { req, res } = await invokeWebhookWithEvent(packEvent);
+
+      expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
+      expect(req.logger!.error).toHaveBeenCalledWith(
+        expect.stringContaining('[CreditPurchase]'),
+        expect.objectContaining({ step: 'grant_failed', paymentIntentId: 'pi_pack' })
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    // Only a duplicate of the payment intent is an already-granted purchase; grantCreditPurchase
+    // reports that as 'already_granted' and rethrows everything else, including other duplicates.
+    it('still fails a duplicate key on anything other than the payment intent so Stripe retries', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockGrantCreditPurchase.mockRejectedValue(
+        Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { transactionId: 1 } })
+      );
+
+      await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('E11000');
+      expect(mockLogEventSafe).not.toHaveBeenCalled();
+    });
+
+    it('ignores an intent for another environment without resolving a user', async () => {
+      const event = {
+        ...packEvent,
+        data: {
+          object: { ...packEvent.data.object, metadata: { ...packEvent.data.object.metadata, environment: 'other' } },
+        },
+      };
+
+      await invokeWebhookWithEvent(event);
+
+      expect(mockFindByStripeCustomerId).not.toHaveBeenCalled();
+      expect(mockGrantCreditPurchase).not.toHaveBeenCalled();
+    });
+
+    describe('credit to the source product', () => {
+      const buyer = { ...mockUser, acquisition: { firstTouch: { source: 'widgets', campaign: 'launch' } } };
+      const paidPack = {
+        ...packEvent,
+        data: { object: { ...packEvent.data.object, amount_received: 999, currency: 'usd' } },
+      };
+
+      it('credits the pack to the product named by the stored touches, keyed on the payment intent', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+
+        const { res } = await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).toHaveBeenCalledTimes(1);
+        expect(mockEmitProductEvent).toHaveBeenCalledWith({
+          productId: 'widgets',
+          event: 'purchase',
+          eventId: stableEventId('purchase', 'widgets', 'pi_pack'),
+          reportFailure: true,
+          userId: 'user123',
+          utm: { source: 'widgets', campaign: 'launch' },
+          metadata: { touch: 'first', attribution: 'self-reported', kind: 'credits', value: 9.99, currency: 'USD' },
+        });
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
+
+      it('sends the same eventId on a redelivery, so the receiver keeps one event', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        await invokeWebhookWithEvent(paidPack);
+        mockGrantCreditPurchase.mockResolvedValue('already_granted');
+        await invokeWebhookWithEvent(paidPack);
+
+        const ids = mockEmitProductEvent.mock.calls.map(([c]) => c.eventId);
+        expect(ids).toHaveLength(2);
+        expect(ids[1]).toBe(ids[0]);
+      });
+
+      it('sends nothing for a buyer with no stored touches or a synthetic buyer', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+        await invokeWebhookWithEvent(paidPack);
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer, isSynthetic: true });
+        await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).not.toHaveBeenCalled();
+      });
+
+      it('sends nothing for an intent from another environment or without credits', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        const object = paidPack.data.object;
+        await invokeWebhookWithEvent({
+          ...paidPack,
+          data: { object: { ...object, metadata: { environment: 'prod' } } },
+        });
+        await invokeWebhookWithEvent({
+          ...paidPack,
+          data: { object: { ...object, metadata: { ...object.metadata, credits: '0' } } },
+        });
+
+        expect(mockEmitProductEvent).not.toHaveBeenCalled();
+      });
+
+      it('still acknowledges the delivery when the emit rejects', async () => {
+        mockFindByStripeCustomerId.mockResolvedValue({ ...buyer });
+        mockEmitProductEvent.mockRejectedValue(new Error('ingest down'));
+
+        const { res } = await invokeWebhookWithEvent(paidPack);
+
+        expect(mockEmitProductEvent).toHaveBeenCalledTimes(1);
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
     });
   });
 
@@ -617,7 +868,10 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
   });
 
   describe('invoice.payment_failed', () => {
-    it('sets subscription to past_due and invalidates client query cache', async () => {
+    it('sets subscription to past_due and invalidates the owner client query cache', async () => {
+      const row = { ownerType: 'User', ownerId: 'user_xyz', subscriptionId: 'sub_123', status: 'past_due' };
+      mockMarkPastDue.mockResolvedValue(row);
+      // No metadata.userId: Stripe never copies it onto the invoice, so the owner comes from the row.
       const invoiceFailedEvent = {
         type: 'invoice.payment_failed',
         data: {
@@ -625,14 +879,19 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
             id: 'in_fail',
             subscription: 'sub_123',
             parent: null,
-            metadata: { userId: 'user_xyz' },
+            metadata: {},
           },
         },
       };
 
       await invokeWebhookWithEvent(invoiceFailedEvent);
 
-      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith('sub_123', { status: 'past_due' });
+      expect(mockMarkPastDue).toHaveBeenCalledWith('sub_123');
+      expect(mockNotifyPaymentFailed).toHaveBeenCalledWith(
+        row,
+        expect.objectContaining({ id: 'in_fail' }),
+        expect.anything()
+      );
       expect(mockSendToClient).toHaveBeenCalledWith(
         'user_xyz',
         expect.anything(),
@@ -655,7 +914,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       };
 
       await invokeWebhookWithEvent(invoiceNoSubEvent);
-      expect(mockUpdateByStripeSubscriptionId).not.toHaveBeenCalled();
+      expect(mockMarkPastDue).not.toHaveBeenCalled();
     });
   });
 

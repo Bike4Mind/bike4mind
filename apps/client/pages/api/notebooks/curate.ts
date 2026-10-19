@@ -87,18 +87,21 @@ const handler = baseApi().post(
       // Publish start events for each session
       await Promise.all(
         curationJobs.map(({ sessionId, curationJobId, batchIndex }) =>
-          NotebookCurationEvents.Start.publish({
-            sessionId,
-            userId,
-            curationJobId,
-            batchJobId,
-            batchIndex,
-            batchTotal,
-            curationType,
-            artifactTypes,
-            exportFormat,
-            customNotebookName,
-          })
+          NotebookCurationEvents.Start.publish(
+            {
+              sessionId,
+              userId,
+              curationJobId,
+              batchJobId,
+              batchIndex,
+              batchTotal,
+              curationType,
+              artifactTypes,
+              exportFormat,
+              customNotebookName,
+            },
+            { requireAcceptance: true }
+          )
         )
       );
 

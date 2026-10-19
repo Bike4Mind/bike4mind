@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -16,7 +16,7 @@ import { WORKSPACE_SURFACES, type IChatHistoryItem } from '@bike4mind/common';
  */
 
 const mocks = vi.hoisted(() => ({
-  showCreditsUsed: true,
+  showCreditsUsed: true as boolean | undefined,
   serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
   sessionFeedback: [] as Array<{ questId?: string }>,
   sessionFeedbackLoading: false,
@@ -46,13 +46,20 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 const workspaceTargets = vi.hoisted(() => ({
   value: { current: undefined, copyTargets: [], moveTargets: [] } as Record<string, unknown>,
 }));
+// Shared so a test can follow a fork from the mutation to where the user is sent.
+const forkFlow = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  navigate: vi.fn(),
+  present: vi.fn((surface: unknown) => surface),
+}));
 vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
   surfaceRouteExists: () => true,
+  useWorkspacePresenter: () => forkFlow.present,
   useWorkspaceTargets: () => workspaceTargets.value,
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
   useGetSession: () => ({ data: undefined }),
-  useForkSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useForkSession: () => ({ mutateAsync: forkFlow.mutateAsync, isPending: false }),
   useSnipSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/quests', () => ({
@@ -95,7 +102,7 @@ vi.mock('@client/app/hooks/useSubscribeChatCompletion', () => ({
   useSubscribeChatCompletion: vi.fn(),
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => forkFlow.navigate,
 }));
 
 // --- utils with API/server dependencies ------------------------------------
@@ -104,6 +111,7 @@ vi.mock('@client/app/utils/fabFileUtils', () => ({
 }));
 vi.mock('@client/app/utils/publishApi', () => ({
   replyPublisher: vi.fn(() => vi.fn()),
+  findPublishedByReply: vi.fn(),
 }));
 // Mutable so a test can flip between personal (null) and an active org account.
 let selectedAccountValue: { id: string; name: string; personal: boolean } | null = null;
@@ -123,7 +131,15 @@ vi.mock('@client/app/components/Session/ToolsUsed', () => ({ default: () => null
 vi.mock('@client/app/components/Session/AgentExecution/ReasoningDisclosure', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AgentExecution/AutoRouteBadge', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/ResearchModeResponseDisplay', () => ({ default: () => null }));
-vi.mock('@client/app/components/ConfirmActionModal', () => ({ default: () => null }));
+// Only the fork confirmation is driven by these tests; every other confirmation stays inert.
+vi.mock('@client/app/components/ConfirmActionModal', () => ({
+  default: ({ className, onGoForward }: { className?: string; onGoForward: () => void }) =>
+    className === 'session-middle-fork-modal' ? (
+      <button data-testid="fork-confirm-mock" onClick={onGoForward}>
+        confirm fork
+      </button>
+    ) : null,
+}));
 vi.mock('@client/app/components/BugReportModal', () => ({
   default: ({
     open,
@@ -145,7 +161,26 @@ vi.mock('@client/app/components/BugReportModal', () => ({
     ) : null,
 }));
 vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ default: () => null }));
-vi.mock('../common/DownloadMenu', () => ({ default: () => null, downloadFile: vi.fn() }));
+vi.mock('../common/DownloadMenu', () => ({
+  default: () => null,
+  downloadFile: vi.fn(),
+  ReplyDownloadMenuItems: () => (
+    <>
+      <li role="menuitem">Markdown</li>
+      <li role="menuitem">DOCX</li>
+    </>
+  ),
+}));
+// Joy keeps a closing Drawer mounted until its exit transition ends, which jsdom never runs: render
+// the sheet's content only while it is open.
+vi.mock('../common/BottomSheet', () => ({
+  default: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div>{children}</div> : null),
+  BottomSheetHeader: ({ title, onBack, backTestId }: { title: string; onBack: () => void; backTestId?: string }) => (
+    <button data-testid={backTestId} onClick={onBack}>
+      {title}
+    </button>
+  ),
+}));
 
 // --- the flag under test ----------------------------------------------------
 // Default (flag on) is established in beforeEach; tests override per-case.
@@ -155,8 +190,9 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
-import { replyPublisher } from '@client/app/utils/publishApi';
+import { replyPublisher, findPublishedByReply } from '@client/app/utils/publishApi';
 import MessageContent from './MessageContent';
+import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
 const replyPublisherMock = replyPublisher as unknown as ReturnType<typeof vi.fn>;
 
@@ -182,22 +218,25 @@ function renderMessageContent(
   {
     onSendMessage = vi.fn(),
     isLastMessage = false,
-  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean } = {}
+    readOnly = false,
+  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean; readOnly?: boolean } = {}
 ) {
   render(
     <TestWrapper queryClient={queryClient}>
-      <MessageContent
-        sessionId="session-1"
-        messageData={data}
-        index={0}
-        onDelete={vi.fn()}
-        onPinToggle={vi.fn()}
-        onSendMessage={onSendMessage as never}
-        isLastMessage={isLastMessage}
-        model="gpt-4o"
-        totalMessages={1}
-        canUseAdminTools={false}
-      />
+      <SessionReadOnlyProvider readOnly={readOnly}>
+        <MessageContent
+          sessionId="session-1"
+          messageData={data}
+          index={0}
+          onDelete={vi.fn()}
+          onPinToggle={vi.fn()}
+          onSendMessage={onSendMessage as never}
+          isLastMessage={isLastMessage}
+          model="gpt-4o"
+          totalMessages={1}
+          canUseAdminTools={false}
+        />
+      </SessionReadOnlyProvider>
     </TestWrapper>
   );
 }
@@ -268,6 +307,7 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
     isFeatureEnabled.mockReset();
     isFeatureEnabled.mockReturnValue(true);
     publishAndShareSpy.mockReset();
+    vi.mocked(findPublishedByReply).mockReset();
     replyPublisherMock.mockReset();
     replyPublisherMock.mockReturnValue(vi.fn());
     selectedAccountValue = null;
@@ -284,6 +324,16 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
       orgOption: { label: 'Team', hint: 'Members of Acme' },
     });
     expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_42' }));
+  });
+
+  it('reopening share on a published reply looks up its existing publication by reply id', async () => {
+    renderAndClickPublishShare();
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    const { resolvePublished } = publishAndShareSpy.mock.calls[0][0];
+    expect(findPublishedByReply).not.toHaveBeenCalled();
+    await resolvePublished();
+    expect(findPublishedByReply).toHaveBeenCalledWith('quest-1');
   });
 
   it('omits the Team option in a personal account context', async () => {
@@ -371,17 +421,23 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
       Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
     });
 
-    it('renders the icon button and wires it to the share flow', async () => {
-      renderAndClickPublishShare();
-
+    // Phones keep only More options and Copy in the row; sharing is in the actions sheet.
+    it('offers sharing in the actions sheet and wires it to the share flow', async () => {
+      renderMessageContent();
       expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-share'));
+
       await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     });
 
-    it('hides the icon button when the reply has no shareable content', () => {
+    it('leaves sharing out of the sheet when the reply has no shareable content', () => {
       renderMessageContent(emptyReplyMessageData);
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
 
-      expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('message-menu-share')).not.toBeInTheDocument();
     });
   });
 });
@@ -514,11 +570,43 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
       Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
     });
 
-    it('renders the persistent Report button', () => {
+    // Phones trade the persistent button for a Report entry in the actions sheet; a reported
+    // answer still shows its orange mark in the row.
+    it('offers Report in the actions sheet and opens the report modal from it', () => {
+      renderMessageContent();
+      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      expect(screen.queryByTestId('message-report-btn')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-report'));
+
+      expect(screen.getByTestId('bug-report-modal-mock-submit')).toBeInTheDocument();
+    });
+
+    it('keeps the reported mark in the row once the answer is reported', () => {
+      mocks.sessionFeedback = [{ questId: 'quest-1' }];
       renderMessageContent();
 
-      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
       expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
+    });
+
+    it('closes the sheet once an action is picked', async () => {
+      renderMessageContent();
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-report'));
+
+      await waitFor(() => expect(screen.queryByTestId('message-menu-report')).not.toBeInTheDocument());
+    });
+
+    it('opens the download formats inside the sheet, with a way back', () => {
+      renderMessageContent();
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-download'));
+
+      expect(screen.getByText('Markdown')).toBeInTheDocument();
+      expect(screen.getByText('DOCX')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('message-actions-back-btn'));
+      expect(screen.getByTestId('message-menu-download')).toBeInTheDocument();
     });
   });
 });
@@ -639,7 +727,26 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
 
     renderMessageContent(creditsMessageData);
 
-    expect(screen.getByTestId('credits-used')).toBeInTheDocument();
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('42 credits');
+    expect(within(screen.getByTestId('credits-used')).getByTestId('credit-icon')).toBeInTheDocument();
+  });
+
+  it('shows the chip when the user has never set the preference', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = undefined;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('42 credits');
+  });
+
+  it('hides the chip when the user turned it off in their profile', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = false;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
   });
 
   it('hides the chip when enforceCredits is off, even with a credits value present', () => {
@@ -649,6 +756,23 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     renderMessageContent(creditsMessageData);
 
     expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
+  });
+
+  it('splits an image answer into the chat and image-tool shares', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent({
+      ...messageData,
+      creditsUsed: 184,
+      promptMeta: {
+        ...(messageData as IChatHistoryItem).promptMeta,
+        tokenUsage: { creditsUsed: 64 },
+        functionCalls: [{ name: 'image_generation', creditsUsed: 120 }],
+      },
+    } as unknown as IChatHistoryItem);
+
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('184 credits (Chat 64 + Image Generation 120)');
   });
 
   it('hides the chip when the enforceCredits setting is unset (self-host default)', () => {
@@ -767,5 +891,73 @@ describe('MessageContent actions menu - Fork into', () => {
     expect(screen.getByTestId('message-menu-fork-into-main')).toBeInTheDocument();
     expect(screen.getByTestId('message-menu-fork-into-opti')).toBeInTheDocument();
     expect(screen.queryByTestId('message-menu-fork')).not.toBeInTheDocument();
+  });
+
+  it('opens the fork at the link its workspace presents to this user', async () => {
+    const home = WORKSPACE_SURFACES.find(surface => surface.id !== null);
+    if (!home) throw new Error('expected a registered workspace');
+    forkFlow.mutateAsync.mockResolvedValueOnce({ id: 'fork-1', surface: home.id });
+    forkFlow.present.mockImplementationOnce(surface => ({
+      ...(surface as typeof home),
+      sessionHref: (id: string) => `/desk?session=${id}`,
+    }));
+    workspaceTargets.value = { current: main, copyTargets: [main], moveTargets: [] };
+
+    renderAndOpenActionsMenu();
+    fireEvent.click(screen.getByTestId('message-menu-fork'));
+    fireEvent.click(screen.getByTestId('fork-confirm-mock'));
+
+    await waitFor(() => expect(forkFlow.navigate).toHaveBeenCalledWith({ href: '/desk?session=fork-1' }));
+    expect(forkFlow.present).toHaveBeenCalledWith(home);
+  });
+});
+
+describe('MessageContent - read-only mode', () => {
+  // Persisted (24-hex id) so the correct-and-retry button is eligible when not read-only.
+  const persisted = { ...messageData, id: '0123456789abcdef01234567' } as IChatHistoryItem;
+  const writeMenuItems = [
+    'message-menu-edit',
+    'message-menu-pin',
+    'message-menu-fork',
+    'message-menu-quickstart',
+    'message-menu-try-again',
+    'message-menu-reprompt',
+    'message-send-to-datalake',
+    'message-menu-delete',
+  ];
+  const writeButtons = ['message-report-btn', 'message-correct-retry-btn', 'message-publish-share-btn'];
+
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+  });
+
+  it('offers every write action when not read-only', () => {
+    renderMessageContent(persisted);
+    for (const id of writeButtons) expect(screen.getByTestId(id)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+    for (const id of writeMenuItems) expect(screen.getByTestId(id)).toBeInTheDocument();
+  });
+
+  it('hides every write action but keeps the read-only ones when read-only', () => {
+    renderMessageContent(persisted, undefined, { readOnly: true });
+    for (const id of writeButtons) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+    for (const id of writeMenuItems) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+    expect(screen.getByText('Toggle Code View')).toBeInTheDocument();
+    expect(screen.getByText(/^Save as/)).toBeInTheDocument();
+  });
+
+  it('shows no proactive report banner on a failing turn when read-only', () => {
+    const brokenTurn = {
+      ...persisted,
+      promptMeta: { functionCalls: [{ name: 'search_knowledge_base', success: false }] },
+    } as unknown as IChatHistoryItem;
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true, readOnly: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
   });
 });

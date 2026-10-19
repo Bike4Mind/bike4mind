@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
   ApiKeyBillingOwnerType,
+  ApiKeyStoredSecret,
   ApiKeyScope,
   ApiKeyStatus,
   IEmbedBranding,
@@ -9,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
+import { computeKeyDigest, keyDigestMatches } from './keyDigest';
 
 interface ValidateUserApiKeyAdapters {
   db: {
@@ -35,6 +37,8 @@ export interface ValidationResult {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** OAuth clients allowed to mint identified sessions on this embed key. */
+  identifiedClientIds?: string[];
   /** Lake ids this key is bound to for the manage-but-not-member session admission. */
   preauthorizedLakeIds?: string[];
   /** White-label config for an embed key; consumed by the widget serve route. */
@@ -44,6 +48,23 @@ export interface ValidationResult {
   /** Cumulative settled spend in credits (`usage.totalSpendCredits`) at validation time. */
   currentSpend?: number;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
+}
+
+/**
+ * Checks `key` against the stored secret and returns the one it matched, or null. A key with a
+ * stored digest is checked by constant-time SHA-256 compare only - the digest is authoritative, so a
+ * mismatch never falls through to bcrypt. Keys minted before the digest existed fall back to the
+ * bcrypt keyHash; a record with neither secret fails closed.
+ */
+async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Promise<ApiKeyStoredSecret | null> {
+  if (apiKey.keyDigest) {
+    return keyDigestMatches(key, apiKey.keyDigest) ? { keyDigest: apiKey.keyDigest } : null;
+  }
+  if (apiKey.keyHash) {
+    return (await bcrypt.compare(key, apiKey.keyHash)) ? { keyHash: apiKey.keyHash } : null;
+  }
+  Logger.globalInstance.warn('API key record has neither keyDigest nor keyHash; rejecting', { keyId: apiKey.id });
+  return null;
 }
 
 /**
@@ -78,6 +99,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     organizationId: apiKey.organizationId,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    identifiedClientIds: apiKey.identifiedClientIds,
     preauthorizedLakeIds: apiKey.preauthorizedLakeIds,
     branding: apiKey.branding,
     spendCap: apiKey.spendCap,
@@ -110,9 +132,8 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'not_found' };
   }
 
-  // Verify the hash
-  const isHashValid = await bcrypt.compare(key, apiKey.keyHash);
-  if (!isHashValid) {
+  const matchedSecret = await matchStoredSecret(key, apiKey);
+  if (!matchedSecret) {
     return { isValid: false, reason: 'invalid_hash' };
   }
 
@@ -123,10 +144,23 @@ export const validateUserApiKey = async (
   // (fire and forget). Only heal a VALID key - matches the original ordering (gates
   // first) so an expired/disabled key isn't rewritten on every rejected request.
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
+  // Both heals pass the secret this request validated against, so a rotation that commits during
+  // validation makes them no-ops instead of reviving the rotated-away key.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.update({ id: apiKey.id, keyPrefix }).catch(err => {
+    db.userApiKeys.healKeyPrefix(apiKey.id, keyPrefix, matchedSecret).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
+    });
+  }
+
+  // Backfill the fast-path digest for a pre-digest key (fire and forget), same
+  // valid-only rule as the prefix heal, so existing keys migrate on first use
+  // without a rotation sweep.
+  if ('keyHash' in matchedSecret && result.isValid) {
+    const keyDigest = computeKeyDigest(key);
+    apiKey.keyDigest = keyDigest;
+    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest, matchedSecret.keyHash).catch(err => {
+      Logger.globalInstance.warn('Failed to backfill API key digest:', err);
     });
   }
 

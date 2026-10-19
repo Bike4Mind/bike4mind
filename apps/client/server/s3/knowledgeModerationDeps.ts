@@ -1,5 +1,5 @@
 import { FabFile, imageModerationIncidentRepository } from '@bike4mind/database';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
@@ -8,15 +8,16 @@ import type { ModerateImportedKnowledgeFilesArgs } from '@server/s3/moderateImpo
 import type { Types } from 'mongoose';
 
 /**
- * The production claim/scan/persist wiring for imported-knowledge moderation, shared by the two
- * callers that run it: the notebook-import handler (scans a fresh import's files post-commit) and
- * the daily rescue sweep (re-scans files an earlier attempt left stranded on 'pending'). Both must
- * claim/persist/release identically - the claim is the single mutual-exclusion point between them -
- * so the wiring lives here once. The claim is an atomic pending|null -> scanning CAS, so only one
- * runner can ever flip a given row out of 'pending' - the two callers here (and any concurrent
- * upload-path scan) cannot double-process it. objectCreated.ts guards the upload-time scan
- * differently (it never writes the interim 'scanning' state), so this is a parallel guarantee, not
- * the identical mechanism.
+ * The production claim/scan/persist wiring for imported-knowledge moderation, shared by the three
+ * callers that run it: the notebook-import handler (scans a fresh import's files post-commit), the
+ * self-host object-created webhook (scans a file as its bytes land) and the daily rescue sweep
+ * (re-scans files an earlier attempt left stranded on 'pending'). All must claim/persist/release
+ * identically - the claim is the single mutual-exclusion point between them - so the wiring lives
+ * here once. The claim is an atomic pending|null -> scanning CAS, so only one runner can ever flip a
+ * given row out of 'pending' - the callers here (and any concurrent hosted upload-path scan) cannot
+ * double-process it. The hosted upload-time scan (apps/workers/src/s3/objectCreated.ts) guards differently (it
+ * never writes the interim 'scanning' state), so this is a parallel guarantee, not the identical
+ * mechanism.
  */
 export function buildKnowledgeModerationDeps(
   logger: Logger
@@ -36,14 +37,20 @@ export function buildKnowledgeModerationDeps(
         { new: true }
       );
       return claimed
-        ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType, moderationClaimedAt: claimedAt }
+        ? {
+            _id: claimed._id,
+            id: claimed.id,
+            mimeType: claimed.mimeType,
+            sourceMetadata: claimed.sourceMetadata,
+            moderationClaimedAt: claimedAt,
+          }
         : null;
     },
     // Both writers below are guarded on the claim stamp, not on 'scanning' alone: the rescue sweep
     // can reclaim a stale 'scanning' row mid-scan and a successor can re-claim it, and an
     // unguarded write here would then land on a claim this run no longer owns - clobbering a
     // successor's terminal verdict, or clearing its claim and re-opening the row to a third runner.
-    // Same identity-guard shape as the chunk claim's release in queueHandlers/fabFileChunk.ts.
+    // Same identity-guard shape as the chunk claim's release in apps/workers/src/queueHandlers/fabFileChunk.ts.
     persist: async (_id, patch, claimedAt) => {
       const res = await FabFile.updateOne(
         { _id: _id as Types.ObjectId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
@@ -57,10 +64,11 @@ export function buildKnowledgeModerationDeps(
         {
           // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
           // moderationRescueSweep.ts. Written here because this is the single point every
-          // transient failure on THIS door (the import path and the sweep's re-scan) funnels
-          // through. objectCreated.ts has no equivalent release - a crashed upload-time scan is
-          // only ever recovered by the sweep's own stale-claim reclaim, so its attempt count is
-          // undercounted relative to a row scanned through here.
+          // transient failure on THIS door (the import path, the self-host webhook and the sweep's
+          // re-scan) funnels through. The hosted S3 handler (apps/workers/src/s3/objectCreated.ts) has no
+          // release - a crashed hosted scan is only ever recovered by the sweep's own stale-claim
+          // reclaim, so its attempt count is undercounted. The on-demand route releases through
+          // moderationScan.releaseModerationClaim, which writes the same bookkeeping.
           $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
           $inc: { moderationAttempts: 1 },
           $unset: { moderationClaimedAt: 1 },
@@ -83,6 +91,7 @@ export function buildKnowledgeModerationDeps(
       });
       return res.deletedCount > 0;
     },
+    measureSize: async filePath => (await storage.getMetadata(filePath)).size ?? Number.POSITIVE_INFINITY,
     downloadBytes: filePath => storage.download(filePath),
     downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
   };

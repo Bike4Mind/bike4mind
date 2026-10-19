@@ -82,6 +82,7 @@ vi.stubEnv('IS_LOCAL', '');
 vi.stubEnv('NODE_ENV', 'production');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
+import { rateLimitSnapshotRepository } from '@bike4mind/database';
 
 const payload = { name: 'github', action: 'callTool', toolName: 'search' } as Parameters<typeof invokeMcpHandler>[0];
 
@@ -100,6 +101,16 @@ describe('invokeMcpHandler on the deployed Lambda path', () => {
 
     await expect(invokeMcpHandler(payload)).resolves.toEqual({ result: 'ok' });
     expect(mockLocalMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it("stores rate-limit events the Lambda hands back under the calling user's tenant", async () => {
+    const event = { type: 'RATE_LIMIT_WARNING', integration: 'github', usagePercent: 95 };
+    mockSend.mockResolvedValue({ Payload: encode({ result: 'ok', _rateLimitEvents: [event] }) });
+
+    await expect(invokeMcpHandler({ ...payload, userId: 'user-1' })).resolves.toEqual({ result: 'ok' });
+    expect(rateLimitSnapshotRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: 'github', userId: 'user-1' })
+    );
   });
 
   it.each(['ETIMEDOUT contacting api.github.com', 'connect ECONNREFUSED 127.0.0.1:443', 'Missing credentials'])(

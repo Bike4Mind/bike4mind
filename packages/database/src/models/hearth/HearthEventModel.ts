@@ -1,5 +1,10 @@
 import mongoose, { Schema, Model, model, Types } from 'mongoose';
-import { hearthEventKindSchema, type HearthEventKind } from '@bike4mind/hearth';
+import {
+  hearthEventKindSchema,
+  hearthEventOriginSchema,
+  type HearthEventKind,
+  type HearthEventOrigin,
+} from '@bike4mind/hearth';
 
 /**
  * One event in the append-only Hearth log. Never updated, and deleted only by
@@ -22,6 +27,8 @@ export interface IHearthEventDoc {
     questId?: string;
     externalId?: string;
   };
+  /** Server-set provenance; unset on events written before it was recorded. */
+  origin?: HearthEventOrigin;
   createdAt: Date;
 }
 
@@ -85,6 +92,7 @@ const HearthEventSchema = new Schema<IHearthEventDoc>(
       ),
       default: {},
     },
+    origin: { type: String, enum: hearthEventOriginSchema.options },
   },
   // No updatedAt: the log is append-only.
   { timestamps: { createdAt: true, updatedAt: false } }

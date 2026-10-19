@@ -53,7 +53,7 @@ vi.mock('@client/app/components/artifacts', () => ({
   ArtifactVersionDropdown: () => <div data-testid="version-dropdown">Version Dropdown</div>,
 }));
 
-vi.mock('react-hot-toast', () => ({
+vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),

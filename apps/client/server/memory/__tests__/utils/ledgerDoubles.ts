@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { IMemoryLedgerEvent } from '@bike4mind/database';
 import type { Principal } from '@bike4mind/memory';
 import type { LedgerRepo } from '../../ledgerMemoryStore';
-import type { KeyProvider } from '../../factCipher';
+import type { KeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 /**
  * The in-memory ledger + keyring doubles the memory suites share.

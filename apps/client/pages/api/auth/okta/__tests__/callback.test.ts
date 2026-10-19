@@ -20,6 +20,7 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
+const mockEndConnections = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...a: any[]) => mockFindOne(...a),
@@ -28,7 +29,22 @@ vi.mock('@bike4mind/database', () => ({
   },
   authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
   authSessionRepository: { revokeAllByUserId: (...a: any[]) => mockRevokeAllByUserId(...a) },
+  realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
+
+// The real revoke primitive runs against the repository mocks above, so ending the realtime
+// connections is exercised for real; the spy only records the adapters it was given.
+const mockRevokeAllUserSessions = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  mockRevokeAllUserSessions.mockImplementation(actual.authSessionService.revokeAllUserSessions);
+  return {
+    authSessionService: {
+      revokeAllUserSessions: (...args: Parameters<typeof actual.authSessionService.revokeAllUserSessions>) =>
+        mockRevokeAllUserSessions(...args),
+    },
+  };
+});
 
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
 const mockGetConfig = vi.fn();
@@ -40,6 +56,11 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
   fetchUserInfo: (...a: any[]) => mockFetchUserInfo(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+
 // State token verification.
 const mockVerifyState = vi.fn();
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
@@ -49,6 +70,12 @@ vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) =
 // which also sets the refresh cookie (so no refresh token appears in the redirect fragment).
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' }),
+}));
+const mockResolveSecondFactor = vi.fn();
+const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signInSecondFactor', () => ({
+  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
@@ -67,15 +94,36 @@ vi.mock('@server/utils/validators', () => ({
 }));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
-vi.mock('@bike4mind/observability', () => ({
-  Logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+// A class, not a bare object: the real services barrel constructs Loggers at import time.
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/observability')>();
+  return {
+    ...actual,
+    Logger: Object.assign(actual.Logger, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  };
+});
+// Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.
+const mockApplyOAuthSignupDomainGrant = vi.fn();
+const mockApplyEmailVerifiedGrants = vi.fn();
+vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
+  applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
+}));
+vi.mock('@server/auth/emailVerifiedGrants', () => ({
+  applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
 }));
 
 // Import after mocks are registered.
+import { issueBrowserSession } from '@server/auth/issueSession';
+import { logAuthAudit } from '@server/utils/authAudit';
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
 const CODE = 'auth-code';
+
+// baseApi is mocked away, so the handler sees a logger only when the test supplies one; a real
+// request carries req.logger. A shared stub keeps the pass-through assertions addressable.
+const reqLogger = { log: vi.fn(), warn: vi.fn() };
 
 function makeReqRes() {
   const { req, res } = createMocks({
@@ -85,6 +133,7 @@ function makeReqRes() {
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
     url: '/api/auth/okta/callback',
   });
+  Object.assign(req, { logger: reqLogger });
   return { req: req as any, res: res as any };
 }
 
@@ -99,6 +148,7 @@ async function runCallback(opts: { user: any; userInfo: Record<string, unknown> 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
   process.env.APP_URL = 'http://localhost:3000';
 
   mockVerifyState.mockReturnValue({
@@ -119,6 +169,7 @@ beforeEach(() => {
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockEndConnections.mockResolvedValue({ connectionIds: [] });
   // Default both lookup stages to "no match" so tests that drive the handler
   // directly (rather than through runCallback) exercise the create path.
   mockFindOne.mockResolvedValue(null);
@@ -162,8 +213,34 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     // New provider link: tokenVersion incremented to invalidate other sessions.
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
     // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
+    // The adapters must be the exact repository instances and a logger, not a look-alike object.
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockRevokeAllUserSessions.mock.calls[0].slice(0, 2)).toEqual(['u2', {}]);
+    const adapters = mockRevokeAllUserSessions.mock.calls[0][2];
+    expect(adapters.db.authSessions).toBe(authSessionRepository);
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
+    expect(adapters.logger).toBe(reqLogger);
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
+    expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('still completes the login when ending realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValueOnce(new Error('prune failed'));
+
+    const res = await runCallback({
+      user: { id: 'u2', _id: 'u2', email: 'User@Example.com', emailVerified: true, authProviders: [], tokenVersion: 3 },
+      userInfo: { sub: 'okta-1', email: 'user@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
+    expect(mockEndConnections).toHaveBeenCalledTimes(1);
+    // The prune's failure is reported, not swallowed silently.
+    expect(reqLogger.warn).toHaveBeenCalledWith(
+      'Failed to end realtime connections; the sweep will retry',
+      expect.any(Error)
+    );
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {
@@ -229,6 +306,36 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(updateArg.$set.emailVerified).toBe(true);
     expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
+    expect(mockApplyEmailVerifiedGrants).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u5' }),
+      verifiedEmail: 'user@example.com',
+      trigger: 'oauth-link-verification',
+      releaseReason: 'Okta account link (email verified)',
+      logger: expect.anything(),
+    });
+    // Membership re-reads emailVerified, so the grants must follow the write that persists it.
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockApplyEmailVerifiedGrants.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('applies the link verification grants only when the link promotes emailVerified', async () => {
+    await runCallback({
+      user: {
+        id: 'u7',
+        _id: 'u7',
+        email: 'user@example.com',
+        emailVerified: true,
+        hasUsablePassword: false,
+        tags: ['pending-free-credits'],
+        authProviders: [],
+        tokenVersion: 0,
+      },
+      userInfo: { sub: 'okta-7', email: 'user@example.com', email_verified: true },
+    });
+
+    expect(mockUpdateOne).toHaveBeenCalled();
+    expect(mockApplyEmailVerifiedGrants).not.toHaveBeenCalled();
   });
 
   it('refuses to promote/link on a username-only match with a null local email (takeover guard)', async () => {
@@ -269,6 +376,20 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com' }));
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+    // The new account never visits /api/email/verify, so its domain grant runs here.
+    expect(mockApplyOAuthSignupDomainGrant).toHaveBeenCalledWith('new-user', 'new@example.com');
+    // Okta gets no flat grant: the account is not created pending-free-credits.
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+  });
+
+  it('skips the domain grant for a new account created without a verified email', async () => {
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-unverified', email: 'new@example.com', email_verified: false, name: 'New Bie' },
+    });
+
+    expect(mockCreate).toHaveBeenCalled();
+    expect(mockApplyOAuthSignupDomainGrant).not.toHaveBeenCalled();
   });
 });
 
@@ -560,6 +681,147 @@ describe('/api/auth/okta/callback - IDP email-domain bind', () => {
     // (idpScope = {}), matching the shape the SST-fallback create branch writes.
     expect(mockFindOne).toHaveBeenCalledWith({
       authProviders: { $elemMatch: { strategy: AuthStrategy.Okta, id: 'okta-sst' } },
+    });
+  });
+});
+
+describe('/api/auth/okta/callback - OAuth client source tag', () => {
+  it('stamps a newly created account with the clientId from the verified state', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps an existing account that signs in through a client', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: {
+        id: 'old-user',
+        _id: 'old-user',
+        tokenVersion: 0,
+        isBanned: false,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-sub-default', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
+    });
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/auth/okta/callback - second factor', () => {
+  const sstFallbackConfig = {
+    config: { issuer: 'https://okta.example.com' },
+    source: 'sst',
+    idp: undefined,
+  };
+  const existingUser = {
+    id: 'u-mfa',
+    _id: 'u-mfa',
+    email: 'user@example.com',
+    emailVerified: true,
+    authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-mfa' }],
+    tokenVersion: 0,
+  };
+  const userInfo = { sub: 'okta-mfa', email: 'user@example.com', email_verified: true, preferred_username: 'user' };
+
+  it('leaves MFA to the IdP for a login bound to an IdP record', async () => {
+    const res = await runCallback({
+      user: {
+        ...existingUser,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-mfa', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo,
+    });
+
+    expect(mockResolveSecondFactor).not.toHaveBeenCalled();
+    expect(issueBrowserSession).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'u-mfa',
+      strategy: AuthStrategy.Okta,
+      trustedDevice: null,
+    });
+  });
+
+  it('hands the unbound SST fallback to the MFA challenge without a session', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: true });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(mockResolveSecondFactor).toHaveBeenCalledTimes(1);
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'okta', createdVia: 'okta' },
+    });
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=verify&passkey=1');
+    expect(res._getRedirectUrl()).not.toContain('#token=');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+    expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('audits a brand-new provider link even when the second factor ends the request', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: { ...existingUser, authProviders: [] }, userInfo });
+
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+    expect(logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'u-mfa', event: 'oauth_link', strategy: 'okta' })
+    );
+  });
+
+  it('does not audit a link on a routine re-login that is handed to the challenge', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback({ user: existingUser, userInfo });
+
+    expect(logAuthAudit).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ event: 'oauth_link' }));
+  });
+
+  it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockVerifyState.mockReturnValue({ valid: true, payload: { redirectTo: '/projects/p1?tab=files' } });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    const location = res._getRedirectUrl();
+    const expectedQuery = `/auth/success?redirectTo=${encodeURIComponent('/projects/p1?tab=files')}`;
+    expect(location.startsWith(expectedQuery)).toBe(true);
+    expect(location.indexOf(expectedQuery)).toBeLessThan(location.indexOf('#mfaToken='));
+  });
+
+  it('sends the unbound SST fallback to MFA setup when enrollment is owed', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=setup');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('mints the session for the unbound fallback once the second factor is satisfied', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    const trustedDevice = { id: 'td-1', label: 'Laptop' };
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(issueBrowserSession).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'u-mfa',
+      strategy: AuthStrategy.Okta,
+      trustedDevice,
     });
   });
 });

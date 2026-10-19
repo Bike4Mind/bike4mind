@@ -242,12 +242,11 @@ export function useCreateLakeFromDrive() {
       // Same reuse rule as the upload path: this path archives its own lake on a failed connect
       // (below), and an archived lake keeps its prefix claim - so a retry on the same prefix has
       // to restore that lake rather than create a second one the claim would refuse.
-      const { id: dataLakeId, status: lakeStatus } = await resolveCreateModeLake(
-        config,
-        tagPrefix,
-        recoverableLake,
-        setRecoverableLake
-      );
+      const {
+        id: dataLakeId,
+        status: lakeStatus,
+        slug,
+      } = await resolveCreateModeLake(config, tagPrefix, recoverableLake, setRecoverableLake);
 
       setStep('upload');
       updateUploadProgress({
@@ -279,7 +278,7 @@ export function useCreateLakeFromDrive() {
         // Only once the archive took: a lake left live in some other state must not be restored
         // by the next retry. Mirrors the upload path's rollback.
         setRecoverableLake(
-          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null
+          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, slug, organizationId: activeOrgId() } : null
         );
         updateUploadProgress({ driveRollback });
         throw err;

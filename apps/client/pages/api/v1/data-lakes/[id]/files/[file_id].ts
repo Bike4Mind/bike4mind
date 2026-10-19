@@ -33,6 +33,7 @@ import {
   fabFileRepository,
   lakeMembershipRemovalRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -50,7 +51,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 // own counter instead of one budget per caller.
 const perUserRateLimit = () =>
   rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
     bucket: '/api/v1/data-lakes/[id]/files/[file_id]',
   });
@@ -135,12 +136,17 @@ const addRouter = nextRouteForContract(addDataLakeFileContract, { rateLimit: per
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
-    const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
-    const result = await dataLakeService.addFileToDataLake(actor, lake.id, fileId, {
-      db: { ...membershipWriteDb, scopedSettings: scopedSettingsRepository },
-      logger: req.logger,
+    const { lake, fileId, result } = await withTransaction(async () => {
+      const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
+      const fileId = fileIdOrNotFound(req.validatedParams.file_id);
+      const result = await dataLakeService.addFileToDataLake(actor, lake.id, fileId, {
+        db: { ...membershipWriteDb, scopedSettings: scopedSettingsRepository },
+        logger: req.logger,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { lake, fileId, result };
     });
     const body: DataLakeFileMembershipResponse = {
       lake_id: lake.id,
@@ -155,12 +161,16 @@ const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimi
   .use(requireFeatureEnabled('EnableDataLakes'))
   .delete(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
-    const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
-    const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fileId, {
-      db: membershipWriteDb,
-      logger: req.logger,
+    const { lake, fileId, result } = await withTransaction(async () => {
+      const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
+      const fileId = fileIdOrNotFound(req.validatedParams.file_id);
+      const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fileId, {
+        db: membershipWriteDb,
+        logger: req.logger,
+      });
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { lake, fileId, result };
     });
     const body: DataLakeFileMembershipResponse = {
       lake_id: lake.id,

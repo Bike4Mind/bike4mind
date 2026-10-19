@@ -4,6 +4,7 @@ import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect'
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
+import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
 import {
   Box,
   Button,
@@ -12,6 +13,7 @@ import {
   Container,
   Divider,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -25,8 +27,10 @@ import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
-import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
+import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
+import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
@@ -37,9 +41,15 @@ import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/set
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import {
+  isSubmittableOtcCode,
+  OTC_CODE_LENGTH,
+  OTC_CODE_PLACEHOLDER,
+  sanitizeOtcInput,
+} from '@client/app/utils/otcCode';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 
 /**
@@ -88,22 +98,16 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Username collected when a verified code belongs to an email with no account yet
   // (the login form doubling as inline registration - see handleRegisterUsernameSubmit).
   const [username, setUsername] = useState('');
+  const [usernameError, setUsernameError] = useState<string | null>(null);
   // Abuse gate on the inline path too: registerUser rejects creation unless
   // the current policy version + age attestation are sent, so both must be collected here;
   // the checkboxes gate the Create account button.
   const [acceptPolicies, setAcceptPolicies] = useState(false);
   const [confirmAdult, setConfirmAdult] = useState(false);
-  // Signed pending token from /api/otc/send - carries the hashed code + nonce and is
-  // required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
+  // Signed pending token from /api/otc/send - references the pending code by nonce (jti) and
+  // is required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [isCheckingStrategy, setIsCheckingStrategy] = useState(false);
-
-  // MFA state
-  const [showMFAModal, setShowMFAModal] = useState(false);
-  const [mfaUserId, setMfaUserId] = useState<string | null>(null);
-  const [mfaError, setMfaError] = useState<string | null>(null);
-  const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
-  const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
 
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -112,11 +116,27 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const navigate = useNavigate();
   const router = useRouter();
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const rateLimit = useOtcRateLimit();
+  const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
-  const verifyMFA = useVerifyMFA();
   const { data: publicConfig } = usePublicConfig();
-  const setupMFA = useSetupMFA();
-  const verifyMFASetup = useVerifyMFASetup();
+  const mfaChallenge = useMfaChallenge({
+    allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
+    onComplete: ({ user }) => setCurrentUser(user),
+    onCancel: mode => {
+      // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
+      // challenge, so the OTC/username steps can't be resumed (any retry dies as "Invalid
+      // code."). Restart cleanly from the email step.
+      handleBackToEmail();
+      if (mode === 'setup') {
+        toast.info(
+          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
+        );
+      } else {
+        toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
+      }
+    },
+  });
   const { t } = useTranslation();
   const openCookieSettings = useCookieSettings(s => s.open);
   const theme = useTheme();
@@ -186,17 +206,21 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }, 1000);
   };
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const handleEmailSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
+    if (rateLimit.secondsLeft > 0) return;
+    setEmailError(null);
     if (!trimmedEmail) {
-      toast.error(t('auth.emailRequired'));
+      setEmailError(t('auth.emailRequired'));
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(trimmedEmail)) {
-      toast.error(t('no_valid_emails_error'));
+      setEmailError(t('auth.fieldErrors.invalidEmail'));
       return;
     }
 
@@ -221,14 +245,15 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 
       const sendResult = await sendOTC({ email: trimmedEmail });
       setPendingToken(sendResult.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       setCurrentStep('otc');
       startResendCooldown();
     } catch (error) {
       // useSendOTC rejects with a plain { message, code } object (not an Error instance),
       // so read .message off either shape - otherwise real server messages like the OTC
       // rate-limit's "try again in N seconds" collapse into "An unexpected error occurred".
-      const errorMessage = (error as { message?: string })?.message || 'An unexpected error occurred';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'An unexpected error occurred');
       toast.error(errorMessage);
     } finally {
       setIsCheckingStrategy(false);
@@ -236,95 +261,24 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
     try {
       const sendResult = await sendOTC({ email: email.trim() });
       setPendingToken(sendResult.pendingToken);
-      toast.success(t('auth.codeSent'));
+      toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
       // Same plain-object rejection shape as handleEmailSubmit above.
-      const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
-    }
-  };
-
-  const handleMFASetup = async () => {
-    try {
-      const result = await setupMFA.mutateAsync();
-      setMfaSetupData(result);
-      setShowMFAModal(true);
-    } catch (error: unknown) {
-      const errorMessage = (error as Record<string, unknown>)?.response
-        ? (error as Record<string, Record<string, Record<string, string>>>).response?.data?.error
-        : (error as Error).message || 'MFA setup failed';
-      toast.error(errorMessage);
-      useAccessToken.getState().resetTokens();
-      setMfaUserId(null);
-      setMfaMode('verify');
-      setMfaSetupData(null);
-    }
-  };
-
-  const handleMFAVerification = async (token: string, rememberDevice = false) => {
-    if (!mfaUserId) return;
-    setMfaError(null);
-    try {
-      let result;
-      if (mfaMode === 'setup') {
-        result = await verifyMFASetup.mutateAsync({ token });
-      } else {
-        result = await verifyMFA.mutateAsync({ token, rememberDevice });
-      }
-      resetRefreshCoordinator();
-      // Drop the cached cold-load result: this browser just acquired a session, so the next
-      // protected navigation must not reuse the "no session" answer from before login.
-      resetSessionBootstrap();
-      useAccessToken.getState().setVerifiedSession(result.accessToken);
-      setShowMFAModal(false);
-      setCurrentUser(result.user);
-    } catch (error: unknown) {
-      const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
-      if (errorData?.forceLogout) {
-        useAccessToken.getState().forceLogoutTokens();
-        setShowMFAModal(false);
-        setMfaUserId(null);
-        setMfaError(null);
-        setMfaMode('verify');
-        setMfaSetupData(null);
-        toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
-        return;
-      }
-      const baseError = (errorData?.error as string) || (error as Error).message || 'MFA verification failed';
-      const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
-      setMfaError(baseError + attemptsInfo);
-    }
-  };
-
-  const handleMFACancel = () => {
-    useAccessToken.getState().resetTokens();
-    setShowMFAModal(false);
-    setMfaUserId(null);
-    setMfaError(null);
-    setMfaMode('verify');
-    setMfaSetupData(null);
-    // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
-    // challenge, so the OTC/username steps can't be resumed (any retry dies as "Invalid
-    // code."). Restart cleanly from the email step.
-    handleBackToEmail();
-    if (mfaMode === 'setup') {
-      toast.info(
-        'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-      );
-    } else {
-      toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
     }
   };
 
   const handleOTCSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otcCode.trim() || otcCode.length !== 6) {
-      toast.error('Please enter the 6-digit code');
+    if (!isSubmittableOtcCode(otcCode)) {
+      toast.error(`Please enter the ${OTC_CODE_LENGTH}-digit code`);
       return;
     }
 
@@ -346,24 +300,20 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         pendingToken: pendingToken || undefined,
         clientData,
       });
+      dismissOtcCodeSentToast();
 
       if ('mfaRequired' in response && response.mfaRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('verify');
-        setShowMFAModal(true);
+        await mfaChallenge.begin({
+          userId: response.userId,
+          mfaToken: response.accessToken,
+          mode: 'verify',
+          passkeyAvailable: !!response.passkeyAvailable,
+        });
         return;
       }
 
       if ('mfaSetupRequired' in response && response.mfaSetupRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('setup');
-        await handleMFASetup();
+        await mfaChallenge.begin({ userId: response.userId, mfaToken: response.accessToken, mode: 'setup' });
         return;
       }
 
@@ -419,11 +369,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // the account. A brand-new user has no MFA, so this returns a logged-in session.
   const handleRegisterUsernameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const uname = username.trim();
-    if (!uname) {
+    if (!username.trim()) {
       toast.error('Please enter a username');
       return;
     }
+    // Checked before any server call: the code is single-use-ish, so a rejected username must not
+    // burn an attempt.
+    const parsedUsername = usernameSchema.safeParse(username);
+    if (!parsedUsername.success) {
+      setUsernameError(USERNAME_RULES_MESSAGE);
+      return;
+    }
+    const uname = parsedUsername.data;
     // The button is disabled until both boxes are checked, but Enter-key implicit form
     // submission can bypass a disabled submit button - and acceptedPolicyVersion is sent
     // unconditionally below, so the handler must enforce the acceptance itself.
@@ -459,21 +416,17 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // MFA challenges. Mirror handleOTCSubmit so that path doesn't fall into finishLogin with
       // no refresh token.
       if ('mfaRequired' in response && response.mfaRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('verify');
-        setShowMFAModal(true);
+        await mfaChallenge.begin({
+          userId: response.userId,
+          mfaToken: response.accessToken,
+          mode: 'verify',
+          passkeyAvailable: !!response.passkeyAvailable,
+        });
         return;
       }
+
       if ('mfaSetupRequired' in response && response.mfaSetupRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('setup');
-        await handleMFASetup();
+        await mfaChallenge.begin({ userId: response.userId, mfaToken: response.accessToken, mode: 'setup' });
         return;
       }
 
@@ -519,9 +472,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setEmail('');
     setOtcCode('');
     setUsername('');
+    setUsernameError(null);
     setAcceptPolicies(false);
     setConfirmAdult(false);
     setPendingToken(null);
+    rateLimit.clear();
   };
 
   if (isLoggedIn) {
@@ -735,6 +690,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   className="email-control"
                   required
                   id="email"
+                  error={!!emailError}
                   sx={{ width: '100%', maxWidth: '700px', margin: '0 auto 16px' }}
                 >
                   <FormLabel sx={visuallyHidden}>Email</FormLabel>
@@ -746,9 +702,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     name="email"
                     type="email"
                     value={email}
-                    onChange={e => setEmail(e.target.value)}
+                    onChange={e => {
+                      setEmail(e.target.value);
+                      setEmailError(null);
+                    }}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && email.trim() && !isCheckingStrategy && !isSendingOTC) {
+                      if (
+                        e.key === 'Enter' &&
+                        email.trim() &&
+                        !isCheckingStrategy &&
+                        !isSendingOTC &&
+                        rateLimit.secondsLeft === 0
+                      ) {
                         handleEmailSubmit(e);
                       }
                     }}
@@ -756,8 +721,16 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     autoComplete="email"
                     autoFocus
                     disabled={isCheckingStrategy || isSendingOTC}
+                    slotProps={{ input: { 'aria-invalid': !!emailError } }}
                     sx={{ ...inputStyles, '--Input-minHeight': '40px' }}
                   />
+                  {emailError ? (
+                    <FormHelperText role="alert" data-testid="login-email-error" sx={{ color: 'danger.plainColor' }}>
+                      {emailError}
+                    </FormHelperText>
+                  ) : (
+                    <FormHelperText data-testid="login-passwordless-hint">{t('auth.passwordlessHint')}</FormHelperText>
+                  )}
                 </FormControl>
                 <Button
                   className="continue-button"
@@ -769,13 +742,29 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     { marginTop: '0.5vh', minHeight: '40px', display: 'flex', gap: '.5rem', borderRadius: '8px' },
                     isDarkMode ? darkInactive : lightInactive,
                   ]}
-                  disabled={!email.trim() || isCheckingStrategy || isSendingOTC}
+                  disabled={!email.trim() || isCheckingStrategy || isSendingOTC || rateLimit.secondsLeft > 0}
                 >
                   {(isCheckingStrategy || isSendingOTC) && <CircularProgress />}
                   <Typography sx={{ color: 'common.white', fontWeight: '500', fontSize: '14px' }}>
-                    {isCheckingStrategy || isSendingOTC ? t('auth.checking') : t('auth.continue')}
+                    {isCheckingStrategy || isSendingOTC
+                      ? t('auth.checking')
+                      : rateLimit.secondsLeft > 0
+                        ? t('auth.retryIn', { time: formatCountdown(rateLimit.secondsLeft) })
+                        : t('auth.continue')}
                   </Typography>
                 </Button>
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-rate-limit-alert"
+                />
+                <Typography
+                  data-testid="login-no-password-hint"
+                  level="body-xs"
+                  sx={{ mt: 1.5, textAlign: 'center', color: 'text.tertiary' }}
+                >
+                  {t('auth.noPasswordNeeded')}
+                </Typography>
 
                 {enableRegister && (
                   <Box
@@ -829,11 +818,13 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     variant="outlined"
                     name="otc-code"
                     type="text"
-                    inputMode="numeric"
-                    placeholder="000000"
+                    // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                    // root div), so the numeric keypad hint has to go through the input slot.
+                    slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
+                    placeholder={OTC_CODE_PLACEHOLDER}
                     value={otcCode}
                     onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      const val = sanitizeOtcInput(e.target.value);
                       setOtcCode(val);
                     }}
                     autoComplete="one-time-code"
@@ -859,7 +850,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     { marginTop: '0.5vh', minHeight: '40px', display: 'flex', gap: '.5rem', borderRadius: '8px' },
                     isDarkMode ? darkInactive : lightInactive,
                   ]}
-                  disabled={otcCode.length !== 6 || isVerifying}
+                  disabled={!isSubmittableOtcCode(otcCode) || isVerifying}
                 >
                   {isVerifying && <CircularProgress className="verify-spinner" />}
                   <Typography sx={{ color: 'common.white', fontWeight: '500', fontSize: '14px' }}>
@@ -890,20 +881,27 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   <Link
                     className="resend-code-link"
                     data-testid="login-resend-btn"
-                    color={resendCooldown > 0 ? 'neutral' : 'primary'}
+                    color={resendBlockedSeconds > 0 ? 'neutral' : 'primary'}
                     onClick={handleResendCode}
                     sx={{
                       fontWeight: 500,
                       fontSize: '14px',
-                      color: resendCooldown > 0 ? 'text.tertiary' : undefined,
-                      cursor: resendCooldown > 0 ? 'default' : 'pointer',
+                      color: resendBlockedSeconds > 0 ? 'text.tertiary' : undefined,
+                      cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
                       transition: 'color 0.2s ease-in-out',
-                      '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                      '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                     }}
                   >
-                    {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                    {resendBlockedSeconds > 0
+                      ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                      : t('auth.resendCode')}
                   </Link>
                 </Box>
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-otc-rate-limit-alert"
+                />
               </form>
             )}
 
@@ -929,13 +927,25 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     type="text"
                     placeholder="Choose a username"
                     value={username}
-                    onChange={e => setUsername(e.target.value)}
+                    onChange={e => {
+                      setUsername(e.target.value);
+                      setUsernameError(null);
+                    }}
                     autoComplete="username"
                     fullWidth
                     autoFocus
                     disabled={isVerifying}
                     sx={{ ...inputStyles, '--Input-minHeight': '48px' }}
                   />
+                  {usernameError && (
+                    <FormHelperText
+                      role="alert"
+                      data-testid="login-register-username-error"
+                      sx={{ color: 'danger.plainColor' }}
+                    >
+                      {usernameError}
+                    </FormHelperText>
+                  )}
                 </FormControl>
 
                 {/* Abuse gate: same acceptance controls as /register - the
@@ -1110,26 +1120,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       </Container>
 
       {/* MFA Modal */}
-      <MFAModal
-        className="mfa-modal"
-        open={showMFAModal}
-        onClose={handleMFACancel}
-        onCancel={handleMFACancel}
-        onVerify={handleMFAVerification}
-        loading={verifyMFA.isPending || verifyMFASetup.isPending}
-        error={mfaError}
-        title={mfaMode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required'}
-        description={
-          mfaMode === 'setup'
-            ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : 'Enter your 6-digit code or backup code to continue.'
-        }
-        qrCodeUrl={mfaSetupData?.qrCodeUrl}
-        manualEntryKey={mfaSetupData?.manualEntryKey}
-        backupCodes={mfaSetupData?.backupCodes}
-        showVerify={true}
-        allowRememberDevice={publicConfig?.allowTrustedDevices ?? false}
-      />
+      <MFAModal {...mfaChallenge.modalProps} />
     </Box>
   );
 };

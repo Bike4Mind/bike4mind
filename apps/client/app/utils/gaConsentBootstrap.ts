@@ -1,8 +1,15 @@
-import { CONSENT_KEY, DECISION_COOKIE, REGION_COOKIE } from './consentRegion';
+import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { CONSENT_KEY } from './consentRegion';
 
 // Window.__b4mGaConsentDefault is declared in types/gaConsent.d.ts, not here: this module
 // isn't imported by every file that reads/writes the global (see CookieConsentBanner), so the
 // augmentation needs to be ambient rather than tied to this module's own compilation.
+
+/** The GA4 id, or undefined when this build has no GA. Gates both the gtag tag in app/layout.tsx
+ * and the consent banner naming Google Analytics (utils/consentVendors.ts). */
+export function getGaMeasurementId(): string | undefined {
+  return process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || undefined;
+}
 
 /**
  * The inline GA tag for the root layout.

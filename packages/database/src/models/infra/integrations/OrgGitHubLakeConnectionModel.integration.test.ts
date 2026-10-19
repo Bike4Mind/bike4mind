@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
+import { DataLakeModel } from '../../ai/DataLakeModel';
 import {
   OrgGitHubLakeConnection,
   orgGitHubLakeConnectionRepository,
@@ -13,6 +14,11 @@ import {
  * that several bindings may legitimately share an installationId, and that release is org-scoped
  * and hard-deletes so the freed claims can be re-taken.
  */
+
+const ORG_1 = { kind: 'organization', organizationId: 'org-1' } as const;
+const ORG_2 = { kind: 'organization', organizationId: 'org-2' } as const;
+const USER_1 = { kind: 'user', userId: 'user-1' } as const;
+const USER_2 = { kind: 'user', userId: 'user-2' } as const;
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -118,16 +124,32 @@ describe('OrgGitHubLakeConnectionModel - accessors', () => {
   });
 });
 
+describe('OrgGitHubLakeConnectionModel - findBoundDataLakeIds', () => {
+  it('returns the given lakes that have a row, disabled rows included, like findByDataLakeIdAny', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-2', repositoryId: 2, enabled: false });
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-other', repositoryId: 3 });
+
+    const bound = await orgGitHubLakeConnectionRepository.findBoundDataLakeIds(['lake-1', 'lake-2', 'lake-3']);
+    expect(bound.sort()).toEqual(['lake-1', 'lake-2']);
+  });
+
+  it('returns an empty array for an empty input', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findBoundDataLakeIds([])).toEqual([]);
+  });
+});
+
 describe('OrgGitHubLakeConnectionModel - release', () => {
   it('is org-scoped: the wrong org cannot release, and the row is kept', async () => {
     const created = await OrgGitHubLakeConnection.create(base);
-    expect(await orgGitHubLakeConnectionRepository.release(created.id, 'org-2')).toBe(false);
+    expect(await orgGitHubLakeConnectionRepository.release(created.id, ORG_2)).toBe(false);
     expect(await OrgGitHubLakeConnection.findById(created.id)).not.toBeNull();
   });
 
   it('hard-deletes so a released repository can be re-claimed', async () => {
     const created = await OrgGitHubLakeConnection.create(base);
-    expect(await orgGitHubLakeConnectionRepository.release(created.id, 'org-1')).toBe(true);
+    expect(await orgGitHubLakeConnectionRepository.release(created.id, ORG_1)).toBe(true);
     expect(await OrgGitHubLakeConnection.findById(created.id)).toBeNull();
 
     const reclaimed = await OrgGitHubLakeConnection.create({
@@ -214,6 +236,15 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     expect(await repo.claimForSync(id)).toBeTruthy();
   });
 
+  // The UI's Access lost state hangs off this status, so it must survive a release and still re-sync.
+  it('release can park the connection in access_lost, and a later claim may retry it', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    await repo.releaseSyncClaim(id, token!, 'reconnect', 'access_lost');
+    expect(await repo.findById(id)).toMatchObject({ status: 'access_lost', lastError: 'reconnect' });
+    expect(await repo.claimForSync(id)).toBeTruthy();
+  });
+
   it('release by a superseded token leaves the new owner alone', async () => {
     const { id } = await repo.create(base);
     const stale = await repo.claimForSync(id);
@@ -239,12 +270,20 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     expect(after?.lastSyncedAt).toBeInstanceOf(Date);
     expect(after?.ingestClaimToken).toBeUndefined();
   });
+
+  it('recordTreeCounts writes under the live claim and refuses a superseded token', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.recordTreeCounts(id, token!, { candidateCount: 12, skippedCount: 3 })).toBe(true);
+    expect(await repo.recordTreeCounts(id, 'stale-token', { candidateCount: 1, skippedCount: 1 })).toBe(false);
+    expect(await repo.findById(id)).toMatchObject({ treeCandidateCount: 12, treeSkippedCount: 3 });
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
   it('disables an idle connection, after which claimForSync refuses it', async () => {
     const { id } = await repo.create(base);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: true });
     expect(await repo.findById(id)).toMatchObject({ enabled: false });
     expect(await repo.claimForSync(id)).toBeNull();
   });
@@ -252,15 +291,15 @@ describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
   it('matches a retry on an already-disabled row and reports it was not enabled', async () => {
     const { id } = await repo.create(base);
     await repo.setEnabledForLake('lake-1', false);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: false });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: false });
   });
 
   it('disables an unchained claim once it passes the unchained staleness window', async () => {
     const { id } = await repo.create(base);
     await repo.claimForSync(id);
     await ageClaim(id, 21);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: true });
   });
 
   it('lets a continuation adopt a disabled chain only to end it: adopt reports disabled, renew refuses', async () => {
@@ -272,32 +311,32 @@ describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
     expect(adopted).toEqual({ token: expect.any(String), enabled: false });
     expect(await repo.renewSyncClaim(id, 'batch-1', adopted!.token)).toBeNull();
     // The adopted claim is live, so a disconnect waits for the continuation to release it.
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toBeNull();
     expect(await repo.releaseSyncClaim(id, adopted!.token, null)).not.toBeNull();
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: false });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: false });
   });
 
   it('refuses while a claim is live and disables once it goes stale', async () => {
     const { id } = await repo.create(base);
     const token = await repo.claimForSync(id);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toBeNull();
     await repo.renewSyncClaim(id, 'batch-1', token!);
     await ageClaim(id, 21);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toBeNull();
     await ageClaim(id, 61);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-1')).toEqual({ wasEnabled: true });
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_1)).toEqual({ wasEnabled: true });
     expect(await repo.findById(id)).toMatchObject({ enabled: false });
   });
 
   it('lets exactly one of a racing claim and disable win', async () => {
     const { id } = await repo.create(base);
-    const [token, disabled] = await Promise.all([repo.claimForSync(id), repo.disableIfNoLiveSyncClaim(id, 'org-1')]);
+    const [token, disabled] = await Promise.all([repo.claimForSync(id), repo.disableIfNoLiveSyncClaim(id, ORG_1)]);
     expect(Boolean(token) !== Boolean(disabled)).toBe(true);
   });
 
   it('is org-scoped', async () => {
     const { id } = await repo.create(base);
-    expect(await repo.disableIfNoLiveSyncClaim(id, 'org-2')).toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, ORG_2)).toBeNull();
     expect(await repo.findById(id)).toMatchObject({ enabled: true });
   });
 });
@@ -314,7 +353,7 @@ describe('OrgGitHubLakeConnectionModel - setEnabledForLake', () => {
 
   it('leaves a disconnecting row disabled: true is refused, false still disables', async () => {
     const { id } = await repo.create(base);
-    await repo.markDisconnecting(id, 'org-1');
+    await repo.markDisconnecting(id, ORG_1);
     expect(await repo.setEnabledForLake('lake-1', true)).toBe(false);
     expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
     expect(await repo.setEnabledForLake('lake-1', false)).toBe(true);
@@ -331,7 +370,7 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
 
   it('stamps disconnectRequestedAt and disables an idle connection, reporting it was created', async () => {
     const { id } = await repo.create(base);
-    const marked = await repo.markDisconnecting(id, 'org-1');
+    const marked = await repo.markDisconnecting(id, ORG_1);
     expect(marked).toMatchObject({ created: true, previousEnabled: true });
     expect(marked?.stamp).toBeInstanceOf(Date);
     expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked?.stamp });
@@ -339,9 +378,9 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
 
   it('reports created false and the already-disabled previousEnabled on a re-stamp', async () => {
     const { id } = await repo.create(base);
-    const first = await repo.markDisconnecting(id, 'org-1');
+    const first = await repo.markDisconnecting(id, ORG_1);
     await ageDisconnect(id, 30);
-    const second = await repo.markDisconnecting(id, 'org-1');
+    const second = await repo.markDisconnecting(id, ORG_1);
     expect(first?.created).toBe(true);
     expect(second).toMatchObject({ created: false, previousEnabled: false });
     expect(second?.stamp.getTime()).toBeGreaterThanOrEqual(first!.stamp.getTime());
@@ -349,28 +388,28 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
 
   it('refuses a second mark while the first disconnect is fresh', async () => {
     const { id } = await repo.create(base);
-    const first = await repo.markDisconnecting(id, 'org-1');
-    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    const first = await repo.markDisconnecting(id, ORG_1);
+    expect(await repo.markDisconnecting(id, ORG_1)).toBeNull();
     expect(await repo.findById(id)).toMatchObject({ disconnectRequestedAt: first!.stamp, enabled: false });
   });
 
   it('refuses while a sync claim is live', async () => {
     const { id } = await repo.create(base);
     await repo.claimForSync(id);
-    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    expect(await repo.markDisconnecting(id, ORG_1)).toBeNull();
     expect(await repo.findById(id)).toMatchObject({ enabled: true });
   });
 
   it('is org-scoped', async () => {
     const { id } = await repo.create(base);
-    expect(await repo.markDisconnecting(id, 'org-2')).toBeNull();
+    expect(await repo.markDisconnecting(id, ORG_2)).toBeNull();
     expect(await repo.findById(id)).toMatchObject({ enabled: true });
   });
 
   it('cancelDisconnect restores enabled and clears the stamp when the stamp matches', async () => {
     const { id } = await repo.create(base);
-    const marked = await repo.markDisconnecting(id, 'org-1');
-    expect(await repo.cancelDisconnect(id, 'org-1', marked!.stamp, marked!.previousEnabled)).toBe(true);
+    const marked = await repo.markDisconnecting(id, ORG_1);
+    expect(await repo.cancelDisconnect(id, ORG_1, marked!.stamp, marked!.previousEnabled)).toBe(true);
     const after = await repo.findById(id);
     expect(after).toMatchObject({ enabled: true });
     expect(after?.disconnectRequestedAt).toBeUndefined();
@@ -378,25 +417,35 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
 
   it('cancelDisconnect is a no-op against a different stamp', async () => {
     const { id } = await repo.create(base);
-    const marked = await repo.markDisconnecting(id, 'org-1');
+    const marked = await repo.markDisconnecting(id, ORG_1);
     const otherStamp = new Date(marked!.stamp.getTime() - 1000);
-    expect(await repo.cancelDisconnect(id, 'org-1', otherStamp, true)).toBe(false);
+    expect(await repo.cancelDisconnect(id, ORG_1, otherStamp, true)).toBe(false);
     expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked!.stamp });
   });
 
   it('touchDisconnect refreshes a pending disconnect s stamp', async () => {
     const { id } = await repo.create(base);
-    await repo.markDisconnecting(id, 'org-1');
+    await repo.markDisconnecting(id, ORG_1);
     await ageDisconnect(id, 30);
     const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
-    expect(await repo.touchDisconnect(id)).toBe(true);
+    expect(await repo.touchDisconnect(id, ORG_1)).toBe(true);
     const after = await repo.findById(id);
     expect(after?.disconnectRequestedAt?.getTime()).toBeGreaterThan(staleStamp.getTime());
   });
 
+  it('touchDisconnect leaves the stamp alone for a different owner', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, ORG_1);
+    await ageDisconnect(id, 30);
+    const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
+    expect(await repo.touchDisconnect(id, ORG_2)).toBe(false);
+    expect(await repo.touchDisconnect(id, USER_1)).toBe(false);
+    expect((await repo.findById(id))?.disconnectRequestedAt?.getTime()).toBe(staleStamp.getTime());
+  });
+
   it('touchDisconnect reports false when no disconnect is pending', async () => {
     const { id } = await repo.create(base);
-    expect(await repo.touchDisconnect(id)).toBe(false);
+    expect(await repo.touchDisconnect(id, ORG_1)).toBe(false);
   });
 });
 
@@ -413,6 +462,77 @@ describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
   });
 });
 
+describe('OrgGitHubLakeConnectionModel - reconcile selection', () => {
+  let seq = 0;
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+  const add = async (fields: Record<string, unknown> = {}) => {
+    seq += 1;
+    const { id } = await repo.create({ ...base, repositoryId: 1000 + seq, targetDataLakeId: `lake-r${seq}` });
+    if (Object.keys(fields).length > 0)
+      await OrgGitHubLakeConnection.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: fields });
+    return id;
+  };
+  const dueIds = async (limit = 50) => (await repo.findDueForReconcile(limit)).map(c => String(c.id));
+
+  it('includes connected, legacy unset status, and stale syncing claims (both windows)', async () => {
+    const connected = await add();
+    const legacy = await add();
+    await OrgGitHubLakeConnection.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(legacy) },
+      { $unset: { status: '' } }
+    );
+    const staleUnchained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(21) });
+    const staleChained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' });
+    expect((await dueIds()).sort()).toEqual([connected, legacy, staleUnchained, staleChained].sort());
+  });
+
+  it('excludes disabled, disconnecting, live syncing, and error connections', async () => {
+    await add({ enabled: false });
+    await add({ disconnectRequestedAt: new Date() });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(5) });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(30), activeIngestBatchId: 'b1' });
+    await add({ status: 'error' });
+    expect(await dueIds()).toEqual([]);
+  });
+
+  it('orders never-checked first, then oldest checked, and honors the limit', async () => {
+    const recent = await add({ reconcileCheckedAt: minutesAgo(1) });
+    const old = await add({ reconcileCheckedAt: minutesAgo(60) });
+    const never = await add();
+    expect(await dueIds()).toEqual([never, old, recent]);
+    expect(await dueIds(2)).toEqual([never, old]);
+    expect(await dueIds(0)).toEqual([]);
+  });
+
+  it('markReconcileChecked stamps only the given ids and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const b = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileChecked([a], at);
+    const after = await repo.findById(a);
+    expect(after?.reconcileCheckedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    expect((await repo.findById(b))?.reconcileCheckedAt).toBeUndefined();
+    await expect(repo.markReconcileChecked([], at)).resolves.toBeUndefined();
+    expect(await dueIds()).toEqual([b, a]);
+  });
+
+  it('markReconcileEnqueued records the target (including null) and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileEnqueued(a, 'abc123', at);
+    let after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBe('abc123');
+    expect(after?.reconcileEnqueuedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    await repo.markReconcileEnqueued(a, null, at);
+    after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBeNull();
+  });
+});
+
 describe('isGitHubLakeSyncClaimLive', () => {
   const now = Date.parse('2026-09-28T12:00:00Z');
   const minutesAgo = (m: number) => new Date(now - m * 60_000);
@@ -425,5 +545,104 @@ describe('isGitHubLakeSyncClaimLive', () => {
     [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' }, false],
   ])('%o -> %s', (conn, live) => {
     expect(isGitHubLakeSyncClaimLive(conn, now)).toBe(live);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - findOrphaned (lakeless binding scan)', () => {
+  const seedLake = async (slug: string, status: string) => {
+    const lake = await DataLakeModel.create({
+      name: `lake-${slug}`,
+      slug,
+      fileTagPrefix: `${slug}:`,
+      datalakeTag: `dl-${slug}`,
+      createdByUserId: 'user-1',
+      status,
+    });
+    return String(lake._id);
+  };
+  const bind = (n: number, targetDataLakeId: string, extra: Record<string, unknown> = {}) =>
+    OrgGitHubLakeConnection.create({
+      ...base,
+      repositoryId: n,
+      repositoryFullName: `acme/repo-${n}`,
+      targetDataLakeId,
+      ...extra,
+    });
+  const missingLakeId = () => new mongoose.Types.ObjectId().toHexString();
+
+  afterEach(async () => {
+    await DataLakeModel.deleteMany({});
+  });
+
+  it('returns a binding whose lake document is gone, and none whose lake exists in any status', async () => {
+    const orphan = await bind(1, missingLakeId());
+    await bind(2, await seedLake('live', 'active'));
+    await bind(3, await seedLake('soft-deleted', 'deleted'));
+    await bind(4, await seedLake('archived', 'archived'));
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id)).toEqual([orphan.id]);
+    expect(found[0].installationId).toBe(base.installationId);
+  });
+
+  it('returns orphans whatever their enabled flag or status', async () => {
+    const disabled = await bind(1, missingLakeId(), { enabled: false, disconnectRequestedAt: new Date() });
+    const errored = await bind(2, missingLakeId(), { status: 'error' });
+    const lost = await bind(3, missingLakeId(), { status: 'access_lost' });
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id).sort()).toEqual([disabled.id, errored.id, lost.id].sort());
+  });
+
+  it('honors the limit, oldest first', async () => {
+    const first = await bind(1, missingLakeId());
+    const second = await bind(2, missingLakeId());
+    await bind(3, missingLakeId());
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(2);
+    expect(found.map(c => c.id)).toEqual([first.id, second.id]);
+    expect(await orgGitHubLakeConnectionRepository.findOrphaned(0)).toEqual([]);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - personal (org-less) rows', () => {
+  const repo = orgGitHubLakeConnectionRepository;
+  const personalBase = { ...base, organizationId: undefined };
+  const createPersonal = async () => (await OrgGitHubLakeConnection.create(personalBase)).id as string;
+
+  it('persists a row with no organizationId', async () => {
+    const id = await createPersonal();
+    const found = await OrgGitHubLakeConnection.findById(id).lean();
+    expect(found?.organizationId).toBeFalsy();
+  });
+
+  it('release matches only the connecting user, not another user or an org owner', async () => {
+    const id = await createPersonal();
+    expect(await repo.release(id, USER_2)).toBe(false);
+    expect(await repo.release(id, ORG_1)).toBe(false);
+    expect(await repo.release(id, USER_1)).toBe(true);
+    expect(await OrgGitHubLakeConnection.findById(id)).toBeNull();
+  });
+
+  it('release does not match an org row for the same user as a personal owner', async () => {
+    const created = await OrgGitHubLakeConnection.create(base);
+    expect(await repo.release(created.id, USER_1)).toBe(false);
+  });
+
+  it('markDisconnecting stamps for the connecting user and refuses a different owner', async () => {
+    const id = await createPersonal();
+    expect(await repo.markDisconnecting(id, USER_2)).toBeNull();
+    expect(await repo.markDisconnecting(id, ORG_1)).toBeNull();
+    const marked = await repo.markDisconnecting(id, USER_1);
+    expect(marked).toMatchObject({ created: true, previousEnabled: true });
+  });
+
+  it('disableIfNoLiveSyncClaim and cancelDisconnect honour the personal owner', async () => {
+    const id = await createPersonal();
+    expect(await repo.disableIfNoLiveSyncClaim(id, USER_2)).toBeNull();
+    expect(await repo.disableIfNoLiveSyncClaim(id, USER_1)).toEqual({ wasEnabled: true });
+    const marked = await repo.markDisconnecting(id, USER_1);
+    expect(await repo.cancelDisconnect(id, USER_2, marked!.stamp, true)).toBe(false);
+    expect(await repo.cancelDisconnect(id, USER_1, marked!.stamp, true)).toBe(true);
   });
 });

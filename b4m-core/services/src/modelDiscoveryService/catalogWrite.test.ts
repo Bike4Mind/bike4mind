@@ -365,7 +365,7 @@ describe('planCatalogWrites', () => {
     );
     const result = plan({
       base,
-      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: {} }] }],
+      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [gpt6()] }],
     });
 
     // The aggregators keep retired ids forever; treating one as evidence the
@@ -442,25 +442,21 @@ describe('planCatalogWrites', () => {
   });
 
   describe('a model the catalog holds as sunset', () => {
-    const deprecated = asBase(
-      [],
-      [
-        seedRow(
-          {
-            id: 'gpt-6',
-            vendor: 'openai',
-            backend: 'openai',
-            type: 'text',
-            name: 'GPT-6',
-            contextWindow: 400_000,
-            lifecycle: { status: 'deprecated', deprecationDate: '2026-06-01' },
-          },
-          ['identity', 'limits', 'lifecycle']
-        ),
-      ]
+    const deprecatedSeed = seedRow(
+      {
+        id: 'gpt-6',
+        vendor: 'openai',
+        backend: 'openai',
+        type: 'text',
+        name: 'GPT-6',
+        contextWindow: 400_000,
+        lifecycle: { status: 'deprecated', deprecationDate: '2026-06-01' },
+      },
+      ['identity', 'limits', 'lifecycle']
     );
+    const deprecated = asBase([], [deprecatedSeed]);
 
-    it('records an announced date without letting it reactivate the model', () => {
+    it('records an earlier announced date without letting it reactivate the model', () => {
       // litellm's shape for a future deprecation_date: a date and no status.
       const result = plan({
         base: deprecated,
@@ -468,14 +464,164 @@ describe('planCatalogWrites', () => {
           {
             name: 'litellm',
             kind: 'aggregator',
-            records: [{ modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: '2026-11-30' } } }],
+            records: [{ modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: '2026-05-01' } } }],
           },
           { name: 'openai', kind: 'provider', records: [gpt6()] },
         ],
       });
 
       expect(result.rows).toHaveLength(1);
-      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'deprecated', deprecationDate: '2026-11-30' });
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'deprecated', deprecationDate: '2026-05-01' });
+    });
+
+    type Lifecycle = NonNullable<DiscoveredModel['patch']['lifecycle']>;
+
+    const sunsetSeed = (lifecycle: Lifecycle) =>
+      seedRow({ ...deprecatedSeed.patch, lifecycle }, ['identity', 'limits', 'lifecycle']);
+
+    /** What a feed's claim would look like if it were persisted unclamped. */
+    const discoveryRow = (lifecycle: Lifecycle): IModelCatalogRow =>
+      ({
+        ...seedRow({ id: 'gpt-6', lifecycle }, ['lifecycle']),
+        source: 'discovery',
+        effectiveFrom: RUN_AT,
+      }) as IModelCatalogRow;
+
+    const typed = (lifecycle: Lifecycle): CatalogWriteInput['contributions'] => [
+      { name: 'openai', kind: 'provider', records: [{ ...gpt6({ lifecycle }), lifecycleEvidence: 'typed' }] },
+    ];
+
+    const announced = (lifecycle: Partial<Lifecycle>): CatalogWriteInput['contributions'] => [
+      { name: 'litellm', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { lifecycle } }] },
+    ];
+
+    const lifecycleOf = (base: ReturnType<typeof asBase>) => base.get('gpt-6')?.record.lifecycle;
+
+    /** Plan, persist the rows, read them back, and plan again against that view: a stable plan has nothing to add. */
+    const settle = (existing: IModelCatalogRow[], contributions: CatalogWriteInput['contributions']) => {
+      const first = plan({ base: asBase([], existing), contributions });
+      const resolved = asBase(first.rows, existing);
+      const second = plan({ base: resolved, contributions });
+      return { first, resolved, second };
+    };
+
+    const lifecycleDrops = (dropped: ReturnType<typeof plan>['dropped']) =>
+      dropped.filter(drop => drop.reason.startsWith('lifecycle'));
+
+    const dateDrop = (key: string, later: string, held: string) =>
+      `lifecycle ${key} "${later}" is later than the "${held}" in force; kept "${held}"`;
+    const statusDrop = (verb: string, claimed: string, held: string) =>
+      `lifecycle status "${claimed}" would ${verb} a model the catalog holds as "${held}"; kept "${held}"`;
+
+    it.each([
+      {
+        name: 'clamps a later announced date to the one in force',
+        held: { status: 'deprecated', deprecationDate: '2026-06-01' },
+        contributions: announced({ deprecationDate: '2026-11-30' }),
+        source: 'litellm',
+        appended: [],
+        reasons: [dateDrop('deprecationDate', '2026-11-30', '2026-06-01')],
+        resolved: { status: 'deprecated', deprecationDate: '2026-06-01' },
+      },
+      {
+        name: 'clamps a later retirementDate the same way',
+        held: { status: 'deprecated', retirementDate: '2026-08-01' },
+        contributions: announced({ retirementDate: '2026-09-01' }),
+        source: 'litellm',
+        appended: [],
+        reasons: [dateDrop('retirementDate', '2026-09-01', '2026-08-01')],
+        resolved: { status: 'deprecated', retirementDate: '2026-08-01' },
+      },
+      {
+        name: 'reports one drop per date when both dates are later',
+        held: { status: 'deprecated', deprecationDate: '2026-06-01', retirementDate: '2026-08-01' },
+        contributions: typed({ status: 'deprecated', deprecationDate: '2026-07-01', retirementDate: '2026-09-01' }),
+        source: 'openai',
+        appended: [],
+        reasons: [
+          dateDrop('deprecationDate', '2026-07-01', '2026-06-01'),
+          dateDrop('retirementDate', '2026-09-01', '2026-08-01'),
+        ],
+        resolved: { status: 'deprecated', deprecationDate: '2026-06-01', retirementDate: '2026-08-01' },
+      },
+      {
+        name: 'does not report an equal date',
+        held: { status: 'deprecated', deprecationDate: '2026-06-01' },
+        contributions: announced({ deprecationDate: '2026-06-01' }),
+        source: 'litellm',
+        appended: [],
+        reasons: [],
+        resolved: { status: 'deprecated', deprecationDate: '2026-06-01' },
+      },
+      {
+        name: 'keeps the held status but takes an earlier date from an active claim, with one status drop',
+        held: { status: 'deprecated', deprecationDate: '2026-06-01' },
+        contributions: typed({ status: 'active', deprecationDate: '2026-05-01' }),
+        source: 'openai',
+        appended: [{ status: 'deprecated', deprecationDate: '2026-05-01' }],
+        reasons: [statusDrop('resurrect', 'active', 'deprecated')],
+        resolved: { status: 'deprecated', deprecationDate: '2026-05-01' },
+      },
+      {
+        name: 'keeps a held retired status over a typed deprecated claim',
+        held: { status: 'retired', retirementDate: '2026-06-01' },
+        contributions: typed({ status: 'deprecated' }),
+        source: 'openai',
+        appended: [],
+        reasons: [statusDrop('step back', 'deprecated', 'retired')],
+        resolved: { status: 'retired', retirementDate: '2026-06-01' },
+      },
+      {
+        name: 'steps back from deprecated to legacy no more than from retired to deprecated',
+        held: { status: 'deprecated', deprecationDate: '2026-06-01' },
+        contributions: typed({ status: 'legacy' }),
+        source: 'openai',
+        appended: [],
+        reasons: [statusDrop('step back', 'legacy', 'deprecated')],
+        resolved: { status: 'deprecated', deprecationDate: '2026-06-01' },
+      },
+      {
+        name: 'does not let an unranked status claim displace a held ranked status',
+        held: { status: 'active' },
+        contributions: typed({ status: 'unlisted' }),
+        source: 'openai',
+        appended: [],
+        reasons: [statusDrop('step back', 'unlisted', 'active')],
+        resolved: { status: 'active' },
+      },
+      {
+        name: 'lets a ranked claim replace a held unranked status',
+        held: { status: 'unlisted' },
+        contributions: typed({ status: 'active' }),
+        source: 'openai',
+        appended: [{ status: 'active' }],
+        reasons: [],
+        resolved: { status: 'active' },
+      },
+    ])('$name, and settles', ({ held, contributions, source, appended, reasons, resolved }) => {
+      const result = settle([sunsetSeed(held)], contributions);
+
+      expect(result.first.rows.map(row => row.patch.lifecycle)).toEqual(appended);
+      const drops = lifecycleDrops(result.first.dropped);
+      expect(drops.map(drop => drop.reason)).toEqual(reasons);
+      expect(drops.every(drop => drop.source === source && drop.modelId === 'gpt-6')).toBe(true);
+      expect(lifecycleOf(result.resolved)).toEqual(resolved);
+      expect(result.second.rows).toEqual([]);
+    });
+
+    it('is what the read side holds anyway: an unclamped later date resolves back to the date in force', () => {
+      // Without the clamp this row would be appended, ignored on read, and appended again on the next run.
+      const unclamped = asBase(
+        [],
+        [deprecatedSeed, discoveryRow({ status: 'deprecated', deprecationDate: '2026-11-30' })]
+      );
+      expect(lifecycleOf(unclamped)).toEqual({ status: 'deprecated', deprecationDate: '2026-06-01' });
+    });
+
+    it('is what the read side holds anyway: an unclamped step back resolves to the furthest status', () => {
+      const retiredSeed = sunsetSeed({ status: 'retired', retirementDate: '2026-06-01' });
+      const unclamped = asBase([], [retiredSeed, discoveryRow({ status: 'deprecated' })]);
+      expect(lifecycleOf(unclamped)).toEqual({ status: 'retired', retirementDate: '2026-06-01' });
     });
 
     it('refuses a typed active claim from a provider and reports the disagreement', () => {
@@ -514,6 +660,181 @@ describe('planCatalogWrites', () => {
       });
 
       expect(result.rows[0].patch.lifecycle).toEqual({ status: 'retired', deprecationDate: '2026-06-01' });
+    });
+  });
+
+  describe('a future deprecation date the model provider does not report', () => {
+    const FUTURE = '2026-10-15';
+    const GROUPS = ['identity', 'limits', 'lifecycle'];
+    const held = (lifecycle: Record<string, unknown>, source: 'discovery' | 'seed' = 'discovery') =>
+      asBase(
+        [],
+        [
+          {
+            ...seedRow(
+              {
+                id: 'gpt-6',
+                vendor: 'openai',
+                backend: 'openai',
+                type: 'text',
+                name: 'GPT-6',
+                contextWindow: 400_000,
+                lifecycle,
+              },
+              GROUPS
+            ),
+            source,
+          } as IModelCatalogRow,
+        ]
+      );
+    const priorDiscoveryGroups = new Map([['gpt-6', GROUPS as never]]);
+    const providerUndated = new Map([['gpt-6', 'openai']]);
+    const litellmDate = {
+      name: 'litellm',
+      kind: 'aggregator' as const,
+      records: [
+        { modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: FUTURE } }, lifecycleEvidence: 'typed' as const },
+      ],
+    };
+
+    it('clears a held future date when the provider reports the model active with no date', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+      expect(result.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      expect(result.dropped).toContainEqual({
+        source: 'litellm',
+        modelId: 'gpt-6',
+        reason: `held deprecationDate ${FUTURE} cleared: openai reports the model "active" with no deprecation date`,
+      });
+
+      // The next run, with the aggregator still repeating the date, appends nothing.
+      const next = plan({
+        base: asBase(result.rows),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+      expect(next.rows).toEqual([]);
+      expect(next.dropped).toContainEqual({
+        source: 'litellm',
+        modelId: 'gpt-6',
+        reason: `deprecationDate ${FUTURE} refused: openai reports the model "active" with no deprecation date`,
+      });
+    });
+
+    it('keeps the date when only an aggregator speaks to the lifecycle', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6()] },
+          {
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('keeps a date that has already passed', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+        runStartedAt: new Date(`${FUTURE}T00:30:00Z`),
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('keeps a future date a provider itself supplies, whatever another provider reports', () => {
+      const result = plan({
+        base: held({ status: 'active' }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6()] },
+          {
+            name: 'bedrock',
+            kind: 'provider',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+      expect(result.dropped).toEqual([]);
+    });
+
+    it('keeps a held date that has passed when an aggregator reports a later one', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: '2026-07-01' }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+
+      // Dates only move earlier below operator: a later date would un-hide the model.
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toContainEqual(
+        expect.objectContaining({
+          modelId: 'gpt-6',
+          reason: `lifecycle deprecationDate "${FUTURE}" is later than the "2026-07-01" in force; kept "2026-07-01"`,
+        })
+      );
+    });
+
+    it('keeps the date of a model held in a sunset status', () => {
+      const result = plan({
+        base: held({ status: 'deprecated', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('leaves a date a seed row holds alone', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }, 'seed'),
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('changes nothing when the provider and the catalog already agree', () => {
+      const result = plan({
+        base: held({ status: 'active' }),
+        priorDiscoveryGroups,
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toEqual([]);
     });
   });
 
@@ -928,6 +1249,84 @@ describe('planCatalogWrites', () => {
 
     expect(agreeing.diff[0].promoted).toBe(true);
     expect(alone.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(alone.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
+  });
+
+  it('says the build holds a price for a per-image literal no trusted source quotes', () => {
+    // Text literals arrive as a trusted price; the per-image and per-minute ones do not, which is
+    // the only way a build-priced model is still blocked on price.
+    const image = gpt6({ id: 'gpt-image-1', name: 'GPT Image 1' });
+    const contributions = [
+      { name: 'openai', kind: 'provider' as const, records: [{ ...image, modelId: 'gpt-image-1' }] },
+    ];
+
+    const priced = plan({
+      resolveDispatch: dispatchable,
+      contributions,
+      buildPricedModelIds: new Set(['gpt-image-1']),
+    });
+    const unpriced = plan({ resolveDispatch: dispatchable, contributions, buildPricedModelIds: new Set(['other']) });
+
+    expect(priced.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(priced.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+    });
+    expect(unpriced.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+  });
+
+  describe('uncorroborated wording across runs', () => {
+    const lone = {
+      name: 'models.dev',
+      kind: 'aggregator' as const,
+      records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+    };
+    const provider = { name: 'openai', kind: 'provider' as const, records: [gpt6()] };
+
+    const afterLoneQuote = () => plan({ resolveDispatch: dispatchable, contributions: [provider, lone] });
+
+    it('keeps the wording in force when no aggregator ran, so the wording alone appends nothing', () => {
+      const first = afterLoneQuote();
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+      });
+
+      const second = plan({ resolveDispatch: dispatchable, contributions: [provider], base: asBase(first.rows) });
+
+      expect(second.rows).toEqual([]);
+    });
+
+    it('replaces the wording when the denial is no longer a price one, even with no aggregator running', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider],
+        base: asBase(afterLoneQuote().rows),
+        policy: 'manual',
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting admin approval' });
+    });
+
+    it('drops the wording once an aggregator listing the model ran and still quoted nothing', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { ...lone, records: [gpt6()] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+    });
+
+    it('keeps the wording when an aggregator that does not list the model ran', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { name: 'litellm', kind: 'aggregator' as const, records: [] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows).toEqual([]);
+    });
   });
 
   // A text row whose output reserve eats its whole context window makes safeInputWindow
@@ -1127,6 +1526,9 @@ describe('planCatalogWrites', () => {
     });
 
     expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(result.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
   });
 
   describe('introducing a model no source describes fully', () => {

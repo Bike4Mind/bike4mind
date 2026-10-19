@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import {
   safeHostname,
@@ -715,6 +716,17 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(calls(fetchStub, isSearxng)).toBe(1);
   });
 
+  it('hedges when performWebSearch is called without resolved providers', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }], searxng: searxngHit });
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    expect(result.formattedResults).toContain('searx.example');
+    expect(result.citables.some(c => c.url === 'https://searx.example')).toBe(true);
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
   it('backs an explicit SearXNG lead up with SerpAPI', async () => {
     configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
@@ -792,6 +804,84 @@ describe('webSearchTool - hedged backup and cache', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(String(await pending)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
+  });
+
+  // Error-level logs page the production alert channel, so only a failure the caller cannot recover
+  // from may raise one; a provider attempt the hedge recovers logs at warn.
+  describe('alert-level logging', () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    const errorMessages = () => errorSpy.mock.calls.map(([message]) => String(message));
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+      warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('logs no error when the backup recovers a failed SerpAPI lead', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: searxngHit });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('searx.example');
+      expect(warnSpy).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs one error naming the provider that failed while the other answered empty', async () => {
+      configure('searxng');
+      stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider failed while the other answered empty'),
+        expect.objectContaining({ provider: 'serpapi' })
+      );
+    });
+
+    it('logs one error naming the failed SerpAPI lead when the SearXNG backup answers empty', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider failed while the other answered empty'),
+        expect.objectContaining({ provider: 'serpapi' })
+      );
+    });
+
+    it('logs no error when both providers answer empty', async () => {
+      configure('searxng');
+      stubProviders({
+        searxng: { status: 200, body: { results: [] } },
+        serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+      });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs the final failure at error once when both providers fail', async () => {
+      configure('searxng');
+      stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }] });
+
+      await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('Web search failed on both providers');
+      expect(errorMessages()).toEqual([expect.stringContaining('Error during search')]);
+    });
+
+    it('keeps a non-retryable SerpAPI failure at error even with a backup to recover it', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 401 }], searxng: searxngHit });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('searx.example');
+      expect(errorMessages()).toEqual([expect.stringContaining('API error details')]);
+    });
   });
 
   it('keeps SearXNG fail-soft when there is no backup to try', async () => {

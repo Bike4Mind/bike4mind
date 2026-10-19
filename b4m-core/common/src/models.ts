@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
  * Model backends
@@ -219,9 +221,15 @@ export enum ChatModels {
   CLAUDE_4_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-5-20251101-v1:0',
   CLAUDE_4_6_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-4-6',
   CLAUDE_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5',
+  CLAUDE_5_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5-5',
   CLAUDE_4_6_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-6-v1',
   CLAUDE_4_7_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-7',
   CLAUDE_4_8_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-8',
+  CLAUDE_FABLE_5_BEDROCK = 'global.anthropic.claude-fable-5',
+  CLAUDE_FABLE_5_1_BEDROCK = 'global.anthropic.claude-fable-5-1',
+  CLAUDE_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5',
+  CLAUDE_5_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5-5',
+  CLAUDE_5_5_HAIKU_BEDROCK = 'global.anthropic.claude-haiku-5-5',
 
   // Anthropic hosted Anthropic models
   CLAUDE_3_OPUS = 'claude-3-opus-20240229',
@@ -242,6 +250,7 @@ export enum ChatModels {
   CLAUDE_FABLE_5 = 'claude-fable-5',
   CLAUDE_5_OPUS = 'claude-opus-5',
   CLAUDE_5_5_OPUS = 'claude-opus-5-5',
+  CLAUDE_5_5_HAIKU = 'claude-haiku-5-5',
 
   JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
   JURASSIC2_MID = 'ai21.j2-mid-v1',
@@ -326,9 +335,18 @@ export const CHAT_MODELS: string[] = [...supportedChatModels.options];
  */
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
+const CLAUDE_ID_PREFIX = new RegExp(`^${BEDROCK_ANTHROPIC_PREFIX}claude-`);
+
+/** Claude ids, direct (`claude-...`) or on Bedrock (`anthropic.claude-...`, optionally region-prefixed). */
+export const isClaudeModelId = (model: string): boolean => CLAUDE_ID_PREFIX.test(model);
+
 /**
- * Models that support the reasoning_effort parameter.
+ * Models that support OpenAI's `reasoning_effort` request parameter.
  * o1-preview and o1-mini do NOT support reasoning_effort.
+ *
+ * OpenAI only. Anthropic's effort control is a different wire field on a different
+ * API - see `ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS` below, which explains why a Claude
+ * id added here would silently contradict `NO_TEMPERATURE_MODELS`.
  */
 export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.O1,
@@ -347,6 +365,48 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
   ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * Claude models that accept Anthropic's `output_config: { effort }` control, whose
+ * levels are 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
+ *
+ * NOT `REASONING_SUPPORTED_MODELS` above, and the two must never be merged. That set
+ * is OpenAI's `reasoning_effort` REQUEST PARAMETER: a different wire field, on a
+ * different API, with a different vocabulary ('none'/'minimal' exist there and have
+ * no Anthropic meaning; 'max' exists here and is not an OpenAI level). Confusing the
+ * two is what left Claude effort unwired in the first place.
+ *
+ * Adding a Claude id to `REASONING_SUPPORTED_MODELS` instead of here would be actively
+ * wrong, not merely imprecise: `FIXED_TEMPERATURE_MODELS` is built by spreading that
+ * set, so the id would be marked temperature=1 while also sitting in
+ * `NO_TEMPERATURE_MODELS`, which is the stronger and correct claim for these models -
+ * they reject temperature outright with a 400. It would also break the documented
+ * invariant on `REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS` and change what the
+ * gates in `openaiBackend.ts` and `thinkingParams.ts` decide. The two sets are
+ * disjoint by design; `models.effortSets.test.ts` pins that.
+ *
+ * Membership is exactly the adaptive-thinking surface (`thinkingStyle: 'adaptive'`),
+ * which is also what the Claude half of `NO_TEMPERATURE_MODELS` lists - effort and the
+ * absent sampling knobs are two halves of the same API surface.
+ */
+export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_4_7_OPUS,
+  ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+  ChatModels.CLAUDE_4_8_OPUS,
+  ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_SONNET,
+  ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
 ]);
 
 /**
@@ -440,6 +500,10 @@ export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
  *  - chat-latest variants that enforce this constraint
  *  - GPT-5.5, which rejects custom temperature even though it does not expose
  *    reasoning controls
+ *
+ * Derived from `REASONING_SUPPORTED_MODELS`, which is why that set is OpenAI-only:
+ * temperature=1 is the wrong claim for a Claude model, which rejects the parameter
+ * outright (`NO_TEMPERATURE_MODELS`).
  */
 export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ...Array.from(REASONING_SUPPORTED_MODELS),
@@ -453,16 +517,25 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5/5.5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5+, Fable 5+, and Opus 5+ remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  // Haiku 5.5 (probed on Bedrock): temperature 0.2 and top_k return 400 ("deprecated"), temperature and top_p
+  // cannot be sent together; omitting all three returns 200
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code
@@ -486,6 +559,26 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
+// Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
+// and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
+// Deliberately a permissive deny-list, not claudeFamilyVersion: an unreviewed spelling of these models (a patch
+// version, a vendor prefix) must still read as unsupported. Keep in sync with TOOL_CHANGES_VERSIONS in
+// claudeToolCapabilities.ts when a new 5.x ships.
+const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
+
+/**
+ * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
+ * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
+ * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
+ * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
+ * deliberately absent: it accepts forced `any`/`tool` (raw Bedrock API probe, adaptive thinking on;
+ * native API: forced `tool` observed via json_schema, forced `any` not probed) and its response
+ * just carries no thinking block.
+ */
+export function supportsForcedToolChoice(modelId: string): boolean {
+  return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
+}
+
 /**
  * Models whose safety classifiers can decline a request with `stop_reason: 'refusal'`
  * (HTTP 200, empty or partial content) - Claude Fable 5's GA classifiers target research
@@ -494,9 +587,14 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
  * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
  * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
+ * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
+ * `adminSettings/fallback.ts`.
  */
-export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
+export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+]);
 
 /**
  * Bedrock-hosted Claude models that do NOT support prompt caching (`cache_control`).
@@ -530,33 +628,6 @@ export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
 export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 
 /**
- * Video Models
- */
-export enum VideoModels {
-  SORA_2 = 'sora-2',
-  SORA_2_PRO = 'sora-2-pro',
-}
-
-export const VIDEO_MODELS = Object.values(VideoModels);
-export const supportedVideoModels = z.enum(VideoModels);
-export type VideoModelName = z.infer<typeof supportedVideoModels>;
-
-/**
- * Video size constraints and options for Sora
- */
-export const VIDEO_SIZE_CONSTRAINTS = {
-  SORA: {
-    durations: [4, 8, 12] as const,
-    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
-    defaultDuration: 4,
-    defaultSize: '720x1280' as const,
-  },
-} as const;
-
-export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
-export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
-
-/**
  * All supported models
  */
 // Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
@@ -565,7 +636,6 @@ export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
   ...SpeechToTextModels,
-  ...VideoModels,
 });
 
 export type ModelName = z.infer<typeof supportedModels>;
@@ -687,6 +757,11 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * Size rules and supported params of an image model. Attached by GET /api/models (see
+   * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
+   */
+  image?: ImageModelCapabilities;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults
@@ -703,6 +778,81 @@ type PricingInfo = {
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
+/** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
+export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+  const thresholds = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const threshold of thresholds) {
+    if (tokens <= threshold) return threshold;
+  }
+  return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+};
+
+/**
+ * One provider request's usage, in the same disjoint convention as CompletionInfo's aggregates:
+ * `inputTokens` excludes cache reads and writes. Providers pick a long-context tier per request on
+ * that request's whole prompt, so a multi-request completion (tool round-trips) has to be priced
+ * turn by turn - see getTurnsCost. Mirrored on CompletionInfo.turnUsage in @bike4mind/llm-adapters.
+ */
+export type TurnUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+};
+
+// $0 for real usage on a model not marked freeToRun means a missing or
+// zero-rate pricing map: the call settles free (stochastic rounding has no
+// 1-credit floor) and the published cost-plus markup is silently false.
+// Alarm-only: billing behavior is unchanged.
+const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number => {
+  if (cost === 0 && usage > 0 && !model.freeToRun) {
+    console.error(
+      `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
+    );
+  }
+  return cost;
+};
+
+/**
+ * Backends whose adapters forward cache reads only for a model whose priced record publishes
+ * cache_read on every tier (publishesCacheReadRate in pricing.ts), since the 0.1x default is
+ * Anthropic's discount, not theirs. A tier without cache_read on one of these backends bills
+ * forwarded reads at its input rate (costAtTier). The gates in geminiBackend.ts and xaiBackend.ts
+ * (@bike4mind/llm-adapters) apply publishesCacheReadRate to the same priced record settlement uses.
+ * @internal Exported for pricing.ts and cliCompletions.ts; not a stable public API.
+ */
+export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
+
+const costAtTier = (
+  model: ModelInfo,
+  tierBasisTokens: number,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheCreationTokens: number
+): number => {
+  const tier = pricingTierForTokens(model, tierBasisTokens);
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (!tierPricing) return 0;
+
+  const cacheReadRate =
+    tierPricing.cache_read ??
+    (PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) ? tierPricing.input : tierPricing.input * CACHE_READ_MULTIPLIER);
+  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
+
+  return (
+    tierPricing.input * inputTokens +
+    tierPricing.output * outputTokens +
+    cacheReadRate * cacheReadTokens +
+    cacheWriteRate * cacheCreationTokens
+  );
+};
+
 /**
  * Compute USD cost for a text model call.
  *
@@ -712,57 +862,48 @@ export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
  * we apply 0.1x input rate to reads and 1.25x input rate to writes. Models can
  * publish explicit `cache_read` / `cache_write` rates in their pricing tier to
  * override the multipliers.
+ *
+ * The pricing tier is picked on `tierBasisTokens` (default: `inputTokens`). For usage
+ * that spans several provider requests, prefer getTurnsCost.
  */
 export const getTextModelCost = (
   model: ModelInfo,
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number = 0,
-  cacheCreationTokens: number = 0
-): number => {
-  // $0 for real usage on a model not marked freeToRun means a missing or
-  // zero-rate pricing map: the call settles free (stochastic rounding has no
-  // 1-credit floor) and the published cost-plus markup is silently false.
-  // Alarm-only: billing behavior is unchanged.
-  const alarmIfUnpriced = (cost: number): number => {
-    const usage = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
-    if (cost === 0 && usage > 0 && !model.freeToRun) {
-      console.error(
-        `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
-      );
-    }
-    return cost;
-  };
-
-  const thresholds: number[] = Object.keys(model.pricing)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  const tierForTokens = (tokens: number): number | null => {
-    for (const threshold of thresholds) {
-      if (tokens <= threshold) return threshold;
-    }
-    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
-  };
-
-  const tier = tierForTokens(inputTokens);
-  if (tier === null) return alarmIfUnpriced(0);
-
-  // Guard against a malformed or non-tiered pricing map (e.g. a flat
-  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
-  // means "no cost", not a crash in post-processing.
-  const tierPricing = model.pricing[tier];
-  if (!tierPricing) return alarmIfUnpriced(0);
-
-  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
-  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
-
-  return alarmIfUnpriced(
-    tierPricing.input * inputTokens +
-      tierPricing.output * outputTokens +
-      cacheReadRate * cacheReadTokens +
-      cacheWriteRate * cacheCreationTokens
+  cacheCreationTokens: number = 0,
+  tierBasisTokens: number = inputTokens
+): number =>
+  alarmIfUnpriced(
+    model,
+    costAtTier(model, tierBasisTokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens),
+    inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
   );
+
+/**
+ * USD cost of a completion priced request by request: each turn takes the tier for its own whole
+ * prompt (input + cache read + cache write), and that tier's rates apply to every token class in it.
+ * Callers fall back to getTextModelCost on aggregates when they have no turns.
+ */
+export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): number => {
+  let cost = 0;
+  let unpricedUsage = 0;
+  for (const turn of turns) {
+    const cacheRead = turn.cacheReadInputTokens ?? 0;
+    const cacheCreation = turn.cacheCreationInputTokens ?? 0;
+    const turnCost = costAtTier(
+      model,
+      turn.inputTokens + cacheRead + cacheCreation,
+      turn.inputTokens,
+      turn.outputTokens,
+      cacheRead,
+      cacheCreation
+    );
+    if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    cost += turnCost;
+  }
+  alarmIfUnpriced(model, 0, unpricedUsage);
+  return cost;
 };
 
 /**

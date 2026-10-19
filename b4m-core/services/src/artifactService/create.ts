@@ -44,6 +44,12 @@ const createArtifactSchema = z.object({
 
 type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
 
+/** Provenance refs recorded verbatim on a new artifact; each needs an access check before it is stored. */
+export type ArtifactSourceRefs = Pick<CreateArtifactParameters, 'sessionId' | 'sourceQuestId' | 'parentArtifactId'>;
+
+/** Throws unless the actor may reference the given session, source quest and parent artifact. */
+export type ArtifactSourceRefsGuard = (userId: string, refs: ArtifactSourceRefs) => Promise<void>;
+
 /**
  * Only `create` is used, so only `create` is asked for. Declaring the full repositories would make
  * a caller that legitimately has just the one method - the notebook import, which hands over three
@@ -51,6 +57,11 @@ type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
  * rest of.
  */
 interface CreateArtifactAdapters {
+  /**
+   * Supplied by the caller (which knows how to resolve the actor's access) and invoked here so the
+   * check applies to every create path, not only the HTTP route.
+   */
+  assertSourceRefsAccessible: ArtifactSourceRefsGuard;
   db: {
     artifacts: Pick<IArtifactRepository, 'create'>;
     artifactContents: Pick<IArtifactContentRepository, 'create'>;
@@ -90,6 +101,8 @@ export const create = async (
     permissions,
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
+
+  await adapters.assertSourceRefsAccessible(userId, { sessionId, sourceQuestId, parentArtifactId });
 
   // Use provided ID if available (for AI-generated artifacts), otherwise generate one. The type and
   // title are what make the minted id parseable by the client; see createArtifactId.

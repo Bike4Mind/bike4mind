@@ -6,7 +6,7 @@ import { lambdaVpc } from './vpc';
 // Database migration function (equivalent to SST v2 onUpdate)
 // This runs database migrations on every deployment when in CI mode
 const migrator = new sst.aws.Function('DatabaseMigrator', {
-  handler: 'apps/client/server/utils/manageDatabase.updateDatabase',
+  handler: 'apps/workers/src/database/manageDatabase.updateDatabase',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '512 MB',
@@ -25,7 +25,7 @@ const migrator = new sst.aws.Function('DatabaseMigrator', {
 
 // Database seeder function for preview environments
 const seeder = new sst.aws.Function('DatabaseSeeder', {
-  handler: 'apps/client/server/utils/seedDatabase.handler',
+  handler: 'apps/workers/src/database/seedDatabase.handler',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '512 MB',
@@ -52,7 +52,7 @@ const seeder = new sst.aws.Function('DatabaseSeeder', {
 // Only deployed for preview stages - not needed for dev or production
 const cleaner = isPreviewStage
   ? new sst.aws.Function('DatabaseCleaner', {
-      handler: 'apps/client/server/utils/dropPreviewDatabase.handler',
+      handler: 'apps/workers/src/database/dropPreviewDatabase.handler',
       runtime: 'nodejs24.x',
       timeout: '2 minutes',
       memory: '512 MB',

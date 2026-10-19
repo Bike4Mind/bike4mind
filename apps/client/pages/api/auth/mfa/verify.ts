@@ -2,10 +2,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { grantTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
-import { logAuthAudit } from '@server/utils/authAudit';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { completeMfaLogin } from '@server/auth/completeMfaLogin';
+import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
 const tokenBodySchema = z.object({
@@ -14,6 +13,13 @@ const tokenBodySchema = z.object({
     .trim()
     .regex(/^[A-Z0-9]{6,10}$/i, 'Invalid token format.'),
   rememberDevice: z.boolean().optional(),
+});
+
+const verifyResponseSchema = z.object({
+  verified: z.literal(true),
+  deviceRemembered: z.boolean(),
+  accessToken: z.string(),
+  user: selfUserResponseSchema,
 });
 
 const handler = baseApi() // Now requires authentication
@@ -43,6 +49,7 @@ const handler = baseApi() // Now requires authentication
         });
       }
 
+      let loginBody: unknown;
       try {
         if (!freshUser.mfa || !freshUser.mfa.totpEnabled) {
           return res.status(400).json({ error: 'MFA is not enabled for this user.' });
@@ -53,50 +60,17 @@ const handler = baseApi() // Now requires authentication
         // `result.user`) would wipe the select:false totpSecret/backupCodes.
         const result = await mfaService.verifyMFA({ user: freshUser, token: cleanToken }, userRepository);
 
-        // Generate FULL access tokens (remove mfaPending) for login completion
-        const tokenUserId = result.user.id;
-        // No mfaPending: MFA is satisfied, so mint a full session.
-        const { accessToken } = await issueBrowserSession(req, res, tokenUserId, {
-          createdVia: 'mfa',
-          tokenVersion: result.user.tokenVersion ?? 0,
-        });
-        const tokens = { accessToken };
+        const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
 
-        // "Remember this device": grant only on a genuine second-factor pass, so the trust
-        // can never be established by anything weaker than the challenge it later skips.
-        // Best-effort - the login already succeeded, so a failed grant must not 500 it; the
-        // user simply gets challenged again next time.
-        let deviceRemembered = false;
-        if (rememberDevice) {
-          try {
-            if (await trustedDevicesAllowed()) {
-              const device = await grantTrustedDevice(req, res, tokenUserId);
-              deviceRemembered = !!device;
-              if (device) {
-                await logAuthAudit(req, {
-                  userId: tokenUserId,
-                  event: 'trusted_device_granted',
-                  metadata: { deviceId: device.id, label: device.label, expiresAt: device.expiresAt.toISOString() },
-                });
-              }
-            }
-          } catch (err) {
-            req.logger?.error('Trusted-device grant failed after successful MFA verification', err);
-          }
-        }
-
-        res.json({
+        loginBody = {
           verified: true,
-          usedBackupCode: result.usedBackupCode,
           deviceRemembered,
-          ...tokens,
+          accessToken,
           user: redactUserSecretsForSelf(result.user),
-        });
+        };
       } catch (error: unknown) {
-        // Atomically increment the failed-attempt counter - concurrent requests each reading
-        // the same count and all writing count+1 would let an attacker batch many concurrent
-        // requests and defeat the 3-strike lockout. $inc + pipeline update is one atomic op.
-        const updatedUser = await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
+        // A code checked by mfaService was counted before it was compared; anything else is counted now.
+        const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
 
         if (updatedUser && mfaService.isUserLockedOut(updatedUser)) {
           const remainingMinutes = mfaService.getLockoutTimeRemaining(updatedUser);
@@ -107,14 +81,18 @@ const handler = baseApi() // Now requires authentication
           });
         }
 
-        const remainingAttempts = 3 - (updatedUser?.mfa?.failedAttempts ?? 0);
+        const remainingAttempts = mfaService.MAX_FAILED_ATTEMPTS - (updatedUser?.mfa?.failedAttempts ?? 0);
         const errMessage = error instanceof Error ? error.message : 'MFA verification failed';
-        res.status(400).json({
+        return res.status(400).json({
           error: errMessage,
           attemptsRemaining: remainingAttempts,
           failedAttempts: updatedUser?.mfa?.failedAttempts ?? 0,
         });
       }
+
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a
+      // failed MFA attempt by the catch above.
+      return respond(res, verifyResponseSchema, loginBody);
     })
   );
 

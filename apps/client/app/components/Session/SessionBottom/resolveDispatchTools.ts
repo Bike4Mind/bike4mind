@@ -18,9 +18,9 @@ export interface DispatchToolSelection {
  * Tool whitelist for an agent-executor dispatch, in precedence order:
  *
  * 1. A non-empty briefcase `toolsOverride` (already resolved into `effectiveTools`) wins, so an
- *    `@`-mention can't drop the tools the prompt pinned. The `length > 0` guard matches
+ *    dispatched agent's own whitelist can't drop the tools the prompt pinned. The `length > 0` guard matches
  *    `resolveTools` (empty is no override). PINNED.
- * 2. An `@`-mentioned agent's own non-empty whitelist. PINNED.
+ * 2. The dispatched agent's (@-mentioned or picker-attached) own non-empty whitelist. PINNED.
  * 3. Agentless: the user's Smart Tools, marked AMBIENT.
  *
  * Case 3 is the agentless dispatch - the auto-route, the Agent-mode composer toggle and the

@@ -15,9 +15,13 @@ import { UserProvider } from '@client/app/contexts/UserContext';
 import { ServerStatusProvider } from '@client/app/contexts/ServerStatusProvider';
 import DefaultMetaTags from '@client/app/components/DefaultMetaTags';
 import ConfirmationModal from '@client/app/components/ConfirmationModal';
+import StepUpModal from '@client/app/components/auth/StepUpModal';
 import WebsocketReactQueryInvalidateListener from '@client/app/components/WebsocketReactQueryInvalidateListener';
+import GenerationUpdatesListener from '@client/app/components/GenerationUpdatesListener';
+import CreditBalanceSyncListener from '@client/app/components/CreditBalanceSyncListener';
 import AgentExecutionSubscriber from '@client/app/components/AgentExecutionSubscriber';
 import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCheckoutSuccessHandler';
+import StripePaymentReturnHandler from '@client/app/components/stripe/StripePaymentReturnHandler';
 import { Toaster } from 'sonner';
 import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner';
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
@@ -187,7 +191,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
       {mounted && <CookieConsentBanner />}
       <TranslationProvider>
         <DefaultMetaTags />
-        <main>
+        <div>
           {/* WebsocketConfigProvider fetches WebSocket URL at runtime from serverConfig. */}
           {/* Kept outside UserProvider to preserve SSR compatibility — the security */}
           {/* improvement is at the API layer (serverConfig now requires auth). Pre-auth, */}
@@ -195,19 +199,23 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           {/* connection is never established until the user authenticates. */}
           <WebsocketConfigProvider>
             <WebsocketReactQueryInvalidateListener />
+            <GenerationUpdatesListener />
+            <CreditBalanceSyncListener />
             <AgentExecutionSubscriber />
             <Suspense fallback={null}>
               <StripeCheckoutSuccessHandler />
+              <StripePaymentReturnHandler />
             </Suspense>
             <UserProvider>
               <ServerStatusProvider>
                 <QuestPreparationOverlay />
                 <Box sx={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100dvh' }}>{children}</Box>
                 <ConfirmationModal />
+                <StepUpModal />
               </ServerStatusProvider>
             </UserProvider>
           </WebsocketConfigProvider>
-        </main>
+        </div>
       </TranslationProvider>
       {/* Lazy load DevTools only when explicitly enabled */}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && (

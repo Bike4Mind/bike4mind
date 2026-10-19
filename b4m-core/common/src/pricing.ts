@@ -1,3 +1,12 @@
+import {
+  CACHE_READ_MULTIPLIER,
+  ModelBackend,
+  PUBLISHED_CACHE_READ_BACKENDS,
+  pricingTierForTokens,
+  type ModelInfo,
+} from './models';
+import { stripBedrockRegionPrefix } from './modelCatalog';
+
 const DEFAULT_PRICE_MARGIN = 1.2;
 const DEFAULT_USD_TO_CREDITS_RATE = 0.0006;
 
@@ -214,3 +223,71 @@ export const reservationOutputTokens = (requestedMaxTokens: number, reasonsWithi
     requestedMaxTokens,
     reasonsWithinOutputBudget ? PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS : PREFLIGHT_RESERVATION_OUTPUT_TOKENS
   );
+
+const TOKENS_PER_MILLION = 1_000_000;
+
+/**
+ * Credits per 1M tokens for a USD-per-token rate: the exact amount usdToCreditsStochastic
+ * settles in expectation, unrounded (4 decimals only to drop float noise). For display and
+ * comparison, not for charging.
+ */
+export const usdPerTokenToCreditsPer1M = (usdPerToken: number, rate: number = CREDITS_PER_USD_COST): number =>
+  Math.round(usdPerToken * TOKENS_PER_MILLION * rate * 10_000) / 10_000;
+
+export interface TextModelCreditsPer1M {
+  input: number;
+  output: number;
+  /**
+   * Rate for cache-read input tokens, by the same default multiplier getTextModelCost applies.
+   * Null where settlement never sees a cache read (including a Gemini or xAI model with no published
+   * cache_read rate), so cached tokens bill at `input`.
+   */
+  cachedInput: number | null;
+}
+
+/**
+ * Backends whose adapters report cache reads apart from input (CompletionInfo.cacheReadInputTokens),
+ * the only way a cache read reaches getTextModelCost at its own rate. Bedrock's non-Claude families
+ * report none, so their cached tokens settle at the full input rate. Must stay in sync with the
+ * adapters in @bike4mind/llm-adapters that set cacheReadInputTokens.
+ */
+const CACHE_READ_SETTLING_BACKENDS: ReadonlySet<string> = new Set([
+  ModelBackend.Anthropic,
+  ModelBackend.OpenAI,
+  ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
+]);
+
+/** True when every pricing tier of `model` carries an explicit cache_read rate. */
+export const publishesCacheReadRate = (model: Pick<ModelInfo, 'pricing'> | undefined): boolean => {
+  const tiers = Object.values(model?.pricing ?? {});
+  return tiers.length > 0 && tiers.every(tier => tier?.cache_read !== undefined);
+};
+
+const settlesCacheReads = (model: ModelInfo): boolean =>
+  (CACHE_READ_SETTLING_BACKENDS.has(model.backend) &&
+    (!PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) || publishesCacheReadRate(model))) ||
+  (model.backend === ModelBackend.Bedrock && stripBedrockRegionPrefix(model.id).startsWith('anthropic.'));
+
+/**
+ * A text model's base-tier rates in credits per 1M tokens, priced exactly as getTextModelCost
+ * and the credit settlement charge them. Null for non-text models and for a text model with no
+ * usable price (missing or all-zero map), so "unpriced" never reads as "free"; a `freeToRun`
+ * model is genuinely free and reports zeros.
+ */
+export function getTextModelCreditsPer1M(model: ModelInfo): TextModelCreditsPer1M | null {
+  if (model.type !== 'text' || !model.pricing) return null;
+  const tier = pricingTierForTokens(model, 0);
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (!tierPricing || !Number.isFinite(tierPricing.input) || !Number.isFinite(tierPricing.output)) return null;
+  if (!model.freeToRun && tierPricing.input === 0 && tierPricing.output === 0) return null;
+  return {
+    input: usdPerTokenToCreditsPer1M(tierPricing.input),
+    output: usdPerTokenToCreditsPer1M(tierPricing.output),
+    cachedInput: settlesCacheReads(model)
+      ? usdPerTokenToCreditsPer1M(tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER)
+      : null,
+  };
+}

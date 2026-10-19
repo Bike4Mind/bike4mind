@@ -1,0 +1,72 @@
+{
+  "scenario": "failed.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built and stays synthetic: no live call reliably produces a provider-side failure. The error object is the standard long-running-operation Status (code, message).",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking."
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "16:9",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticfailed"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticfailed"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticfailed"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticfailed"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticfailed",
+          "done": true,
+          "error": {
+            "code": 13,
+            "message": "Internal error encountered."
+          }
+        }
+      }
+    }
+  ]
+}

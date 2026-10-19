@@ -57,6 +57,38 @@ describe('useStartChatWithLake (single lake)', () => {
     expect(closeManager).toHaveBeenCalledTimes(1);
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'session-1' }, replace: true });
   });
+
+  it('lets an embedding caller handle the created session without notebook navigation', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-embedded' } });
+    const onCreated = vi.fn();
+    const { result } = renderWithClient(() => useStartChatWithLake());
+
+    await act(async () => {
+      await result.current('lake-1', { onCreated });
+    });
+
+    expect(onCreated).toHaveBeenCalledWith({ id: 'session-embedded' });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-embedded' });
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects but still adopts the session when an embedding caller callback fails', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-callback-failed' } });
+    const onCreated = vi.fn().mockRejectedValue(new Error('embed failed'));
+    const { result } = renderWithClient(() => useStartChatWithLake());
+
+    await expect(
+      act(async () => {
+        await result.current('lake-1', { onCreated });
+      })
+    ).rejects.toThrow('embed failed');
+
+    expect(onCreated).toHaveBeenCalledWith({ id: 'session-callback-failed' });
+    expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-callback-failed' });
+    expect(closeManager).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useStartChatWithLakes (multi-lake subset)', () => {
@@ -72,9 +104,11 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'inline',
     });
     expect(setCurrentSession).toHaveBeenCalledWith({ id: 'session-2' });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'session-2' }, replace: true });
   });
 
   it('sends preauthorizedLakeIds when the caller may admit some of the checked lakes', async () => {
@@ -93,6 +127,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a', 'datalake:b'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'retrieve',
       preauthorizedLakeIds: ['lake-a'],
     });
@@ -113,6 +148,7 @@ describe('useStartChatWithLakes (multi-lake subset)', () => {
       name: 'New Notebook',
       retrievalTags: ['datalake:a'],
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       corpusGroundingMode: 'retrieve',
     });
   });

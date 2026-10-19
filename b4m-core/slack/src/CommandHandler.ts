@@ -2,7 +2,7 @@
  * Parses, validates, and processes agent commands from Slack messages.
  */
 
-import { SQSService, checkStorageLimitForFile } from '@bike4mind/utils';
+import { SQSService, checkStorageLimit } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { PERSONA_ALLOWED_SUBAGENTS } from '@bike4mind/agents';
 import { SYSTEM_MODEL_DEFAULTS } from './constants/system-model-defaults';
@@ -20,8 +20,8 @@ import {
   HTTPError,
   IUserDocument,
   BadRequestError,
+  isStorageLimitError,
   type IAdminSettingsRepository,
-  type IOrganizationDocument,
 } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
 
@@ -36,7 +36,7 @@ function capErrorReply(reply: string): string {
 }
 
 import { SlackClient } from './SlackClient';
-import { ChatCompletionInvoke } from '@bike4mind/services/llm';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { createLoadingBar } from './utils/loadingBar';
 
 /**
@@ -423,6 +423,8 @@ export class CommandHandler {
             : undefined,
         },
         userId: this.user.id,
+        // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+        authOrigin: 'internal',
       });
 
       if (!quest) return null;
@@ -521,22 +523,10 @@ export class CommandHandler {
     // Enforce the same MaxFileSize + storage limits fabFilesService.createFabFile applies on
     // the web upload path (#1685): this path writes the FabFile directly and never called that
     // service, so neither limit applied here before. Resolved once per message, not per
-    // attachment - neither the admin setting nor the org lookup below can change mid-call.
+    // attachment - the admin setting cannot change mid-call.
+    // These attachments are personal (no lake, so no organizationId stamp on the FabFile), so
+    // the uploader's own quota applies, not the selected org's.
     const { adminSettingsRepository, FabFile } = getSlackDb();
-    // Typed once here, at the DI boundary, instead of `any`-cast at each use below: dropping the
-    // `.exec()` on the memoized lookup then becomes a compile error rather than a runtime
-    // "Query was already executed" throw on an org-affiliated user's second attachment (the
-    // exact bug the round-2 fix caught). `.select(...)` narrows the round-trip to the one field
-    // checkStorageLimitForFile actually reads, instead of pulling the whole organization doc.
-    const { Organization } = getSlackDb() as unknown as {
-      Organization: {
-        findById(id: string): {
-          select(fields: string): {
-            lean(): { exec(): Promise<Pick<IOrganizationDocument, 'storageLimit'> | null> };
-          };
-        };
-      };
-    };
     const { storage } = getSlackDeps();
     // Resolved outside the per-file try/catch below, so a lookup failure here is caught on its
     // own (mirroring resolveModelConfig's DB-failure fallback above) instead of propagating out
@@ -556,26 +546,6 @@ export class CommandHandler {
         error: settingsError,
       });
     }
-    // Memoized rather than resolved eagerly: most messages carry no attachment that actually
-    // needs the storage check, so this only pays for the lookup the first time it is used.
-    // Deliberately NOT fail-open like the MaxFileSize lookup above: a rejected lookup stays
-    // memoized as the rejection, so every attachment in the message that needs it fails the
-    // same way. Unlike an absent MaxFileSize, there is no safe "no limit" fallback for a
-    // storage check we could not actually run.
-    let organizationLookup: Promise<Pick<IOrganizationDocument, 'storageLimit'> | null> | undefined;
-    const findOrganizationOnce = (id: string) => {
-      // `.exec()` is load-bearing: `.lean()` alone returns a thenable Mongoose Query, not a
-      // Promise - memoizing the Query itself and awaiting it more than once throws "Query was
-      // already executed" on the second await, which is exactly what happens for an
-      // org-affiliated user with 2+ attachments in one message (checkStorageLimitForFile awaits
-      // this once per accepted attachment). Typed on `Organization` above, so removing `.exec()`
-      // is now a compile error instead of a runtime throw.
-      organizationLookup ??= Organization.findById(id).select('storageLimit').lean().exec();
-      // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
-      // by this point. checkStorageLimitForFile only reads the selected field, so the lean
-      // projection satisfies it despite not being a full Mongoose document.
-      return organizationLookup as Promise<IOrganizationDocument | null>;
-    };
     // `this.user.currentStorageSize` is a snapshot taken once for this whole
     // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
     // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
@@ -637,24 +607,21 @@ export class CommandHandler {
           // Adding `acceptedBytesThisMessage` folds in every file already accepted earlier in
           // this same loop, so the check is against "quota used so far, including this
           // message" rather than the stale start-of-call snapshot alone.
-          await checkStorageLimitForFile(
-            this.user,
-            fileBuffer.length + acceptedBytesThisMessage,
-            this.user.organizationId ?? undefined,
-            findOrganizationOnce
-          );
+          await checkStorageLimit(this.user, fileBuffer.length + acceptedBytesThisMessage);
         } catch (limitError) {
-          // Only a `BadRequestError` (the three thrown by checkStorageLimitForFile/
-          // checkOrganizationStorageLimit in @bike4mind/utils) is safe to post verbatim to
-          // Slack. Anything else - notably whatever the memoized `Organization.findById(...)`
-          // lookup throws on a DB blip - is an internal error (can name a host/port) and must
-          // not be echoed into a customer channel.
+          // Only a `BadRequestError` (a `StorageLimitError` from checkStorageLimit in
+          // @bike4mind/utils) is safe to post to Slack. Anything else is an internal error
+          // (can name a host/port) and must not be echoed into a customer channel.
           if (!(limitError instanceof BadRequestError)) {
             this.logger.error('[Slack Files] Storage limit check failed', { error: limitError, fileName: file.name });
           }
-          const message =
-            limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit';
-          const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
+          // No byte counts: the reply is a normal thread message every channel member sees, and the
+          // refused size here is the running total for the message, not this file's, so the
+          // reply must not claim this file alone is over the limit.
+          const message = isStorageLimitError(limitError)
+            ? 'Not enough storage for this file.'
+            : `${limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit'}.`;
+          const error = `\u26a0\ufe0f ${message} Skipping "${file.name}".`;
           this.logger.warn(error);
           errors.push(error);
           continue;

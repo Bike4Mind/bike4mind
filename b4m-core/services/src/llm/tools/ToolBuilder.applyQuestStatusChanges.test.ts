@@ -8,6 +8,30 @@ function makeQuest(overrides: Partial<IChatHistoryItemDocument> = {}): IChatHist
 }
 
 describe('applyQuestStatusChanges', () => {
+  describe('generationJobs', () => {
+    const video = (id: string) => ({ id, kind: 'video' as const });
+    const music = (id: string) => ({ id, kind: 'music' as const });
+
+    it('keeps both jobs when two sequential updates each carry one job', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { generationJobs: [video('job-a')] }, 'user-1');
+      applyQuestStatusChanges(quest, { generationJobs: [music('job-b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([video('job-a'), music('job-b')]);
+    });
+
+    it('dedupes already-present jobs by id and keeps order', () => {
+      const quest = makeQuest({ generationJobs: [music('a')] });
+      applyQuestStatusChanges(quest, { generationJobs: [music('a'), video('b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([music('a'), video('b')]);
+    });
+
+    it('initializes the field when the quest has none', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { generationJobs: [music('b')] }, 'user-1');
+      expect(quest.generationJobs).toEqual([music('b')]);
+    });
+  });
+
   describe('images (multi-image-generation persistence bug)', () => {
     it('appends images across multiple calls instead of overwriting', () => {
       // Repro of the prod bug: 4 separate image_generation tool calls, each
@@ -47,6 +71,27 @@ describe('applyQuestStatusChanges', () => {
   });
 
   describe('promptMeta.citables', () => {
+    const stamped = (id: string, citationIndex: number) => ({
+      id,
+      url: `u-${id}`,
+      title: id,
+      metadata: { citationIndex },
+    });
+
+    it('strips forced-retrieval citation stamps when a tool merges duplicate-only citables', () => {
+      const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1), stamped('f2', 2)] } });
+      applyQuestStatusChanges(quest, { promptMeta: { citables: [{ id: 'f1', url: 'u-f1', title: 'f1' }] } }, 'user-1');
+      const citables = quest.promptMeta?.citables ?? [];
+      expect(citables.map(c => c.id)).toEqual(['f1', 'f2']);
+      expect(citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
+    });
+
+    it('keeps citation stamps when the merge carries no tool citables', () => {
+      const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1), stamped('f2', 2)] } });
+      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['w'] } }, 'user-1');
+      expect(quest.promptMeta?.citables?.map(c => c.metadata?.citationIndex)).toEqual([1, 2]);
+    });
+
     it('merges and dedupes citables by stable identity', () => {
       const quest = makeQuest({
         promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },

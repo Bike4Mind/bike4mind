@@ -1,7 +1,5 @@
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-} from '@client/lib/subscriptions/constants';
+import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema } from '@client/lib/subscriptions/schema';
 import { describe, expect, it } from 'vitest';
 
@@ -30,19 +28,18 @@ describe('OrgSubscriptionSubscribeSchema.quantity', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a seat count below the platform minimum', () => {
-    const result = OrgSubscriptionSubscribeSchema.safeParse({
-      ...baseRequest,
-      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS - 1,
-    });
+  // The paid-plan floor/ceiling are admin settings checked by the subscribe handler; the schema
+  // holds only the absolute rail.
+  it('rejects a zero seat count', () => {
+    const result = OrgSubscriptionSubscribeSchema.safeParse({ ...baseRequest, quantity: 0 });
 
     expect(result.success).toBe(false);
   });
 
-  it('rejects a seat count above the platform maximum', () => {
+  it('rejects a seat count above the hard rail', () => {
     const result = OrgSubscriptionSubscribeSchema.safeParse({
       ...baseRequest,
-      quantity: ORGANIZATION_SUBSCRIPTION_MAX_SEATS + 1,
+      quantity: TEAM_PLAN_SEATS_HARD_LIMIT + 1,
     });
 
     expect(result.success).toBe(false);

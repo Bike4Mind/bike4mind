@@ -7,6 +7,7 @@ import {
   AppFile,
   Artifact,
   ArtifactVersion,
+  Connection,
   FabFile,
   findModelByCollectionName,
   Inbox,
@@ -14,9 +15,9 @@ import {
   mongoose,
   Organization,
   Project,
-  QuerySubscription,
   Quest,
   QuestMasterPlan,
+  realtimeConnectionRepository,
   User,
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
@@ -25,13 +26,15 @@ import { Subscription } from '@server/models/Subscription';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import { closeConnection } from '@server/websocket/closeConnection';
+import { UnauthorizedError } from '@server/utils/errors';
 import crypto from 'crypto';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
-import { resolveFieldLimits } from './dataSubscribeFieldLimits';
+import { findWithheldFilterPaths, resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
 
@@ -52,9 +55,9 @@ function extractRawSubscriptionId(rawBody: unknown): string | undefined {
  * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
  * aborted - the two failure modes on this path that are content-dependent rather than auth- or
  * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
- * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
- * reaches the client as a frame; without this, the caller sees silence and the surface just
- * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * throws an UnauthorizedError/JsonWebTokenError/ForbiddenError, so withWebSocketContext's status
+ * code never reaches the client as a frame; without this, the caller sees silence and the surface
+ * just never updates. Deliberately not used for auth failures - those keep their existing behavior.
  * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
  */
 async function notifySubscribeError(
@@ -103,6 +106,18 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
+
+  // A subscriber must hang off a live Connection row of the same user: a revoke marks the row ended
+  // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing
+  // on the still-open socket. Close it so the client reconnects through $connect instead.
+  const connection = await Connection.findOne({ connectionId }, { userId: 1 }).lean();
+  if (!connection || connection.userId !== user.id) {
+    await closeConnection(connectionId, endpoint).catch(error =>
+      logger.warn(`[dataSubscribeRequest] Failed to close unregistered connection ${connectionId}`, error)
+    );
+    throw new UnauthorizedError('Connection is not registered to this user');
+  }
+
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
@@ -171,9 +186,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
+    inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
     isPlatformAdmin: !!user.isAdmin,
   });
+  const withheldFilterPaths = findWithheldFilterPaths(query, fieldLimits);
+  if (withheldFilterPaths.length) {
+    const error = new Error(`Disallowed subscription filter: ${withheldFilterPaths.join(', ')}`);
+    await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+    throw error;
+  }
 
   let scopedFields: undefined | Record<string, boolean | number> =
     (fields || fieldLimits) &&
@@ -224,7 +246,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     .find(scopedQuery, scopedFields ?? undefined)
     .setOptions({ includeDeleted: true, limit: HARD_LIMIT, maxTimeMS: INITIAL_FETCH_MAX_TIME_MS });
   const normalizedQuery = findPromise.getQuery();
-  const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
+  const subscriber = { endpoint, connectionId, clientId: clientSubscriberId };
 
   if (fetchInitialData) {
     let results;
@@ -279,24 +301,25 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     .update(JSON.stringify(scopedFields))
     .digest('base64');
 
-  const result = await QuerySubscription.findOneAndUpdate(
-    { queryId: uniqueQuerySelector },
-    {
-      $addToSet: { subscribers: subscriber },
-      $setOnInsert: {
-        queryId: uniqueQuerySelector,
-        collectionName,
-        query: normalizedQuery,
-        fields: scopedFields,
-      },
-    },
-    { upsert: true, new: true }
+  await realtimeConnectionRepository.upsertSubscriber(
+    { queryId: uniqueQuerySelector, collectionName, query: normalizedQuery, fields: scopedFields },
+    subscriber
   );
-  if (result) {
-    // no-op
-  } else {
-    logger.error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
-    throw new Error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
+
+  // A revoke can end the connection while this subscribe is in flight, after its own pull ran but
+  // before this write landed. Re-read the row: if it is gone, back the entry out like the no-row
+  // check above does. Both steps are best-effort so the close still runs and the caller always
+  // gets the UnauthorizedError; the disconnect handler and the stale-subscriber pass sweep any leftover.
+  if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
+    await realtimeConnectionRepository
+      .removeConnectionSubscribers(connectionId)
+      .catch(error =>
+        logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
+      );
+    await closeConnection(connectionId, endpoint).catch(error =>
+      logger.warn(`[dataSubscribeRequest] Failed to close ended connection ${connectionId}`, error)
+    );
+    throw new UnauthorizedError('Connection is not registered to this user');
   }
 
   return { statusCode: 200 };

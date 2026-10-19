@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as XLSX from 'xlsx';
 import {
   notebooksToExcel,
   notebooksToDocx,
@@ -166,6 +167,39 @@ describe('bulkNotebookExport', () => {
       const blob = await notebooksToExcel(mockSingleNotebookExportData);
       expect(blob).toBeInstanceOf(Blob);
       expect(blob.size).toBeGreaterThan(0);
+    });
+
+    // The Messages sheet's Model column must name the model that answered, so an exported
+    // conversation matches the reply chip rather than the model originally requested.
+    it('records the answering model on the assistant row and the requested one on the user row', async () => {
+      const data: BulkExportData = {
+        exportVersion: '1.0',
+        exportedAt: '2024-01-15T12:00:00Z',
+        notebooks: [
+          {
+            id: 'nb-redirect',
+            name: 'Redirected session',
+            firstCreated: '2024-01-10T09:00:00Z',
+            lastUpdated: '2024-01-10T09:10:00Z',
+            chatHistory: [
+              {
+                id: 'msg-redirect',
+                timestamp: '2024-01-10T09:00:00Z',
+                type: 'user',
+                prompt: 'hello',
+                replies: ['hi there'],
+                promptMeta: { model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' },
+              },
+            ],
+          },
+        ],
+      };
+
+      const workbook = XLSX.read(await (await notebooksToExcel(data)).arrayBuffer(), { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets['Messages']);
+
+      expect(rows.find(row => row.Role === 'Assistant')?.Model).toBe('gemini-3.5-flash');
+      expect(rows.find(row => row.Role === 'User')?.Model).toBe('gemini-2.5-pro');
     });
   });
 

@@ -50,6 +50,22 @@ export const createFabFileOnServer = async (
   return response.data;
 };
 
+/**
+ * Runs the moderation scan for a just-uploaded file now, rather than waiting for the S3 event, so a
+ * caller that uses the file immediately gets it already 'clean'. Never throws: 'pending' means the
+ * scan did not finish here and the normal S3 path (and the server's own wait) will settle it.
+ */
+export const moderateFabFileNow = async (fabFileId: string): Promise<'clean' | 'blocked' | 'pending'> => {
+  try {
+    const response = await api.post<{ moderationStatus: 'clean' | 'blocked' | 'pending' }>(
+      `/api/files/${fabFileId}/moderate`
+    );
+    return response.data.moderationStatus;
+  } catch {
+    return 'pending';
+  }
+};
+
 export const createFabFileOnServerWithUpload = async (
   formData: CreateFabFileRequestInputType,
   file: ActualFileObject | File,

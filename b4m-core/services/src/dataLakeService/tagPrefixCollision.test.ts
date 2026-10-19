@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DATA_LAKES } from '@bike4mind/common';
-import { collidesWithRegistryPrefix, findCollidingPrefixLakes, warnOnPrefixCollision } from './tagPrefixCollision';
+import { DATA_LAKES, withTagPrefixSuffix } from '@bike4mind/common';
+import {
+  collidesWithRegistryPrefix,
+  findCollidingPrefixLakes,
+  previewDataLakeTagPrefix,
+  warnOnPrefixCollision,
+} from './tagPrefixCollision';
 
 const lakeRow = (over: Partial<{ id: string; name: string; fileTagPrefix: string }> = {}) => ({
   id: 'other',
@@ -149,5 +154,47 @@ describe('warnOnPrefixCollision', () => {
 
     await expect(warnOnPrefixCollision({ dataLakes }, lake, logger)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('previewDataLakeTagPrefix', () => {
+  const scope = { createdByUserId: 'creator-1', organizationId: 'org-1' };
+
+  it('returns a free base as-is', async () => {
+    expect(await previewDataLakeTagPrefix({ dataLakes: repo() }, 'acme:', scope)).toBe('acme:');
+  });
+
+  it('skips a prefix held by a deleted lake, querying the scope once', async () => {
+    const dataLakes = repo([{ ...lakeRow(), status: 'deleted' }]);
+
+    expect(await previewDataLakeTagPrefix({ dataLakes }, 'acme:', scope)).toBe('acme-1:');
+    expect(dataLakes.find).toHaveBeenCalledOnce();
+    expect(dataLakes.find).toHaveBeenCalledWith({
+      $or: [{ createdByUserId: 'creator-1' }, { organizationId: 'org-1' }],
+    });
+  });
+
+  it('walks past every held candidate, including nested overlaps', async () => {
+    const dataLakes = repo([lakeRow(), lakeRow({ fileTagPrefix: 'acme-1:sub:' })]);
+
+    expect(await previewDataLakeTagPrefix({ dataLakes }, 'acme:', scope)).toBe('acme-2:');
+  });
+
+  it('skips a candidate that overlaps a built-in registry lake', async () => {
+    const registryPrefix = DATA_LAKES.find(lake => lake.fileTagPrefix)?.fileTagPrefix;
+    if (!registryPrefix) return;
+
+    const picked = await previewDataLakeTagPrefix({ dataLakes: repo() }, registryPrefix, scope);
+
+    expect(picked).not.toBe(registryPrefix);
+    expect(collidesWithRegistryPrefix(picked)).toBe(false);
+  });
+
+  it('returns the base when every candidate is held, so create reports the collision', async () => {
+    const dataLakes = repo(
+      Array.from({ length: 50 }, (_, i) => lakeRow({ fileTagPrefix: withTagPrefixSuffix('acme:', i) }))
+    );
+
+    expect(await previewDataLakeTagPrefix({ dataLakes }, 'acme:', scope)).toBe('acme:');
   });
 });

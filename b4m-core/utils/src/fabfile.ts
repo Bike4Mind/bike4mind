@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { IFabFile, IFabFileVersion, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  IFabFile,
+  IFabFileVersion,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import axios from 'axios';
 import { BadRequestError, CorruptedFileError } from './errors';
 import { Logger } from '@bike4mind/observability';
@@ -48,8 +53,11 @@ export const getFileContent = async (
     case SupportedFabFileMimeTypes.PDF:
       try {
         const { getDocumentProxy, extractText } = await import('unpdf');
-        const buffer = Buffer.from(data, 'binary');
-        const pdf = await getDocumentProxy(new Uint8Array(buffer.buffer));
+        // axios returns a Buffer in Node; `new Uint8Array(buffer)` copies it into a standalone
+        // ArrayBuffer. Never pass `buffer.buffer`: a small Buffer is a view into Node's shared,
+        // untransferable allocation pool, so pdf.js threw DataCloneError for any PDF under half the
+        // pool size (and was handed the whole pool, not just this file's bytes).
+        const pdf = await getDocumentProxy(new Uint8Array(data));
         const { text } = await extractText(pdf, { mergePages: true });
         content = text as string;
       } catch (error) {
@@ -204,10 +212,31 @@ export const versionedFileKey = (params: {
 };
 
 /**
+ * Cap a version history at the original (v1, always kept) plus the last `maxEditedVersions`
+ * edited entries. `droppedVersions` are the trimmed entries whose storage key no retained entry
+ * still holds, so the caller can delete those objects once the trimmed history is persisted.
+ */
+export const trimVersionHistory = (
+  history: IFabFileVersion[],
+  maxEditedVersions: number
+): { versions: IFabFileVersion[]; droppedVersions: IFabFileVersion[] } => {
+  const keep = Math.max(1, Math.floor(maxEditedVersions));
+  if (history.length <= keep + 1) return { versions: history, droppedVersions: [] };
+  const versions = [history[0], ...history.slice(-keep)];
+  const retainedKeys = new Set(versions.map(v => v.filePath));
+  const droppedVersions = history
+    .slice(1, history.length - keep)
+    .filter(v => typeof v.filePath === 'string' && v.filePath.length > 0 && !retainedKeys.has(v.filePath));
+  return { versions, droppedVersions };
+};
+
+/**
  * Build the version history for a non-destructive AI edit. On the first edit the current
  * (pre-edit) bytes are seeded as v1 so history is complete, then the edited version is
- * appended. Returns the S3 key the edited bytes should be written to and the full versions
- * array to persist; the caller uploads the bytes and repoints `filePath` at `newFilePath`.
+ * appended and the history is capped via `trimVersionHistory`. Returns the S3 key the edited
+ * bytes should be written to, the versions array to persist, and the dropped entries; the caller
+ * uploads the bytes, repoints `filePath` at `newFilePath`, and only after that write succeeds
+ * deletes the dropped entries' objects.
  */
 export const appendEditedVersion = (params: {
   userId: string;
@@ -220,7 +249,9 @@ export const appendEditedVersion = (params: {
   newFileSize: number;
   now: Date;
   nonce: string;
-}): { newFilePath: string; versions: IFabFileVersion[] } => {
+  /** Defaults to AI_EDIT_VERSION_RETENTION_DEFAULT; the edit routes pass the admin setting. */
+  maxEditedVersions?: number;
+}): { newFilePath: string; versions: IFabFileVersion[]; droppedVersions: IFabFileVersion[] } => {
   const history: IFabFileVersion[] = params.existingVersions?.length
     ? [...params.existingVersions]
     : [
@@ -247,5 +278,5 @@ export const appendEditedVersion = (params: {
     mimeType: params.mimeType,
     createdAt: params.now,
   });
-  return { newFilePath, versions: history };
+  return { newFilePath, ...trimVersionHistory(history, params.maxEditedVersions ?? AI_EDIT_VERSION_RETENTION_DEFAULT) };
 };

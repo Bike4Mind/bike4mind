@@ -1,6 +1,7 @@
 import { IChatHistoryItem, ISessionDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/app/utils/replyUtils';
+import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { requestedModelId } from '@client/app/utils/answeringModel';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
@@ -49,7 +50,7 @@ export function toExportableSession(session: ISessionDocument, chatHistory: ICha
         timestamp: new Date(item.timestamp),
         role: item.type === 'system' ? 'system' : 'user',
         content: item.prompt,
-        model: item.promptMeta?.model?.name,
+        model: requestedModelId(item.promptMeta),
         tokensUsed: item.promptMeta?.tokenUsage?.inputTokens,
       });
     }

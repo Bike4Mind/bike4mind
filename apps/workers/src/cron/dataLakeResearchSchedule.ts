@@ -20,6 +20,8 @@ import {
   dataLakeRepository,
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
+  organizationRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { dataLakeResearchService } from '@bike4mind/services';
@@ -56,6 +58,10 @@ export async function runResearchScheduleTick(
       dataLakeResearchConfigs: dataLakeResearchConfigRepository,
       dataLakeResearchRuns: dataLakeResearchRunRepository,
       dataLakeProposals: dataLakeProposalRepository,
+      // The balance pre-flight's holder reads (see StartResearchRunAdapters): a scheduled run is
+      // refused exactly like a Run-now one when the owner cannot cover the ceiling.
+      users: userRepository,
+      organizations: organizationRepository,
       ...lakeConfigAuditDb,
     },
     enqueue: (run, lake) => queueResearchRun(run, lake, queueUrl, runLogger),

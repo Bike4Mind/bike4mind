@@ -10,33 +10,14 @@ import { userApiKeyService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-
-/**
- * Take the last hop from the X-Forwarded-For chain - that's the one CloudFront
- * appends and can't be spoofed by the client, unlike earlier entries. `req.ip`
- * on an unauth endpoint behind a proxy is attacker-controllable and would
- * otherwise poison audit logs / baseline calculations.
- */
-function trustedClientIp(req: {
-  headers: Record<string, string | string[] | undefined>;
-  socket?: { remoteAddress?: string };
-}): string | undefined {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length > 0) {
-    const parts = xff
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    if (parts.length > 0) return parts[parts.length - 1];
-  }
-  return req.socket?.remoteAddress;
-}
+import { getClientIp } from '@server/utils/ip';
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),
-  deviceLabel: z.string().min(1).max(100),
+  deviceLabel: CcBridgeDeviceLabelSchema,
   platform: z.string().max(50).optional(),
   bridgeVersion: z.string().max(30).optional(),
 });
@@ -103,7 +84,7 @@ const handler = baseApi({ auth: false })
           // completions on the user's account.
           scopes: [ApiKeyScope.CC_BRIDGE],
           metadata: {
-            clientIP: trustedClientIp(req),
+            clientIP: getClientIp(req),
             userAgent: req.headers['user-agent'],
             createdFrom: 'bridge' as const,
           },

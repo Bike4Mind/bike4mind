@@ -1,12 +1,10 @@
 import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { secretRotationRepository } from '@bike4mind/database/infra';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
-import { decryptAtRest } from '@bike4mind/utils/security';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { ExtractJwt } from 'passport-jwt';
+import { respond } from '@server/utils/respond';
+import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 
 // Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
 // flow calls identify anywhere near 60/min - it fires on cold load, tab refocus and WS
@@ -16,48 +14,29 @@ import { redactUserSecretsForSelf } from '@bike4mind/common';
 // refreshToken's own per-IP rate limit and, when enabled, the edge WAF.
 const IDENTIFY_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000 } as const;
 
+// Same extractor as the jwt strategy (server/auth/auth.ts), so the echoed token is exactly the one
+// that authenticated the request, whatever whitespace the header carries.
+const extractBearerToken = ExtractJwt.fromAuthHeaderAsBearerToken();
+
+/**
+ * Read-only whoami. It never issues a session: it is reachable before the second factor (the
+ * mfaPending allowlist in server/auth/auth.ts) and by API keys, and minting here would upgrade
+ * either into a full browser session. Sessions come only from the login, second-factor and
+ * refresh routes.
+ */
 const handler = baseApi()
   .use(rateLimit(IDENTIFY_RATE_LIMIT))
   .use(requireUser)
   .get(async (req, res) => {
-    // An API key is a long-lived credential that may be scoped to a single flow or
-    // shipped publicly (embed widgets), so it gets a read-only whoami: no session is
-    // minted and no refresh cookie is set. Otherwise presenting one here would trade
-    // it for a full browser session carrying the owner's whole account.
+    // An API-key caller gets no token back: echoing a bearer it also sent would hand a scoped or
+    // publicly shipped key's holder the owner's session token.
     const isApiKeyCaller = !!req.apiKeyInfo;
-    let accessToken: string | undefined = isApiKeyCaller ? undefined : req.headers?.authorization?.split(' ')[1];
+    const accessToken = isApiKeyCaller ? undefined : (extractBearerToken(req) ?? undefined);
     req.logger.log(
-      `Successful auth for "${req.user?.username}" (${req.user?.email}), ${
-        isApiKeyCaller ? 'api key - no' : accessToken ? 'have' : 'creating'
-      } access token`
+      `Successful auth for "${req.user?.username}" (${req.user?.email}) via ${isApiKeyCaller ? 'api key' : 'jwt'}`
     );
 
-    if (!isApiKeyCaller) {
-      if (!accessToken) {
-        ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
-          createdVia: 'identify',
-          tokenVersion: req.user!.tokenVersion ?? 0,
-        }));
-      } else {
-        const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
-        let previousSecret = undefined;
-        // Accept the previous key only within the shared rotation grace window.
-        // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
-        // decrypt before verifying. Legacy plaintext rows pass through unchanged.
-        if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
-          previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
-        }
-        const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);
-        if (decoded.exp && decoded.exp < Date.now() / 1000) {
-          ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
-            createdVia: 'identify',
-            tokenVersion: req.user!.tokenVersion ?? 0,
-          }));
-        }
-      }
-    }
-
-    return res.status(200).json({
+    return respond(res, selfSessionResponseSchema, {
       // Same self-view shape as refreshToken and the login endpoints, which feed the
       // client's currentUser from this identical sanitizer. Raw `req.user` is the
       // hydrated document, so returning it shipped OAuth tokens, encrypted integration

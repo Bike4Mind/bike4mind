@@ -295,6 +295,16 @@ export default function ExperimentalFeatureToggle() {
             {telemetryLevel === 'enhanced' &&
               'Sharing full diagnostic data: everything in Basic plus context composition breakdown, system prompt details, cache efficiency, truncation patterns, tool error details, and sub-agent metrics. Helps us diagnose complex issues. We never collect prompts, responses, or personal information.'}
           </Typography>
+          {telemetryLevel !== 'none' && (
+            <Typography
+              data-testid="telemetry-export-helper"
+              level={TYPE.caption}
+              sx={{ mt: 0.5, color: mutedTextColor }}
+            >
+              Export telemetry data downloads your usage telemetry as a JSON file. To keep a copy of your notebooks and
+              files, use Export All on the Notebooks and Knowledge Files cards in General settings.
+            </Typography>
+          )}
           {!telemetryAdminEnabled && (
             <Typography level={TYPE.caption} sx={{ mt: 0.5, color: 'warning.500', fontStyle: 'italic' }}>
               Sharing with us is off (your administrator has not enabled it). Your level still controls whether you can
@@ -344,7 +354,7 @@ export default function ExperimentalFeatureToggle() {
               ) : exportStatus === 'error' ? (
                 'Retry Export'
               ) : (
-                'Export My Data'
+                'Export telemetry data'
               )}
             </Button>
             {exportStatus === 'error' && (

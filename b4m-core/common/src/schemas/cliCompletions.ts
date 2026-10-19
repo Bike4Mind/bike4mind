@@ -2,6 +2,32 @@ import { z } from 'zod';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import type { ReasoningEffort } from '../types/common';
+import type { ApiErrorCode } from '../apiErrorCodes';
+
+/**
+ * The cross-provider effort vocabulary, deliberately NOT any one provider's.
+ *
+ * It is OpenAI's `reasoning_effort` levels, which the OpenAI path forwards verbatim.
+ * Every other backend translates: Kimi and DeepSeek collapse these six onto their three
+ * (toKimiEffort / toDeepSeekEffort), and Anthropic maps them onto `output_config.effort`
+ * (toAnthropicEffort). Anthropic's five levels are 'low' | 'medium' | 'high' | 'xhigh' |
+ * 'max', so the two vocabularies disagree at both ends: 'none' and 'minimal' have no
+ * Anthropic effort level (on Claude, 'none' turns thinking off where the model allows
+ * it, and otherwise both resolve to 'low', the least effort Anthropic can express), and 'max' is
+ * absent here because adding it would also hand an invalid value to OpenAI's
+ * `reasoning_effort`. Anthropic's 'max' is reached through
+ * `ICompletionOptions.anthropicEffort` instead, which is typed in Anthropic's vocabulary.
+ */
+const REASONING_EFFORT_VALUES = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const satisfies readonly ReasoningEffort[];
+export const CompletionReasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
 
 /**
  * Tool schema matching ICompletionOptionTools.toolSchema. The Zod surface only
@@ -9,7 +35,7 @@ import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
  * z.array(z.any()) so client-side bugs (typos in name, missing type) surface
  * at parse time instead of failing silently inside the backend.
  */
-export const CompletionToolSchema = z.object({
+export const CompletionCustomToolSchema = z.object({
   toolSchema: z.object({
     name: z.string(),
     description: z.string(),
@@ -22,11 +48,65 @@ export const CompletionToolSchema = z.object({
       })
       .passthrough(),
     strict: z.boolean().optional(),
+    defer_loading: z
+      .boolean()
+      .optional()
+      .describe(
+        'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
+          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
+          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
+      ),
+    cache_control: z
+      .unknown()
+      .optional()
+      .describe(
+        'Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`).'
+      ),
   }),
   _isMcpTool: z.boolean().optional(),
 });
 
+export type CompletionCustomTool = z.infer<typeof CompletionCustomToolSchema>;
+
+/** Anthropic's tool search server tools; `name` is fixed by `type`. */
+export const ToolSearchServerToolSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('tool_search_tool_regex_20251119'), name: z.literal('tool_search_tool_regex') }),
+  z.object({ type: z.literal('tool_search_tool_bm25_20251119'), name: z.literal('tool_search_tool_bm25') }),
+]);
+
+export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
+
+export const CompletionServerToolSchema = z.object({
+  serverTool: ToolSearchServerToolSchema.describe(
+    'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
+      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
+      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+  ),
+});
+
+export type CompletionServerTool = z.infer<typeof CompletionServerToolSchema>;
+
+/** One `tools[]` entry: a caller-defined tool, or a provider-run server tool. */
+export const CompletionToolSchema = z.union([CompletionCustomToolSchema, CompletionServerToolSchema]);
+
 export type CompletionTool = z.infer<typeof CompletionToolSchema>;
+
+export function isCompletionServerTool(tool: CompletionTool): tool is CompletionServerTool {
+  return 'serverTool' in tool;
+}
+
+/**
+ * The `errorCode`s of the completions 400s for tool search requests (CONVENTIONS.md section 1).
+ * Assigned in services/cliCompletionsToolSearch.ts.
+ */
+export const COMPLETION_TOOL_ERROR_CODES = [
+  'tool_search_unsupported',
+  'all_tools_deferred',
+  'deferred_tool_cache_control',
+  'unknown_tool_reference',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
 
 /**
  * JSON Schema definition for structured output. The `schema` field is a full
@@ -73,7 +153,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
-  model: z.string(),
+  model: z.string().max(256),
   messages: z.array(CompletionMessageSchema),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
@@ -88,6 +168,19 @@ export const CompletionRequestSchema = z.object({
       stream: z.boolean().optional(),
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
+      reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+      ),
+      thinking: z
+        .object({
+          enabled: z.boolean(),
+          // 1024 is the smallest legacy thinking budget the Anthropic API accepts.
+          budget_tokens: z.number().int().min(1024).optional(),
+        })
+        .optional()
+        .describe(
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+        ),
     })
     .optional(),
 });
@@ -133,6 +226,12 @@ export function normalizeCompletionRequest<T extends CompletionRequest>(req: T):
 const CompletionUsageSchema = z.object({
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
+  reasoningTokens: z
+    .number()
+    .optional()
+    .describe(
+      'Reasoning/thinking tokens the provider reported. A subset of outputTokens, not additive and not billed on top. Absent when the provider or adapter reports no count.'
+    ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
 });
@@ -158,35 +257,61 @@ const CompletionContentEventSchema = z.object({
   stopReason: z.string().optional(),
   // Complete assistant message incl. reasoning blocks (Anthropic extended thinking with tools).
   thinking: z.array(z.any()).optional(),
+  // A tool call the model has begun writing; see CompletionInfo.toolStarted.
+  toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
 });
 
 /**
- * The in-band terminal failure frame. Because this endpoint flushes SSE headers
- * before it authenticates or prices anything, EVERY failure past the malformed-body
- * check arrives here under a 200 - there is no pre-stream 422 on this surface the
- * way there is on /api/chat and /api/embed/chat.
+ * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ */
+export const COMPLETION_SSE_ERROR_CODES = [
+  ...QUEST_ERROR_CODES,
+  'provider_error',
+  'provider_rejected',
+  'content_blocked',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
+
+/**
+ * The in-band terminal failure frame, sent only once the stream has opened. Failures found before
+ * the provider call (auth, scope, validation, rate limit, model, credits) are JSON errors with a
+ * real status instead; see completions.contract.ts.
  *
- * `code` is the machine-readable classifier, drawn from QUEST_ERROR_CODES (itself a
- * narrowing of the platform-wide API_ERROR_CODES, so it cannot drift from the codes
- * the JSON surfaces use). It is what makes mid-generation credit exhaustion
- * detectable: the `message` is prose and callers must never match on it. Absent for
- * unclassified failures, so treat it as optional.
+ * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
+ * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
+ * model's safety classifier declined the request. Optional; callers must never match on the prose
+ * `message`.
  *
- * The field is `code` rather than the conventions' `errorCode` because this frame
- * shipped that way and is a published wire shape; the vocabulary is what had to be
- * shared, not the key.
+ * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
+ * and is a published wire shape.
  */
 export const CompletionSseErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
   requestId: z.string().optional(),
-  code: z.enum(QUEST_ERROR_CODES).optional(),
+  code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
+});
+
+/** Anthropic content block types the provider runs itself; surfaced as `provider_block` frames and echoed back. */
+export const TOOL_SEARCH_BLOCK_TYPES: ReadonlySet<string> = new Set(['server_tool_use', 'tool_search_tool_result']);
+
+/**
+ * A provider content block the caller must echo back verbatim, in stream order, in the assistant
+ * `messages` content of the next request: today the Anthropic tool search `server_tool_use` and
+ * `tool_search_tool_result` blocks. Never executed by the caller and never answered with a tool_result.
+ */
+export const CompletionProviderBlockEventSchema = z.object({
+  type: z.literal('provider_block'),
+  provider: z.literal('anthropic'),
+  block: z.record(z.string(), z.unknown()),
 });
 
 /** One `data:` event in the `text/event-stream` completions response. */
 export const CompletionStreamEventSchema = z.union([
   CompletionMetaEventSchema,
   CompletionContentEventSchema,
+  CompletionProviderBlockEventSchema,
   CompletionSseErrorEventSchema,
 ]);
 

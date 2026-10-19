@@ -18,7 +18,7 @@ const getEffectiveLLMApiKeys = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...a) },
 }));
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/toolAvailability', () => ({
   resolveToolAvailability: (...a: unknown[]) => resolveToolAvailability(...a),
   isLocalImageBackendAvailable: vi.fn(),
   isLocalEmbedderAvailable: vi.fn(),

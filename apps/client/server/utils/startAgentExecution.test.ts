@@ -16,7 +16,11 @@ const {
   mockPersistLinkedQuestId,
   mockResolveExecutorName,
   mockFindRememberedApprovals,
+  mockUserFindById,
+  mockPinFiles,
 } = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
+  mockPinFiles: vi.fn(),
   mockSend: vi.fn(),
   mockSessionFindById: vi.fn(),
   mockOrgFindById: vi.fn(),
@@ -51,7 +55,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
   sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
+  userRepository: { findById: mockUserFindById },
 }));
+
+vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
 vi.mock('@server/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
@@ -61,6 +68,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
+import { ApiKeyScope, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from './headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
@@ -106,6 +114,8 @@ beforeEach(() => {
   mockPersistLinkedQuestId.mockResolvedValue(undefined);
   mockResolveExecutorName.mockReturnValue('agent-executor-fn');
   mockFindRememberedApprovals.mockResolvedValue(null);
+  mockUserFindById.mockImplementation(async (id: string) => ({ id }));
+  mockPinFiles.mockResolvedValue(undefined);
 });
 
 describe('startAgentExecution', () => {
@@ -126,6 +136,70 @@ describe('startAgentExecution', () => {
     // Also stamped on the execution doc, so a checkpointed continuation - which never
     // sees the start payload - can still key lake-access audit rows to the real Quest.
     expect(mockPersistLinkedQuestId).toHaveBeenCalledWith('exec1', 'quest1');
+  });
+
+  it('pins the in-app run message attachments to the session, minus message-only files', async () => {
+    await startAgentExecution(
+      input({
+        userId: 'pins',
+        messageFileIds: ['file-csv', 'file-note'],
+        messageOnlyFileIds: ['file-note'],
+        pinMessageFiles: true,
+      }),
+      logger
+    );
+
+    expect(mockPinFiles).toHaveBeenCalledWith(expect.objectContaining({ id: 's1' }), ['file-csv'], {
+      user: { id: 'pins' },
+      logger,
+    });
+  });
+
+  it('still dispatches, and warns, when the user lookup for the pin fails', async () => {
+    mockUserFindById.mockRejectedValueOnce(new Error('db'));
+    const result = await startAgentExecution(
+      input({ userId: 'pin-user-fails', messageFileIds: ['file-csv'], pinMessageFiles: true }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockPinFiles).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('session knowledge pin'),
+      expect.objectContaining({ userId: 'pin-user-fails' })
+    );
+  });
+
+  it('leaves a run message attachments unpinned when the door does not ask for it', async () => {
+    await startAgentExecution(input({ userId: 'no-pins', messageFileIds: ['file-csv'] }), logger);
+    expect(mockPinFiles).not.toHaveBeenCalled();
+  });
+
+  it('pins nothing when the start is refused', async () => {
+    mockCountActive.mockResolvedValueOnce(MAX_CONCURRENT_EXECUTIONS_PER_USER);
+    await startAgentExecution(
+      input({ userId: 'refused-pins', messageFileIds: ['file-csv'], pinMessageFiles: true }),
+      logger
+    );
+    expect(mockPinFiles).not.toHaveBeenCalled();
+  });
+
+  it('records the per-message attachments on the prompt Quest, as the chat path does', async () => {
+    await startAgentExecution(
+      input({ userId: 'attachments', messageFileIds: ['file-csv'], sessionFabFileIds: ['file-pinned'] }),
+      logger
+    );
+
+    // Message files only: session files live on the session and would otherwise render as a
+    // chip on every agent turn.
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: ['file-csv'] }));
+  });
+
+  it('records an empty attachment list on the prompt Quest when the send has none', async () => {
+    await startAgentExecution(input({ userId: 'no-attachments' }), logger);
+
+    expect(mockQuestCreate).toHaveBeenCalledWith(expect.objectContaining({ fabFileIds: [] }));
   });
 
   it('rejects a session the caller does not own without creating anything', async () => {
@@ -281,6 +355,26 @@ describe('startAgentExecution', () => {
     });
   });
 
+  it('forwards per-send systemContext on the start payload only, never on the doc or the Quest', async () => {
+    await startAgentExecution(
+      input({ userId: 'system-context-run', systemContext: 'Extra instructions for this send.' }),
+      logger
+    );
+
+    expect(dispatchedPayload()).toMatchObject({ systemContext: 'Extra instructions for this send.' });
+    // Run-scoped: the executor bakes it into the checkpointed system message, so no
+    // durable copy is kept on the execution doc or shown via the persisted prompt Quest.
+    expect(mockCreateExecution.mock.calls[0][0]).not.toHaveProperty('systemContext');
+    expect(mockQuestCreate.mock.calls[0][0]).not.toHaveProperty('systemContext');
+    expect(mockQuestCreate.mock.calls[0][0].prompt).not.toContain('Extra instructions');
+  });
+
+  it('omits systemContext from the start payload when the caller sends none', async () => {
+    await startAgentExecution(input({ userId: 'no-system-context-run' }), logger);
+
+    expect(dispatchedPayload()).not.toHaveProperty('systemContext');
+  });
+
   it('never lets the ambient marker widen approvedTools on a headless run', async () => {
     // A headless caller's explicit tool list IS its permission approval, so the public REST
     // contract has no ambient field at all. Belt: even if one were forged onto the input,
@@ -295,6 +389,44 @@ describe('startAgentExecution', () => {
     );
 
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: ['web_search'] }));
+  });
+
+  it('derives the scope denials from the key and persists them so every invocation re-applies them', async () => {
+    await startAgentExecution(
+      input({ userId: 'scoped-key', apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] } }),
+      logger
+    );
+    await startAgentExecution(
+      input({ userId: 'writer', apiKeyInfo: { keyId: 'k2', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session' }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_TOOL_NAMES]);
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
+    expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('scopeDeniedTools');
+  });
+
+  it('persists the authenticating key so the executor can attribute lake writes to it', async () => {
+    await startAgentExecution(
+      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session' }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].apiKeyId).toBe('key-1');
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
+  });
+
+  it('persists how the run was authenticated, so its tools and child runs see it', async () => {
+    await startAgentExecution(
+      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session', apiKeyInfo: undefined }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].authOrigin).toBe('apiKey');
+    expect(mockCreateExecution.mock.calls[1][0].authOrigin).toBe('session');
   });
 
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {

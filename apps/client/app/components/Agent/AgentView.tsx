@@ -23,8 +23,9 @@ import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { useGetProject } from '@client/app/hooks/data/projects';
 import { Link } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
-import { CREDIT_SOURCE, LOW_CREDITS_THRESHOLD } from '@client/app/constants/agentForm';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import { CREDIT_SOURCE } from '@client/app/constants/agentForm';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import { AgentAvatar } from './AgentAvatar';
 
 interface AgentViewProps {
@@ -64,6 +65,7 @@ const AgentView: React.FC<AgentViewProps> = ({ agent, title, subtitle, headerAct
   const [useOwnCredits, setUseOwnCredits] = useState(agent.useOwnCredits || false);
   const [currentCredits, setCurrentCredits] = useState(agent.currentCredits || 0);
   const { currentUser, setCurrentUser } = useUser();
+  const lowCreditsThreshold = useLowCreditsThreshold();
 
   const { data: project, isLoading: isProjectLoading } = useGetProject(agent.projectId);
 
@@ -237,20 +239,21 @@ const AgentView: React.FC<AgentViewProps> = ({ agent, title, subtitle, headerAct
                               fontWeight: 400,
                               color:
                                 (useOwnCredits ? currentCredits : currentUser?.currentCredits || 0) <
-                                LOW_CREDITS_THRESHOLD
+                                lowCreditsThreshold
                                   ? 'danger.500'
                                   : 'text.primary',
                               mb: 0,
                             }}
                           >
-                            <Bike4MindIcon
-                              size="12"
-                              fill={
-                                (useOwnCredits ? currentCredits : currentUser?.currentCredits || 0) <
-                                LOW_CREDITS_THRESHOLD
-                                  ? 'var(--joy-palette-danger-500)'
-                                  : 'var(--joy-palette-text-tertiary)'
-                              }
+                            <CreditIcon
+                              sx={{
+                                fontSize: 12,
+                                color:
+                                  (useOwnCredits ? currentCredits : currentUser?.currentCredits || 0) <
+                                  lowCreditsThreshold
+                                    ? 'danger.500'
+                                    : 'text.tertiary',
+                              }}
                             />
                             {(useOwnCredits ? currentCredits : currentUser?.currentCredits || 0).toLocaleString()}
                           </Typography>

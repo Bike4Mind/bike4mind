@@ -1,4 +1,4 @@
-import { connectDB, DataLakeModel, OrgGoogleDriveConnection } from '@bike4mind/database';
+import { connectDB, DataLakeModel, lakeConnectorClaimRepository, OrgGoogleDriveConnection } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 
@@ -67,6 +67,8 @@ async function main() {
   }
 
   const res = await OrgGoogleDriveConnection.deleteMany({ _id: { $in: stranded.map(c => c._id) } });
+  // Their lakes are gone, so their lake claims are garbage too.
+  await lakeConnectorClaimRepository.releaseByConnectionIds(stranded.map(c => c.id));
   console.log(`\nReleased ${res?.deletedCount ?? 0} row(s). Those Drive folders can now be connected again.`);
   console.log('The Google grants are NOT revoked - each connectedBy user must revoke from their own account.');
   process.exit(0);

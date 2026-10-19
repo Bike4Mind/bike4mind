@@ -37,7 +37,7 @@ export interface ShortCircuitContext {
   hasAgentLiteral: boolean;
   /** Active text/image model id. */
   model: string;
-  /** True for a real slash command (e.g. `/gen_image`, `/roll`, `/gen_video`). `/llm` is not real. */
+  /** True for a real slash command (e.g. `/gen_image`, `/roll`). `/llm` is not real. */
   isRealSlashCommand: boolean;
   /**
    * Set to true once the user dismisses the `AutoRouteBadge` in the current

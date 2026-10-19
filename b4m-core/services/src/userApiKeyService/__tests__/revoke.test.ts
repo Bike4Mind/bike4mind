@@ -12,13 +12,15 @@ vi.mock('bcryptjs', async () => {
 // In-memory store wiring create -> revoke so we can assert the status flip.
 function makeSyncedRepo() {
   let stored: IUserApiKeyDocument | null = null;
+  const storeDoc = (doc: Record<string, unknown>) => {
+    stored = { ...doc, id: 'key-1', createdAt: new Date() } as unknown as IUserApiKeyDocument;
+    return Promise.resolve(stored);
+  };
   const repo = {
     countActiveByUserId: vi.fn().mockResolvedValue(0),
     countActiveByProductId: vi.fn().mockResolvedValue(0),
-    create: vi.fn().mockImplementation((doc: Record<string, unknown>) => {
-      stored = { ...doc, id: 'key-1', createdAt: new Date() } as unknown as IUserApiKeyDocument;
-      return Promise.resolve(stored);
-    }),
+    create: vi.fn().mockImplementation(storeDoc),
+    createIfUnderCap: vi.fn().mockImplementation(storeDoc),
     findByUserIdAndId: vi.fn().mockImplementation(() => Promise.resolve(stored)),
     update: vi.fn().mockResolvedValue(undefined),
     // Mirrors the repo's status-filtered write: a no-op on an already-DISABLED key.
@@ -86,6 +88,30 @@ describe('revokeUserApiKey', () => {
     expect(getStored()!.revokedAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(repo.revokeIfNotDisabled).toHaveBeenCalledWith('key-1', 'user1', 'Leaked in a build log');
     expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it("ends the key's realtime connections", async () => {
+    const { repo } = makeSyncedRepo();
+    const endConnections = vi.fn().mockResolvedValue({ connectionIds: ['conn-1'] });
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+        realtimeConnections: { endConnections },
+      },
+    };
+
+    await createUserApiKey(
+      'user1',
+      { name: 'CI key', scopes: [ApiKeyScope.AI_GENERATE], metadata: { createdFrom: 'dashboard' as const } },
+      adapters
+    );
+    await revokeUserApiKey('user1', { keyId: 'key-1' }, adapters);
+
+    expect(endConnections).toHaveBeenCalledWith({ apiKeyId: 'key-1' });
+    expect(repo.revokeIfNotDisabled.mock.invocationCallOrder[0]).toBeLessThan(
+      endConnections.mock.invocationCallOrder[0]
+    );
   });
 
   it('leaves revokedReason unset when no reason is supplied', async () => {

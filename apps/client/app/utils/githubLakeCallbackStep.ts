@@ -19,7 +19,9 @@ export type GitHubLakeCallbackStep =
    * token from the first authorize. Reached from the install fallback's return (no `code`) and from
    * an org-owner approval request, which carries a one-time notice for the toast.
    */
-  | { kind: 'resume'; dataLakeId: string; notice?: string };
+  | { kind: 'resume'; dataLakeId: string; notice?: string }
+  /** A return from the Access lost repair link: no handoff and unsigned, so there is no flow to resume. */
+  | { kind: 'repaired' };
 
 export const RESTART_MESSAGE = 'The GitHub connection could not be completed. Start it again from the data lake.';
 const APPROVAL_PENDING_NOTICE =
@@ -38,6 +40,9 @@ export function resolveGitHubLakeCallbackStep(
   handoff: GitHubLakeConnectHandoff | null
 ): GitHubLakeCallbackStep {
   if (search.error === 'access_denied') return { kind: 'cancelled' };
+  if (!handoff && !search.state && !search.error && (search.installation_id || search.setup_action)) {
+    return { kind: 'repaired' };
+  }
   if (!handoff) return { kind: 'failed', message: RESTART_MESSAGE };
   if (search.error) return { kind: 'failed', message: RESTART_MESSAGE };
 

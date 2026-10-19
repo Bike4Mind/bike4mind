@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -27,11 +28,22 @@ import {
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  AI_EDIT_VERSION_RETENTION_MAX,
+  AI_EDIT_VERSION_RETENTION_MIN,
+} from '../constants/aiEditVersionRetention';
+import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import {
+  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+  TEAM_PLAN_SEATS_HARD_LIMIT,
+} from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -42,6 +54,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
@@ -215,9 +228,10 @@ When you report a time-sensitive fact, state what it is as of - the date of the 
  * forced retrieval already shows on out-of-corpus questions, reached by a different route. Three of
  * its clauses are load-bearing for a specific co-resident path, not general hedging:
  * - "from an attached document" - a small attached corpus is INLINED rather than deferred to
- *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval deliberately steps aside on
- *   an attached-files turn (`forcedRetrievalAbstention` emits nothing there). Without this clause
- *   the section tells the model to go searching for content already sitting in its context.
+ *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval steps aside on an
+ *   attached-files turn in a chat with no chosen lake (`forcedRetrievalAbstention` emits nothing
+ *   there). Without this clause the section tells the model to go searching for content already
+ *   sitting in its context.
  * - "already been searched on this turn" - on a forced turn that found nothing,
  *   `forcedRetrievalNoContextPrompt` instructs the model to say the library does not cover the
  *   question. A nudge to search then invites a second identical query - a billed query embedding,
@@ -259,13 +273,16 @@ export const SettingKeySchema = z.enum([
   'moonshotApiKey',
   'deepseekApiKey',
   'voyageApiKey',
+  'typesafeApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
+  'PerplexityApiKey',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
   'EnableKnowledgeBaseSearch',
   'DefaultChunkSize',
   'DefaultAPIModel',
+  'recommendedModelIds',
   'AutoNameNotebook',
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
@@ -302,6 +319,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnableDataLakeGitHub',
+  'EnableDataLakeGitHubReconcile',
   'EnforceLakeAdmission',
   'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
@@ -320,6 +338,8 @@ export const SettingKeySchema = z.enum([
   'EnableInertArtifactRender',
   'pricePerCredit',
   'ModerationEnabled',
+  'BedrockGuardrailId',
+  'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'tagLineMain',
   'tagLineSub',
@@ -340,6 +360,7 @@ export const SettingKeySchema = z.enum([
   'EnableUserDeletionSlackNotification',
   'AdminEmail',
   'MaxFileSize',
+  'AiEditVersionRetention',
   'DefaultContext',
   'FeedbackSendEmailUsername',
   'FeedbackSendEmailPassword',
@@ -372,6 +393,11 @@ export const SettingKeySchema = z.enum([
   'atlassianClientSecret',
   'notionClientId',
   'notionClientSecret',
+  'EnableCustomMcpConnectors',
+  'customMcpPolicy',
+  'customMcpBlockedHosts',
+  'customMcpPresetClients',
+  'customMcpAllowPrivateNetworks',
   'qWorkUrl',
   'qWorkToken',
 
@@ -390,6 +416,11 @@ export const SettingKeySchema = z.enum([
   'allowOpenRegistration',
   'blockDisposableEmails',
   'defaultFreeCredits',
+  'teamPlanMinSeats',
+  'teamPlanMaxSeats',
+  'teamPlanCreditsPerSeat',
+  'lowCreditsThreshold',
+  'syntheticUserEmailDomains',
 
   // GOOGLE CALENDAR SETTINGS
   'enableGoogleCalendar',
@@ -438,6 +469,17 @@ export const SettingKeySchema = z.enum([
   // Knowledge
   'enableAutoChunk',
 
+  // Skill Market moderation
+  'SkillMarketHighRiskTools',
+  'SkillMarketUrlAllowlist',
+  'SkillMarketClassifierMinConfidence',
+  'SkillMarketAuditSampleRate',
+  'SkillMarketReviewSlaHours',
+  'SkillMarketDailySubmitLimit',
+  'SkillMarketMaxListingsPerUser',
+  'SkillMarketPublicMinAccountAgeDays',
+  'SkillMarketReportAutoHideThreshold',
+
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
   'SlackGeneralWebhookUrl',
@@ -464,6 +506,8 @@ export const SettingKeySchema = z.enum([
   'voiceSessionVadType',
   'voiceSessionVadEagerness',
 
+  'OrgFeedbackSummaryModel',
+
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
   'EmailAnalysisModel',
@@ -475,6 +519,7 @@ export const SettingKeySchema = z.enum([
   'whatsNewAutomationEnabled',
   'whatsNewConfig',
   'whatsNewSyncConfig',
+  'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
   'enableAgentProactiveMessages',
@@ -540,6 +585,14 @@ export const SettingKeySchema = z.enum([
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
 
+  // VIDEO GENERATION
+  'videoGeneration',
+  'agentVideoClipsPerRun',
+
+  // MUSIC GENERATION
+  'musicGeneration',
+  'agentMusicTracksPerRun',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -574,7 +627,7 @@ export const IntentClassifierConfigSchema = z.object({
   enabled: z.boolean().default(true),
   shadowMode: z.boolean().default(true),
   primaryModel: z.string().default('claude-haiku-4-5-20251001'),
-  fallbackModels: z.array(z.string()).default(['gemini-2.5-flash-lite', 'gpt-5.4-nano']),
+  fallbackModels: z.array(z.string()).default(['gemini-3.1-flash-lite', 'gpt-5.4-nano']),
 });
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
@@ -606,9 +659,12 @@ export const OrchestrationDefaultsSchema = z.object({
     // to expose.
     'image_generation',
     'edit_image',
+    // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
     'audio_generation',
     'excel_generation',
+    // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
+    'video_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -846,6 +902,26 @@ interface BaseSetting {
    * adding this field changes no existing consumer.
    */
   scope?: SettingScopeConfig;
+  /**
+   * A blank save DELETES the platform row instead of storing the declared default, so the setting
+   * reads as unset again (see `isBlankSettingValue` and apps/client/pages/api/settings/update.ts).
+   * Only for a setting whose consumer treats unset differently from its default's own number.
+   */
+  clearDeletesRow?: boolean;
+  /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
+  unsetLabel?: string;
+}
+
+/** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
+export const LOW_CREDITS_THRESHOLD_DEFAULT = 1000;
+
+/**
+ * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
+ * just numbers): a missing, null or whitespace-only stored value. A number setting's schema rewrites
+ * one into the declared default, which is exactly why a stored default must not read as a choice of it.
+ */
+export function isBlankSettingValue(raw: unknown): boolean {
+  return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
 function makeStringSetting(
@@ -982,7 +1058,7 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
     // substitutes only on the raw value it receives, so chaining it outside would feed the
     // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
     schema: z.preprocess(
-      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      val => (isBlankSettingValue(val) ? undefined : val),
       numberSchema.prefault(config.defaultValue ?? 0)
     ),
   };
@@ -1042,11 +1118,116 @@ export enum ServerStatusEnum {
   Offline = 'offline',
 }
 
+/** Platform cap on custom MCP connections per user (design #4845). */
+export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
+export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
+
+/**
+ * Org policy for custom remote MCP connectors, evaluated on create, OAuth start, offering and every
+ * call (design #4845 section 8). The platform row is the default for users with no org override,
+ * so `presets_only` keeps arbitrary URLs closed until an operator or org opts in to `allowlist`/`any`.
+ */
+export const CustomMcpPolicySchema = z.object({
+  mode: z.enum(CUSTOM_MCP_POLICY_MODES).default('presets_only'),
+  /** Host patterns (`example.com`, `*.example.com`) a URL must match when `mode` is `allowlist`. */
+  allowedHostPatterns: McpHostPatternListSchema.default([]),
+  /** Checked in every mode, after the platform `customMcpBlockedHosts`. */
+  blockedHostPatterns: McpHostPatternListSchema.default([]),
+  allowUnauthenticated: z.boolean().default(true),
+  /** false drops every tool not annotated read-only at offering time. */
+  allowWriteTools: z.boolean().default(true),
+  requireApprovalForAll: z.boolean().default(false),
+  /** Capped at the platform limit; an org can only lower it. */
+  maxConnectionsPerUser: z
+    .number()
+    .int()
+    .min(0)
+    .max(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER)
+    .default(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER),
+});
+
+export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
+
+/**
+ * Effective enablement: the platform `EnableCustomMcpConnectors` flag (operator master switch, never
+ * org-settable) AND the resolved org `customMcpPolicy.mode` not being `off`. An org can only close
+ * custom connectors for its members, never open them past a platform off.
+ */
+export function isCustomMcpEnabled(
+  platformFlag: boolean | undefined,
+  orgPolicy: Pick<CustomMcpPolicy, 'mode'> | undefined
+): boolean {
+  return platformFlag === true && orgPolicy?.mode !== 'off';
+}
+
+export const CustomMcpBlockedHostsSchema = z.object({
+  hosts: McpHostPatternListSchema.default([]),
+});
+
+export type CustomMcpBlockedHosts = z.infer<typeof CustomMcpBlockedHostsSchema>;
+
+/**
+ * Self-host only; hosted deployments never reach private networks regardless of this value. Each
+ * CIDR is strictly parsed, at least /8 (IPv4) or /16 (IPv6), and never overlaps a network the fetch
+ * path refuses anyway (NEVER_ADMITTED_NETWORKS in customMcpHosts.ts).
+ */
+export const CustomMcpAllowPrivateNetworksSchema = z.object({
+  cidrs: z.array(CustomMcpPrivateCidrSchema).max(100).default([]),
+  allowHttp: z.boolean().default(false),
+});
+
+export type CustomMcpAllowPrivateNetworks = z.infer<typeof CustomMcpAllowPrivateNetworksSchema>;
+
+/**
+ * Shape of the `customMcpPresetClients` value: `{ [presetId]: { clientId, clientSecret? } }`. The
+ * setting itself is a sensitive plain string (the masking protocol only supports strings), so the
+ * JSON is parsed here at the point of use.
+ */
+export const CustomMcpPresetClientsSchema = z.record(
+  z.string(),
+  z.object({ clientId: z.string().min(1), clientSecret: z.string().optional() })
+);
+
+export type CustomMcpPresetClients = z.infer<typeof CustomMcpPresetClientsSchema>;
+
+export type CustomMcpPresetClientsParse =
+  { ok: true; clients: CustomMcpPresetClients } | { ok: false; clients: CustomMcpPresetClients; error: string };
+
+/**
+ * Parse the stored `customMcpPresetClients` string. Blank is `ok` with no clients. Malformed JSON or
+ * a wrong shape is `ok: false` with an empty map and a reason: common has no logger, so the caller
+ * logs it (otherwise every preset OAuth flow fails with no diagnostic).
+ */
+export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClientsParse {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return { ok: true, clients: {} };
+  }
+  if (typeof raw !== 'string') return { ok: false, clients: {}, error: `Expected a JSON string, got ${typeof raw}` };
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, clients: {}, error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = CustomMcpPresetClientsSchema.safeParse(json);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      clients: {},
+      error: `Invalid shape at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`,
+    };
+  }
+  return { ok: true, clients: parsed.data };
+}
+
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
-  customLogoUrl: z.string().optional().prefault(''),
-  customDarkLogoUrl: z.string().optional().prefault(''),
-  useBothLogos: z.boolean().optional().prefault(false),
+  customLogoUrl: z.string().prefault(''),
+  customDarkLogoUrl: z.string().prefault(''),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
@@ -1079,6 +1260,20 @@ export const RapidReplySettingsSchema = z.object({
 });
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
+
+export const VideoGenerationSettingsSchema = z.object({
+  // Per-model override of VIDEO_MODEL_CATALOG[id].defaultEnabled; see isVideoModelEnabled in ../video/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
+
+export const MusicGenerationSettingsSchema = z.object({
+  // Per-model override of MUSIC_MODEL_CATALOG[id].defaultEnabled; see isMusicModelEnabled in ../music/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -1690,6 +1885,13 @@ export const API_SERVICE_GROUPS = {
     icon: 'AutoAwesome',
     settings: [{ key: 'voyageApiKey', order: 1 }],
   },
+  TYPESAFE: {
+    id: 'typesafeAPIService',
+    name: 'TypeSafe Service',
+    description: 'TypeSafe API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'typesafeApiKey', order: 1 }],
+  },
   WEATHER: {
     id: 'weatherAPIService',
     name: 'Weather Service',
@@ -1714,6 +1916,11 @@ export const API_SERVICE_GROUPS = {
       { key: 'atlassianClientSecret', order: 5 },
       { key: 'notionClientId', order: 6 },
       { key: 'notionClientSecret', order: 7 },
+      { key: 'EnableCustomMcpConnectors', order: 8 },
+      { key: 'customMcpPolicy', order: 9 },
+      { key: 'customMcpBlockedHosts', order: 10 },
+      { key: 'customMcpPresetClients', order: 11 },
+      { key: 'customMcpAllowPrivateNetworks', order: 12 },
     ],
   },
   Q_WORK: {
@@ -1878,6 +2085,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'enforceCredits', order: 2 },
       { key: 'billOperationalUsage', order: 3 },
       { key: 'enableTeamPlan', order: 4 },
+      { key: 'teamPlanMinSeats', order: 5 },
+      { key: 'teamPlanMaxSeats', order: 6 },
+      { key: 'teamPlanCreditsPerSeat', order: 7 },
+      { key: 'lowCreditsThreshold', order: 8 },
     ],
   },
   KNOWLEDGE: {
@@ -1889,6 +2100,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxFileSize', order: 1 },
       { key: 'VectorThreshold', order: 2 },
       { key: 'MaxContentLength', order: 3 },
+      { key: 'AiEditVersionRetention', order: 4 },
     ],
   },
   SLACK: {
@@ -2015,8 +2227,9 @@ export const settingsMap = {
     // which 401s where no key is configured. A reliable, tool-calling default also fixes the
     // tool-driven surfaces (OptiHashi et al.) that silently break on GPT-5 (internal tracking).
     // Opus/Fable remain an explicit opt-in.
-    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock can never work),
-    // while ANTHROPIC_API_KEY from .env.selfhost powers the Anthropic-hosted twin.
+    // Self-host inverts the reasoning: there is no AWS IAM there (Bedrock works only with the
+    // opt-in BEDROCK_AWS_* pair), while ANTHROPIC_API_KEY from .env.selfhost powers the
+    // Anthropic-hosted twin.
     // This is the authoritative default returned by getSettingsValue() when no AdminSettings override exists.
     defaultValue:
       process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
@@ -2026,6 +2239,21 @@ export const settingsMap = {
     order: 1,
     // publicSafe: read by LLMContext at startup; a model name is not sensitive (M2.5).
     publicSafe: true,
+  }),
+  recommendedModelIds: makeObjectSetting<string[]>({
+    key: 'recommendedModelIds',
+    name: 'Recommended Model IDs',
+    // Empty means "follow DefaultAPIModel", so a fresh deploy recommends only the default model
+    // and an admin who changes that setting sees the change here too. Resolved client-side by
+    // resolveRecommendedModelIds (apps/client/app/utils/recommendedModels.ts).
+    defaultValue: [],
+    description:
+      'Model IDs pinned in a "Recommended" group at the top of the model picker, in display order. Unknown or inaccessible IDs are skipped. Empty recommends the Default API Model.',
+    category: 'AI',
+    order: 2,
+    // The picker renders for every user, and a list of model ids is not sensitive.
+    userReadable: true,
+    schema: z.array(z.string()),
   }),
   openaiDemoKey: makeStringSetting({
     key: 'openaiDemoKey',
@@ -2075,6 +2303,16 @@ export const settingsMap = {
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.VOYAGE.id,
+    order: 1,
+  }),
+  typesafeApiKey: makeStringSetting({
+    key: 'typesafeApiKey',
+    name: 'TypeSafe API Key',
+    defaultValue: '',
+    description: 'TypeSafe API key used by the Decisions API for Jev models.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.TYPESAFE.id,
     order: 1,
   }),
   anthropicDemoKey: makeStringSetting({
@@ -2259,6 +2497,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 96,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGitHubReconcile: makeBooleanSetting({
+    key: 'EnableDataLakeGitHubReconcile',
+    name: 'Data Lakes: GitHub scheduled reconcile',
+    defaultValue: false,
+    description:
+      "Server-side gate for the scheduled check that compares each connected GitHub repository's default-branch HEAD with the last synced commit and queues a sync when they differ, so a missed or dropped push webhook still reaches the lake. Off by default - pushes still sync through the webhook and the Re-sync button; turn this on to also reconcile on a schedule.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakeGitHub',
   }),
   EnforceLakeAdmission: makeBooleanSetting({
     key: 'EnforceLakeAdmission',
@@ -2593,12 +2842,107 @@ export const settingsMap = {
     description: 'Whether to enable moderation for LLM prompts.',
     category: 'AI Moderation',
   }),
+  BedrockGuardrailId: makeStringSetting({
+    key: 'BedrockGuardrailId',
+    name: 'Bedrock Guardrail ID',
+    defaultValue: '',
+    description:
+      'Bedrock Guardrail identifier used for prompt moderation when no OpenAI key is available. Leave empty to skip Bedrock moderation.',
+    category: 'AI Moderation',
+  }),
+  BedrockGuardrailVersion: makeStringSetting({
+    key: 'BedrockGuardrailVersion',
+    name: 'Bedrock Guardrail Version',
+    defaultValue: 'DRAFT',
+    description: 'Version of the Bedrock Guardrail to apply. Defaults to DRAFT.',
+    category: 'AI Moderation',
+  }),
   ImageModerationEnabled: makeBooleanSetting({
     key: 'ImageModerationEnabled',
     name: 'Image Moderation Enabled',
     defaultValue: true,
     description:
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketHighRiskTools: makeStringSetting({
+    key: 'SkillMarketHighRiskTools',
+    name: 'Skill Market High-Risk Tools',
+    defaultValue: '',
+    description:
+      'Comma-separated tool names that force a Skill Market listing into human review, in addition to the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketUrlAllowlist: makeStringSetting({
+    key: 'SkillMarketUrlAllowlist',
+    name: 'Skill Market URL Allowlist',
+    defaultValue: '',
+    description:
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketClassifierMinConfidence: makeNumberSetting({
+    key: 'SkillMarketClassifierMinConfidence',
+    name: 'Skill Market Classifier Min Confidence',
+    defaultValue: 0.8,
+    min: 0,
+    max: 1,
+    description: 'Below this classifier confidence a passing skill lands in the review tier instead of clean.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketAuditSampleRate: makeNumberSetting({
+    key: 'SkillMarketAuditSampleRate',
+    name: 'Skill Market Audit Sample Rate',
+    defaultValue: 0.1,
+    min: 0,
+    max: 1,
+    description: 'Share of auto-approved Skill Market versions sent to the admin audit queue.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReviewSlaHours: makeNumberSetting({
+    key: 'SkillMarketReviewSlaHours',
+    name: 'Skill Market Review SLA (hours)',
+    defaultValue: 72,
+    min: 1,
+    int: true,
+    description:
+      'A held Skill Market version waiting longer than this triggers a daily reminder to the author and reviewers. It is never auto-approved.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketDailySubmitLimit: makeNumberSetting({
+    key: 'SkillMarketDailySubmitLimit',
+    name: 'Skill Market Daily Submit Limit',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Max Skill Market submissions (new listings plus new versions) per user per 24 hours.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketMaxListingsPerUser: makeNumberSetting({
+    key: 'SkillMarketMaxListingsPerUser',
+    name: 'Skill Market Max Listings Per User',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'Max live (not withdrawn or delisted) Skill Market listings one author may hold.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketPublicMinAccountAgeDays: makeNumberSetting({
+    key: 'SkillMarketPublicMinAccountAgeDays',
+    name: 'Skill Market Public Min Account Age (days)',
+    defaultValue: 3,
+    min: 0,
+    description: 'Accounts younger than this cannot publish Public listings (Organization and Unlisted are allowed).',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReportAutoHideThreshold: makeNumberSetting({
+    key: 'SkillMarketReportAutoHideThreshold',
+    name: 'Skill Market Report Auto-Hide Threshold',
+    defaultValue: 3,
+    min: 1,
+    int: true,
+    description:
+      'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
     category: 'AI Moderation',
   }),
   FormatPromptTemplate: makeStringSetting({
@@ -2964,6 +3308,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.KNOWLEDGE.id,
     order: 1,
   }),
+  AiEditVersionRetention: makeNumberSetting({
+    key: 'AiEditVersionRetention',
+    name: 'AI Edit Versions Kept',
+    defaultValue: AI_EDIT_VERSION_RETENTION_DEFAULT,
+    min: AI_EDIT_VERSION_RETENTION_MIN, // a blank field coerces to 0, which would trim every edited version
+    max: AI_EDIT_VERSION_RETENTION_MAX,
+    description:
+      'How many AI-edited versions are kept per file. Older edited versions are deleted from storage ' +
+      'on the next edit. The original upload is always kept in addition.',
+    category: 'Knowledge',
+    group: API_SERVICE_GROUPS.KNOWLEDGE.id,
+    order: 4,
+  }),
   DefaultContext: makeNumberSetting({
     key: 'DefaultContext',
     name: 'Default Context Size',
@@ -3034,6 +3391,8 @@ export const settingsMap = {
     category: 'Calendar',
     group: API_SERVICE_GROUPS.CALENDAR.id,
     order: 1,
+    // The Integrations page derives the Google Calendar card's status from it.
+    userReadable: true,
   }),
   googleCalendarServiceAccountEmail: makeStringSetting({
     key: 'googleCalendarServiceAccountEmail',
@@ -3117,10 +3476,75 @@ export const settingsMap = {
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
+    // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
+    userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
+    description: `Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup - an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this - their hard ceiling of real model cost is roughly credits / ${CREDITS_PER_USD_COST} USD.`,
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMinSeats: makeNumberSetting({
+    key: 'teamPlanMinSeats',
+    // Read by the create-team and billing UIs for non-admin org owners.
+    userReadable: true,
+    name: 'Team Plan Minimum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
     description:
-      'Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup — an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this — their hard ceiling of real model cost is roughly credits ÷ 1500 USD.',
+      'Fewest seats a paid team subscription can be bought with. Enforced at checkout, on seat changes from Stripe and on admin conversion to paid. Admin grants may still go down to 1. If set above the maximum seats, the maximum wins.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanMaxSeats: makeNumberSetting({
+    key: 'teamPlanMaxSeats',
+    userReadable: true,
+    name: 'Team Plan Maximum Seats',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+    int: true,
+    min: 1,
+    max: TEAM_PLAN_SEATS_HARD_LIMIT,
+    description:
+      'Most seats any team can hold (owner + members + pending invites). Enforced at checkout, on every seat change, on admin grants and on the partner-signup auto-raise. Lowering it below a team that is already larger does not remove anyone; that team can only be set down to this cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  teamPlanCreditsPerSeat: makeNumberSetting({
+    key: 'teamPlanCreditsPerSeat',
+    name: 'Team Plan Credits Per Seat',
+    defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits added to a team pool per paid seat each billing cycle (and per seat-month on admin team grants). Applies to invoices issued after the change; credits already granted are not adjusted.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    // The Team plan card quotes the pool size to every signed-in user.
+    userReadable: true,
+  }),
+  lowCreditsThreshold: makeNumberSetting({
+    key: 'lowCreditsThreshold',
+    // The credit chip and low-credit warnings read this for every signed-in user.
+    userReadable: true,
+    name: 'Low Credit Warning Threshold',
+    defaultValue: LOW_CREDITS_THRESHOLD_DEFAULT,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Below this many credits a user sees the low-credit warning state. Set to 0 to show warnings only once credits run out.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  syntheticUserEmailDomains: makeStringSetting({
+    key: 'syntheticUserEmailDomains',
+    name: 'Synthetic User Email Domains',
+    defaultValue: '',
+    description:
+      'Comma-separated email domains whose new signups are flagged synthetic (test personas) and excluded from funnel analytics. Accounts whose username starts with "persona-" are always flagged. Applies at signup only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3409,6 +3833,8 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 1,
+    // The Integrations page derives the agent-tool capabilities' status from it.
+    userReadable: true,
   }),
   githubMcpClientId: makeStringSetting({
     key: 'githubMcpClientId',
@@ -3469,6 +3895,77 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MCP.id,
     order: 7,
     isSensitive: true,
+  }),
+  EnableCustomMcpConnectors: makeBooleanSetting({
+    key: 'EnableCustomMcpConnectors',
+    name: 'Enable Custom MCP Connectors',
+    defaultValue: false,
+    description:
+      'Platform master switch for custom remote MCP connectors (beta). Off: no custom connector tools ' +
+      'are offered and new connections cannot be created; existing ones can still be disconnected. ' +
+      'Orgs cannot override it; an org closes connectors for its members with customMcpPolicy mode off.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 8,
+    dependsOn: 'EnableMCPServer',
+    // The Integrations page derives the custom connector card's status from it.
+    userReadable: true,
+  }),
+  customMcpPolicy: makeObjectSetting({
+    key: 'customMcpPolicy',
+    name: 'Custom MCP Connector Policy',
+    defaultValue: CustomMcpPolicySchema.parse({}),
+    description:
+      'Which custom MCP servers members may connect. mode: off (org kill switch; ANDed with the platform ' +
+      'flag), presets_only (catalog presets only), ' +
+      'allowlist (allowedHostPatterns only) or any. blockedHostPatterns apply in every mode. ' +
+      'allowUnauthenticated permits servers with no sign-in; allowWriteTools false hides tools not ' +
+      'marked read-only; requireApprovalForAll asks before every tool call. Overridable per org.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 9,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpPolicySchema,
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  customMcpBlockedHosts: makeObjectSetting({
+    key: 'customMcpBlockedHosts',
+    name: 'Custom MCP Blocked Hosts',
+    defaultValue: CustomMcpBlockedHostsSchema.parse({}),
+    description:
+      'Platform kill switch per host: custom MCP connections to these hosts are blocked for every ' +
+      'org and user on their next use. Exact hosts or *.example.com patterns.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 10,
+    // No dependsOn: the operator kill switch must stay visible and editable while the flag is off.
+    schema: CustomMcpBlockedHostsSchema,
+  }),
+  customMcpPresetClients: makeStringSetting({
+    key: 'customMcpPresetClients',
+    name: 'Custom MCP Preset OAuth Clients',
+    defaultValue: '',
+    description:
+      'JSON map of pre-registered OAuth clients for connector presets whose vendor offers no dynamic ' +
+      'registration: {"<presetId>": {"clientId": "...", "clientSecret": "..."}}.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 11,
+    isSensitive: true,
+  }),
+  customMcpAllowPrivateNetworks: makeObjectSetting({
+    key: 'customMcpAllowPrivateNetworks',
+    name: 'Custom MCP Private Networks (self-host)',
+    defaultValue: CustomMcpAllowPrivateNetworksSchema.parse({}),
+    description:
+      'Self-host only, ignored on hosted deployments. CIDRs that custom MCP connections may reach even ' +
+      'though they are private, and whether plain http is allowed. Empty (the default) blocks every ' +
+      'private address.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.MCP.id,
+    order: 12,
+    dependsOn: 'EnableCustomMcpConnectors',
+    schema: CustomMcpAllowPrivateNetworksSchema,
   }),
   qWorkUrl: makeStringSetting({
     key: 'qWorkUrl',
@@ -3803,22 +4300,27 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
-      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
-      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
-      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'gate - the relative floor above does the ranking. LEAVE IT UNSET UNLESS YOU HAVE MEASURED YOUR ' +
+      'OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so while ' +
+      'unset the server applies the floor measured for whichever model your documents are actually ' +
+      `embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
-      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
-      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
-      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
-      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
-      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model.',
+      `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
+      `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
+      'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
+      'query, so a value above the floor measured for the default model needs confirmation ' +
+      'to save. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
+      '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
+      'Re-measure after changing the embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+    // Unset resolves per embedding space; a stored value, 75 included, is honored in every space.
+    clearDeletesRow: true,
+    unsetLabel: 'per embedding space',
   }),
   forcedRetrievalSpreadFloorPct: makeNumberSetting({
     key: 'forcedRetrievalSpreadFloorPct',
@@ -4090,6 +4592,14 @@ export const settingsMap = {
     defaultValue: '',
     category: 'AI',
   }),
+  PerplexityApiKey: makeStringSetting({
+    key: 'PerplexityApiKey',
+    name: 'Perplexity API Key',
+    description: 'The API key for Perplexity AI search service',
+    defaultValue: '',
+    isSensitive: true,
+    category: 'AI',
+  }),
   EnableDeepResearch: makeBooleanSetting({
     key: 'EnableDeepResearch',
     name: 'Enable Deep Research',
@@ -4242,6 +4752,15 @@ export const settingsMap = {
     order: 10,
     schema: RapidReplySettingsSchema,
   }),
+  OrgFeedbackSummaryModel: makeStringSetting({
+    key: 'OrgFeedbackSummaryModel',
+    name: 'Organization Feedback Summary Model',
+    defaultValue: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+    description: 'The AI model used for organization feedback summaries. The selected provider must be configured.',
+    options: CHAT_MODELS,
+    category: 'AI',
+    order: 199,
+  }),
   EnableEmailAnalysis: makeBooleanSetting({
     key: 'EnableEmailAnalysis',
     name: 'Enable Email Analysis',
@@ -4249,6 +4768,8 @@ export const settingsMap = {
     description: 'Enable AI-powered analysis of ingested emails (summary, entities, sentiment, action items).',
     category: 'AI',
     order: 200,
+    // The Integrations page derives the inbound-email analysis capability's status from it.
+    userReadable: true,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
@@ -4339,6 +4860,16 @@ export const settingsMap = {
     category: 'Admin',
     order: 102,
     schema: WhatsNewSyncConfigSchema,
+  }),
+  releaseNotesConfig: makeObjectSetting({
+    key: 'releaseNotesConfig',
+    name: 'Release Notes Configuration',
+    defaultValue: ReleaseNotesConfigSchema.parse({}),
+    description:
+      'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
+    category: 'Admin',
+    order: 103,
+    schema: ReleaseNotesConfigSchema,
   }),
   enableAgentProactiveMessages: makeBooleanSetting({
     key: 'enableAgentProactiveMessages',
@@ -4569,17 +5100,17 @@ export const settingsMap = {
     name: 'Hardware Compute: Max USD per run',
     defaultValue: 300,
     min: 1,
-    max: 10_000,
+    // Kept in USD so it survives a HardwareComputeCreditsPerUsd change. The ceiling matches
+    // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
+    max: 100_000,
     description:
-      'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
-      'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
-      'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
-      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
-      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity.',
+      'Runaway brake on a single eligible hybrid compute job run on real external compute hardware ' +
+      '(see EnableHardwareCompute): a run whose reserved worst-case cost exceeds this is rejected before ' +
+      'submission, independent of the live device roster. It exists to stop a looping run or a client ' +
+      'retry bug, not to set a spending budget. The default suits a deployment that pays for hardware ' +
+      'out of its own funds; where hardware spend is funded and metered separately, size it so the ' +
+      'largest planned run fits under it (up to $100k, no deploy needed). A run above the per-user daily ' +
+      'cap is still rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -4608,13 +5139,12 @@ export const settingsMap = {
     min: 1,
     max: 100_000,
     description:
-      "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
+      "Rolling 24h per-user ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
-      'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
-      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
-      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
-      'patterns emerge.',
+      'hardware (see EnableHardwareCompute). A cumulative runaway brake alongside the per-run cost ceiling ' +
+      'and the concurrent-run cap, not a spending budget. The default suits a deployment that pays for ' +
+      'hardware out of its own funds; where hardware spend is funded and metered separately, size it to a ' +
+      'heavy day of planned runs. Raise it here without a deploy.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
@@ -4766,6 +5296,54 @@ export const settingsMap = {
     category: 'AI',
     order: 140,
     schema: OrchestrationDefaultsSchema,
+  }),
+  videoGeneration: makeObjectSetting({
+    key: 'videoGeneration',
+    userReadable: true,
+    name: 'Video Generation',
+    defaultValue: VideoGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual video generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 145,
+    schema: VideoGenerationSettingsSchema,
+  }),
+  agentVideoClipsPerRun: makeNumberSetting({
+    key: 'agentVideoClipsPerRun',
+    name: 'Agent Video Clips Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most video_generation clips one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 146,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.videoToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  musicGeneration: makeObjectSetting({
+    key: 'musicGeneration',
+    userReadable: true,
+    name: 'Music Generation',
+    defaultValue: MusicGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual music generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 147,
+    schema: MusicGenerationSettingsSchema,
+  }),
+  agentMusicTracksPerRun: makeNumberSetting({
+    key: 'agentMusicTracksPerRun',
+    name: 'Agent Music Tracks Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most music_generation songs one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each song still holds and settles its own credits.',
+    category: 'AI',
+    order: 148,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',
@@ -4938,7 +5516,7 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  * Every setting the forced-retrieval merge resolves, in one list - the sibling of
  * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
  * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
- * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * through `resolveScopedSettingEntries`, and the guard in settings.test.ts loops this list to assert
  * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
  * no single lake can key a narrower rung (#2572).
  *

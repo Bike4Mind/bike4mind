@@ -2,6 +2,7 @@ import defineAbilitiesFor, { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
   agentRepository,
+  cacheRepository,
   compareMongoIds,
   favoriteRepository,
   mongoose,
@@ -11,6 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { NotFoundError } from '@server/utils/errors';
+import { getFilesStorage } from '@server/utils/storage';
 import {
   Permission,
   ISessionDocument,
@@ -18,6 +20,7 @@ import {
   ISession,
   ISessionOrigin,
   IUserDocument,
+  isSessionPinnableAttachment,
   SessionListFilters,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -32,6 +35,7 @@ import {
   logProjectSessionAddedEvent,
   recordNotebookAddedToProjectActivity,
 } from './sessionSideEffects';
+import { pinnableMessageFileIds } from './pinnableMessageFileIds';
 
 /**
  * Session lifecycle, querying, and basic persistence.
@@ -68,8 +72,28 @@ export interface GetOrCreateSessionParams {
   ability?: Ability;
   /** Logger instance */
   logger: Logger;
-  /** Fab file IDs if session should be associated with fab files */
+  /** Per-turn files; seeds knowledge on a new session. */
   fabFileIds?: string[];
+  /**
+   * Internal: on an existing session, also persist the new notebook-scope fabFileIds to knowledgeIds
+   * (best-effort, never propagated to projects). Set only by callers that know the ids were newly
+   * attached (Slack uploads); never wire it from a request body - a browser sends its whole
+   * workbench, so a stale tab would re-add a file another tab removed.
+   */
+  persistFabFileIds?: boolean;
+  /**
+   * This message's own attachments. Unlike the workbench in fabFileIds, a message attachment is an
+   * explicit gesture, so its notebook-scope files are always pinned to knowledgeIds (new or existing
+   * session) and stay in context on later turns. See pinFilesToSessionKnowledge.
+   */
+  messageFileIds?: string[];
+  /** Message attachments the user scoped to this message only; never pinned. */
+  messageOnlyFileIds?: string[];
+  /**
+   * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
+   * `sessionService.createSession`, which drops ids the caller cannot access.
+   */
+  agentIds?: string[];
   /** Stamped on a newly created session only (see resolveSessionOrigin); ignored for an existing one. */
   origin?: ISessionOrigin;
 }
@@ -107,13 +131,105 @@ export interface GetOrCreateSessionResult {
  * Promise.all(asyncPromises).catch(err => logger.error('Background task failed:', err));
  * ```
  */
+/**
+ * Lake resolvers for a request-free caller (it has a user but no request), so the access check and
+ * the lake-tag derivation see lake-membership files - an ownership/share reader cannot follow the
+ * creator-identity widening an organization lake uses. See resolveRetrievalLakeScopeForUser.
+ * Imported at CALL time: the resolvers' graph reaches the entitlement and Mongoose layers, and it is
+ * only needed when files are actually attached.
+ */
+const lakeAdaptersFor = (user: IUserDocument, logger: Logger) => ({
+  resolveLakeAccess: async () =>
+    (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, { logger }),
+  resolveAttachmentLakeAccess: async () =>
+    (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, logger)(),
+});
+
+/**
+ * The notebook-scope subset of `ids`, lowercased and deduplicated, in input order. Images stay
+ * per-turn: a notebook image is re-sent as base64 every turn (see isSessionPinnableAttachment).
+ * findMetadataByIds includes soft-deleted rows; those must not come back as knowledge.
+ */
+const notebookScopedFileIds = async (ids: string[], logger: Logger, sessionId?: string): Promise<string[]> => {
+  const unique = [...new Set(ids.map(id => id.toLowerCase()))];
+  if (unique.length === 0) return [];
+  const { data, hasMore } = await fabFileRepository.findMetadataByIds(unique);
+  if (hasMore) logger.warn('fabFileIds exceed the metadata cap; persisting the first page', { sessionId });
+  const notebook = new Set(
+    data.filter(file => !file.deletedAt && isSessionPinnableAttachment(file.mimeType)).map(file => String(file.id))
+  );
+  return unique.filter(id => notebook.has(id));
+};
+
+/**
+ * Pins the notebook-scope files among `fileIds` to `session.knowledgeIds`, so a file sent on one
+ * turn stays in context on later ones. Add-only ($addToSet) and access-checked in
+ * sessionService.updateSession, which drops any file the user cannot read; never propagated to
+ * projects, since an automatic attach is not consent to share. Best-effort: on failure the
+ * session is returned unchanged and the current turn still carries the files itself.
+ * Returns the session as written, or the input session when nothing was added.
+ *
+ * There is no cap on pins. Inline token use stays bounded as the list grows: every turn splits one
+ * attachedFileTokenBudget evenly across the inlined files (buildDataSources), so another pin thins
+ * each file's share rather than adding tokens.
+ */
+export async function pinFilesToSessionKnowledge(
+  session: ISessionDocument,
+  fileIds: string[],
+  { user, logger }: { user: IUserDocument; logger: Logger }
+): Promise<ISessionDocument> {
+  const known = new Set((session.knowledgeIds ?? []).map(id => String(id).toLowerCase()));
+  const addedIds = fileIds.filter(id => !known.has(id.toLowerCase()));
+  if (addedIds.length === 0) return session;
+  try {
+    const notebookIds = await notebookScopedFileIds(addedIds, logger, session.id);
+    if (notebookIds.length === 0) return session;
+    return await sessionService.updateSession(
+      user,
+      // Add-only: `known` was read before the metadata lookup, so writing the full list back
+      // would undo a detach the user made in the meantime.
+      { id: session.id, knowledgeIds: notebookIds, knowledgeIdsMode: 'add', propagateToProjects: false },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          caches: cacheRepository,
+        },
+        logger,
+        ...lakeAdaptersFor(user, logger),
+        storage: getFilesStorage(),
+      }
+    );
+  } catch (error) {
+    logger.warn('Failed to write the session knowledge pin', { sessionId: session.id, error });
+    return session;
+  }
+}
+
 export async function getOrCreateSession(params: GetOrCreateSessionParams): Promise<GetOrCreateSessionResult> {
-  const { sessionId: reqSessionId, sessionName, projectId, user, ability, logger, fabFileIds, origin } = params;
+  const {
+    sessionId: reqSessionId,
+    sessionName,
+    projectId,
+    user,
+    ability,
+    logger,
+    fabFileIds,
+    persistFabFileIds,
+    messageFileIds,
+    messageOnlyFileIds,
+    agentIds,
+    origin,
+  } = params;
   const userId = user.id;
 
   const asyncPromises: Promise<unknown>[] = [];
   let session: ISessionDocument | null;
   let wasCreated = false;
+
+  const lakeAdapters = lakeAdaptersFor(user, logger);
+  const messagePins = pinnableMessageFileIds(messageFileIds, messageOnlyFileIds);
 
   if (reqSessionId) {
     // Resolve an existing session through an access-scoped lookup, never a bare findById -
@@ -131,12 +247,34 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           ...accessibleBy(ability, Permission.update).ofType(SessionModel),
         })
       : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
+
+    // Persist the notebook-scope files this turn adds - otherwise a file rides this turn only (later
+    // turns read session.knowledgeIds). fabFileIds only when the caller vouches they are new.
+    if (session) {
+      session = await pinFilesToSessionKnowledge(
+        session,
+        [...(persistFabFileIds ? (fabFileIds ?? []) : []), ...messagePins],
+        { user, logger }
+      );
+    }
   } else {
+    // Seeded at create rather than pinned after it, so the session.created push already carries
+    // them and the client's workbench hydrates with the file in place.
+    const seeded = new Set((fabFileIds ?? []).map(id => id.toLowerCase()));
+    const messageKnowledgeIds = (
+      await notebookScopedFileIds(messagePins, logger).catch(error => {
+        logger.warn('Failed to resolve the session knowledge pin for a new session', { error });
+        return [];
+      })
+    ).filter(id => !seeded.has(id));
     const createdSession = await sessionService.createSession(
       user,
       {
         name: sessionName ?? 'New Notebook',
-        knowledgeIds: fabFileIds ?? [],
+        // Every workbench file, images included, on purpose: the user started the notebook with them
+        // (matches createSessionForFile). Message attachments keep images per-turn, as on later sends.
+        knowledgeIds: [...(fabFileIds ?? []), ...messageKnowledgeIds],
+        agentIds: agentIds ?? [],
         projectId,
       },
       {
@@ -146,21 +284,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           fabFiles: fabFileRepository,
           agents: agentRepository,
         },
-        // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
-        // and it is only needed when files are actually attached.
-        // Lets the lake-tag derivation see lake-membership files - an ownership/share reader cannot
-        // follow the creator-identity widening an organization lake uses. Request-free variant: this
-        // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
-        resolveLakeAccess: async () =>
-          (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
-            logger,
-          }),
-        // The attachment door's lake arms, so a supplied lake file passes the access check.
-        resolveAttachmentLakeAccess: async () =>
-          (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-            user,
-            logger
-          )(),
+        ...lakeAdapters,
       },
       { origin }
     );

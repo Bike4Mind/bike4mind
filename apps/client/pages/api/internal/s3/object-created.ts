@@ -1,12 +1,16 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@server/utils/storage';
+import { chargeUploadedObject } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
+import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
 import type { Context, S3Event } from 'aws-lambda';
 import crypto from 'crypto';
@@ -14,20 +18,24 @@ import crypto from 'crypto';
 /**
  * Self-host S3 ObjectCreated webhook.
  *
- * In AWS, an S3 ObjectCreated event invokes objectCreated.ts (server/s3) to mark the
+ * In AWS, an S3 ObjectCreated event invokes apps/workers/src/s3/objectCreated.ts to mark the
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the
- * essential objectCreated path - mark complete, enqueue chunking - but skips Rekognition
- * image moderation (no AWS Rekognition in self-host). A scheduler scan in the worker is
- * the safety net for any notification that doesn't arrive.
+ * objectCreated path - mark complete, charge the uploader's storage, enqueue chunking, run the
+ * upload-time moderation scan.
+ * A file is unservable until that scan resolves it, so skipping it here held every self-host
+ * file for the rescue sweep's 30-minute floor. On self-host the scan is the type sniff only:
+ * the image check returns early without Rekognition (see imageModerationGate.ts). A scheduler
+ * scan in the worker is the safety net for any notification that doesn't arrive.
  *
  * Self-host only (404 otherwise) and guarded by a shared secret (INTERNAL_S3_WEBHOOK_SECRET)
  * that MinIO sends in the Authorization header; browsers never learn it.
  */
 
 interface MinioS3Record {
-  s3?: { bucket?: { name?: string }; object?: { key?: string } };
+  eventTime?: string;
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number } };
 }
 
 /**
@@ -112,6 +120,7 @@ const handler = baseApi({ auth: false }).post(
     }
 
     const enableAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
+    const moderationEnabled = (await adminSettingsRepository.getSettingsValue('ImageModerationEnabled')) ?? true;
 
     for (const record of fabFileRecords) {
       const rawKey = record.s3?.object?.key;
@@ -131,9 +140,39 @@ const handler = baseApi({ auth: false }).post(
         continue;
       }
 
+      const statusBeforeUpload = metadata.status;
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
+
+      // Charged from the stored object's size, never the row's client-claimed fileSize. The
+      // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
+      // complete and a redelivery would enqueue chunking twice.
+      try {
+        const payloadSize = record.s3?.object?.size;
+        const size =
+          typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
+            ? payloadSize
+            : (await getFilesStorage().getMetadata(objectKey)).size;
+        if (size === undefined) {
+          req.logger.warn(`No object size for ${objectKey}; storage not charged`);
+        } else {
+          const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
+          const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
+          await withTransaction(async session => {
+            const user = await User.findById(metadata.userId).session(session);
+            // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+            if (
+              user &&
+              (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))
+            ) {
+              await user.save({ session });
+            }
+          });
+        }
+      } catch (error) {
+        req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
+      }
 
       // Mirrors the hosted event: the bytes have landed, so the lakes this file joined can be
       // counted - and, if one is still a draft, activated.
@@ -151,6 +190,27 @@ const handler = baseApi({ auth: false }).post(
           req.logger.error(`Failed to enqueue FabFile for chunking: ${error}`);
         }
       }
+
+      // The same claim/scan/persist the rescue sweep runs, so the two cannot double-scan a row. Not
+      // awaited: the scan downloads the object, and holding MinIO's webhook on that invites a
+      // redelivery. Deps are built inside the chain so a wiring error is logged instead of 500ing a
+      // file already marked complete. A failed or lost scan leaves the file 'pending' for the sweep.
+      void Promise.resolve()
+        .then(() =>
+          moderateImportedKnowledgeFiles({
+            filePaths: [objectKey],
+            userId: metadata.userId,
+            enabled: moderationEnabled,
+            // The bytes just landed, so a missing read is a storage blip to retry, not an orphan to retire.
+            terminalOnMissingObject: false,
+            ...buildKnowledgeModerationDeps(req.logger),
+          })
+        )
+        .catch(err =>
+          req.logger.error(
+            `Upload moderation failed for ${objectKey}: ${err instanceof Error ? err.message : String(err)}`
+          )
+        );
     }
 
     return res.status(200).json({ ok: true });

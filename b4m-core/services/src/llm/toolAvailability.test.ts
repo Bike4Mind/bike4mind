@@ -64,23 +64,12 @@ describe('resolveToolAvailability - search & scrape providers', () => {
   });
 });
 
-describe('resolveToolAvailability - music_generation and audio_generation ElevenLabs/OpenAI gate', () => {
-  it('music_generation is available when an ElevenLabs key resolves', async () => {
-    getEffectiveApiKey.mockImplementation(async (_userId: string, sel: { type: ApiKeyType }) =>
-      sel.type === ApiKeyType.elevenlabs ? 'el-key' : undefined
-    );
+describe('resolveToolAvailability - audio_generation ElevenLabs/OpenAI gate', () => {
+  // A music model can run on a Gemini key, an ElevenLabs key or no key at all (test model), so the tool
+  // builder gates music_generation on its job config instead (sharedToolBuilder).
+  it('leaves music_generation ungated', async () => {
     const availability = await resolveToolAvailability('user-1', { db });
-    expect(availability.music_generation).toBe(true);
-  });
-
-  it('music_generation is hidden when no ElevenLabs key is configured', async () => {
-    const availability = await resolveToolAvailability('user-1', { db });
-    expect(availability.music_generation).toBe(false);
-  });
-
-  it('music_generation is hidden for an anonymous (no-user) request', async () => {
-    const availability = await resolveToolAvailability(undefined, { db });
-    expect(availability.music_generation).toBe(false);
+    expect(availability).not.toHaveProperty('music_generation');
   });
 
   it('audio_generation is available with only an OpenAI key (no ElevenLabs)', async () => {
@@ -89,7 +78,6 @@ describe('resolveToolAvailability - music_generation and audio_generation Eleven
     );
     const availability = await resolveToolAvailability('user-1', { db });
     expect(availability.audio_generation).toBe(true);
-    expect(availability.music_generation).toBe(false);
   });
 
   it('audio_generation is hidden with neither an OpenAI nor an ElevenLabs key', async () => {

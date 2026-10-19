@@ -26,6 +26,8 @@ const {
   mockArmCallback,
   mockFindCallbackById,
   mockClaimCallbackDispatch,
+  mockOrgFindById,
+  mockOrgFindAccessibleById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -39,6 +41,8 @@ const {
   mockArmCallback: vi.fn(),
   mockFindCallbackById: vi.fn(),
   mockClaimCallbackDispatch: vi.fn(),
+  mockOrgFindById: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -89,6 +93,14 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.userApiKeyRepository as object),
       findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
     },
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      findById: (...a: unknown[]) => mockOrgFindById(...a),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
+    },
   };
 });
 
@@ -109,7 +121,7 @@ vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/queueHandlers/imageGeneration', () => ({
+vi.mock('@server/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 
@@ -134,9 +146,11 @@ vi.mock('@server/auth/auth', async orig => {
 import handler from '../image-generations';
 import legacyHandler from '../../ai/generate-image';
 import { questRepository } from '@bike4mind/database';
-import { ApiKeyScope, ApiKeyStatus, GenerateImageResponseSchema } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType, GenerateImageResponseSchema } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
+const USER = { id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false };
+const HOME_ORG = 'c'.repeat(24);
 
 function fire({
   apiKey = VALID_KEY as string | null,
@@ -155,20 +169,28 @@ function fire({
   return { req: req as any, res: res as any };
 }
 
-function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
+function validateWithScopes(
+  scopes: ApiKeyScope[] | string[],
+  billing: { billingOwnerType?: CreditHolderType; organizationId?: string } = {}
+) {
   mockValidate.mockResolvedValue({
     isValid: true,
     keyId: 'k1',
     userId: 'user-1',
     scopes,
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...billing,
   });
 }
 
 describe('POST /api/v1/image-generations (integration - contract auth + validation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
+    mockUserFindById.mockResolvedValue(USER);
+    mockOrgFindById.mockImplementation(async (id: string) => ({ id, userId: 'owner', users: [{ userId: 'user-1' }] }));
+    mockOrgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
+      id === HOME_ORG ? { id } : null
+    );
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockGetRecentHistory.mockResolvedValue([]);
     mockResolveImagePrompt.mockResolvedValue({ rewrittenPrompt: 'a red bicycle', intent: 'fresh' });
@@ -204,6 +226,66 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it('strips server-owned fields from the returned session', async () => {
+    mockGetOrCreateSession.mockResolvedValue({
+      sessionId: 'sess-1',
+      asyncPromises: [],
+      session: {
+        id: 'sess-1',
+        systemPromptText: 'secret prompt',
+        preauthorizedLakeIds: ['lake-1'],
+        origin: { channel: 'api', apiKeyId: 'k1' },
+      },
+    });
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const { session } = res._getJSONData();
+    expect(session).toMatchObject({ id: 'sess-1', origin: { channel: 'api' } });
+    expect(session).not.toHaveProperty('systemPromptText');
+    expect(session).not.toHaveProperty('preauthorizedLakeIds');
+    expect(session.origin).not.toHaveProperty('apiKeyId');
+  });
+
+  describe('referenceImageFabFileIds', () => {
+    const REFS = ['ref-1', 'ref-2'];
+
+    it('accepts reference images for a gpt-image model (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'gpt-image-1', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-pro-1.1', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/referenceImageFabFileIds.*flux-pro-1\.1/);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('accepts a non-gpt-image model with no reference images (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-pro-1.1', referenceImageFabFileIds: [] },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing generation', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { prompt: 'a red bicycle' } });
@@ -233,6 +315,62 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
         }),
       })
     );
+  });
+
+  describe('prompt_resolution', () => {
+    const LITERAL_PROMPT = 'a different variant';
+    const REWRITTEN_PROMPT = 'a red bicycle on a white background, different variant';
+
+    beforeEach(() => {
+      mockGetRecentHistory.mockResolvedValue([{ id: 'prior-quest', images: ['prior.png'] }]);
+      mockResolveImagePrompt.mockResolvedValue({ rewrittenPrompt: REWRITTEN_PROMPT, intent: 'continuation' });
+    });
+
+    it.each([undefined, 'auto'] as const)('rewrites a continuation when prompt_resolution is %s', async mode => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', ...(mode ? { prompt_resolution: mode } : {}) },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ promptWasEnhanced: true, intent: 'continuation' });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ prompt: REWRITTEN_PROMPT }) })
+      );
+    });
+
+    it('sends a literal prompt unchanged and skips the history resolver', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'literal' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        enhancedPrompt: LITERAL_PROMPT,
+        promptWasEnhanced: false,
+        intent: 'fresh',
+      });
+      expect(mockGetRecentHistory).not.toHaveBeenCalled();
+      expect(mockResolveImagePrompt).not.toHaveBeenCalled();
+      const invokedBody = mockInvoke.mock.calls[0][0].body;
+      expect(invokedBody).toMatchObject({
+        prompt: LITERAL_PROMPT,
+        intent: 'fresh',
+        promptEnhancement: { originalPrompt: LITERAL_PROMPT, enhancedPrompt: LITERAL_PROMPT, promptWasEnhanced: false },
+      });
+      expect(invokedBody).not.toHaveProperty('prompt_resolution');
+    });
+
+    it('rejects an unknown prompt_resolution (422) before enqueuing generation', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'verbatim' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
   });
 
   it('serves the legacy /api/ai/generate-image path with the same handler', () => {
@@ -308,6 +446,92 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
         apiKeyId: 'k1',
         state: 'pending',
       });
+    });
+  });
+
+  describe('billing target (API key)', () => {
+    const KEY_ORG = 'd'.repeat(24);
+    const OTHER_ORG = 'b'.repeat(24);
+    const HOME_ORG = 'c'.repeat(24);
+    const base = { prompt: 'a red bicycle', model: 'gpt-image-1' };
+    const orgKey = () =>
+      validateWithScopes([ApiKeyScope.AI_GENERATE], {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: KEY_ORG,
+      });
+    const billedOrg = () => mockInvoke.mock.calls[0][0].body.organizationId;
+
+    it('bills the key org when the body names none', async () => {
+      orgKey();
+      const { req, res } = fire({ body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(KEY_ORG);
+    });
+
+    it('bills the key org when the body names the same org', async () => {
+      orgKey();
+      const { req, res } = fire({ body: { ...base, organizationId: KEY_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(KEY_ORG);
+    });
+
+    it.each([
+      ['another org', OTHER_ORG],
+      ['null (personal)', null],
+    ])('refuses %s on an org-billed key (403) before enqueuing', async (_label, orgId) => {
+      orgKey();
+      const { req, res } = fire({ body: { ...base, organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'billing_organization_mismatch' });
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses an org-billed key whose org no longer exists (400) before enqueuing', async () => {
+      orgKey();
+      mockOrgFindById.mockResolvedValue(null);
+      const { req, res } = fire({ body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('keeps a personal key on the home org when the body names none', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      mockUserFindById.mockResolvedValue({ ...USER, organizationId: HOME_ORG });
+      const { req, res } = fire({ body: base });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(HOME_ORG);
+      expect(mockOrgFindById).not.toHaveBeenCalled();
+    });
+
+    it('keeps a personal key on the org the body names', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { ...base, organizationId: HOME_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(HOME_ORG);
+    });
+
+    it('keeps a session caller on the org the body names', async () => {
+      const { req, res } = fire({ apiKey: null, body: { ...base, organizationId: HOME_ORG } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(billedOrg()).toBe(HOME_ORG);
+      expect(mockOrgFindById).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   '])('rejects a blank organizationId %j (422) instead of billing personal', async orgId => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { ...base, organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 });

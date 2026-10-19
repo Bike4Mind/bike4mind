@@ -19,16 +19,20 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # The deps stage copies and runs this script for the overlay install, so a rename or
+      # deletion breaks every image build (the COPY has no source) without running this gate.
+      - 'scripts/link-premium-overlays.mjs'
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'
       # The docs are baked into the image by the same prebuild, so a docs-only edit changes
       # what ships and has to revalidate it.
       - 'docs-site/docs/**'
-      # Root package.json drives pnpm install and the turbo build graph in this image, so a
-      # manifest-only edit that changes what gets built has to revalidate the image even when the
-      # lockfile is unchanged.
+      # Root package.json and pnpm-workspace.yaml drive pnpm install and the turbo build graph in
+      # this image, so a manifest-only edit that changes what gets built has to revalidate the image
+      # even when the lockfile is unchanged.
       - 'package.json'
+      - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       # The builder loads this template as the built-API-route probe's placeholder env, so a key
       # change can flip the image build's verdict.
@@ -40,16 +44,20 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # The deps stage copies and runs this script for the overlay install, so a rename or
+      # deletion breaks every image build (the COPY has no source) without running this gate.
+      - 'scripts/link-premium-overlays.mjs'
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'
       # The docs are baked into the image by the same prebuild, so a docs-only edit changes
       # what ships and has to revalidate it.
       - 'docs-site/docs/**'
-      # Root package.json drives pnpm install and the turbo build graph in this image, so a
-      # manifest-only edit that changes what gets built has to revalidate the image even when the
-      # lockfile is unchanged.
+      # Root package.json and pnpm-workspace.yaml drive pnpm install and the turbo build graph in
+      # this image, so a manifest-only edit that changes what gets built has to revalidate the image
+      # even when the lockfile is unchanged.
       - 'package.json'
+      - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       # The builder loads this template as the built-API-route probe's placeholder env, so a key
       # change can flip the image build's verdict.

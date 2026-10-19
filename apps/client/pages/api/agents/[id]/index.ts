@@ -1,26 +1,13 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { agentRepository, User, userRepository, creditTransactionRepository } from '@bike4mind/database';
-import {
-  IAgent,
-  IAgentCapabilities,
-  supportedChatModels,
-  supportedImageModels,
-  CreditHolderType,
-  groupShareSchema,
-  userShareSchema,
-} from '@bike4mind/common';
-import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
-import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
-import { creditService } from '@bike4mind/services';
-import {
-  validateToolList,
-  validateMaxIterations,
-  validateDefaultThoroughness,
-  validateStringList,
-  validateDefaultVariables,
-  validateTriggerWords,
-} from '@server/utils/agentValidation';
+import { assertAgentsReadScope, assertAgentsWriteScope, AGENTS_READ_OR_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
+import { agentRepository } from '@bike4mind/database';
+import { IAgent, IAgentCapabilities, groupShareSchema, userShareSchema } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
+import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
+import { deleteAgent } from '@server/agents/deleteAgent';
+import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { z } from 'zod';
 
 // The whole body is spread into `agentRepository.update`, i.e. a `$set`, and update payloads cast
@@ -156,13 +143,6 @@ const updateBodySchema = z.object({
     ])
     .optional(),
   useOwnCredits: z.boolean().optional(),
-  // Kept writable only because `AgentForm` sends it on every save. It is a plain Number path here
-  // with no accounting: the debit from the owner's balance lives in
-  // `POST /api/agents/[id]/transfer-credits`, not in this route, so a PUT moves the agent's
-  // balance without a matching user debit or a `creditTransaction` row. Typing it is all this
-  // guard can do -- closing the gap means routing the form's credit field through
-  // transfer-credits, which changes the form's contract and is not a cast-safety fix.
-  currentCredits: z.number().optional(),
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
   // The seven fields below keep the imperative validators in `agentValidation.ts`, which already
@@ -227,7 +207,8 @@ const updateBodySchema = z.object({
     )
     .optional(),
   conversationCooldowns: z.array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema })).optional(),
-  tavernSessionId: z.string().optional(),
+  // `tavernSessionId` is deliberately absent: it must name the owner's own session, so only
+  // `AgentRepository.updateTavernSessionId` sets it. See `presentAgentsForViewer`.
   currentFloorId: z.string().optional(),
   tavernStats: z
     .object({
@@ -255,27 +236,21 @@ const updateBodySchema = z.object({
   users: z.array(userShareSchema).optional(),
 });
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either agents scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
+    assertAgentsReadScope(req);
     const { id } = req.query;
 
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
+    assertAgentAccess(agent, req.user!.id, 'view');
 
-    // Check permission (user must own the agent or be shared)
-    const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === req.user!.id);
-    if (agent.userId !== req.user!.id && !isSharedWithUser) {
-      throw new ForbiddenError("You don't have permission to view this agent");
-    }
+    const [presented] = await presentAgentsForViewer([agent], req.user!.id);
 
-    // Refresh avatar URL before returning
-    const [agentWithRefreshedAvatar] = await refreshAgentAvatarUrls([agent], req.user!.id);
-
-    res.json(agentWithRefreshedAvatar);
+    res.json(presented);
   })
   .put(async (req, res) => {
+    assertAgentsWriteScope(req);
     const { id } = req.query;
 
     const parsedBody = updateBodySchema.safeParse(req.body);
@@ -286,59 +261,9 @@ const handler = baseApi()
 
     // Find the agent
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
+    assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
-    // Check ownership
-    if (agent.userId !== req.user!.id) {
-      throw new ForbiddenError("You don't have permission to update this agent");
-    }
-
-    // Validate model config fields
-    if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
-      throw new BadRequestError(`Invalid model: ${agentData.preferredModel}`);
-    }
-    if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
-      throw new BadRequestError(`Invalid image model: ${agentData.preferredImageModel}`);
-    }
-    if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
-      throw new BadRequestError('Temperature must be between 0 and 2');
-    }
-    if (agentData.maxTokens !== undefined && (agentData.maxTokens < 1 || agentData.maxTokens > 128000)) {
-      throw new BadRequestError('Max tokens must be between 1 and 128000');
-    }
-
-    // Reject malformed trigger words before they reach MongoDB - keeps the
-    // PUT route in sync with POST and stops a silent regression where a
-    // valid create is followed by a malformed edit.
-    if (agentData.triggerWords !== undefined) {
-      agentData.triggerWords = validateTriggerWords(agentData.triggerWords);
-    }
-
-    // Orchestration fields - mirror the POST endpoint bounds so PUT can't
-    // bypass the array-size / max-iteration guards.
-    if (agentData.allowedTools !== undefined) {
-      agentData.allowedTools = validateToolList(agentData.allowedTools, 'allowedTools');
-    }
-    if (agentData.deniedTools !== undefined) {
-      agentData.deniedTools = validateToolList(agentData.deniedTools, 'deniedTools');
-    }
-    if (agentData.maxIterations !== undefined) {
-      agentData.maxIterations = validateMaxIterations(agentData.maxIterations);
-    }
-    if (agentData.defaultThoroughness !== undefined) {
-      agentData.defaultThoroughness = validateDefaultThoroughness(agentData.defaultThoroughness);
-    }
-    if (agentData.defaultVariables !== undefined) {
-      agentData.defaultVariables = validateDefaultVariables(agentData.defaultVariables);
-    }
-    if (agentData.exclusiveMcpServers !== undefined) {
-      agentData.exclusiveMcpServers = validateStringList(agentData.exclusiveMcpServers, 'exclusiveMcpServers');
-    }
-    if (agentData.fallbackModels !== undefined) {
-      agentData.fallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
-    }
+    validateAgentUpdate(agentData);
 
     // Handle capabilities conversion if it's in the old format
     if (
@@ -372,73 +297,14 @@ const handler = baseApi()
     res.json(updatedAgent);
   })
   .delete(async (req, res) => {
+    assertAgentsWriteScope(req);
     const { id } = req.query;
 
     // Find the agent
     const agent = await agentRepository.findById(id as string);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
+    assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to delete this agent");
 
-    // Check ownership
-    if (agent.userId !== req.user!.id) {
-      throw new ForbiddenError("You don't have permission to delete this agent");
-    }
-
-    // Reclaim agent credits back to owning user before deletion.
-    // claimCredits atomically zeroes the agent balance and returns the claimed amount -
-    // concurrent DELETE requests will get 0 on the second call, preventing double credit grant.
-    const creditsToReclaim = await agentRepository.claimCredits(id as string);
-    if (creditsToReclaim > 0) {
-      try {
-        // Credit user first: if subsequent agent debit fails, user has extra credits (recoverable)
-        // rather than losing credits permanently (agent debited but user never credited).
-        await creditService.addCredits(
-          {
-            ownerId: req.user!.id,
-            ownerType: CreditHolderType.User,
-            credits: creditsToReclaim,
-            type: 'received_credit',
-            senderId: agent.id,
-            senderType: CreditHolderType.Agent,
-            description: 'Credits returned from deleted agent',
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
-        );
-        await creditService.subtractCredits(
-          {
-            type: 'transfer_credit',
-            ownerId: agent.id,
-            ownerType: CreditHolderType.Agent,
-            credits: creditsToReclaim,
-            description: 'Agent credit reclaim on deletion',
-            recipientId: req.user!.id,
-            recipientType: CreditHolderType.User,
-          },
-          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: agentRepository }
-        );
-      } catch (err) {
-        // Non-atomic: log for manual reconciliation but still block deletion if reclaim failed
-        console.error('Agent credit reclaim failed — manual reconciliation may be needed', {
-          agentId: agent.id,
-          userId: req.user!.id,
-          credits: creditsToReclaim,
-          err,
-        });
-        throw err;
-      }
-    }
-
-    // Delete the agent
-    await agentRepository.delete(id as string);
-
-    // Clean up any users who had this agent selected as their custom Slack agent
-    try {
-      await User.updateMany({ 'slackSettings.customAgentId': id }, { $unset: { 'slackSettings.customAgentId': '' } });
-    } catch (error) {
-      console.error('Failed to clean up agent references:', error);
-      // Don't fail the request - agent is already deleted
-    }
+    await deleteAgent(agent, req.user!.id);
 
     res.status(204).end();
   });

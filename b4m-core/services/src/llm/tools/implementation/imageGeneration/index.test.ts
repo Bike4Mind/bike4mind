@@ -47,6 +47,12 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
   return { ...actual, getEffectiveApiKey: vi.fn().mockResolvedValue('fake-gemini-key') };
 });
 
+const { mockSaveFromTool } = vi.hoisted(() => ({ mockSaveFromTool: vi.fn() }));
+vi.mock('../../helpers/persistGeneratedFile', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../helpers/persistGeneratedFile')>();
+  return { ...actual, saveGeneratedAssetFromTool: mockSaveFromTool };
+});
+
 // Imported after the mocks so `processAndStoreImages` and the Gemini branch pick up the fakes.
 const { processAndStoreImages, imageGenerationTool } = await import('./index');
 
@@ -85,8 +91,11 @@ function createFakeContext(): ToolContext {
 }
 
 describe('image_generation processAndStoreImages moderation gate (agent-tool serve-gate bypass)', () => {
+  const RENDER = { model: 'gpt-image-2', provider: 'openai', prompt: 'a lighthouse at dusk' };
+
   beforeEach(() => {
     mockCheckImage.mockReset();
+    mockSaveFromTool.mockReset().mockResolvedValue({ saved: true, fileId: 'f1', s3Key: 'k', fileName: 'n' });
   });
 
   it('block: moderation rejects the image — upload is NOT called and the call rejects', async () => {
@@ -95,22 +104,65 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
     );
     const context = createFakeContext();
 
-    await expect(processAndStoreImages([PNG_DATA_URL], context, 'gpt-image-2', 'openai')).rejects.toBeInstanceOf(
+    await expect(processAndStoreImages([PNG_DATA_URL], context, RENDER)).rejects.toBeInstanceOf(
       ImageModerationBlockedError
     );
 
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    expect(mockSaveFromTool).not.toHaveBeenCalled();
   });
 
   it('clean image: moderation passes — upload IS called', async () => {
     mockCheckImage.mockResolvedValue(undefined);
     const context = createFakeContext();
 
-    const result = await processAndStoreImages([PNG_DATA_URL], context, 'gpt-image-2', 'openai');
+    const result = await processAndStoreImages([PNG_DATA_URL], context, RENDER);
 
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(1);
+  });
+
+  it('saves each image to files with the prompt and model', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImages([PNG_DATA_URL, PNG_DATA_URL], context, RENDER);
+
+    expect(mockSaveFromTool).toHaveBeenCalledTimes(2);
+    expect(mockSaveFromTool).toHaveBeenCalledWith(context, {
+      bytes: expect.any(Buffer),
+      contentType: 'image/png',
+      generation: {
+        generator: 'image',
+        provider: 'openai',
+        modelId: 'gpt-image-2',
+        prompt: RENDER.prompt,
+        jobId: expect.any(String),
+      },
+    });
+  });
+
+  it('gives each image of a batch its own index-suffixed jobId', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImages([PNG_DATA_URL, PNG_DATA_URL], context, RENDER);
+
+    const jobIds = mockSaveFromTool.mock.calls.map(call => call[1].generation.jobId as string);
+    expect(jobIds[0]).toMatch(/-0$/);
+    expect(jobIds[1]).toMatch(/-1$/);
+    expect(new Set(jobIds).size).toBe(2);
+  });
+
+  it('a skipped save still returns the stored images', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    mockSaveFromTool.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+    const context = createFakeContext();
+
+    const result = await processAndStoreImages([PNG_DATA_URL], context, RENDER);
+
+    expect(result).toEqual(['generated/stored-key.png']);
   });
 });
 
@@ -184,6 +236,43 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
     const resolved = { model: ImageModels.GPT_IMAGE_2, n: 1, quality: 'high', size: '1024x1536' };
     expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining(resolved));
     expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining(resolved));
+  });
+
+  // onFinish is where both credit rails bill, so it carries the same resolved cost input as
+  // onStart plus what was delivered.
+  it('bills a delivered image from onFinish with the dispatched cost input', async () => {
+    const context = createFakeContext();
+    const onFinish = vi.fn().mockResolvedValue(undefined);
+    context.onFinish = onFinish;
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'a red bike', n: 1, quality: 'high', size: '1024x1536' });
+
+    expect(onFinish).toHaveBeenCalledWith('image_generation', {
+      model: ImageModels.GPT_IMAGE_2,
+      n: 1,
+      quality: 'high',
+      size: '1024x1536',
+      paths: ['generated/stored-key.png'],
+    });
+  });
+
+  // A rejected key comes back as an "Error: ..." tool result, not a throw, so the only thing
+  // keeping it unbilled is that onFinish never fires.
+  it('never reaches onFinish when the provider rejects the call', async () => {
+    mockOpenAIGenerate.mockRejectedValue(new Error('Invalid API key'));
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    const onFinish = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+    context.onFinish = onFinish;
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await expect(toolFn({ prompt: 'a red bike' })).resolves.toBe('Error: Invalid API key');
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onFinish).not.toHaveBeenCalled();
   });
 
   // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
@@ -295,7 +384,8 @@ describe('image_generation BFL branch dimensions', () => {
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 810 }));
+    // 810 is off BFL's 32px grid, so it reaches BFL rounded to 800.
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 800 }));
   });
 
   it('derives width/height from the tool call size when imageConfig has none', async () => {
@@ -316,12 +406,12 @@ describe('image_generation BFL branch dimensions', () => {
       model: ImageModels.FLUX_PRO_1_1,
       size: '1440x810',
       width: 800,
-      height: 600,
+      height: 640,
     });
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 600 }));
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 640 }));
   });
 
   it('discards a preset BFL would reject rather than forwarding it', async () => {

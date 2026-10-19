@@ -7,6 +7,8 @@ import type { Logger } from '@bike4mind/observability';
  * WHOLE request with `ValidationException: A maximum of 4 blocks with cache_control may be
  * provided`, which is non-retryable - so an over-budget request loses the turn outright,
  * after the user has already waited for it.
+ * See https://docs.claude.com/en/docs/build-with-claude/prompt-caching (tools, system and messages
+ * all count toward the same four).
  */
 const MAX_CACHE_CONTROL_BLOCKS = 4;
 
@@ -35,16 +37,135 @@ interface MarkerCensus {
  * shareable-prefix breakpoint) - so this adapter's budget is whatever they left, not the full four.
  */
 function censusMarkers(params: Record<string, unknown>): MarkerCensus {
-  const tools = Array.isArray(params.tools) ? params.tools.filter(hasMarker).length : 0;
-  const system = Array.isArray(params.system) ? params.system.filter(hasMarker).length : 0;
-  let messages = 0;
+  const { tools, system, messages } = markerSites(params);
+  return {
+    tools: tools.length,
+    system: system.length,
+    messages: messages.length,
+    total: tools.length + system.length + messages.length,
+  };
+}
+
+/**
+ * One marked block: `index` is into tools/system, or into the content of `messages[message]`.
+ * `nested` is set for a block inside that content block's own `content` (a `tool_result` body),
+ * which the provider counts toward the same four.
+ */
+interface MarkerSite {
+  region: 'tools' | 'system' | 'messages';
+  index: number;
+  message?: number;
+  nested?: number;
+}
+
+function markerSites(params: Record<string, unknown>): Record<MarkerSite['region'], MarkerSite[]> {
+  const sitesIn = (region: 'tools' | 'system', value: unknown): MarkerSite[] =>
+    Array.isArray(value) ? value.flatMap((block, index) => (hasMarker(block) ? [{ region, index }] : [])) : [];
+  const messages: MarkerSite[] = [];
   if (Array.isArray(params.messages)) {
-    for (const message of params.messages) {
+    params.messages.forEach((message, messageIndex) => {
       const content = (message as Record<string, unknown> | null)?.content;
-      if (Array.isArray(content)) messages += content.filter(hasMarker).length;
-    }
+      if (!Array.isArray(content)) return;
+      content.forEach((block, index) => {
+        const inner = (block as Record<string, unknown> | null)?.content;
+        if (Array.isArray(inner)) {
+          inner.forEach((innerBlock, nested) => {
+            if (hasMarker(innerBlock)) messages.push({ region: 'messages', index, message: messageIndex, nested });
+          });
+        }
+        if (hasMarker(block)) messages.push({ region: 'messages', index, message: messageIndex });
+      });
+    });
   }
-  return { tools, system, messages, total: tools + system + messages };
+  return { tools: sitesIn('tools', params.tools), system: sitesIn('system', params.system), messages };
+}
+
+function describeSite(site: MarkerSite): string {
+  if (site.region !== 'messages') return `${site.region}[${site.index}]`;
+  const block = `messages[${site.message}].content[${site.index}]`;
+  return site.nested === undefined ? block : `${block}.content[${site.nested}]`;
+}
+
+function withoutMarker(block: unknown): unknown {
+  const { cache_control: _removed, ...rest } = block as Record<string, unknown>;
+  return rest;
+}
+
+/**
+ * Request-level chokepoint for the 4-marker ceiling, run on the final body right before send by
+ * both `anthropicBackend.ts` and `bedrockBackend/anthropic.ts`. Markers are attached from several
+ * independent places (per-message `cache` flags, `cache: true` system messages, applyCaching above,
+ * caller-supplied content blocks), none of which can see the others' totals.
+ *
+ * At or under the cap it returns `params` itself, untouched. Over it, only `cache_control` keys are
+ * removed - every block still ships. Kept in priority order:
+ *   1. the latest message marker (the largest cached prefix; where a growing conversation's tokens are)
+ *   2. the last system marker (end of the stable prefix, covers tools too)
+ *   3. other system markers, earliest first (the earliest is the deployment-wide shareable head)
+ *   4. other message markers, newest first (the previous turn's breakpoint is what this turn reads)
+ *   5. tool markers, last first (covered by any system or message marker after them)
+ */
+export function capCacheControlMarkers(params: Record<string, unknown>, logger?: Logger): Record<string, unknown> {
+  const sites = markerSites(params);
+  const total = sites.tools.length + sites.system.length + sites.messages.length;
+  if (total <= MAX_CACHE_CONTROL_BLOCKS) return params;
+
+  const lastMessage = sites.messages.at(-1);
+  const lastSystem = sites.system.at(-1);
+  const ranked = [
+    ...(lastMessage ? [lastMessage] : []),
+    ...(lastSystem ? [lastSystem] : []),
+    ...sites.system.slice(0, -1),
+    ...sites.messages.slice(0, -1).reverse(),
+    ...[...sites.tools].reverse(),
+  ];
+  const dropped = ranked.slice(MAX_CACHE_CONTROL_BLOCKS);
+
+  const capped = { ...params };
+  for (const region of ['tools', 'system'] as const) {
+    const droppedHere = new Set(dropped.filter(site => site.region === region).map(site => site.index));
+    if (droppedHere.size === 0) continue;
+    capped[region] = (params[region] as unknown[]).map((block, index) =>
+      droppedHere.has(index) ? withoutMarker(block) : block
+    );
+  }
+  const droppedMessages = dropped.filter(site => site.region === 'messages');
+  if (droppedMessages.length > 0) {
+    capped.messages = (params.messages as unknown[]).map((message, messageIndex) => {
+      const droppedHere = droppedMessages.filter(site => site.message === messageIndex);
+      if (droppedHere.length === 0) return message;
+      const record = message as Record<string, unknown>;
+      return {
+        ...record,
+        content: (record.content as unknown[]).map((block, index) => {
+          const atBlock = droppedHere.filter(site => site.index === index);
+          if (atBlock.length === 0) return block;
+          const nested = new Set(atBlock.flatMap(site => (site.nested === undefined ? [] : [site.nested])));
+          const stripped = atBlock.some(site => site.nested === undefined)
+            ? (withoutMarker(block) as Record<string, unknown>)
+            : { ...(block as Record<string, unknown>) };
+          if (nested.size > 0) {
+            stripped.content = (stripped.content as unknown[]).map((inner, innerIndex) =>
+              nested.has(innerIndex) ? withoutMarker(inner) : inner
+            );
+          }
+          return stripped;
+        }),
+      };
+    });
+  }
+
+  const message = `[PromptCache] request carried ${total} cache_control markers (limit ${MAX_CACHE_CONTROL_BLOCKS}); stripped ${dropped.length}: ${dropped.map(describeSite).join(', ')}`;
+  const detail = {
+    census: censusMarkers(params),
+    kept: ranked.slice(0, MAX_CACHE_CONTROL_BLOCKS).map(describeSite),
+    dropped: dropped.map(describeSite),
+    limit: MAX_CACHE_CONTROL_BLOCKS,
+  };
+  if (logger) logger.warn(message, detail);
+  else console.warn(message, JSON.stringify(detail));
+
+  return capped;
 }
 
 /**
@@ -143,11 +264,20 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // system on the request), which the ordering handles on its own: the budget is still there
     // for tools when system did not spend it.
     const tools = modifiedParams.tools as unknown[] | undefined;
-    if (strategy.cacheTools && Array.isArray(tools) && tools.length > 0) {
+    // The API rejects cache_control on a deferred tool; a server tool (a `type` with no input_schema) is
+    // skipped with it. The marker goes on the last tool that can carry one.
+    const markIndex = Array.isArray(tools)
+      ? tools.findLastIndex(t => {
+          const tool = t as Record<string, unknown>;
+          const isServerTool = typeof tool.type === 'string' && !('input_schema' in tool);
+          return tool.defer_loading !== true && !isServerTool;
+        })
+      : -1;
+    if (strategy.cacheTools && Array.isArray(tools) && markIndex >= 0) {
       const toolsCopy = [...tools];
-      const lastTool = toolsCopy[toolsCopy.length - 1] as Record<string, unknown>;
-      if (claim('tools', hasMarker(lastTool))) {
-        toolsCopy[toolsCopy.length - 1] = { ...lastTool, cache_control: cacheControl };
+      const markTool = toolsCopy[markIndex] as Record<string, unknown>;
+      if (claim('tools', hasMarker(markTool))) {
+        toolsCopy[markIndex] = { ...markTool, cache_control: cacheControl };
         modifiedParams.tools = toolsCopy;
       }
     }
@@ -160,11 +290,12 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     //    to stay legal. Not fatal; the request goes out with a weaker cache strategy, whose only
     //    other symptom would be a lower hit rate.
     // 2. Already over the cap on arrival (outbound.total > MAX) - upstream alone exceeded the
-    //    ceiling, so there is nothing this adapter can subtract and the provider WILL reject the
-    //    request. That is a defect in whoever attached them, and the census names where they sit
-    //    so the next occurrence is diagnosable rather than a bare ValidationException. This is
+    //    ceiling, so there is nothing this adapter can subtract; capCacheControlMarkers strips the
+    //    excess before send. That is a defect in whoever attached them, and the census names where
+    //    they sit so the next occurrence is diagnosable rather than a bare ValidationException. This is
     //    the case the original incident hit and could not be accounted for from code reading, so
-    //    it is logged loudly rather than assumed impossible.
+    //    it is logged rather than assumed impossible. `warn`, not `error`: the request no longer
+    //    fails, and ERROR lines feed the LiveOps/Slack alerting (see anthropicBackend.ts).
     // Report the census, not only the exceptional paths. The incident this cap was written for
     // could not be explained from code reading - the known sources sum to four, not five - and a
     // request is only diagnosable while it is still in hand.
@@ -189,10 +320,10 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     }
 
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
-      const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); the provider will reject it`;
+      const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); capCacheControlMarkers will strip the excess before send`;
       const detail = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.error(message, detail);
-      else console.error(message, JSON.stringify(detail));
+      if (logger) logger.warn(message, detail);
+      else console.warn(message, JSON.stringify(detail));
     } else if (dropped.length > 0) {
       const message = `[PromptCache] cache_control budget exhausted (limit ${MAX_CACHE_CONTROL_BLOCKS}); skipped breakpoints: ${dropped.join(', ')}`;
       const detail = { dropped, inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };

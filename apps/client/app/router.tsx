@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -11,12 +11,14 @@ import {
   createBrowserHistory,
   Outlet,
   redirect,
+  useRouterState,
 } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
+import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -30,7 +32,9 @@ import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
+import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -39,8 +43,10 @@ const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
+const IntegrationsPage = lazy(() => import('./routes/integrations/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
+const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
 const AgentsPage = lazy(() => import('./routes/agents'));
 const NewAgentPage = lazy(() => import('./routes/agents/new'));
 const AgentDetailPage = lazy(() => import('./routes/agents/$id'));
@@ -49,6 +55,11 @@ const SkillsPage = lazy(() => import('./routes/skills'));
 const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
+const SkillMarketPage = lazy(() => import('./routes/skills/market'));
+const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
+const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
+const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
 const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
@@ -84,6 +95,7 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -196,9 +208,18 @@ const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
 
 // Root route that wraps all other routes
 function RootComponent() {
+  // NotebookLayout draws its own main beside the sidebar nav, so only pages outside it get one here.
+  // display: contents keeps the page a direct child of the providers' grid.
+  const inNotebookLayout = useRouterState({ select: s => s.matches.some(m => m.routeId === layoutRoute.id) });
   return (
     <>
-      <Outlet />
+      {inNotebookLayout ? (
+        <Outlet />
+      ) : (
+        <Box component="main" sx={{ display: 'contents' }}>
+          <Outlet />
+        </Box>
+      )}
       {process.env.NEXT_PUBLIC_ENABLE_DEVTOOLS === 'true' && <TanStackRouterDevtools position="top-right" />}
     </>
   );
@@ -270,6 +291,9 @@ const layoutRoute = createRoute({
       <ProviderBundle>
         <NotebookLayout>
           <Outlet />
+          <Suspense fallback={null}>
+            <BillingDeepLinkModals />
+          </Suspense>
         </NotebookLayout>
       </ProviderBundle>
     </RestrictedPage>
@@ -343,6 +367,25 @@ const gearsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <GearsPage />
+    </Suspense>
+  ),
+});
+
+// Integrations - the directory of every integration and model provider, with roadmap requests.
+// Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const CONNECTIONS_TABS = ['integrations', 'api-keys'] as const;
+export type ConnectionsTab = (typeof CONNECTIONS_TABS)[number];
+
+export const integrationsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/integrations',
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource; tab?: ConnectionsTab } => ({
+    source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+    tab: CONNECTIONS_TABS.find(t => t === search.tab),
+  }),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <IntegrationsPage />
     </Suspense>
   ),
 });
@@ -436,6 +479,34 @@ const subscriptionsCheckoutRoute = createRoute({
   },
 });
 
+// Shareable billing entry points (/billing/credits, /billing/plans) for emails and marketing CTAs.
+// Under layoutRoute so a signed-out visitor goes through /login?redirectTo= and lands here after.
+export const billingRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/billing/$view',
+  beforeLoad: ({ params }) => {
+    throw redirect({ href: billingLandingHref(parseBillingView(params.view)), replace: true });
+  },
+});
+
+// Guessed URLs with no page of their own. Chats are listed in the sidenav, so /notebooks lands on
+// the app home; /subscriptions opens the plans modal the way /billing/plans does.
+export const notebooksIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/notebooks',
+  beforeLoad: () => {
+    throw redirect({ to: '/', replace: true });
+  },
+});
+
+export const subscriptionsIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/subscriptions',
+  beforeLoad: () => {
+    throw redirect({ href: billingLandingHref('plans'), replace: true });
+  },
+});
+
 const AGENT_FEATURE_GATE = {
   feature: 'enableAgents' as const,
   featureName: 'Agents',
@@ -465,6 +536,24 @@ const hearthRoute = createRoute({
       </Suspense>
     </ExperimentalFeatureGate>
   ),
+});
+
+// Studio: one page per generation modality (/studio/video), each a CapabilityForm and the gallery of the user's jobs.
+export const studioRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/studio/$modality',
+  params: {
+    parse: ({ modality }) => ({ modality: parseStudioModality(modality) }),
+    stringify: ({ modality }) => ({ modality }),
+  },
+  component: function StudioRouteComponent() {
+    const { modality } = studioRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioPage modality={modality} />
+      </Suspense>
+    );
+  },
 });
 
 // Agents index route (replaces /agents/index.tsx)
@@ -543,6 +632,24 @@ const newSkillRoute = createRoute({
   ),
 });
 
+// Skill Market. Static `market` segments outrank the `/skills/$id` param route in Tanstack's
+// ranking, so /skills/market never resolves as a skill id.
+const marketRoute = <TPath extends string>(path: TPath, Page: LazyExoticComponent<FC>) =>
+  createRoute({
+    getParentRoute: () => layoutRoute,
+    path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Page />
+      </Suspense>
+    ),
+  });
+const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
+const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
+const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
+const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
+
 const skillDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/skills/$id',
@@ -612,10 +719,25 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
+// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
+const qaStatusLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'qa-status-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={false}>
+      <ProviderBundle>
+        <Outlet />
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+});
+
 // QA status (admin only). Exported so pages read typed search/params via
 // `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
 export const qaStatusRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
@@ -628,7 +750,7 @@ export const qaStatusRoute = createRoute({
 });
 
 export const qaRunRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -642,7 +764,7 @@ export const qaRunRoute = createRoute({
 // The router encodes the key into one segment (it contains / > ? #); the page
 // re-sends it as ?testKey=.
 export const qaTestRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -1130,12 +1252,16 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
+    integrationsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
     profileDetailRoute,
     feedbackRollupRoute,
     subscriptionsCheckoutRoute,
+    billingRoute,
+    notebooksIndexRoute,
+    subscriptionsIndexRoute,
     agentsRoute,
     newAgentRoute,
     agentDetailRoute,
@@ -1144,12 +1270,14 @@ const routeTree = rootRoute.addChildren([
     newSkillRoute,
     skillDetailRoute,
     editSkillRoute,
+    skillMarketRoute,
+    mySkillListingsRoute,
+    skillReviewQueueRoute,
+    unlistedSkillListingRoute,
+    skillListingRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
-    qaStatusRoute,
-    qaRunRoute,
-    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
@@ -1160,8 +1288,11 @@ const routeTree = rootRoute.addChildren([
     dataLakesRoute,
     hudRoute,
     hearthRoute,
+    studioRoute,
     ...builtAppShellPremiumRoutes,
   ]),
+  // QA status pages (admin layout without the sidenav)
+  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,

@@ -4,7 +4,10 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Quest, questRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { resolveQuestTimeoutRecovery, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  resolveQuestTimeoutRecovery,
+  UNFINISHED_REPLY_NOTICE,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { RUN_TIMED_OUT_FINISH_REASON } from '@bike4mind/common';
 import * as sweepModule from '@workers/cron/questTimeoutSweep';
 import { SelfHostWorker } from './selfHostWorker';

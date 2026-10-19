@@ -1,5 +1,6 @@
 import type { ResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
 import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import { isPlaceholderTitle } from '@bike4mind/fab-pipeline';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
 import { classifySource } from './sourceFilter';
@@ -34,6 +35,8 @@ export interface ResearchCandidate {
 /** What a fetch produced, honoring the queue's extraction contract. See `fetchSource` below. */
 export interface FetchedSource {
   title: string;
+  /** The url after redirects, which the title was derived from; may differ from the hit url. */
+  finalUrl: string;
   /**
    * The extracted text, or undefined when the door cannot produce text comparable with what the
    * INGESTION door would extract from the same URL. Undefined is a real answer, not a failure: the
@@ -167,9 +170,10 @@ export async function executeResearchRun(
 
     const outcome = await ports.propose({
       sourceUrl: candidate.url,
-      // The page's own title beats the search hit's: the hit's is the provider's rendering of it,
-      // and a reviewer opening the link should see the same words on both sides.
-      title: fetched.title || candidate.title,
+      // The page's own title beats the search hit's (the same words a reviewer sees on the page),
+      // unless it is a placeholder (empty, domain label, or last path segment) and the hit has one.
+      title:
+        isPlaceholderTitle(fetched.title, fetched.finalUrl) && candidate.title.trim() ? candidate.title : fetched.title,
       text: fetched.text,
       proposedTags: levers.proposedTags,
       // Advisory display only. Recorded because a reviewer weighing an unfamiliar source has

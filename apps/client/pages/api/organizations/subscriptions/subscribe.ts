@@ -1,14 +1,12 @@
+import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import {
-  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
-  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-} from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -16,17 +14,30 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
+import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<{}, {}, z.infer<typeof OrgSubscriptionSubscribeSchema>>>(async (req, res) => {
-    const { priceId, organizationId, quantity, organizationData, callbackUrl } = OrgSubscriptionSubscribeSchema.parse(
-      req.body
-    );
+    const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
+      OrgSubscriptionSubscribeSchema.parse(req.body);
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
     }
+
+    // enableTeamPlan is the single gate for NEW Team purchases (mirrors the availabilityFlag check in
+    // pages/api/subscriptions/subscribe.ts). This route only ever starts a new checkout; seat changes,
+    // the billing portal, renewals and admin grants use other routes and stay open with the flag off.
+    // `=== true` so a missing or non-boolean value fails closed.
+    if ((await adminSettingsRepository.getSettingsValue('enableTeamPlan')) !== true) {
+      throw new BadRequestError('Team plans are not available right now.');
+    }
+
+    // Admin-configured paid-plan floor/ceiling (Admin -> Growth & Pricing).
+    const { minSeats: planMinSeats, maxSeats: planMaxSeats } = await getTeamPlanSettings();
+    assertSeatsWithinPlan(quantity, { minSeats: planMinSeats, maxSeats: planMaxSeats });
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin. An
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -59,7 +70,7 @@ const handler = baseApi()
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
     // send an uppercase spelling of their own org id, miss the byte-exact `ownerId` match in the
     // duplicate-subscription guard below (rows are written from `org.id`, always lowercase - see
-    // Subscription.ts and lib/userSubscriptions/serverUtils.ts) and open a second checkout
+    // Subscription.ts and apps/workers/src/lib/userSubscriptions/serverUtils.ts) and open a second checkout
     // session: a double charge with only one entitlement. Same reason the Stripe metadata uses it.
     const gatedOrganizationId = organization?.id;
 
@@ -86,7 +97,7 @@ const handler = baseApi()
       }
     }
 
-    let minSeats = ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
+    let minSeats = planMinSeats;
 
     let customerId: string | undefined;
     if (organization) {
@@ -99,10 +110,7 @@ const handler = baseApi()
 
       // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
       // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
-      minSeats = Math.min(
-        Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
-        ORGANIZATION_SUBSCRIPTION_MAX_SEATS
-      );
+      minSeats = Math.min(Math.max(planMinSeats, organization.users.length + 1), planMaxSeats);
     } else {
       const customer = await createCustomer({
         email: req.user.email!,
@@ -129,6 +137,7 @@ const handler = baseApi()
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       customer: customerId,
       payment_method_types: ['card'],
       line_items: [
@@ -138,7 +147,7 @@ const handler = baseApi()
           adjustable_quantity: {
             enabled: true,
             minimum: minSeats,
-            maximum: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+            maximum: planMaxSeats,
           },
         },
       ],
@@ -147,7 +156,13 @@ const handler = baseApi()
       success_url: appendSuccessParams(callbackUrl),
       cancel_url: callbackUrl,
       subscription_data: {
-        metadata,
+        // Attribution is spread after the schema parse, which would strip unknown keys. Same
+        // acq_* keys as individual checkout; the invoice webhook stores them on the org row.
+        metadata: {
+          ...metadata,
+          ...checkoutAcquisitionMetadata(req, attributionConsent, req.user.acquisition),
+          ...(surface && { checkout_surface: surface }),
+        },
       },
     });
 

@@ -1,10 +1,20 @@
 import { z } from 'zod';
-import type { ApiErrorCode } from '../apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  type ApiErrorCode,
+} from '../apiErrorCodes';
+import { StorageLimitErrorInfoSchema } from '../errors';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
 import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
+import { FallbackInfoSchema } from './llm';
+import { SystemPromptDetailSchema } from './contextTelemetry';
+import { COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
+import { ChatToolModeSchema } from './promptMeta';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -23,6 +33,11 @@ import { PROMPT_TEXT_MAX } from './briefcasePrompt';
  */
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
+  // Force a brand-new notebook for this turn, regardless of auth mode. Mutually exclusive with
+  // `sessionId` - sending both is a 422. It never reads or writes `lastNotebookId`, so it cannot
+  // reopen (or repoint) the notebook the human last had open. The new notebook's id is returned
+  // as `sessionId`, so a caller continues the conversation by passing that back.
+  newConversation: z.boolean().optional(),
   message: z.string(),
   // Billing target. When set, the turn is billed to this organization's credit pool - but only
   // after the handler validates the caller actually belongs to it (never trusted as-is; see
@@ -49,7 +64,7 @@ export const SimplifiedChatRequestSchema = z.object({
   // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
   // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
   // tools and supplies the set; absent that too, it falls back to enableTools behavior.
-  toolMode: z.enum(['fast', 'smart']).optional(),
+  toolMode: ChatToolModeSchema.optional(),
   // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
   // intent to enable tools, so no companion toolMode/enableTools is required - the array
   // used to be dropped in silence without one. Unknown ids are filtered by the handler
@@ -135,8 +150,8 @@ export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 /**
  * Async ACK returned on the default (wait:false) path of POST /api/chat. The
  * `type`/`errorCode` pair below is the same classifier the `wait: true` body and
- * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here -
- * the rest of those two bodies is NOT described by this schema. The
+ * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here.
+ * The rest of the `wait: true` body is ChatWaitResponseSchema below. The
  * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
  * this schema MUST stay in sync with that `res.json({...})` shape.
  */
@@ -146,6 +161,12 @@ export const ChatAckSchema = z.object({
   message_received: z.boolean(),
   timestamp: z.string(),
   model: z.string(),
+  // The notebook/session this turn was recorded in. Present on both the async ACK and the
+  // `wait: true` body. When the request carried no `sessionId` (an API-key caller, or
+  // `newConversation: true`), this is a freshly created notebook's id - pass it back as the
+  // request's `sessionId` to continue that conversation. A JWT caller with no `sessionId`
+  // gets back the notebook they last had open, unchanged.
+  sessionId: z.string().optional(),
   message: z.string().optional(),
   // Present unconditionally on the `wait: true` body, carrying the quest's own value -
   // same as the polled quest (`GET /api/v1/quests/{id}`). Absent only on the immediate async
@@ -172,7 +193,7 @@ export const ChatAckSchema = z.object({
   tools: z
     .object({
       // Absent when the caller named tools without sending a mode.
-      toolMode: z.enum(['fast', 'smart']).optional(),
+      toolMode: ChatToolModeSchema.optional(),
       // Smart mode only: what the prompt-based recommender picked.
       autoSelectedTools: z.array(z.string()).optional(),
       effectiveTools: z.array(z.string()),
@@ -190,6 +211,34 @@ export const ChatAckSchema = z.object({
 });
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
+
+// Must stay in sync with `ToolPayload` in utils/toolPayloads.ts.
+const ToolPayloadSchema = z.object({ type: z.string(), payload: z.unknown() });
+
+/**
+ * The completed-turn body POST /api/chat returns with `wait: true`. Like the ACK it is
+ * assembled inline in apps/client/pages/api/chat.ts and MUST stay in sync with that
+ * `res.json({...})` shape.
+ */
+export const ChatWaitResponseSchema = ChatAckSchema.extend({
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES),
+  // questReplyText() is null when the turn produced no visible reply.
+  response: z.string().nullable(),
+  responses: z.array(z.string()),
+  toolPayloads: z.array(ToolPayloadSchema),
+  // ISO string on the wire; Date too because defineNextRoute's non-prod response check runs
+  // before JSON serialization. Not z.coerce.date(): that documents the field as nullable.
+  createdAt: z.union([z.string().datetime(), z.date()]),
+  promptDetails: z.array(SystemPromptDetailSchema).optional(),
+  promptText: z.string().optional(),
+  performance: z.object({
+    total_ms: z.number(),
+    phases: z.record(z.string(), z.number()),
+    pipeline_phases: z.record(z.string(), z.number()).optional(),
+  }),
+});
+
+export type ChatWaitResponse = z.infer<typeof ChatWaitResponseSchema>;
 
 /**
  * The quest a `wait: false` caller polls at `GET /api/v1/quests/{id}` - the outcome
@@ -209,6 +258,16 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  * RUN_ABANDONED_FINISH_REASON (utils/stopReasons.ts) - plus a notice appended to
  * the reply.
  */
+// Exported so the /api/quests/[id] handler can build its response from this schema
+// instead of hand-listing the same fields, which would let the two drift apart silently.
+export const PolledFallbackInfoSchema = FallbackInfoSchema.pick({
+  primaryModel: true,
+  primaryModelName: true,
+  fallbackModel: true,
+  fallbackModelName: true,
+  reason: true,
+});
+
 export const ChatQuestPollResultSchema = z.object({
   id: z.string(),
   status: z.enum(['pending', 'stopped', 'running', 'done']).optional(),
@@ -223,8 +282,14 @@ export const ChatQuestPollResultSchema = z.object({
   // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  // The visible answer text, derived from `replies` when the poll body is built: thinking blocks
+  // and a choices block in the final answer slot stripped, slots joined. `replies` is the raw
+  // stored slots.
   reply: z.string().nullable().optional(),
   replies: z.array(z.string()).optional(),
+  // Present only when the requested model failed and another one answered. The answer in
+  // `reply` came from `fallbackModel`; `primaryModel` is what the caller asked for.
+  fallbackInfo: PolledFallbackInfoSchema.optional(),
 });
 
 export type ChatQuestPollResult = z.infer<typeof ChatQuestPollResultSchema>;
@@ -259,12 +324,49 @@ export const ApiErrorSchema = z.object({
  * both of those 422s are *thrown*, so errorHandler serves the body and adds
  * `name`. Extending is what keeps that documented here (and what drops it again
  * on the sunset date) instead of leaving a bespoke copy behind to drift.
+ *
+ * Also covers `spend_cap_exceeded`; the name is a published OpenAPI component, so it stays.
  */
 export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
-  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
-  // so a rename there breaks this rather than silently publishing a dead code.
-  errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
+  // QUEST_ERROR_CODES is itself typed against apiErrorCodes.ts, so a rename there breaks this
+  // rather than silently publishing a dead code.
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
 });
+
+/**
+ * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll and
+ * `sessionId` is the notebook the turn was recorded in, so a caller that sent no `sessionId` can
+ * continue the conversation it just started (same field name as the ACK and the `wait: true` body).
+ */
+export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
+ * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
+ * together, which the endpoint's 400 description states for integrators.
+ */
+export const StorageLimitErrorSchema = ApiErrorSchema.extend(StorageLimitErrorInfoSchema.partial().shape);
+
+/** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
+export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
+});
+
+/**
+ * 400 for a `model` the caller cannot use, or a refused tool search request; `errorCode` is absent on the
+ * other 400s (e.g. malformed JSON).
+ */
+export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.enum([UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
+});
+
+/** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
+export const UnknownModelErrorSchema = CompletionsBadRequestErrorSchema;
 
 /**
  * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
@@ -282,4 +384,12 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
     .array(z.string())
     .optional()
     .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
+
+/**
+ * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
+ * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ */
+export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
 });

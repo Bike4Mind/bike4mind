@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -14,9 +15,15 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
   deleteManyArgs: undefined as unknown[] | undefined,
+  storedObjectArgs: undefined as unknown[] | undefined,
+  findFilters: [] as unknown[],
+  selectProjections: [] as unknown[],
+  unpublishArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
   baseApiOptions: undefined as unknown,
+  deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
+  incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -34,11 +41,27 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
-const fabFileDocs = vi.hoisted(() => [{ filePath: 'a/one.png' }, { filePath: 'b/two.png' }]);
+const fabFileDocs = vi.hoisted(
+  () =>
+    [{ filePath: 'a/one.png' }, { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } }] as Array<
+      Record<string, unknown>
+    >
+);
 
 vi.mock('@bike4mind/database', () => {
   class FabFile {
-    static find = () => ({ select: () => ({ session: async () => fabFileDocs }) });
+    static find = (filter: unknown) => {
+      mockRefs.findFilters.push(filter);
+      return {
+        select: (projection: unknown) => {
+          mockRefs.selectProjections.push(projection);
+          return {
+            session: async () => fabFileDocs,
+            lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
+          };
+        },
+      };
+    };
     // Mirrors the real soft-delete plugin static: it settles to a plain Promise, not a
     // chainable Query, so calling `.session()` on the return value throws in production
     // (see softDeletePlugin in b4m-core/db-core/src/utils/mongo.ts). Session must be
@@ -63,7 +86,10 @@ vi.mock('@bike4mind/database', () => {
   }
   class User {
     static findById = () => ({
-      session: async () => ({ save: vi.fn().mockResolvedValue(undefined), currentStorageSize: 0 }),
+      session: async () => {
+        mockRefs.deleteUser = { save: vi.fn().mockResolvedValue(undefined), currentStorageSize: 99 };
+        return mockRefs.deleteUser;
+      },
     });
   }
   return {
@@ -71,6 +97,9 @@ vi.mock('@bike4mind/database', () => {
     User,
     fabFileRepository: { __repo: 'fabFiles' },
     userRepository: { __repo: 'users' },
+    organizationRepository: {
+      incrementCurrentStorage: (...args: unknown[]) => mockRefs.incrementCurrentStorage(...args),
+    },
     projectRepository: { __repo: 'projects' },
     adminSettingsRepository: { __repo: 'adminSettings' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
@@ -83,11 +112,24 @@ vi.mock('@bike4mind/services', () => ({
       mockRefs.searchArgs = args;
       return Promise.resolve({ data: [], total: 0, hasMore: false });
     },
+    deleteStoredObjects: (...args: unknown[]) => {
+      mockRefs.storedObjectArgs = args;
+      return Promise.resolve();
+    },
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: vi.fn() }) }));
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
+  getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...args: unknown[]) => {
+    mockRefs.unpublishArgs = args;
+    return Promise.resolve({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+  },
+}));
 const accessibleFilter = vi.hoisted(() => ({ __accessibleFilter: true }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => accessibleFilter }) }));
 
@@ -103,6 +145,27 @@ function invokeGet(query: Record<string, unknown> = {}) {
 }
 
 describe('GET /api/files', () => {
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { req, res } = invokeGet();
+      await mockRefs.getHandler!(req, res);
+      const adapter = mockRefs.searchArgs?.[2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
+
   beforeEach(() => {
     mockRefs.searchArgs = undefined;
   });
@@ -183,8 +246,13 @@ function invokeDelete() {
 describe('DELETE /api/files', () => {
   beforeEach(() => {
     mockRefs.deleteManyArgs = undefined;
+    mockRefs.storedObjectArgs = undefined;
+    mockRefs.findFilters = [];
+    mockRefs.selectProjections = [];
+    mockRefs.unpublishArgs = undefined;
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
+    mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -207,6 +275,19 @@ describe('DELETE /api/files', () => {
     expect(mockRefs.deleteManyArgs?.[1]).toEqual({ session: { __fakeSession: true } });
   });
 
+  it("takes down the caller's pages published from the files it owns", async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    // Only the owner-scoped arm feeds the takedown: a file shared IN keeps its owner's pages.
+    const firstFind = mockRefs.findFilters[0] as { $and: unknown[] };
+    expect(firstFind.$and[0]).toBe(accessibleFilter);
+    expect(firstFind.$and[1]).toEqual({ userId: 'user-1' });
+    expect(mockRefs.unpublishArgs?.[0]).toBe('user-1');
+    expect(mockRefs.unpublishArgs?.[1]).toEqual({ kind: 'fabfile', fabFileIds: ['file-0', 'file-1'] });
+  });
+
   it('unshares files owned by others rather than deleting them', async () => {
     const { req, res } = invokeDelete();
 
@@ -218,6 +299,63 @@ describe('DELETE /api/files', () => {
     expect(update).toEqual({ $pull: { users: { userId: 'user-1' } } });
     // A soft-deleted share must lose the grant too, or restoring it hands the access back.
     expect(mockRefs.updateManyOptions).toEqual({ includeDeleted: true });
+  });
+
+  it("removes every owned file's stored objects, generated-bucket copies included", async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const [files, buckets] = mockRefs.storedObjectArgs as [unknown, { files: unknown; generated: unknown }];
+    expect(files).toBe(fabFileDocs);
+    expect(buckets.files).toMatchObject({ bucket: 'files' });
+    expect(buckets.generated).toMatchObject({ storage: { bucket: 'generated' } });
+  });
+
+  // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the
+  // file's own notebook look like another's, so every notebook-linked chat copy would be kept.
+  // `versions` carries the retained AI-edit keys, which would otherwise be orphaned.
+  it('selects the notebook link the generated-copy fork guard needs, and the retained versions', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const storedObjectProjection = String(mockRefs.selectProjections.at(-1)).split(' ');
+    expect(storedObjectProjection).toEqual(
+      expect.arrayContaining([
+        'filePath',
+        'versions',
+        'moderationStatus',
+        // Without it an unscannable-format block reads as a content block and its bytes are kept forever.
+        'blockReason',
+        'sourceMetadata.generatedCopyKey',
+        'sourceMetadata.sessionId',
+      ])
+    );
+  });
+
+  // Storage is billed by owner: an org-stamped row was charged to its org, so deleting it must refund
+  // the org counter (not just zero the caller's), once per org with the summed charged bytes.
+  it('refunds org-stamped files to their org and empties only the personal counter', async () => {
+    const originalDocs = fabFileDocs.splice(0, fabFileDocs.length);
+    const charged = new Date('2026-10-10T00:00:00Z');
+    fabFileDocs.push(
+      { filePath: 'o/a.png', organizationId: 'org1', fileSize: 10, storageChargedAt: charged },
+      { filePath: 'o/b.png', organizationId: 'org1', fileSize: 20, storageChargedAt: charged },
+      { filePath: 'p/c.png', fileSize: 5, storageChargedAt: charged }
+    );
+    mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    try {
+      const { req, res } = invokeDelete();
+
+      await mockRefs.deleteHandler!(req, res);
+
+      expect(mockRefs.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+      expect(mockRefs.incrementCurrentStorage).toHaveBeenCalledWith('org1', -30, { __fakeSession: true });
+      expect(mockRefs.deleteUser?.currentStorageSize).toBe(0);
+    } finally {
+      fabFileDocs.splice(0, fabFileDocs.length, ...originalDocs);
+    }
   });
 
   it('completes the request without throwing', async () => {
@@ -237,3 +375,5 @@ describe('DELETE /api/files', () => {
     expect(mockRefs.deleteManyArgs).toBeUndefined();
   });
 });
+
+afterEach(() => vi.unstubAllEnvs());

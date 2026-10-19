@@ -28,6 +28,7 @@ export const usageSchema = z
   .object({
     inputTokens: z.number().optional(),
     outputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
     cacheReadInputTokens: z.number().optional(),
     cacheCreationInputTokens: z.number().optional(),
   })
@@ -72,6 +73,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('content'),
     text: z.string().optional(),
+    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),
     stopReason: z.string().optional(),
@@ -79,6 +81,7 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('tool_use'),
     text: z.string().optional(),
+    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
     tools: z.array(toolUseSchema).optional(),
     thinking: z.array(z.unknown()).optional(),
     usage: usageSchema.optional(),
@@ -88,6 +91,9 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('error'),
     message: z.string().optional(),
+    // The server's classifier (CompletionSseErrorEventSchema in @bike4mind/common); kept open so a new code still parses.
+    code: z.string().optional(),
+    requestId: z.string().optional(),
   }),
 ]);
 export type StreamEvent = z.infer<typeof streamEventSchema>;

@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * the allowlist check is WIRED into the handler and runs BEFORE the update reaches the service.
  */
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   updateDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 // Real allowlist predicate on purpose - the whole point is which ids pass.
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     updateDataLake: h.updateDataLake,
   },
@@ -78,7 +78,7 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.updateDataLake.mockResolvedValue({ id: 'lake1', preferredSystemPromptId: 'triage_router' });
   });
 
@@ -88,7 +88,7 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
       /not a valid preferred system prompt/i
     );
     // Fail loud and early: neither the access gate nor the update ran.
-    expect(h.assertLakeAccess).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessById).not.toHaveBeenCalled();
     expect(h.updateDataLake).not.toHaveBeenCalled();
   });
 

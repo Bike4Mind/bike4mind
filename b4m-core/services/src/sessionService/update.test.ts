@@ -629,6 +629,104 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
+
+    describe('forced retrieval', () => {
+      it('turns forced retrieval on when a lake is picked on a session that never set it', async () => {
+        // Matches create: without this the search is left to the model, and a turn that skips it
+        // is answered without the lake and nothing tells the user so.
+        const { update, adapters } = makeAdapters({}, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope: ['datalake:research'] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).toMatchObject({
+          retrievalTags: ['datalake:research'],
+          lakeScopeExplicit: true,
+          forceKnowledgeRetrieval: true,
+        });
+      });
+
+      it.each([
+        ['an empty scope', []],
+        ['a cleared scope', null],
+      ])('leaves it unset for %s', async (_label, lakeScope) => {
+        const { update, adapters } = makeAdapters({}, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+
+      it('leaves a stored false alone, so an existing opt-out survives the pick', async () => {
+        // A stored value is the caller's own setting. Flipping it here would reverse an explicit
+        // opt-out on the public PUT path, where no picker invariant applies.
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false }, []);
+
+        await updateSession(user, { id: 'session-1', lakeScope: ['datalake:research'] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+
+      it('leaves a stored true alone when the pick is empty or cleared', async () => {
+        for (const lakeScope of [[], null]) {
+          const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true }, []);
+
+          await updateSession(user, { id: 'session-1', lakeScope } as never, adapters as never);
+
+          expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+        }
+      });
+
+      it('lets an opt-out in the same request win', async () => {
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true }, []);
+
+        await updateSession(
+          user,
+          { id: 'session-1', lakeScope: ['datalake:research'], forceKnowledgeRetrieval: false } as never,
+          adapters as never
+        );
+
+        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: false });
+      });
+
+      it('lets an explicit on in the same request win over a stored opt-out', async () => {
+        const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false }, []);
+
+        await updateSession(
+          user,
+          { id: 'session-1', lakeScope: ['datalake:research'], forceKnowledgeRetrieval: true } as never,
+          adapters as never
+        );
+
+        expect(update.mock.calls[0][1]).toMatchObject({ forceKnowledgeRetrieval: true });
+      });
+
+      it('does not turn it on for a scope derived from an attached file', async () => {
+        const { update, adapters } = makeAdapters({}, [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+
+        await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
+
+        expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: ['datalake:acme'] });
+        expect(update.mock.calls[0][1]).not.toHaveProperty('forceKnowledgeRetrieval');
+      });
+    });
+  });
+
+  describe('includeLibraryFiles', () => {
+    it.each([true, false])('persists %s, so turning the library off sticks', async value => {
+      const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:x'], lakeScopeExplicit: true }, []);
+
+      await updateSession(user, { id: 'session-1', includeLibraryFiles: value } as never, adapters as never);
+
+      expect(update.mock.calls[0][1]).toMatchObject({ includeLibraryFiles: value });
+    });
+
+    it('leaves the stored value alone when omitted', async () => {
+      const { update, adapters } = makeAdapters({ includeLibraryFiles: false }, []);
+
+      await updateSession(user, { id: 'session-1', name: 'renamed' } as never, adapters as never);
+
+      expect(update.mock.calls[0][1]).not.toHaveProperty('includeLibraryFiles');
+    });
   });
 });
 
@@ -699,5 +797,106 @@ describe('updateSession - added knowledge ids are access-checked', () => {
     expect(findAccessibleInIds.mock.calls[0][0]).toEqual([OTHERS_FILE]);
     expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([KEPT_PRIVATE]);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateSession - knowledgeIdsMode 'add'", () => {
+  const user = { id: 'user-1' } as IUserDocument;
+
+  // Resolves NEW_FILE and LAKE_FILE_ID only; OTHERS_FILE is someone else's.
+  const makeAdapters = (storedIds: string[], lakeFiles: Array<Record<string, unknown>> = []) => {
+    const findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      ids.filter(id => id === NEW_FILE || id === LAKE_FILE_ID).map(id => ({ id }))
+    );
+    return {
+      adapters: {
+        db: {
+          sessions: {
+            shareable: {
+              findUpdateAccessById: vi.fn().mockResolvedValue({
+                id: 'session-1',
+                knowledgeIds: storedIds,
+                artifactIds: [],
+                tags: [],
+                name: 'Session',
+              }),
+            },
+            updateWithUpdateAccess: vi.fn(),
+            addKnowledgeIdsWithUpdateAccess: vi.fn((_user: unknown, data: unknown) => Promise.resolve(data)),
+          },
+          projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
+          fabFiles: {
+            findAccessibleInIds,
+            shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(lakeFiles) },
+          },
+          caches: {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage isn't exercised; getCachedSignedUrl is mocked above
+        storage: {} as any,
+      },
+    };
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('adds only the accessible new ids and never writes the stored list back', async () => {
+    const { adapters } = makeAdapters([KEPT_PRIVATE]);
+    await updateSession(
+      user,
+      { id: 'session-1', knowledgeIds: [KEPT_PRIVATE, OTHERS_FILE, NEW_FILE], knowledgeIdsMode: 'add' },
+      adapters
+    );
+
+    const { addKnowledgeIdsWithUpdateAccess, updateWithUpdateAccess } = adapters.db.sessions;
+    expect(updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(addKnowledgeIdsWithUpdateAccess).toHaveBeenCalledOnce();
+    const [calledUser, data, added] = addKnowledgeIdsWithUpdateAccess.mock.calls[0];
+    expect(calledUser).toBe(user);
+    expect(data).not.toHaveProperty('knowledgeIds');
+    expect(added).toEqual([NEW_FILE]);
+  });
+
+  it('derives the lake scope from the stored ids plus the additions', async () => {
+    const { adapters } = makeAdapters([KEPT_PRIVATE], [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      KEPT_PRIVATE,
+      LAKE_FILE_ID,
+    ]);
+    expect(adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mock.calls[0][1]).toMatchObject({
+      retrievalTags: ['datalake:acme'],
+    });
+  });
+
+  it('drops an unusable stored id before the lake derivation casts the list', async () => {
+    const { adapters } = makeAdapters(
+      ['Legacy-UUID-2019', KEPT_PRIVATE],
+      [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]
+    );
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(user, [
+      KEPT_PRIVATE,
+      LAKE_FILE_ID,
+    ]);
+  });
+
+  it('does not re-add a stored id that differs only in hex case', async () => {
+    const { adapters } = makeAdapters([LAKE_FILE_ID.toUpperCase()]);
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], knowledgeIdsMode: 'add' }, adapters);
+
+    const [, , added] = adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mock.calls[0];
+    expect(added).toEqual([]);
+  });
+
+  it('404s when the gated add-only write is refused', async () => {
+    const { adapters } = makeAdapters([]);
+    adapters.db.sessions.addKnowledgeIdsWithUpdateAccess.mockResolvedValue(null);
+
+    await expect(
+      updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE], knowledgeIdsMode: 'add' }, adapters)
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 });

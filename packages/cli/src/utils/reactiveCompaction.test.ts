@@ -45,9 +45,9 @@ describe('createReactiveCompactionHandler', () => {
   it('summarizes older iterations and preserves the protected prefix + recent tail', async () => {
     const messages = buildWorkingHistory(3);
     const agent = fakeAgent('summary of earlier turns');
-    const handler = createReactiveCompactionHandler(agent, createSession(), INITIAL_MESSAGE_COUNT);
+    const handler = createReactiveCompactionHandler(agent, createSession());
 
-    const result = await handler(messages);
+    const result = await handler(messages, INITIAL_MESSAGE_COUNT);
 
     expect(result).not.toBeNull();
     expect(agent.completeText).toHaveBeenCalledTimes(1);
@@ -69,9 +69,9 @@ describe('createReactiveCompactionHandler', () => {
     // Only 2 iterations total - nothing left to summarize once the last 2 are preserved.
     const messages = buildWorkingHistory(2);
     const agent = fakeAgent('should not be used');
-    const handler = createReactiveCompactionHandler(agent, createSession(), INITIAL_MESSAGE_COUNT);
+    const handler = createReactiveCompactionHandler(agent, createSession());
 
-    const result = await handler(messages);
+    const result = await handler(messages, INITIAL_MESSAGE_COUNT);
 
     expect(result).toBeNull();
     expect(agent.completeText).not.toHaveBeenCalled();
@@ -80,9 +80,9 @@ describe('createReactiveCompactionHandler', () => {
   it('returns null when the summarizer produces empty text', async () => {
     const messages = buildWorkingHistory(3);
     const agent = fakeAgent('   ');
-    const handler = createReactiveCompactionHandler(agent, createSession(), INITIAL_MESSAGE_COUNT);
+    const handler = createReactiveCompactionHandler(agent, createSession());
 
-    const result = await handler(messages);
+    const result = await handler(messages, INITIAL_MESSAGE_COUNT);
 
     expect(result).toBeNull();
   });

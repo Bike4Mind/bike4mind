@@ -9,16 +9,30 @@
  *
  * Status policy (deliberate v1 product decision): only `status === 'active'`
  * grants - `past_due` (no dunning grace) and `trialing` deny. Changing that
- * means replacing `findActiveUserSubscriptions` with a status-allowlist query
- * here, not widening the repository method.
+ * means a status-allowlist query in `getActiveSubscriptionsForUser`, not
+ * widening the repository methods.
  *
- * Owner scope: User-owned subscriptions only. The org-seat fast-follow
- * (ACCESS_MODEL §3.2) adds seat-membership resolution HERE - callers never
- * change. Note the webhook invalidation fan-out for seats is separate work.
+ * Owner scope: the user's own subscriptions plus those of every org they are a
+ * member of (`getActiveSubscriptionsForUser`) - an org seat confers the org
+ * plan's price-derived keys exactly as an owned subscription would. The same
+ * row set feeds the rate tier and `/api/v1/me`.
+ *
+ * Note the webhook invalidation fan-out for seats is still separate work: the Stripe handler
+ * (`apps/workers/src/events/stripe/customerSubscriptionUpdated.ts`) skips org owners, so the
+ * client's cached entitlements can lag a seat change until its next refetch.
  */
-import { resolveEntitlements, normalizeTag, BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import {
+  applyImpliedEntitlements,
+  resolveEntitlements,
+  normalizeTag,
+  BASE_ENTITLEMENT_KEY,
+} from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import {
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+  type ActiveSubscriptionsRequest,
+} from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -31,8 +45,7 @@ import type { Logger } from '@bike4mind/observability';
  * never surfaces because express types are not imported here at all. Any
  * Express.Request (or Next.js request) is structurally assignable to this.
  */
-export interface EntitlementRequest {
-  user?: IUserDocument;
+export interface EntitlementRequest extends ActiveSubscriptionsRequest {
   entitlements?: EntitlementKey[];
   /** Attached by `baseApi()` early in the middleware chain; optional so a bare test double still fits. */
   logger?: Logger;
@@ -71,8 +84,8 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
 export async function getUserEntitlements(
   user: EntitlementUser,
   /**
-   * The user's active subscriptions, when the caller has already loaded them - it
-   * is the same query this function would run. `/api/v1/me` passes them so `tier`
+   * The user's active subscriptions (from `getActiveSubscriptionsForUser`), when the
+   * caller has already loaded them - it is the same read this function would run. `/api/v1/me` passes them so `tier`
    * and `entitlements` in one response are derived from one read, and therefore
    * are derived from one snapshot read, not two reads that could race apart.
    */
@@ -80,7 +93,7 @@ export async function getUserEntitlements(
 ): Promise<EntitlementKey[]> {
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
-    preloadedActiveSubscriptions ?? subscriptionRepository.findActiveUserSubscriptions(user.id),
+    preloadedActiveSubscriptions ?? getActiveSubscriptionsForUser(user.id),
     partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
@@ -104,7 +117,10 @@ export async function getUserEntitlements(
   // hold" chokepoint feeding both the client `/api/entitlements` and the server
   // admission gate) rather than in the pure registry, which stays grant-rows-only.
   keys.add(BASE_ENTITLEMENT_KEY);
-  return [...keys];
+  // Implications run last, over the union of every source, so an implying key
+  // confers the same keys whether it came from a tag, domain, partner rule or
+  // subscription. Must stay the only place they are applied for gating.
+  return applyImpliedEntitlements(keys);
 }
 
 /**
@@ -141,7 +157,11 @@ export async function getRequestEntitlements(req: EntitlementRequest): Promise<E
   // req.user before gating routes call this, so `!` below is safe once past the guard;
   // the guard is defense-in-depth for a future caller that forgets to check.
   if (!req.user) return [];
-  return (req.entitlements ??= await getUserEntitlements(req.user));
+  if (req.entitlements) return req.entitlements;
+  const active = await getRequestActiveSubscriptions(req);
+  // The early return above covers the settled case; `??=` covers two callers that both passed
+  // it before either assigned - the first write wins, so both resolve to the same list.
+  return (req.entitlements ??= await getUserEntitlements(req.user, active));
 }
 
 /**

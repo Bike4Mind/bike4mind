@@ -4,12 +4,12 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { briefcasePromptRepository } from '@bike4mind/database';
 import { briefcaseService } from '@bike4mind/services';
-import { BriefcasePromptIdSchema, BriefcasePromptUpdateInput, type ICaller } from '@bike4mind/common';
+import { BriefcasePromptIdSchema, BriefcasePromptUpdateInput, isOAuthSourceTag, type ICaller } from '@bike4mind/common';
 import { Request } from 'express';
 
 const toCaller = (req: Request): ICaller => ({
   id: req.user.id,
-  entitlements: req.user.tags ?? [],
+  entitlements: (req.user.tags ?? []).filter(tag => !isOAuthSourceTag(tag)),
   isAdmin: !!req.user.isAdmin,
   isApiKey: !!req.apiKeyInfo,
 });
@@ -20,8 +20,8 @@ const toCaller = (req: Request): ICaller => ({
  * GET    /api/briefcase/prompts/:id - authoritative click-time refetch. Returns
  *        the FULL prompt (incl. promptText) only if it's a system prompt the caller
  *        is ENTITLED to see (same visibility scoping as the catalog) or one owned
- *        by the caller; 404 otherwise (never another user's personal prompt, and no
- *        by-id bypass of visibilityScopes).
+ *        by the caller (never to an API key); 404 otherwise (never another user's
+ *        personal prompt, and no by-id bypass of visibilityScopes).
  * PUT    /api/briefcase/prompts/:id - update a prompt the caller OWNS.
  * DELETE /api/briefcase/prompts/:id - soft-delete a prompt the caller OWNS.
  */
@@ -34,11 +34,9 @@ const handler = baseApi()
     if (!id.success) return res.status(400).json({ error: 'Invalid prompt id' });
 
     const prompt = await briefcasePromptRepository.findByIdForCaller(id.data, req.user.id);
-    if (!prompt) return res.status(404).json({ error: 'Prompt not found' });
-    // System prompts must pass the SAME visibility gate as the catalog - otherwise
-    // the by-id path leaks entitlement-scoped promptText/tools to non-entitled callers.
-    // (Personal prompts are already owner-scoped by findByIdForCaller.)
-    if (prompt.userId == null && !briefcaseService.canSeeSystemPrompt(prompt, toCaller(req))) {
+    // Same gates as the catalog, so the by-id path cannot bypass them. 404 (not 403)
+    // so the response does not confirm the id exists.
+    if (!prompt || !briefcaseService.canReadPrompt(prompt, toCaller(req))) {
       return res.status(404).json({ error: 'Prompt not found' });
     }
     return res.json({ prompt });

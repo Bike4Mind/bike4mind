@@ -76,6 +76,8 @@ vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
 
+const USER_ID = 'user-1';
+
 // Mock breaker whose execute() runs the given function
 function createMockBreaker() {
   return {
@@ -151,13 +153,24 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', undefined);
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'read');
       expect(mockBreaker.execute).toHaveBeenCalledOnce();
+    });
+
+    it('should run a call with no user outside any shared breaker', async () => {
+      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+
+      await expect(invokeMcpHandler(payload)).resolves.toEqual({ result: 'ok' });
+
+      expect(mockGetBreaker).not.toHaveBeenCalled();
+      expect(mockLocalMcpHandler).toHaveBeenCalledOnce();
     });
 
     it('should pass "write" op type for write operations', async () => {
@@ -165,14 +178,18 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', toolName: 'create_issue', params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        action: 'callTool',
+        toolName: 'create_issue',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'create_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'write');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'write');
     });
 
     it('should pass "read" op type for read operations', async () => {
@@ -180,20 +197,26 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', toolName: 'get_issue', params: {} } as Parameters<
-        typeof invokeMcpHandler
-      >[0];
+      const payload = {
+        name: 'github',
+        action: 'callTool',
+        toolName: 'get_issue',
+        userId: USER_ID,
+        params: {},
+      } as Parameters<typeof invokeMcpHandler>[0];
 
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'get_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(USER_ID, 'github', 'read');
     });
 
     it('should convert CircuitBreakerError to user-friendly message', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow(
         'github integration is temporarily unavailable due to repeated failures'
@@ -203,7 +226,9 @@ describe('invokeMcpHandler circuit breaker', () => {
     it('should emit CloudWatch rejection metric when circuit breaker rejects', async () => {
       mockGetBreaker.mockReturnValue(createOpenBreaker('github'));
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow();
 
@@ -218,7 +243,9 @@ describe('invokeMcpHandler circuit breaker', () => {
       };
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('MCP handler invocation failed: 502');
     });
@@ -232,7 +259,9 @@ describe('invokeMcpHandler circuit breaker', () => {
       const mockBreaker = createMockBreaker();
       mockGetBreaker.mockReturnValue(mockBreaker);
 
-      const payload = { name: 'github', action: 'callTool', params: {} } as Parameters<typeof invokeMcpHandler>[0];
+      const payload = { name: 'github', action: 'callTool', userId: USER_ID, params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
 
       await expect(invokeMcpHandler(payload)).rejects.toThrow('github blocked by admin');
 

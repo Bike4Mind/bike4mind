@@ -33,11 +33,15 @@ vi.mock('@bike4mind/services', () => ({
     isOpaqueRefreshToken: (...args: any[]) => mockIsOpaque(...(args as [])),
     rotateSession: (...args: any[]) => mockRotateSession(...args),
     issueSession: (...args: any[]) => mockIssueSession(...args),
+    revokeSession: vi.fn(),
   },
+  // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
+  userService: { accountBlockReasons: () => [] },
 }));
 
 const mockFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...args: any[]) => mockFindById(...args),
   },
@@ -182,6 +186,16 @@ describe('POST /api/auth/refreshToken — cookie vs body transport', () => {
 
     expect(res._getJSONData().refreshToken).toBe('new_refresh');
     expect(res.getHeader('Set-Cookie')).toBeUndefined();
+  });
+
+  it('strips keys that are not part of the self-view user from the response body', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, notAUserField: 'leak' });
+    const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'cli-token' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().user).not.toHaveProperty('notAUserField');
   });
 
   it('migrates a pre-cookie browser session onto the cookie when it opts in with cookie: true', async () => {

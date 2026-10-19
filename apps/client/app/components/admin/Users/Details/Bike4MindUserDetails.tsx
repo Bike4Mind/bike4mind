@@ -1,8 +1,9 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { IUserDocument } from '@bike4mind/common';
+import { IUserDocument, storageLimitToBytes } from '@bike4mind/common';
+import { computeStoragePercent } from '@client/app/components/admin/Users/Views/storageUtils';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
-import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
+import { CreditIcon } from '@client/app/components/svgs/icons/CreditIcon';
 import SdStorageIcon from '@mui/icons-material/SdStorage';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button, Textarea, FormHelperText } from '@mui/joy';
@@ -25,6 +26,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
+    const storagePercent = computeStoragePercent(user.currentStorageSize, user.storageLimit);
 
     const handleSubscribedDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newDate = e.target.value;
@@ -107,7 +109,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
 
         <Tooltip title="Credits">
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
-            <MonetizationOnIcon />
+            <CreditIcon />
             <Input
               key={`credits-${userKey}`}
               sx={{
@@ -150,9 +152,10 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
               <SdStorageIcon />
               <Box sx={{ flex: 1 }}>
                 <LinearProgress
+                  data-testid="admin-user-storage-progress"
                   determinate
                   thickness={32}
-                  value={(user.currentStorageSize / (user.storageLimit * 1024 * 1024)) * 100}
+                  value={storagePercent}
                   sx={{
                     '--LinearProgress-progressThickness': '26px',
                     borderRadius: '6px',
@@ -161,15 +164,10 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
                     height: '28px',
                     backgroundColor: 'background.level2',
                   }}
-                  color={
-                    (user.currentStorageSize / (user.storageLimit * 1024 * 1024)) * 100 >= 90
-                      ? 'danger'
-                      : (user.currentStorageSize / (user.storageLimit * 1024 * 1024)) * 100 >= 75
-                        ? 'warning'
-                        : 'primary'
-                  }
+                  color={storagePercent >= 90 ? 'danger' : storagePercent >= 75 ? 'warning' : 'primary'}
                 >
                   <Typography
+                    data-testid="admin-user-storage-label"
                     level="body-xs"
                     sx={{
                       mixBlendMode: 'normal',
@@ -178,7 +176,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
                       zIndex: 2,
                     }}
                   >
-                    {prettyBytes(user.currentStorageSize || 0)} / {prettyBytes(user.storageLimit * 1024 * 1024)}
+                    {prettyBytes(user.currentStorageSize || 0)} / {prettyBytes(storageLimitToBytes(user.storageLimit))}
                   </Typography>
                 </LinearProgress>
               </Box>

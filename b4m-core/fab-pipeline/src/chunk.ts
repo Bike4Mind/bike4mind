@@ -7,7 +7,7 @@ import {
   MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
-  isAudioMimeType,
+  isMediaOnlyMimeType,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
@@ -134,6 +134,9 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
+/** Longest stretch (ms) the chunker holds the event loop before yielding it. */
+const CHUNK_YIELD_INTERVAL_MS = 50;
+
 // Canonical in @bike4mind/common (see constants/chunking) so the admin-settings schema and the
 // React controls can share them without importing this module, which pulls in mammoth, JSZip,
 // tiktoken, unpdf and the S3 client. Re-exported so existing `from './chunk'` importers are
@@ -223,6 +226,7 @@ export class SmartChunker {
   // hand - re-reading the file just to look at its metadata would double the ingest read for a
   // field most documents do not have. Undefined whenever no source offered a plausible date.
   private lastDocumentDate: ExtractedDocumentDate | undefined;
+  private lastYieldAt = Date.now();
 
   /**
    * @param model - The embedding model name
@@ -339,12 +343,12 @@ export class SmartChunker {
     this.lastExtractedText = undefined;
     this.lastDocumentDate = undefined;
 
-    // Audio (generated TTS / sound effects) is intentionally not vectorizable -
+    // Audio and video (generated media) are intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
     // paths don't log it as an "Unsupported file type" error. The normal ingest
-    // path already skips the chunk-queue enqueue for audio (objectCreated.ts).
-    if (isAudioMimeType(mimeType)) {
-      this.logger.log(`Skipping chunking for audio file type: ${mimeType}`);
+    // path already skips the chunk-queue enqueue for media-only files (objectCreated.ts).
+    if (isMediaOnlyMimeType(mimeType)) {
+      this.logger.log(`Skipping chunking for media-only file type: ${mimeType}`);
       return [];
     }
 
@@ -1124,6 +1128,7 @@ export class SmartChunker {
    * falls back to character-based splitting for VoyageAI/Bedrock.
    */
   private async encodeTokens(text: string): Promise<number[]> {
+    await this.yieldIfBusy();
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       await this.initializeEncoder();
       // encode_ordinary, not encode: file content is untrusted and a special-token literal in it
@@ -1297,8 +1302,18 @@ export class SmartChunker {
     return merged;
   }
 
+  // The tokenizer is synchronous and every await around it resolves as a microtask, so without this
+  // a large file holds the event loop for the whole chunk. Tens of seconds of that starves the
+  // database driver's monitors until it drops the connection the commit then needs.
+  private async yieldIfBusy(): Promise<void> {
+    if (Date.now() - this.lastYieldAt < CHUNK_YIELD_INTERVAL_MS) return;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    this.lastYieldAt = Date.now();
+  }
+
   // Counts the number of tokens in the given text using the appropriate tokenization method
   private async countTokens(text: string): Promise<number> {
+    await this.yieldIfBusy();
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       // Use tiktoken for OpenAI models. encode_ordinary for the same reason as encodeTokens above:
       // a special-token literal in file content must be counted, not rejected.

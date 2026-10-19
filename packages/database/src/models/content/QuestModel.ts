@@ -10,6 +10,10 @@ import {
   MessageContentObject,
   QuestCallbackState,
   QuestCallbackStateSchema,
+  ChatToolModeSchema,
+  type GenerationJobRef,
+  type GenerationJobKind,
+  GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -191,6 +195,14 @@ const RetrievalCoverageSchema = subSchema({
   reasons: [{ type: String, required: false }],
 });
 
+// Required fields and default: undefined for the reason RetrievalCoverageSchema gives: the client
+// banners a reply on this field's presence.
+const RetrievalFloorRejectionSchema = subSchema({
+  floorPct: { type: Number, required: true },
+  measuredPct: { type: Number, required: true },
+  embeddingModel: { type: String, required: true },
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -282,6 +294,12 @@ const ReplyChoicesOutcomeSchema = subSchema({
   offered: { type: Boolean, required: false },
   status: { type: String, required: false },
   reason: { type: String, required: false },
+});
+
+// A tool call the model wrote as text and finalize stripped. Sub-Schema with `default: undefined`
+// so a turn without one has no field rather than an empty object.
+const NarratedToolCallSchema = subSchema({
+  toolNames: { type: [String], required: false, default: undefined },
 });
 
 export const PromptMetaSchema = new Schema<PromptMeta>(
@@ -431,6 +449,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
     retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalFloorRejection` (parity test enforces it).
+    retrievalFloorRejection: { type: RetrievalFloorRejectionSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
@@ -446,6 +466,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       },
     ],
     offeredTools: [{ type: String, required: false }],
+    toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
+    redirectedFrom: { type: String, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -453,7 +475,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // Unset means nothing visible ever streamed - see PromptMetaPerformanceSchema.
       firstTokenTime: { type: Number, required: false },
       firstChunkTime: { type: Number, required: false },
-      // Posted back by the client after it renders the first token (quests/[id]/client-timing).
+      // Legacy: written here before it moved to the top-level `clientFirstTokenTime`. Kept for old quests.
       clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
         chunkCount: { type: Number, required: false },
@@ -485,6 +507,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     finishReason: { type: String, required: false },
     // Must stay in sync with the Zod PromptMeta `replyChoices` (parity test enforces it).
     replyChoices: { type: ReplyChoicesOutcomeSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `narratedToolCall`.
+    narratedToolCall: { type: NarratedToolCallSchema, required: false, default: undefined },
     artifacts: { type: [ArtifactSchema], required: false, default: undefined },
     toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
     executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
@@ -570,6 +594,8 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // `IChatHistoryItem.correctsQuestId` - a field declared only on the type is dropped on write
     // by Mongoose strict mode, with no error.
     correctsQuestId: { type: String, required: false },
+    // See `IChatHistoryItem.clientFirstTokenTime` for why this is not under promptMeta.performance.
+    clientFirstTokenTime: { type: Number, required: false },
     // Provenance of the routing decision that produced this quest.
     // Drives the `AutoRouteBadge` rendering above auto-routed responses
     // (classifier- or rule-based complexity-routed).
@@ -580,6 +606,21 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    // Legacy: read only (see questGenerationJobs); new jobs go to generationJobs.
+    videoJobIds: { type: [String], default: undefined },
+    generationJobs: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, required: true },
+          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+        },
+      ],
+      default: undefined,
+    },
+    // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
+    agentVideoClipsClaimed: { type: Number, required: false },
+    agentMusicTracksClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -599,6 +640,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
           eventId: { type: String, required: true },
           state: { type: String, enum: QuestCallbackStateSchema.options, required: true },
           dispatchedAt: { type: Date },
+          redispatchCount: { type: Number },
           completedAt: { type: Date },
           lastStatusCode: { type: Number },
           lastError: { type: String },
@@ -669,6 +711,25 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       enhancedPrompt: { type: String, required: false },
       promptWasEnhanced: { type: Boolean, required: false },
       intent: { type: String, enum: ['fresh', 'continuation'], required: false },
+    },
+    // Which model actually answered when the requested one failed over. Must stay in sync with
+    // FallbackInfoSchema (@bike4mind/common schemas/llm.ts); strict mode drops any path not
+    // declared here, and this is the only durable record of a fallback that ignores telemetry
+    // opt-outs. Not `required` inside: losing one field beats throwing on the quest write.
+    fallbackInfo: {
+      type: {
+        sessionId: String,
+        primaryModel: String,
+        primaryModelName: String,
+        fallbackModel: String,
+        fallbackModelName: String,
+        primaryModelBackend: String,
+        fallbackModelBackend: String,
+        reason: String,
+        timestamp: Number,
+      },
+      required: false,
+      _id: false,
     },
     // Pre-computed embedding for semantic search (generated by Zen Garden Spider)
     embedding: {
@@ -820,6 +881,34 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
  * callback handler can check a quest is still settled before delivering against it.
  */
 export const TERMINAL_QUEST_STATUSES: readonly NonNullable<IChatHistoryItemDocument['status']>[] = ['done', 'stopped'];
+
+/** Which `dispatched` callbacks count as stuck; one value feeds both the sweep's read and its reclaim. */
+export type StaleCallbackDispatchCriteria = {
+  /** Claims made before this are past every delivery the queue could still be retrying. */
+  dispatchedBefore: Date;
+  /** Claims made before this are too old to re-send: the caller has stopped waiting for them. */
+  dispatchedAfter: Date;
+  /** Reclaims allowed per arm; a callback that has used them all is failed by failExhaustedCallbacks. */
+  maxRedispatches: number;
+};
+
+function staleCallbackDispatchFilter({
+  dispatchedBefore,
+  dispatchedAfter,
+  maxRedispatches,
+}: StaleCallbackDispatchCriteria) {
+  return {
+    'callback.state': 'dispatched',
+    'callback.dispatchedAt': { $lt: dispatchedBefore, $gte: dispatchedAfter },
+    // $not rather than $lt, so a callback never reclaimed (field absent) also matches.
+    'callback.redispatchCount': { $not: { $gte: maxRedispatches } },
+  };
+}
+
+const AGENT_GENERATION_SLOT_FIELDS = {
+  video: 'agentVideoClipsClaimed',
+  music: 'agentMusicTracksClaimed',
+} as const satisfies Record<GenerationJobKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -984,8 +1073,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // earlier turn as an input image (see ImageGenerationService.selectInputImage).
       // Include suggestedChoices so history can re-attach a turn's stored choices (see
       // withStoredChoices in @bike4mind/utils).
+      // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -1061,7 +1151,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async findUnfinishedByAgentExecutionIds(agentExecutionIds: string[]): Promise<UnfinishedQuestView[]> {
     if (agentExecutionIds.length === 0) return [];
-    // MUST STAY IN SYNC with `QuestContentView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestContentView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1074,12 +1165,28 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
+  }
+
+  /**
+   * `update`, but only while the stored quest is still unfinished; null when it already reached a
+   * terminal status. The streaming pipeline saves its in-memory 'running' copy mid-turn, and an
+   * `_id`-only write would put 'running' back over a user Stop before the cancellation watcher saw it.
+   */
+  async updateIfUnfinished(data: Partial<IChatHistoryItemDocument> & { id: string }) {
+    const { id, ...updateData } = data;
+    if (!id) throw new Error('id is required');
+    return this._plainUpdate(
+      { _id: convertId(id), status: { $nin: TERMINAL_QUEST_STATUSES } },
+      updateData as Record<string, unknown>
+    );
   }
 
   /**
@@ -1102,7 +1209,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies'>> & { finishReason?: string }
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+      finishReason?: string;
+    }
   ): Promise<boolean> {
     const filter = { _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } };
     const { finishReason, ...fields } = patch;
@@ -1120,34 +1229,13 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Set only `promptMeta.performance.clientFirstTokenTime`. The client posts it while the quest is
-   * still streaming, so a read-modify-write of the whole `promptMeta` would clobber whatever the
-   * pipeline saved in between. Returns whether a quest matched.
-   *
-   * Goes through an update pipeline, not a dotted `$set`, for the same reason as `settleIfUnfinished`:
-   * a null `promptMeta` (or `performance`) makes the dotted path error, while `$mergeObjects` treats
-   * a null or missing operand as empty.
+   * Set only the top-level `clientFirstTokenTime`, which the client posts while the quest is still
+   * streaming. A single-field `$set` leaves the pipeline's concurrent writes alone, and the
+   * pipeline's whole-`promptMeta` saves cannot erase a field outside `promptMeta`. Returns whether a
+   * quest matched.
    */
   async setClientFirstTokenTime(id: string, clientFirstTokenTime: number): Promise<boolean> {
-    const result = await this.model.updateOne({ _id: id }, [
-      {
-        $set: {
-          promptMeta: {
-            $mergeObjects: [
-              '$promptMeta',
-              {
-                performance: {
-                  $mergeObjects: [
-                    '$promptMeta.performance',
-                    { clientFirstTokenTime: { $literal: clientFirstTokenTime } },
-                  ],
-                },
-              },
-            ],
-          },
-        },
-      },
-    ]);
+    const result = await this.model.updateOne({ _id: id }, { $set: { clientFirstTokenTime } });
     return result.matchedCount > 0;
   }
 
@@ -1189,6 +1277,52 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     await this.model.updateOne({ agentExecutionId }, { $addToSet: { images: { $each: images } } });
   }
 
+  /**
+   * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
+   * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
+   * Quest matches.
+   */
+  async setPendingAction(questId: string, action: { tool: string; params: Record<string, unknown>; ts: number }) {
+    await this.model.updateOne({ _id: convertId(questId) }, { $set: { pendingAction: action } });
+  }
+
+  /**
+   * Append generation jobs to a chat Quest the moment each job is created. `$addToSet` makes a
+   * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
+   * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can
+   * briefly drop a second id, and the next save restores it. No-op if no Quest matches.
+   */
+  async addGenerationJobs(questId: string, jobs: GenerationJobRef[]): Promise<void> {
+    if (!jobs.length) return;
+    // $addToSet matches a subdocument on its fields in order, so rebuild each ref as { id, kind }.
+    const refs = jobs.map(({ id, kind }) => ({ id, kind }));
+    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { generationJobs: { $each: refs } } });
+  }
+
+  /**
+   * Claim one of an agent run's `limit` slots for a `kind` of generation job. The run's parent, its in-process subagents and its
+   * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
+   * Returns false when the cap is reached or no Quest matches.
+   */
+  async claimAgentGenerationSlot(questId: string, kind: GenerationJobKind, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ [field]: { $exists: false } }, { [field]: { $lt: limit } }],
+      },
+      { $inc: { [field]: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
+  async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
+    await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
+  }
+
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first
   // match). The voice proxy uses this to decide whether to emit an ElevenLabs
   // buffer chunk on the very first turn of a fresh session (no prior quests).
@@ -1208,6 +1342,19 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // The subset of `keys` that some quest in this session references as generated media (`images`
+  // or `videos`). Session-scoped twin of findSessionIdsByImage: once the caller's access to the
+  // session is established, a key is readable iff one of its turns produced it.
+  async findGeneratedMediaKeysInSession(sessionId: string, keys: string[]): Promise<string[]> {
+    if (!sessionId || keys.length === 0) return [];
+    const docs = await this.model
+      .find({ sessionId, $or: [{ images: { $in: keys } }, { videos: { $in: keys } }] }, { images: 1, videos: 1 })
+      .lean();
+    const requested = new Set(keys);
+    const referenced = docs.flatMap(doc => [...(doc.images ?? []), ...(doc.videos ?? [])]);
+    return [...new Set(referenced.filter(key => requested.has(key)))];
+  }
+
   /**
    * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
    * Shape is `StaleRunningQuestView`, declared below the class.
@@ -1225,7 +1372,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     newerThan?: Date;
     limit?: number;
   }): Promise<StaleRunningQuestView[]> {
-    // MUST STAY IN SYNC with `QuestTimeoutView` in questTimeoutRecovery.ts: a
+    // MUST STAY IN SYNC with `QuestTimeoutView` in
+    // packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts: a
     // content field the decision reads but this does not project reads as
     // absent, and a run that produced that content gets stamped as a failure.
     const docs = await this.model
@@ -1242,6 +1390,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           replies: 1,
           images: 1,
           videos: 1,
+          videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1293,6 +1443,26 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       { _id: id, 'callback.state': 'dispatched', 'callback.eventId': eventId },
       { $set: { 'callback.state': 'pending' }, $unset: { 'callback.dispatchedAt': 1 } }
     );
+  }
+
+  /**
+   * The `dispatched -> dispatched` re-claim of a callback whose queue message is gone: its claim
+   * is older than every delivery the queue could still be retrying but not past the re-send
+   * horizon, and it has reclaims left. The
+   * same atomic shape as claimCallbackDispatch, so concurrent sweeps re-enqueue it once: moving
+   * `dispatchedAt` forward takes the callback out of the stale window. Returns the claimed event
+   * id, kept so the receiver dedupes a redelivery, or null when nothing matched.
+   */
+  async reclaimStaleCallbackDispatch(id: string, criteria: StaleCallbackDispatchCriteria): Promise<string | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, ...staleCallbackDispatchFilter(criteria) },
+        { $set: { 'callback.dispatchedAt': new Date() }, $inc: { 'callback.redispatchCount': 1 } },
+        { projection: { 'callback.eventId': 1 } }
+      )
+      .lean<{ callback?: Pick<IQuestCallback, 'eventId'> }>()
+      .exec();
+    return doc?.callback?.eventId ?? null;
   }
 
   async findCallbackById(id: string): Promise<IQuestCallback | null> {
@@ -1352,6 +1522,71 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       .limit(opts.limit)
       .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
     return docs.map(doc => doc._id.toString());
+  }
+
+  /**
+   * Quests whose callback is stuck at `dispatched` with no queue message behind it: the process
+   * died between the claim and the send, or the send and its compensating release both failed.
+   * Candidates for reclaimStaleCallbackDispatch, oldest claim first.
+   */
+  async findStaleDispatchedCallbacks(criteria: StaleCallbackDispatchCriteria & { limit: number }): Promise<string[]> {
+    const docs = await this.model
+      .find(staleCallbackDispatchFilter(criteria), { _id: 1 })
+      .sort({ 'callback.dispatchedAt': 1 })
+      .limit(criteria.limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    return docs.map(doc => doc._id.toString());
+  }
+
+  /**
+   * Atomically move exhausted dispatched callbacks to `failed`. Two disjoint cases:
+   * - Redispatch limit reached: stale but still within the horizon, retries used up.
+   * - Horizon passed: last claim older than the maximum re-send window regardless of retry count.
+   *   A reclaim resets `dispatchedAt`, so in steady state this only catches pre-horizon backlog or
+   *   callbacks stranded while the sweep was down; exhausted retries land in the first case.
+   * Concurrent sweeps are safe: each updateMany is gated on `state: 'dispatched'`, so
+   * only one writer flips any given callback and the second finds nothing to modify.
+   * Returns counts by failure reason for separate metrics.
+   */
+  async failExhaustedCallbacks(opts: {
+    staleBefore: Date;
+    horizonBefore: Date;
+    maxRedispatches: number;
+  }): Promise<{ redispatchLimitReached: number; horizonPassed: number }> {
+    const now = new Date();
+    const [limitResult, horizonResult] = await Promise.all([
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.staleBefore, $gte: opts.horizonBefore },
+          'callback.redispatchCount': { $gte: opts.maxRedispatches },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch limit reached',
+          },
+        }
+      ),
+      this.model.updateMany(
+        {
+          'callback.state': 'dispatched',
+          'callback.dispatchedAt': { $lt: opts.horizonBefore },
+        },
+        {
+          $set: {
+            'callback.state': 'failed',
+            'callback.completedAt': now,
+            'callback.lastError': 'redispatch horizon passed',
+          },
+        }
+      ),
+    ]);
+    return {
+      redispatchLimitReached: limitResult.modifiedCount,
+      horizonPassed: horizonResult.modifiedCount,
+    };
   }
 
   // Returns the most recent quest in the session that has no reply yet, or
@@ -1461,6 +1696,13 @@ function initializeQuestModel() {
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
     );
+
+    // Serves findStaleDispatchedCallbacks and failExhaustedCallbacks (questTimeoutSweep backstop).
+    // Partial, so it holds only the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
+    ChatHistoryItemSchema.index(
+      { 'callback.state': 1, 'callback.dispatchedAt': 1 },
+      { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
   } catch (error) {
     // Plugin already applied, ignore error
   }
@@ -1479,24 +1721,41 @@ export const questRepository = new QuestRepository(Quest);
  * Content fields the stranded-quest settle reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestContentView` (questTimeoutRecovery.ts) cannot drift on field types. The
- * projection in the query above still has to list the same fields by hand.
+ * `QuestContentView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. The projection in the query above still has to list the same fields by
+ * hand.
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  | 'agentExecutionId'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;
 
 /**
  * Everything the liveness recovery decision reads, plus the id it writes back to.
  *
  * Picked from `IChatHistoryItem` rather than restated so this and
- * `QuestTimeoutView` (questTimeoutRecovery.ts) cannot drift on field types.
- * `updatedAt` is declared here because it lives on the mongo document, not on
+ * `QuestTimeoutView` (packages/server-utils/src/chatCompletion/questTimeoutRecovery.ts) cannot
+ * drift on field types. `updatedAt` is declared here because it lives on the mongo document, not on
  * `IChatHistoryItem`. The projection in the query above still lists the same
  * fields by hand.
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  | 'status'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;

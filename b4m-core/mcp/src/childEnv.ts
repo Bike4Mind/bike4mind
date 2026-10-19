@@ -1,4 +1,5 @@
 import { McpServerName } from '@bike4mind/common';
+import { GITHUB_SELECTED_REPOSITORIES_ENV_KEY } from './github/constants.js';
 
 /**
  * Environment construction for the MCP stdio child process.
@@ -23,7 +24,7 @@ import { McpServerName } from '@bike4mind/common';
  */
 export const MCP_SERVER_ENV_KEYS: Readonly<Record<McpServerName, readonly string[]>> = {
   [McpServerName.LinkedIn]: ['LINKEDIN_ACCESS_TOKEN', 'COMPANY_NAME'],
-  [McpServerName.Github]: ['GITHUB_ACCESS_TOKEN'],
+  [McpServerName.Github]: ['GITHUB_ACCESS_TOKEN', GITHUB_SELECTED_REPOSITORIES_ENV_KEY],
   [McpServerName.Atlassian]: ['ATLASSIAN_ACCESS_TOKEN', 'ATLASSIAN_CLOUD_ID', 'ATLASSIAN_SITE_URL'],
   [McpServerName.Notion]: [
     'NOTION_ACCESS_TOKEN',

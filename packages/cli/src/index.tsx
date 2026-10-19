@@ -12,7 +12,6 @@ process.on('warning', warning => {
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
-import { execSync } from 'child_process';
 import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
@@ -33,20 +32,26 @@ import type { PendingMcpApproval } from './storage/ConfigStore';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
-import { SessionStore, ConfigStore, CommandHistoryStore, buildGlobalConfigPatch } from './storage';
+import {
+  SessionStore,
+  ConfigStore,
+  CommandHistoryStore,
+  buildGlobalConfigPatch,
+  PENDING_ASSISTANT_CONTENT,
+} from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
-import { ReActAgent } from '@bike4mind/agents';
-import { isReadOnlyTool } from './config/toolSafety.js';
+import { ReActAgent, createToolSearchTool } from '@bike4mind/agents';
+import { ToolCatalog } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
-  wrapTools,
+  buildCliToolList,
   resolveApiEndpoint,
   requireApiUrl,
   ApiEndpointUnconfiguredError,
@@ -136,15 +141,17 @@ import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
 import { FallbackLlmBackend } from './llm/FallbackLlmBackend.js';
 import { type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { WebSocketConnectionManager } from './ws/WebSocketConnectionManager';
-import { setWebSocketToolExecutor, registerFeatureModuleTools, clearFeatureModuleTools } from './llm/ToolRouter';
+import { setWebSocketToolExecutor } from './llm/ToolRouter';
 import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
+import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
+import { whenTurnIdle } from './session/whenTurnIdle.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
 import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
-import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
+import { CREDIT_DEDUCT_TRANSACTION_TYPES, tokenEstimateMultiplier } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
 import { mergeCommands, rewireReservedNames } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
@@ -157,7 +164,6 @@ import { createResumeAgentTool } from './agents/resumeAgentTool.js';
 import { createCoordinateTaskTool } from './agents/coordinatorTool.js';
 import { parseAgentConfig } from './tools/skillTool.js';
 import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
-import { createToolSearchTool } from './tools/toolSearchTool.js';
 import {
   createWriteTodosTool,
   createTodoStore,
@@ -173,8 +179,9 @@ import {
   createWorkItemTools,
 } from './tools';
 import { WorkItemsClient } from './api/WorkItemsClient.js';
+import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
-import { checkForUpdate } from './utils/updateChecker.js';
+import { getStartupUpdateStatus } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
 import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
 import { createBuiltinModules } from './features/createBuiltinModules.js';
@@ -196,6 +203,7 @@ import {
   rewindSession,
   type SessionLifecycleContext,
 } from './session/lifecycle.js';
+import { runWithModelOverride } from './session/modelOverride.js';
 import { printDecisions, printBlockers, printReviewGates } from './commands/handlers/workflowViews.js';
 
 interface PermissionPromptState {
@@ -236,6 +244,8 @@ interface CliState {
   agent: ReActAgent | null;
   mcpManager: McpManager | null;
   permissionManager: PermissionManager | null;
+  /** Tool descriptors for this process; the permission manager and the agent's read-only predicate share it. */
+  toolCatalog: ToolCatalog;
   permissionPrompt: PermissionPromptState | null;
   trustLocationSelector: TrustLocationSelectorState | null;
   /** Startup folder-trust prompt for an untrusted project shipping b4m files. */
@@ -299,6 +309,7 @@ function CliApp() {
     agent: null,
     mcpManager: null,
     permissionManager: null,
+    toolCatalog: new ToolCatalog(),
     permissionPrompt: null,
     trustLocationSelector: null,
     folderTrustPrompt: null,
@@ -335,6 +346,7 @@ function CliApp() {
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
+  const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -362,6 +374,7 @@ function CliApp() {
     } catch (err) {
       logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
     }
+    killRunningBangCommands();
 
     // Save session
     const session = useCliStore.getState().session;
@@ -750,8 +763,8 @@ function CliApp() {
 
       // Initialize permission manager with trusted tools and denied tools from config
       const permissionManager = new PermissionManager(
+        state.toolCatalog,
         config.trustedTools || [],
-        undefined, // customCategories (not used yet)
         config.tools.disabled || [] // denied tools from project config
       );
 
@@ -856,10 +869,10 @@ function CliApp() {
         });
       };
 
-      // Create agent context for observation tracking
+      // Per-agent state shared with the tool wrappers
       const agentContext: AgentContext = {
         currentAgent: null,
-        observationQueue: [],
+        onFileChanged: filePath => postEditDiagnosticsRef.current.enqueue(filePath),
       };
 
       // Build CLI tools, MCP/agent/context stores, the subagent orchestrator,
@@ -955,10 +968,9 @@ function CliApp() {
         reviewGateStoreRef.current.reviewGates = [];
       }
 
-      // Deps for routing the raw CLI-built tools (skill, find_definition,
-      // get_file_structure) through the ONE permission wrapper, exactly like the
-      // B4M and MCP tools. `additionalDirectories` is the same live allow-list
-      // reference threaded into generateCliTools, so runtime grants apply here too.
+      // Deps for routing the CLI-built tools through the ONE permission wrapper,
+      // exactly like the B4M and MCP tools. `additionalDirectories` is the same live
+      // allow-list reference threaded into generateCliTools, so runtime grants apply here too.
       const cliWrapDeps = {
         permissionManager,
         showPermissionPrompt: promptFn,
@@ -972,27 +984,16 @@ function CliApp() {
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
       const skillTool = enableSkillTool
-        ? wrapTools(
-            [
-              createSkillTool({
-                customCommandStore: state.customCommandStore,
-                subagentOrchestrator: orchestrator,
-                sessionId: newSession.id,
-                // Gate skill lifecycle hook shell commands through permission.
-                permission: { permissionManager, promptFn },
-                // Confine skill @file refs to the workspace (plus granted dirs).
-                allowedDirectories: additionalDirectories,
-              }),
-            ],
-            cliWrapDeps
-          )[0]
+        ? createSkillTool({
+            customCommandStore: state.customCommandStore,
+            subagentOrchestrator: orchestrator,
+            sessionId: newSession.id,
+            // Gate skill lifecycle hook shell commands through permission.
+            permission: { permissionManager, promptFn },
+            // Confine skill @file refs to the workspace (plus granted dirs).
+            allowedDirectories: additionalDirectories,
+          })
         : null;
-
-      // Create find_definition tool for fast symbol lookup
-      const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-
-      // Create get_file_structure tool for AST-based code overview
-      const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for
@@ -1001,33 +1002,50 @@ function CliApp() {
         ? createWorkItemTools(new WorkItemsClient(apiClient))
         : [];
 
-      // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
-      // registry so their names can be reserved against plugin tool-name
-      // collisions (a duplicate tool name would 400 every completion).
-      const cliTools = [
-        agentDelegateTool,
-        ...backgroundTools,
-        resumeAgentTool,
-        writeTodosTool,
-        decisionLogTool,
-        ...blockerTools,
-        reviewGateTool,
-        findDefinitionTool,
-        getFileStructureTool,
-        ...workItemTools,
-      ];
-      if (skillTool) {
-        cliTools.push(skillTool);
-      }
-      if (dynamicAgentTool) {
-        cliTools.push(dynamicAgentTool);
-      }
+      // Holder so the tool_search closure can resolve to the agent's live
+      // context.tools array (assigned below after the agent is constructed).
+      // Pushing into context.tools makes newly-loaded schemas callable in
+      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
+      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+      const toolSearchTool =
+        deferredToolRegistry.size() > 0
+          ? createToolSearchTool({
+              registry: deferredToolRegistry,
+              logger,
+              toolListAccessor: () => {
+                if (!agentToolsRef.current) {
+                  throw new Error('tool_search invoked before agent context was wired');
+                }
+                return agentToolsRef.current;
+              },
+            })
+          : null;
 
-      // Create coordinate_task tool (gated by config flag)
-      if (config.preferences.enableCoordinatorMode === true) {
-        const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, newSession.id);
-        cliTools.push(coordinateTaskTool);
-      }
+      // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
+      // Assembled before the feature registry so their names can be reserved against
+      // plugin tool-name collisions (a duplicate tool name would 400 every completion).
+      const cliTools = buildCliToolList(
+        {
+          toolSearchTool,
+          agentDelegateTool,
+          backgroundTools,
+          resumeAgentTool,
+          writeTodosTool,
+          decisionLogTool,
+          blockerTools,
+          reviewGateTool,
+          findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+          getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+          workItemTools,
+          skillTool,
+          dynamicAgentTool,
+          coordinateTaskTool:
+            config.preferences.enableCoordinatorMode === true
+              ? createCoordinateTaskTool(orchestrator, agentStore, newSession.id)
+              : null,
+        },
+        cliWrapDeps
+      );
 
       // Build the feature registry: config-gated built-ins plus any enabled
       // external plugins (discovered once here; installs need a restart).
@@ -1041,7 +1059,8 @@ function CliApp() {
         descriptors: pluginDescriptors,
         config,
         logger,
-        // 'tool_search' is added later but its name is fixed; reserve it too.
+        // 'tool_search' is fixed-named; cliTools carries it when deferred schemas exist,
+        // but reserve the name unconditionally so a plugin can never claim it.
         reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
       });
 
@@ -1051,33 +1070,13 @@ function CliApp() {
       // one reserved-name source.
       rewireReservedNames(state, featureRegistry);
 
-      // Register feature module tool names with ToolRouter so they route as local tools
-      const featureModuleToolNames = featureRegistry.getAllToolNames();
-      if (featureModuleToolNames.length > 0) {
-        registerFeatureModuleTools(featureModuleToolNames);
-      }
-
       // Register feature module WS handlers
       if (wsManager && featureRegistry.hasModules) {
         featureRegistry.registerAllWsHandlers(wsManager);
       }
 
       const featureTools = featureRegistry.getAllTools();
-      // Holder so the tool_search closure can resolve to the agent's live
-      // context.tools array (assigned below after the agent is constructed).
-      // Pushing into context.tools makes newly-loaded schemas callable in
-      // the next ReAct iteration - see b4m-core/agents/src/ReActAgent.ts:202.
-      const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-      const toolSearchTool =
-        deferredToolRegistry.size() > 0
-          ? createToolSearchTool(() => {
-              if (!agentToolsRef.current) {
-                throw new Error('tool_search invoked before agent context was wired');
-              }
-              return agentToolsRef.current;
-            })
-          : null;
-      const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools, ...featureTools];
+      const allTools = [...loadedB4mTools, ...cliTools, ...featureTools];
 
       startupLog.push(`📂 Working directory: ${process.cwd()}`);
       if (additionalDirectories.length > 0) {
@@ -1103,7 +1102,7 @@ function CliApp() {
         startupLog.push(`⚠️ Plugins skipped: ${skippedPlugins.map(s => s.name).join(', ')} (see debug log)`);
       }
       logger.debug(
-        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature + ${toolSearchTool ? 1 : 0} tool_search, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
+        `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
       );
 
       if (contextResult.globalContext) {
@@ -1149,7 +1148,7 @@ function CliApp() {
 
       // Wire the agent's step events to the UI store and tavern transcript,
       // and mirror them onto delegated subagents via the orchestrator callbacks.
-      wireAgentEvents({ agent, agentContext, orchestrator });
+      wireAgentEvents({ agent, orchestrator });
 
       setState((prev: CliState) => ({
         ...prev,
@@ -1335,6 +1334,8 @@ function CliApp() {
 
     // Set thinking state to show loading indicator
     useCliStore.getState().setIsThinking(true);
+    // Released in the finally below; this finalizes "the last message" from a snapshot.
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1391,7 +1392,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],
@@ -1432,11 +1433,11 @@ function CliApp() {
           previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
+          isReadOnlyTool: toolName => state.toolCatalog.isReadOnly(toolName),
           // Mid-loop recovery if a provider context-window error interrupts this
           // turn: compact the in-flight history once and retry, instead of
           // failing the turn and losing the user's work.
-          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
+          onContextLimit: createReactiveCompactionHandler(state.agent, session),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
@@ -1602,6 +1603,7 @@ function CliApp() {
       setState(prev => ({ ...prev, abortController: null }));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
+      releaseSession();
     }
   };
 
@@ -1623,9 +1625,11 @@ function CliApp() {
       additionalDirectories: state.additionalDirectories,
       featureRegistry: state.featureRegistry,
       backgroundManager: state.backgroundManager,
+      toolCatalog: state.toolCatalog,
       todoStore: todoStoreRef.current,
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
+      postEditDiagnostics: postEditDiagnosticsRef.current,
       workflowStores: {
         decisionStore: decisionStoreRef.current,
         blockerStore: blockerStoreRef.current,
@@ -1661,19 +1665,21 @@ function CliApp() {
    * without adding a user message to the conversation.
    */
   const handleBackgroundCompletion = async () => {
-    const session = useCliStore.getState().session;
-    if (!state.agent || !session) {
-      return;
-    }
-
     // Check authentication before allowing any AI operations
     const authTokens = await state.configStore.getAuthTokens();
     if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
       return;
     }
 
+    // Snapshot and hold with no await in between, so nothing appends to the session unseen.
+    const session = useCliStore.getState().session;
+    if (!state.agent || !session) {
+      return;
+    }
+
     // Set thinking state
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1684,7 +1690,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],
@@ -1710,7 +1716,7 @@ function CliApp() {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => state.toolCatalog.isReadOnly(toolName),
       });
 
       // Count successful tool calls
@@ -1769,57 +1775,84 @@ function CliApp() {
     } finally {
       setState(prev => ({ ...prev, abortController: null }));
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 
   // Handle bash command execution directly (no backend calls)
   const handleBashCommand = useCallback(
-    (command: string) => {
-      const session = useCliStore.getState().session;
-      if (!session) return;
+    async (command: string) => {
+      if (!useCliStore.getState().session) return;
 
-      let output: string;
-      let isError = false;
-
-      try {
-        output = execSync(command, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: process.cwd(),
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        });
-      } catch (error) {
-        const execError = error as { stderr?: string; message?: string };
-        output = execError.stderr || execError.message || 'Command failed';
-        isError = true;
+      // With nothing else running the command owns the spinner and ESC, and prompts submitted
+      // meanwhile queue behind it. Mid-turn both belong to the turn, so leave them alone.
+      const ownsInput = !useCliStore.getState().isThinking;
+      const sessionId = useCliStore.getState().session?.id;
+      const abortController = new AbortController();
+      if (ownsInput) {
+        useCliStore.getState().setIsThinking(true);
+        setState(prev => ({ ...prev, abortController }));
       }
 
-      // Create messages for the bash command
-      const userMessage: Message = {
-        id: uuidv4(),
-        role: 'user',
-        content: `$ ${command}`,
-        timestamp: new Date().toISOString(),
-      };
+      const result = await runBangCommand(command, {
+        cwd: process.cwd(),
+        signal: abortController.signal,
+      });
+      // null: killed because the CLI is exiting, so record nothing.
+      if (!result) return;
+      const { output, isError } = result;
 
-      const assistantMessage: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: isError ? `❌ Error:\n${output}` : output.trim() || '(no output)',
-        timestamp: new Date().toISOString(),
-      };
+      // The command runs while the TUI stays live, so an agent turn may have started meanwhile:
+      // append once it ends, reading the session then, and add both messages together so the
+      // history never holds an unanswered `$ command` turn.
+      whenTurnIdle(() => {
+        const session = useCliStore.getState().session;
+        // /clear, /new or /resume may have switched sessions while it ran; it belongs to the old one.
+        if (!session || session.id !== sessionId) return;
 
-      // Update session with both messages
-      const updatedSession: Session = {
-        ...session,
-        messages: [...session.messages, userMessage, assistantMessage],
-        updatedAt: new Date().toISOString(),
-      };
+        const userMessage: Message = {
+          id: uuidv4(),
+          role: 'user',
+          content: `$ ${command}`,
+          timestamp: new Date().toISOString(),
+        };
 
-      setStoreSession(updatedSession);
+        const assistantMessage: Message = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: isError ? `\u274c Error:\n${output}` : output.trim() || '(no output)',
+          timestamp: new Date().toISOString(),
+        };
 
-      // Auto-save session
-      state.sessionStore.save(updatedSession);
+        // Update session with both messages
+        const updatedSession: Session = {
+          ...session,
+          messages: [...session.messages, userMessage, assistantMessage],
+          updatedAt: new Date().toISOString(),
+        };
+
+        setStoreSession(updatedSession);
+
+        // Auto-save session
+        state.sessionStore.save(updatedSession).catch(error => {
+          logger.debug(`[BASH] Session save error: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
+
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
+      // ESC already reset the UI (a new turn may have started since), and a custom command or
+      // compaction started meanwhile owns the spinner until its own finally. Those do not drain
+      // the queue, so prompts queued behind this command then wait for the next agent turn.
+      if (ownsInput && !abortController.signal.aborted && useCliStore.getState().sessionHolds === 0) {
+        useCliStore.getState().setIsThinking(false);
+        // Same drain as the end of an agent turn (turnController.ts).
+        const queued = useCliStore.getState().dequeueAllMessages();
+        if (queued.length > 0) {
+          setImmediate(() => {
+            void handleMessageRef.current?.(queued.join('\n\n'));
+          });
+        }
+      }
     },
     // session is read fresh from the store, so it is intentionally not a dependency.
     [state.sessionStore]
@@ -1993,8 +2026,9 @@ function CliApp() {
 
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
     try {
-      const result = await state.agent.run(prompt, { maxIterations: 1 });
+      const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
 
       if (!handoff) {
@@ -2024,6 +2058,7 @@ function CliApp() {
       return null;
     } finally {
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 
@@ -2238,27 +2273,12 @@ function CliApp() {
         if (customCommand.model && state.agent) {
           console.log(`🔄 Using model override: ${customCommand.model}`);
 
-          // Temporarily override the model on the active session by mutating the
-          // captured reference in place. NOTE: this restore is best-effort and
-          // known-incomplete - handleCustomCommandMessage installs new session
-          // references in the store, so the restore below mutates a now-orphaned
-          // object and the override can persist to the saved session. Behavior
-          // is unchanged from before the single-source-of-truth refactor; a
-          // proper fix (restore on the current store session, or a first-class
-          // "run with model override" transition) is tracked in #241.
-          const overrideSession = useCliStore.getState().session;
-          const originalModel = overrideSession?.model;
-          if (overrideSession) {
-            overrideSession.model = customCommand.model;
-          }
-
           // Execute the command - send full template to agent but show concise message to user
-          await handleCustomCommandMessage(substitutedBody, displayMessage);
-
-          // Restore original model
-          if (overrideSession && originalModel) {
-            overrideSession.model = originalModel;
-          }
+          await runWithModelOverride(
+            { applyModel: applyModelToSession, sessionStore: state.sessionStore },
+            customCommand.model,
+            () => handleCustomCommandMessage(substitutedBody, displayMessage)
+          );
         } else {
           // Execute without model override
           console.log('🤖 Sending to agent...\n');
@@ -2796,7 +2816,7 @@ function CliApp() {
           return;
         }
         try {
-          const diffOutput = state.checkpointStore.getCheckpointDiff(diffTarget);
+          const diffOutput = await state.checkpointStore.getCheckpointDiff(diffTarget);
           if (!diffOutput.trim()) {
             console.log('No differences found between checkpoint and current state.');
           } else {
@@ -2979,7 +2999,9 @@ function CliApp() {
           break;
         }
 
-        const tokenCounter = getTokenCounter();
+        // Calibrate to the session's model so the meter reports real usage, matching the
+        // compaction trigger and windowing budget.
+        const tokenCounter = getTokenCounter().forModel(session.model);
         const contextWindow = tokenCounter.getContextWindow(session.model, state.availableModels);
 
         // Calculate token counts for each component (reflect the variant the user has selected)
@@ -3026,8 +3048,9 @@ function CliApp() {
         const bar = '\u2588'.repeat(filledWidth) + '\u2591'.repeat(BAR_WIDTH - filledWidth);
 
         // Display context usage summary
+        const calibrationNote = tokenEstimateMultiplier(session.model) !== 1 ? ` (calibrated to ${session.model})` : '';
         console.log('\n\u{1F4CA} Context Usage:');
-        console.log(`[${bar}] ${usagePercent.toFixed(1)}%`);
+        console.log(`[${bar}] ${usagePercent.toFixed(1)}%${calibrationNote}`);
         console.log(`${(totalWithTools / 1000).toFixed(1)}k / ${(contextWindow / 1000).toFixed(0)}k tokens\n`);
 
         // System prompt breakdown
@@ -3697,9 +3720,6 @@ function CliApp() {
       // Dispose old registry (unsubscribes WS handlers)
       state.featureRegistry?.disposeAll();
 
-      // Clear old feature tool registrations from ToolRouter
-      clearFeatureModuleTools();
-
       // Create fresh registry with new config (same descriptors as bootstrap;
       // newly installed plugins appear after a restart)
       const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
@@ -3725,12 +3745,6 @@ function CliApp() {
 
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
-      }
-
-      // Register new tool names with ToolRouter
-      const newToolNames = newFeatureRegistry.getAllToolNames();
-      if (newToolNames.length > 0) {
-        registerFeatureModuleTools(newToolNames);
       }
 
       // Register new WS handlers. The feature-event socket is only opened at
@@ -4180,19 +4194,13 @@ function CliApp() {
 
 // Banner is rendered alongside startup messages in init()
 
-// Non-blocking update check (best-effort, 3s timeout)
-try {
-  const updateResult = await Promise.race([
-    checkForUpdate(packageJson.version),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
-  ]);
-  if (updateResult?.updateAvailable) {
-    console.log(
-      `\x1b[33m  ⬆ Update available: v${updateResult.currentVersion} → v${updateResult.latestVersion} (run: b4m update)\x1b[0m\n`
-    );
-  }
-} catch {
-  // Silently ignore update check failures
+// Update banner from the cached check only, so first paint never waits on the
+// network; the cache is refreshed in the background for the next launch.
+const cachedUpdate = await getStartupUpdateStatus(packageJson.version);
+if (cachedUpdate?.updateAvailable) {
+  console.log(
+    `\x1b[33m  \u2b06 Update available: v${cachedUpdate.currentVersion} \u2192 v${cachedUpdate.latestVersion} (run: b4m update)\x1b[0m\n`
+  );
 }
 
 // Show dev mode indicator when running via tsx (pnpm dev)

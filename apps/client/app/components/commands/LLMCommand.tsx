@@ -30,8 +30,15 @@ export type LLMCommandArgs = {
   currentSession: ISessionDocument | null;
   model: ModelName;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents selected in the composer's Agents panel. Stamped on the session this turn creates;
+   * omitted when `currentSession` already exists (see the requestPayload guard).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   promptFileIds: string[];
+  /** The subset of `promptFileIds` scoped to this message only; the server pins the rest. */
+  messageOnlyFileIds?: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   questId?: string;
   /** Correct-and-retry target: the quest whose answer the user says was wrong. */
@@ -49,6 +56,18 @@ export type LLMCommandArgs = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /**
+   * Suppresses the instant ack for this turn. Set for tool-directed launches: the ack model
+   * runs with no tools, so given a prompt that orders a tool call it fakes one as text. Also
+   * set when `systemContext` is present, which the ack model never sees.
+   */
+  skipRapidReply?: boolean;
+  /**
+   * Extra system context for this request only, sent as one more system message in
+   * `extraContextMessages`. Not part of the prompt, so it is not shown in the bubble,
+   * and the server does not persist extraContextMessages content on the quest.
+   */
+  systemContext?: string;
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -110,9 +129,11 @@ export async function handleLLMCommand(
       params,
       workBenchFiles,
       currentSession,
+      agentIds,
       model,
       dashboardParams,
       promptFileIds,
+      messageOnlyFileIds,
       questId,
       correctsQuestId,
       enableQuestMaster,
@@ -125,6 +146,8 @@ export async function handleLLMCommand(
       questMaster,
       researchMode,
       skipAutoOffers,
+      skipRapidReply,
+      systemContext,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -173,11 +196,14 @@ export async function handleLLMCommand(
     // Don't send objects not intended for the API request
     const {
       currentSession: _currentSession,
+      agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
       skipAutoOffers: _omitSkipAutoOffers,
+      skipRapidReply: _omitSkipRapidReply,
+      systemContext: _omitSystemContext,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
@@ -215,6 +241,8 @@ export async function handleLLMCommand(
         // chat actually uses - pushChatMessage is REST-only.
         const briefContext = surfaceCtx.briefContext ?? null;
         if (briefContext) messages.push({ role: 'system' as const, content: briefContext });
+        // Per-send context from the caller (e.g. a programmatic launch), for this request only.
+        if (systemContext) messages.push({ role: 'system' as const, content: systemContext });
         return messages.length > 0 ? messages : undefined;
       })();
 
@@ -227,11 +255,15 @@ export async function handleLLMCommand(
         questId,
         ...(correctsQuestId ? { correctsQuestId } : {}),
         sessionId: currentSession?.id,
+        // Workbench agents are a session-creation input: only the id-less (new-session) turn may
+        // carry them, so an existing session's agents are never re-stamped from stale local state.
+        ...(agentIds?.length && !currentSession?.id ? { agentIds } : {}),
         historyCount,
         clientSubmittedAt: clientPromptSentTime,
         fabFileIds,
         message: userPrompt,
         messageFileIds: promptFileIds,
+        ...(messageOnlyFileIds?.length ? { messageOnlyFileIds } : {}),
         enableQuestMaster,
         enableMementos: args.enableMementos,
         enableArtifacts: args.enableArtifacts,
@@ -269,7 +301,8 @@ export async function handleLLMCommand(
         workBenchFiles.map(file => file.id),
         tools,
         researchMode,
-        currentSession?.agentIds ? currentSession.agentIds : []
+        // On a new session the agents only live in the args until the session exists.
+        currentSession?.agentIds ?? agentIds ?? []
       );
 
       // Sessions on the opti surface always get the instant ack (their KB-search
@@ -281,7 +314,7 @@ export async function handleLLMCommand(
 
       // Fire rapid reply if it's an opti-surface session, complex, or has files. `fabFileIds`
       // is built from `workBenchFiles`, so the workbench check covers the file case.
-      if (isOptiSession || queryComplexity === 'complex' || workBenchFiles.length > 0) {
+      if (!skipRapidReply && (isOptiSession || queryComplexity === 'complex' || workBenchFiles.length > 0)) {
         perfLogger.log(
           `🚀 [RapidReply] Firing rapid reply request (complexity: ${queryComplexity}, opti: ${isOptiSession}, questId: ${questId || 'none'})`
         );
@@ -310,7 +343,9 @@ export async function handleLLMCommand(
           })
           .finally(() => releaseBlank?.());
       } else {
-        perfLogger.log(`🚀 [RapidReply] Skipped (complexity: ${queryComplexity}, no files)`);
+        perfLogger.log(
+          `\u{1F680} [RapidReply] Skipped (complexity: ${queryComplexity}, opti: ${isOptiSession}, files: ${workBenchFiles.length}, skipRapidReply: ${!!skipRapidReply})`
+        );
       }
 
       const { data } = await api.post<

@@ -1,10 +1,20 @@
-import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
+import {
+  Content,
+  GenerateContentConfig,
+  GenerateContentParameters,
+  GenerateContentResponse,
+  GoogleGenAI,
+  Part,
+  Tool,
+} from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
+  estimateStreamedOutputTokens,
   ImageModels,
   MessageContentImageUrl,
   MessageContentInlineImage,
@@ -20,14 +30,17 @@ import {
   type MessageContentToolResult,
   type MessageContentToolUse,
   type ModelInfo,
+  publishesCacheReadRate,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import pick from 'lodash/pick.js';
 import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
+import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 
 type ToolCall = {
@@ -39,6 +52,7 @@ type ToolCall = {
 
 type GeminiPart = {
   text?: string;
+  thought?: boolean; // reasoning part, not answer text
   functionCall?: {
     name?: string;
     args?: Record<string, unknown>;
@@ -61,14 +75,25 @@ type GeminiCandidate = {
   finishMessage?: string;
 };
 
+// Gemini reports thinking tokens apart from candidates but bills them as output.
+function geminiOutputTokens(usage: GenerateContentResponse['usageMetadata']): number {
+  return (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0);
+}
+
 export class GeminiBackend implements ICompletionBackend {
   private _api: GoogleGenAI;
   private logger: Logger;
   public currentModel: string = '';
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger) {
     this._api = new GoogleGenAI({ apiKey });
     this.logger = logger ?? new Logger();
+  }
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
   }
 
   /**
@@ -155,7 +180,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          1048576: { input: 1.5 / 1000000, output: 9.0 / 1000000 }, // $1.50/1M input, $9.00/1M output
+          // $0.15/1M cache read. Google dropped the model from the live Gemini API page when it
+          // deprecated it (2026-10-08); the rate is on the archived page and on Vertex AI's.
+          // @see https://web.archive.org/web/20261001232750/https://ai.google.dev/gemini-api/docs/pricing
+          // @see https://cloud.google.com/vertex-ai/generative-ai/pricing
+          1048576: { input: 1.5 / 1000000, output: 9.0 / 1000000, cache_read: 0.15 / 1000000 }, // $1.50/1M input, $9.00/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -178,7 +207,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          2097152: { input: 2 / 1000000, output: 18.0 / 1000000 }, // $1.25/1M input, $10/1M output
+          // List is $2/$12 per 1M up to 200k and $4/$18 above ($0.20/$0.40 cache read). Held flat until
+          // every billing path picks the tier per request: summed tool-loop or agent-run input would
+          // cross 200k and bill the whole run at the upper rate.
+          // @see https://ai.google.dev/gemini-api/docs/pricing
+          2097152: { input: 2 / 1000000, output: 18 / 1000000, cache_read: 0.2 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -200,7 +233,8 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true, // Supports minimal/low/medium/high thinking levels
         pricing: {
-          1048576: { input: 0.25 / 1000000, output: 1.5 / 1000000 }, // $0.25/1M input, $1.50/1M output
+          // $0.025/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
+          1048576: { input: 0.25 / 1000000, output: 1.5 / 1000000, cache_read: 0.025 / 1000000 }, // $0.25/1M input, $1.50/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -223,7 +257,10 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          2097152: { input: 2 / 1000000, output: 18.0 / 1000000 }, // $2.00/1M input, $8.00/1M output
+          // List is $2/$12 per 1M up to 200k and $4/$18 above. Held flat until every billing path
+          // picks the tier per request: summed tool-loop or agent-run input would cross 200k and
+          // bill the whole run at the upper rate.
+          2097152: { input: 2 / 1000000, output: 18 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -247,7 +284,8 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          2097152: { input: 2.0 / 1000000, output: 1.0 / 1000000 }, // $2.00/1M input, $1.00/1M output
+          // $0.05/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
+          2097152: { input: 0.5 / 1000000, output: 3.0 / 1000000, cache_read: 0.05 / 1000000 }, // $0.50/1M input, $3.00/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -341,7 +379,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          2097152: { input: 1.25 / 1000000, output: 10.0 / 1000000 }, // $1.25/1M input, $10/1M output
+          // <=200K rates: $1.25 in, $10 out, $0.125 cache read per 1M (>200K is $2.50 / $15 /
+          // $0.25). Held flat until every billing path picks the tier per request: summed tool-loop
+          // or agent-run input would cross 200k and bill the whole run at the upper rate.
+          // @see https://ai.google.dev/gemini-api/docs/pricing
+          2097152: { input: 1.25 / 1000000, output: 10.0 / 1000000, cache_read: 0.125 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -364,7 +406,8 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          1048576: { input: 0.075 / 1000000, output: 0.6 / 1000000 }, // $0.075/1M input, $0.60/1M output
+          // $0.03/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
+          1048576: { input: 0.3 / 1000000, output: 2.5 / 1000000, cache_read: 0.03 / 1000000 }, // $0.30/1M input, $2.50/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -389,7 +432,8 @@ export class GeminiBackend implements ICompletionBackend {
         max_tokens: 65_535,
         can_stream: true,
         pricing: {
-          1048576: { input: 0.0375 / 1000000, output: 0.3 / 1000000 }, // $0.0375/1M input, $0.30/1M output
+          // $0.01/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
+          1048576: { input: 0.1 / 1000000, output: 0.4 / 1000000, cache_read: 0.01 / 1000000 }, // $0.10/1M input, $0.40/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -556,9 +600,11 @@ export class GeminiBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = modelName;
-    const modelInfo = (await this.getModelInfo()).find(model => model.id === modelName);
+    // A catalog-only id (one model discovery promoted) is absent from the literal list,
+    // so fall back to the record getLlmByModel handed over.
+    const modelInfo =
+      (await this.getModelInfo()).find(model => model.id === modelName) ?? this._dispatch.for(modelName);
     if (!modelInfo) {
-      // Unlikely:
       throw new Error(`Model ${modelName} not found`);
     }
 
@@ -572,6 +618,14 @@ export class GeminiBackend implements ICompletionBackend {
     // running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; usageSoFar splits them.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
+    // Without a published cache rate the cached tokens stay in inputTokens: getTextModelCost's 0.1x
+    // default is Anthropic's discount, not a Gemini price. Gated on the catalog-priced record when
+    // there is one, since that is the record settlement and the public quote price with.
+    const forwardsCacheReads = publishesCacheReadRate(this._dispatch.for(modelName) ?? modelInfo);
+    const accumReasoningTokens = options._internal?.accumReasoningTokens;
 
     // Tool calls minted by an earlier round of THIS SAME completion chain - exempt from the
     // gemini-3 replayed-history drop guard below, since a live call is a different failure mode
@@ -637,17 +691,17 @@ export class GeminiBackend implements ICompletionBackend {
           },
         ] as Tool[]);
 
-    const config = {
+    const request: GenerateContentParameters = {
       model: modelName,
       contents,
-      systemInstruction: systemInstruction || undefined,
-      generationConfig,
       config: {
+        systemInstruction: systemInstruction || undefined,
         tools,
+        ...generationConfig,
       },
     };
 
-    this.logger.debug('[Gemini] Request config:', { config });
+    this.logger.debug('[Gemini] Request config:', { request });
 
     const toolCalls: ToolCall[] = [];
 
@@ -656,13 +710,43 @@ export class GeminiBackend implements ICompletionBackend {
     // complete() call further down.
     let turnInputTokens = 0;
     let turnOutputTokens = 0;
+    let turnReasoningTokens: number | undefined;
+    // The cached subset of turnInputTokens (promptTokenCount includes cachedContentTokenCount).
+    let turnCacheReadTokens = 0;
+    const turnCacheReads = (usage: { cachedContentTokenCount?: number } | undefined) =>
+      forwardsCacheReads ? (usage?.cachedContentTokenCount ?? 0) : 0;
+    const setTurnUsage = (usage: GenerateContentResponse['usageMetadata']) => {
+      turnInputTokens = usage?.promptTokenCount ?? 0;
+      turnOutputTokens = geminiOutputTokens(usage);
+      turnCacheReadTokens = turnCacheReads(usage);
+      turnReasoningTokens = reasoningTokensFromUsage(usage);
+    };
+    // Running totals plus this turn, and this turn appended to the per-request breakdown.
+    const usageSoFar = () => ({
+      ...splitCacheInclusiveInput(accumInputTokens + turnInputTokens, accumCacheReadTokens + turnCacheReadTokens),
+      outputTokens: accumOutputTokens + turnOutputTokens,
+      ...reasoningTokensField(addReasoningTokens(accumReasoningTokens, turnReasoningTokens)),
+      turnUsage: appendCacheInclusiveTurn(accumTurnUsage, turnInputTokens, turnCacheReadTokens, turnOutputTokens),
+    });
+    // This round's visible answer text (thought parts excluded), for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
 
     if (options.stream) {
+      // Read by the catch below: usage and output seen while the stream loop was still open.
+      let streamLoopOpen = true;
+      let streamedChars = 0;
+      let latestUsage: GenerateContentResponse['usageMetadata'];
       try {
-        const result = await this._api.models.generateContentStream(config);
+        // @google/genai ignores a signal that is already aborted, so the request would still go out.
+        if (options.abortSignal?.aborted) throw new Error('Request aborted');
+        const result = await this._api.models.generateContentStream({
+          ...request,
+          config: { ...request.config, abortSignal: options.abortSignal },
+        });
 
         let lastChunk: any = null;
         for await (const chunk of result) {
+          if (chunk.usageMetadata) latestUsage = chunk.usageMetadata;
           // Check for abort signal
           if (options.abortSignal?.aborted) {
             throw new Error('Request aborted');
@@ -682,7 +766,11 @@ export class GeminiBackend implements ICompletionBackend {
                 // Gemini already sends incremental text deltas, not accumulated text
                 // Accumulate text if multiple parts have text
                 streamedText[i] = (streamedText[i] || '') + part.text;
+                if (!part.thought) streamedRoundText += part.text;
+                streamedChars += part.text.length;
               }
+              const callArgs = (part.functionCall ?? part.function_call)?.args;
+              if (callArgs) streamedChars += JSON.stringify(callArgs).length;
 
               // Check for functionCall in various possible formats
               if (part.functionCall) {
@@ -706,6 +794,8 @@ export class GeminiBackend implements ICompletionBackend {
             await callback(streamedText, { toolsUsed });
           }
         }
+
+        streamLoopOpen = false;
 
         // At completion, send token usage info but NO text (already streamed)
         // IMPORTANT: Gemini may send function calls ONLY in the final chunk
@@ -743,19 +833,13 @@ export class GeminiBackend implements ICompletionBackend {
             }
           }
 
-          // Do NOT forward cachedContentTokenCount to CompletionInfo.cacheReadInputTokens:
-          // Gemini's promptTokenCount INCLUDES cached tokens (unlike Anthropic, where the
-          // fields are disjoint), so forwarding without subtracting from inputTokens would
-          // double-bill the cached portion in provider-basis settlement.
-          turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
-          turnOutputTokens = lastChunk.usageMetadata?.candidatesTokenCount ?? 0;
+          setTurnUsage(lastChunk.usageMetadata);
           const finishReason = normalizeGeminiFinishReason(lastChunk.candidates?.[0]?.finishReason);
           // Emit accum + this turn's tokens. When the call recurses below,
           // the inner call's terminal emit will overwrite this with the full
           // multi-turn total via the same accum+thisTurn shape.
           await callback([], {
-            inputTokens: accumInputTokens + turnInputTokens,
-            outputTokens: accumOutputTokens + turnOutputTokens,
+            ...usageSoFar(),
             toolsUsed,
             cacheStats,
             ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -917,6 +1001,27 @@ export class GeminiBackend implements ICompletionBackend {
               }
             }
 
+            if (
+              shouldEndTurnAfterTools(
+                toolCalls.map(tc => tc.name),
+                options.tools,
+                streamedRoundText
+              )
+            ) {
+              this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+                model: modelName,
+                toolsExecuted: toolCalls.map(tc => tc.name),
+              });
+              // Same terminal shape as the no-tool end of turn: accum + this turn's tokens.
+              await (artifactGuard?.callback ?? callback)([], {
+                toolsUsed,
+                ...usageSoFar(),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], { toolsUsed });
 
@@ -934,6 +1039,9 @@ export class GeminiBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + turnInputTokens,
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
+                  accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
+                  accumTurnUsage: usageSoFar().turnUsage,
+                  accumReasoningTokens: addReasoningTokens(accumReasoningTokens, turnReasoningTokens),
                   liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
                   artifactGuard,
                 },
@@ -946,17 +1054,32 @@ export class GeminiBackend implements ICompletionBackend {
             if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute.
-            // The post-stream cb above already emitted accum+thisTurn tokens;
-            // this leaf doesn't need to re-emit (no tokens here would be a
-            // falsy no-op in wrappedOnChunk).
+            // Terminal leaf - re-emit accum+thisTurn so the last cb carries the totals.
             this.logger.debug('[Gemini] Gemini executeTools=false, passing tool calls to callback');
-            await callback([null], { toolsUsed });
+            await callback([null], { ...usageSoFar(), toolsUsed });
           }
           return; // Exit early since we've handled everything
         }
       } catch (error) {
         // Check if error is due to abort signal
         if (options.abortSignal?.aborted || (error as Error).message.includes('aborted')) {
+          // Only an abort inside the stream loop: past it the turn's usage is already emitted,
+          // and an abort in tool execution or the recursive call is accounted for there.
+          if (streamLoopOpen && options.abortSignal?.aborted) {
+            setTurnUsage(latestUsage);
+            // Same call-2+ only estimate as anthropicBackend's withAbortedOutputEstimate: on a first
+            // call ChatCompletionProcess estimates the whole reply itself.
+            if (!turnOutputTokens && accumTurnUsage?.length && streamedChars > 0) {
+              turnOutputTokens = estimateStreamedOutputTokens(streamedChars, modelName);
+            }
+            if (turnInputTokens || turnOutputTokens) {
+              try {
+                await callback([], { ...usageSoFar(), toolsUsed, stopReason: 'aborted' });
+              } catch (callbackError) {
+                this.logger.warn('[Gemini] Aborted-usage callback failed:', callbackError);
+              }
+            }
+          }
           throw new Error('Request aborted');
         }
         throw error;
@@ -973,7 +1096,7 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(config)
+          this._api.models.generateContent(request)
         );
         const r = result;
 
@@ -1000,6 +1123,7 @@ export class GeminiBackend implements ICompletionBackend {
           candidate.content?.parts?.forEach((part: GeminiPart) => {
             if (part.text) {
               textParts.push(part.text);
+              if (!part.thought) streamedRoundText += part.text;
             }
             if (part.functionCall) {
               this.registerToolCall(part.functionCall, part, toolCalls, toolsUsed);
@@ -1013,15 +1137,13 @@ export class GeminiBackend implements ICompletionBackend {
           });
         });
 
-        turnInputTokens = r.usageMetadata?.promptTokenCount ?? 0;
-        turnOutputTokens = r.usageMetadata?.candidatesTokenCount ?? 0;
+        setTurnUsage(r.usageMetadata);
         const finishReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
         // Emit accum + this turn's tokens. The recursive call below (if any)
         // will overwrite via the same accum+thisTurn shape, ending at the
         // full multi-turn billable total.
         await callback(textParts.length ? textParts : [], {
-          inputTokens: accumInputTokens + turnInputTokens,
-          outputTokens: accumOutputTokens + turnOutputTokens,
+          ...usageSoFar(),
           toolsUsed,
           cacheStats,
           ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -1171,6 +1293,27 @@ export class GeminiBackend implements ICompletionBackend {
           }
         }
 
+        if (
+          shouldEndTurnAfterTools(
+            toolCalls.map(tc => tc.name),
+            options.tools,
+            streamedRoundText
+          )
+        ) {
+          this.logger.info('[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran', {
+            model: modelName,
+            toolsExecuted: toolCalls.map(tc => tc.name),
+          });
+          // Same terminal shape as the no-tool end of turn: accum + this turn's tokens.
+          await (artifactGuard?.callback ?? callback)([], {
+            toolsUsed,
+            ...usageSoFar(),
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
+        }
+
         // Add newline separator before recursive call to ensure proper markdown rendering
         await callback(['\n\n'], { toolsUsed });
 
@@ -1187,6 +1330,9 @@ export class GeminiBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + turnInputTokens,
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
+              accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
+              accumTurnUsage: usageSoFar().turnUsage,
+              accumReasoningTokens: addReasoningTokens(accumReasoningTokens, turnReasoningTokens),
               liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
               artifactGuard,
             },
@@ -1200,7 +1346,7 @@ export class GeminiBackend implements ICompletionBackend {
       } else {
         // New behavior: just pass tool calls through callback, don't execute
         this.logger.debug('[Gemini] Gemini executeTools=false, passing tool calls to callback');
-        await callback([null], { toolsUsed });
+        await callback([null], { ...usageSoFar(), toolsUsed });
       }
     }
   }
@@ -1487,9 +1633,16 @@ export class GeminiBackend implements ICompletionBackend {
     return sanitized;
   }
 
-  private getGenerationConfig(model: ModelInfo, options: Partial<ICompletionOptions>): GenerationConfig {
+  private getGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
+    // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
+    // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
+    // so a caller's small cap would starve the visible reply.
+    if (model.can_think) return {};
     return {
-      temperature: options.temperature ?? 0.9,
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       maxOutputTokens: options.maxTokens ?? 8192,
     };
   }

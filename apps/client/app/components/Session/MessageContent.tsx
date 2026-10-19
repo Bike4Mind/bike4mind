@@ -2,11 +2,13 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import { chatActionButtonSx } from '@client/app/components/Session/chatActionButtonSx';
 import { messageMetaChipSx } from '@client/app/components/Session/messageMetaChipSx';
-import DownloadMenu from '../common/DownloadMenu';
+import DownloadMenu, { ReplyDownloadMenuItems } from '../common/DownloadMenu';
+import BottomSheet, { BottomSheetHeader } from '../common/BottomSheet';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
+import FallbackModelNote from '@client/app/components/Session/FallbackModelNote';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -20,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
-import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
+import { Menu, MenuItem, MenuList, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -34,7 +36,7 @@ import React, { lazy, memo, useCallback, useEffect, useMemo, useState, Suspense 
 const TavernArtifactRenderer = lazy(() => import('../tavern/TavernArtifactRenderer'));
 import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks/data/sessions';
 import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
-import { surfaceRouteExists, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import { surfaceRouteExists, useWorkspacePresenter, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
 import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import { Refresh } from '@mui/icons-material';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -46,6 +48,7 @@ import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import { CorrectionComposer } from './CorrectionComposer';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
@@ -66,12 +69,18 @@ import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPrev
 import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
+import { answerCostUnit, formatAnswerCost, formatAnswerCostAmount } from '@client/app/utils/formatCredits';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import SaveAltIcon from '@mui/icons-material/SaveAlt';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
-import { replyPublisher } from '@client/app/utils/publishApi';
+import { findPublishedByReply, replyPublisher } from '@client/app/utils/publishApi';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import PushPinIcon from '@mui/icons-material/PushPin';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
@@ -79,19 +88,22 @@ import { useGetQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies } from '@client/shared/replyUtils';
 import { detectChatContentType } from '@client/app/utils/contentTypes';
 import { saveToFileAndWorkbench } from '@client/app/utils/fabFileUtils';
 import ToolsUsed from '@client/app/components/Session/ToolsUsed';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
+import { answeringModelLabel } from '@client/app/utils/answeringModel';
 
-const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
+const ModelChip: React.FC<{ displayName: string; replaces?: string }> = ({ displayName, replaces }) => {
   // The only item in the footer with no natural width limit: model names run from "GPT-4.1"
   // to a long vendor string, and on a phone one of those pushes the row onto a second line
-  // or crowds out the actions opposite it. Capped and ellipsized, with the full name on the
-  // tooltip so nothing is lost.
-  <Tooltip title={displayName}>
+  // or crowds out the actions opposite it. Capped and ellipsized. The tooltip appears only on a
+  // redirected reply, to name the model it replaced; a phone has no hover, but the label itself
+  // already names the model that answered.
+  const chip = (
     <Chip
+      data-testid="message-model-chip"
       className="model-chip-web"
       size="sm"
       variant="soft"
@@ -110,8 +122,27 @@ const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
     >
       {displayName}
     </Chip>
-  </Tooltip>
-);
+  );
+  return replaces ? (
+    <Tooltip data-testid="message-model-chip-replaces-tooltip" title={`Replaces ${replaces}`}>
+      {chip}
+    </Tooltip>
+  ) : (
+    chip
+  );
+};
+
+// The phone actions sheet: rows tall enough for a finger, no frame of their own inside the sheet.
+// Icon slot, icon and text sizes match the plus menu's sheet (AttachFileButton plusMenuListSx).
+const ACTIONS_SHEET_LIST_SX = {
+  '--ListItem-minHeight': '44px',
+  '--List-padding': '0px',
+  '--ListItemDecorator-size': '30px',
+  '--Icon-fontSize': '18px',
+  fontSize: '14px',
+  boxShadow: 'none',
+  backgroundColor: 'transparent',
+} as const;
 
 const DeleteMessageModal = ({
   onConfirmDelete,
@@ -173,6 +204,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     const forkSession = useForkSession();
     const { data: sourceSession } = useGetSession(sessionId);
     const { current: currentWorkspace, copyTargets: forkTargets } = useWorkspaceTargets(sourceSession);
+    const presentWorkspace = useWorkspacePresenter();
     // Destination picked from "Fork into"; null = the source's own workspace (a plain fork).
     const [forkTarget, setForkTarget] = useState<WorkspaceSurface | null>(null);
     const snipSession = useSnipSession();
@@ -275,6 +307,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     const { settings: userSettings } = useUserSettings();
     const contextBreakdownAvailable = !!messageData.id && userSettings.contextTelemetryLevel !== 'none';
     const triggerEdit = useMessageEditMode(s => s.triggerEdit);
+    const readOnly = useSessionReadOnly();
 
     const [isBugReportModalOpen, setIsBugReportModalOpen] = useState(false);
     const [isCorrecting, setIsCorrecting] = useState(false);
@@ -513,7 +546,8 @@ const MessageContent: React.FC<ContentProps> = memo(
           ...(target ? { targetSurface: target.id } : {}),
         });
         // Open the fork in its home workspace; an unregistered or unshipped one keeps the notebook route.
-        const home = getWorkspaceSurface(data?.surface);
+        const registered = getWorkspaceSurface(data?.surface);
+        const home = registered && presentWorkspace(registered);
         if (home && surfaceRouteExists(home) && data?.id) navigate({ href: home.sessionHref(data.id) });
         else navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
       } catch (error) {
@@ -608,7 +642,7 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     // Only offered on a turn that actually produced an answer and was persisted: there is nothing
     // to correct on a turn still running, and an optimistic id is not a link anything can resolve.
-    const canCorrect = isPersistedMessage && !isProcessingPrompt && hasShareableReply;
+    const canCorrect = !readOnly && isPersistedMessage && !isProcessingPrompt && hasShareableReply;
 
     const correctAndRetryButton = canCorrect ? (
       <Tooltip title="Tell the assistant what was wrong and get a corrected answer">
@@ -632,9 +666,11 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
+      const replyId = messageData.id;
       const markdown = extractedReplies[0] || messageData.reply || undefined;
       void publishAndShareReply({
         publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
+        resolvePublished: () => findPublishedByReply(replyId),
         ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown,
@@ -679,6 +715,135 @@ const MessageContent: React.FC<ContentProps> = memo(
       if (!modelInfoRepo) return modelName;
       const modelInfo = modelInfoRepo.find(m => m.id === modelName);
       return modelInfo?.name || modelName;
+    };
+
+    const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
+    const answeringModel = answeringModelLabel(
+      messageData.promptMeta,
+      getModelDisplayName,
+      messageData.type === 'error'
+    );
+
+    // The More options entries, shared by the desktop menu and the phone actions sheet so the two
+    // cannot drift. Delete stays apart: the sheet lists Report before it.
+    const moreOptionsItems = (
+      <>
+        {!readOnly && (
+          <MenuItem
+            data-testid="message-menu-edit"
+            onClick={() => {
+              if (messageData.prompt) {
+                triggerEdit(messageData.id!, 'prompt');
+              } else {
+                triggerEdit(messageData.id!, 'reply');
+              }
+            }}
+          >
+            <ListItemDecorator>
+              <EditIcon />
+            </ListItemDecorator>
+            Edit
+          </MenuItem>
+        )}
+        <MenuItem onClick={handleOpenPromptMetaInspector}>
+          <ListItemDecorator>
+            <HiveIcon />
+          </ListItemDecorator>
+          {ANSWER_DIAGNOSIS_TITLE}
+        </MenuItem>
+        {contextBreakdownAvailable && (
+          <MenuItem data-testid="message-context-breakdown-btn" onClick={() => setShowContextBreakdown(true)}>
+            <ListItemDecorator>
+              <DonutSmallIcon />
+            </ListItemDecorator>
+            Context
+          </MenuItem>
+        )}
+        {!readOnly && (
+          <>
+            <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
+              <ListItemDecorator>{messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}</ListItemDecorator>
+              {messageData.pinned ? 'Unpin' : 'Pin'}
+            </MenuItem>
+            {canUseAdminTools && (
+              <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
+                <ListItemDecorator>
+                  <ArticleIcon />
+                </ListItemDecorator>
+                Publish
+              </MenuItem>
+            )}
+            {forkMenuItems}
+            <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
+              <ListItemDecorator>
+                <StartIcon />
+              </ListItemDecorator>
+              Quickstart
+            </MenuItem>
+            <MenuItem
+              data-testid="message-menu-try-again"
+              onClick={() => onSendMessage(messageData, { isRetry: true })}
+            >
+              <ListItemDecorator>
+                <Refresh />
+              </ListItemDecorator>
+              Try Again
+            </MenuItem>
+            <MenuItem
+              data-testid="message-menu-reprompt"
+              onClick={() => onSendMessage(messageData, { isVariation: true })}
+            >
+              <ListItemDecorator>
+                <AddIcon />
+              </ListItemDecorator>
+              Re-prompt
+            </MenuItem>
+          </>
+        )}
+        <MenuItem onClick={toggleSyntaxHighlight}>
+          <ListItemDecorator>
+            <CodeIcon />
+          </ListItemDecorator>
+          Toggle Code View
+        </MenuItem>
+        <MenuItem onClick={() => handleSaveAsFile(messageData)}>
+          <ListItemDecorator>
+            <SaveIcon />
+          </ListItemDecorator>
+          Save as {detectChatContentType(messageData.replies?.[0] || '')}
+        </MenuItem>
+        {!readOnly && isFeatureEnabled('EnableDataLakes') && (
+          <MenuItem onClick={() => handleSendReplyToDataLake(messageData)} data-testid="message-send-to-datalake">
+            <ListItemDecorator>
+              <DataLakeIcon />
+            </ListItemDecorator>
+            Send to {DATA_LAKE}
+          </MenuItem>
+        )}
+      </>
+    );
+    const deleteMenuItem = !readOnly ? (
+      <MenuItem data-testid="message-menu-delete" onClick={() => handleDelete(messageData)} color="danger">
+        <ListItemDecorator sx={{ color: 'inherit' }}>
+          <DeleteOutline />
+        </ListItemDecorator>
+        Delete
+      </MenuItem>
+    ) : null;
+
+    // Phones: every action but Copy lives in a sheet behind the More options button.
+    const [actionsSheetOpen, setActionsSheetOpen] = useState(false);
+    const [actionsSheetView, setActionsSheetView] = useState<'main' | 'download'>('main');
+    const closeActionsSheet = useCallback(() => {
+      setActionsSheetOpen(false);
+      setActionsSheetView('main');
+    }, []);
+    // Picking an entry closes the sheet, unless the entry opens a view inside it.
+    const closeActionsSheetOnPick = (event: React.MouseEvent) => {
+      const item = (event.target as Element).closest('[role="menuitem"]');
+      if (item && !item.hasAttribute('data-keeps-sheet-open') && item.getAttribute('aria-disabled') !== 'true') {
+        closeActionsSheet();
+      }
     };
 
     return (
@@ -764,7 +929,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         {showSnipModal && (
           <ConfirmActionModal
             className="session-middle-snip-modal"
-            title="Quickstart Notebook from thisMessage?"
+            title="Quickstart Notebook from this Message?"
             description="Are you sure you want to quickstart a notebook from this message?"
             onGoBackward={() => setShowSnipModal(false)}
             onGoForward={() => {
@@ -779,7 +944,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           <UserPrompt
             prompt={messageData.prompt}
             messageFiles={messageFiles}
-            onEdit={prompt => onSendMessage({ ...messageData, prompt }, { isRetry: true })}
+            onEdit={readOnly ? undefined : prompt => onSendMessage({ ...messageData, prompt }, { isRetry: true })}
             onSendMessage={onSendMessage}
             search={search}
             messageId={messageData.id}
@@ -795,6 +960,8 @@ const MessageContent: React.FC<ContentProps> = memo(
         {(messageData.routingSource === 'classifier' || messageData.routingSource === 'complexity') && (
           <AutoRouteBadge source={messageData.routingSource} />
         )}
+        {/* An error turn has no answer to attribute; recovery paths can leave the record behind. */}
+        {messageData.type !== 'error' && <FallbackModelNote fallbackInfo={messageData.fallbackInfo ?? undefined} />}
         {/* Conditional rendering: Research Mode vs Standard Response */}
         {messageData.researchModeResults && messageData.researchModeResults.length > 0 ? (
           <ResearchModeResponseDisplay
@@ -902,6 +1069,8 @@ const MessageContent: React.FC<ContentProps> = memo(
               const disableResearchMode = useLLM.getState().setResearchMode;
               disableResearchMode({ enabled: false });
             }}
+            // Last, so it overrides the handlers above: without them the picker renders no buttons.
+            {...(readOnly && { onSelectResponse: undefined, onDeselectResponse: undefined, onUseModel: undefined })}
           />
         ) : (
           <PromptReplies
@@ -911,15 +1080,19 @@ const MessageContent: React.FC<ContentProps> = memo(
             search={search}
             isExpandable={isExpandable}
             messageId={messageData.id}
-            onEdit={(newReply: string) => {
-              if (!messageData.id || !sessionId) return;
-              const update = messageData.reply ? { reply: newReply } : { replies: [newReply] };
-              updateQuest.mutate({
-                sessionId,
-                id: messageData.id,
-                update,
-              });
-            }}
+            onEdit={
+              readOnly
+                ? undefined
+                : (newReply: string) => {
+                    if (!messageData.id || !sessionId) return;
+                    const update = messageData.reply ? { reply: newReply } : { replies: [newReply] };
+                    updateQuest.mutate({
+                      sessionId,
+                      id: messageData.id,
+                      update,
+                    });
+                  }
+            }
           />
         )}
         {/* "Show reasoning" disclosure — only present when this Quest was
@@ -978,7 +1151,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             holds; it is only the "the turn you are still thinking about" part that weakens.
             Rendered here rather than inside either action row so the desktop/mobile branches below
             cannot drift into showing it twice or not at all. */}
-        {!isProcessingPrompt && isLastMessage && (
+        {!readOnly && !isProcessingPrompt && isLastMessage && (
           <AnswerFeedbackPrompt
             promptMeta={messageData.promptMeta}
             questId={isPersistedMessage ? messageData.id : undefined}
@@ -1047,99 +1220,8 @@ const MessageContent: React.FC<ContentProps> = memo(
                         borderRadius: '6px',
                       })}
                     >
-                      <MenuItem
-                        onClick={() => {
-                          if (messageData.prompt) {
-                            triggerEdit(messageData.id!, 'prompt');
-                          } else {
-                            triggerEdit(messageData.id!, 'reply');
-                          }
-                        }}
-                      >
-                        <ListItemDecorator>
-                          <EditIcon />
-                        </ListItemDecorator>
-                        Edit
-                      </MenuItem>
-                      <MenuItem onClick={handleOpenPromptMetaInspector}>
-                        <ListItemDecorator>
-                          <HiveIcon />
-                        </ListItemDecorator>
-                        {ANSWER_DIAGNOSIS_TITLE}
-                      </MenuItem>
-                      {contextBreakdownAvailable && (
-                        <MenuItem
-                          data-testid="message-context-breakdown-btn"
-                          onClick={() => setShowContextBreakdown(true)}
-                        >
-                          <ListItemDecorator>
-                            <DonutSmallIcon />
-                          </ListItemDecorator>
-                          Context
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={() => onPinToggle(messageData)}>
-                        <ListItemDecorator>
-                          {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                        </ListItemDecorator>
-                        {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      {canUseAdminTools && (
-                        <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                          <ListItemDecorator>
-                            <ArticleIcon />
-                          </ListItemDecorator>
-                          Publish
-                        </MenuItem>
-                      )}
-                      {forkMenuItems}
-                      <MenuItem onClick={() => setShowSnipModal(true)}>
-                        <ListItemDecorator>
-                          <StartIcon />
-                        </ListItemDecorator>
-                        Quickstart
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isRetry: true })}>
-                        <ListItemDecorator>
-                          <Refresh />
-                        </ListItemDecorator>
-                        Try Again
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isVariation: true })}>
-                        <ListItemDecorator>
-                          <AddIcon />
-                        </ListItemDecorator>
-                        Re-prompt
-                      </MenuItem>
-                      <MenuItem onClick={toggleSyntaxHighlight}>
-                        <ListItemDecorator>
-                          <CodeIcon />
-                        </ListItemDecorator>
-                        Toggle Code View
-                      </MenuItem>
-                      <MenuItem onClick={() => handleSaveAsFile(messageData)}>
-                        <ListItemDecorator>
-                          <SaveIcon />
-                        </ListItemDecorator>
-                        Save as {detectChatContentType(messageData.replies?.[0] || '')}
-                      </MenuItem>
-                      {isFeatureEnabled('EnableDataLakes') && (
-                        <MenuItem
-                          onClick={() => handleSendReplyToDataLake(messageData)}
-                          data-testid="message-send-to-datalake"
-                        >
-                          <ListItemDecorator>
-                            <DataLakeIcon />
-                          </ListItemDecorator>
-                          Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={() => handleDelete(messageData)} color="danger">
-                        <ListItemDecorator sx={{ color: 'inherit' }}>
-                          <DeleteOutline />
-                        </ListItemDecorator>
-                        Delete
-                      </MenuItem>
+                      {moreOptionsItems}
+                      {deleteMenuItem}
                     </Menu>
                   </Dropdown>
 
@@ -1151,9 +1233,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                     variant="plain"
                     triggerSx={chatActionButtonSx}
                   />
-                  {reportButton}
+                  {!readOnly && reportButton}
                   {correctAndRetryButton}
-                  {hasShareableReply && shareButton}
+                  {!readOnly && hasShareableReply && shareButton}
 
                   {/* Keep the modals */}
                   <BugReportModal
@@ -1177,137 +1259,95 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
+            <Stack className="action-buttons-mobile" direction={'row'} gap="4px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Advanced actions in menu */}
-                  <Dropdown>
-                    <Tooltip title="More options">
-                      <MenuButton
-                        data-testid="message-actions-menu-btn"
-                        slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
-                        sx={chatActionButtonSx}
-                      >
-                        <MoreVertIcon />
-                      </MenuButton>
-                    </Tooltip>
-                    <Menu
-                      placement="bottom-start"
-                      className="menuSurface advanced-menu-mobile"
-                      sx={_theme => ({
-                        minWidth: '180px',
-                        '--ListItem-minHeight': '32px',
-                        borderRadius: '6px',
-                      })}
+                  <Tooltip title="More options">
+                    <IconButton
+                      data-testid="message-actions-menu-btn"
+                      aria-label="More options"
+                      aria-haspopup="dialog"
+                      variant="plain"
+                      color="neutral"
+                      size="sm"
+                      onClick={() => setActionsSheetOpen(true)}
+                      sx={chatActionButtonSx}
                     >
-                      <MenuItem
-                        onClick={() => {
-                          if (messageData.prompt) {
-                            triggerEdit(messageData.id!, 'prompt');
-                          } else {
-                            triggerEdit(messageData.id!, 'reply');
-                          }
-                        }}
-                      >
-                        <ListItemDecorator>
-                          <EditIcon />
-                        </ListItemDecorator>
-                        Edit
-                      </MenuItem>
-                      <MenuItem onClick={handleOpenPromptMetaInspector}>
-                        <ListItemDecorator>
-                          <HiveIcon />
-                        </ListItemDecorator>
-                        {ANSWER_DIAGNOSIS_TITLE}
-                      </MenuItem>
-                      {contextBreakdownAvailable && (
-                        <MenuItem
-                          data-testid="message-context-breakdown-btn"
-                          onClick={() => setShowContextBreakdown(true)}
-                        >
-                          <ListItemDecorator>
-                            <DonutSmallIcon />
-                          </ListItemDecorator>
-                          Context
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={() => onPinToggle(messageData)}>
-                        <ListItemDecorator>
-                          {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                        </ListItemDecorator>
-                        {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      {canUseAdminTools && (
-                        <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                          <ListItemDecorator>
-                            <ArticleIcon />
-                          </ListItemDecorator>
-                          Publish
-                        </MenuItem>
-                      )}
-                      {forkMenuItems}
-                      <MenuItem onClick={() => setShowSnipModal(true)}>
-                        <ListItemDecorator>
-                          <StartIcon />
-                        </ListItemDecorator>
-                        Quickstart
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isRetry: true })}>
-                        <ListItemDecorator>
-                          <Refresh />
-                        </ListItemDecorator>
-                        Try Again
-                      </MenuItem>
-                      <MenuItem onClick={() => onSendMessage(messageData, { isVariation: true })}>
-                        <ListItemDecorator>
-                          <AddIcon />
-                        </ListItemDecorator>
-                        Re-prompt
-                      </MenuItem>
-                      <MenuItem onClick={toggleSyntaxHighlight}>
-                        <ListItemDecorator>
-                          <CodeIcon />
-                        </ListItemDecorator>
-                        Toggle Code View
-                      </MenuItem>
-                      <MenuItem onClick={() => handleSaveAsFile(messageData)}>
-                        <ListItemDecorator>
-                          <SaveIcon />
-                        </ListItemDecorator>
-                        Save as {detectChatContentType(messageData.replies?.[0] || '')}
-                      </MenuItem>
-                      {isFeatureEnabled('EnableDataLakes') && (
-                        <MenuItem
-                          onClick={() => handleSendReplyToDataLake(messageData)}
-                          data-testid="message-send-to-datalake"
-                        >
-                          <ListItemDecorator>
-                            <DataLakeIcon />
-                          </ListItemDecorator>
-                          Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={() => handleDelete(messageData)} color="danger">
-                        <ListItemDecorator sx={{ color: 'inherit' }}>
-                          <DeleteOutline />
-                        </ListItemDecorator>
-                        Delete
-                      </MenuItem>
-                    </Menu>
-                  </Dropdown>
-
-                  {/* Always visible primary action */}
+                      <MoreVertIcon />
+                    </IconButton>
+                  </Tooltip>
+                  {/* The one action kept in the row: the most common thing done with an answer. */}
                   <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                    variant="plain"
-                    triggerSx={chatActionButtonSx}
-                  />
-                  {reportButton}
-                  {correctAndRetryButton}
-                  {hasShareableReply && shareButton}
+                  {/* Reporting lives in the sheet; a reported answer keeps its orange mark here. */}
+                  {!readOnly && isReported && reportButton}
+
+                  <BottomSheet
+                    open={actionsSheetOpen}
+                    onClose={closeActionsSheet}
+                    label="Answer actions"
+                    keepHeight={actionsSheetView !== 'main'}
+                    data-testid="message-actions-sheet"
+                  >
+                    {actionsSheetView === 'download' ? (
+                      <>
+                        <BottomSheetHeader
+                          title="Download"
+                          backTestId="message-actions-back-btn"
+                          onBack={() => setActionsSheetView('main')}
+                        />
+                        <MenuList variant="plain" sx={ACTIONS_SHEET_LIST_SX} onClick={closeActionsSheetOnPick}>
+                          <ReplyDownloadMenuItems
+                            content={extractedReplies ? extractedReplies[0] : ''}
+                            fileName={`${messageData.id}.md`}
+                          />
+                        </MenuList>
+                      </>
+                    ) : (
+                      <MenuList variant="plain" sx={ACTIONS_SHEET_LIST_SX} onClick={closeActionsSheetOnPick}>
+                        {canCorrect && (
+                          <MenuItem data-testid="message-menu-correct-retry" onClick={() => setIsCorrecting(true)}>
+                            <ListItemDecorator>
+                              <EditNoteIcon />
+                            </ListItemDecorator>
+                            Correct and retry
+                          </MenuItem>
+                        )}
+                        {!readOnly && hasShareableReply && (
+                          <MenuItem data-testid="message-menu-share" onClick={handleShareReply}>
+                            <ListItemDecorator>
+                              <ShareOutlinedIcon />
+                            </ListItemDecorator>
+                            Publish & Share
+                          </MenuItem>
+                        )}
+                        <MenuItem
+                          data-testid="message-menu-download"
+                          data-keeps-sheet-open
+                          onClick={() => setActionsSheetView('download')}
+                        >
+                          <ListItemDecorator>
+                            <SaveAltIcon />
+                          </ListItemDecorator>
+                          Download
+                          <ChevronRightIcon sx={{ ml: 'auto', color: 'text.tertiary' }} />
+                        </MenuItem>
+                        {moreOptionsItems}
+                        {!readOnly && (
+                          <MenuItem
+                            data-testid="message-menu-report"
+                            color={isReported ? 'warning' : 'neutral'}
+                            onClick={handleOpenBugReportModal}
+                          >
+                            <ListItemDecorator sx={{ color: 'inherit' }}>
+                              <BugReportOutlinedIcon />
+                            </ListItemDecorator>
+                            {isReported ? 'Reported' : 'Report an issue'}
+                          </MenuItem>
+                        )}
+                        {deleteMenuItem}
+                      </MenuList>
+                    )}
+                  </BottomSheet>
 
                   {/* Keep the modals */}
                   <BugReportModal
@@ -1338,26 +1378,48 @@ const MessageContent: React.FC<ContentProps> = memo(
             )}
 
             {adminSettings.enforceCredits &&
-            currentUser?.showCreditsUsed &&
+            currentUser?.showCreditsUsed !== false &&
             !isProcessingPrompt &&
-            messageData.creditsUsed !== undefined ? (
-              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
+            typeof messageData.creditsUsed === 'number' ? (
+              <Tooltip
+                title={
+                  costParts.length > 0 ? (
+                    <Box data-testid="credits-used-breakdown">
+                      {costParts.map(part => (
+                        <Box key={`${part.label}|${part.model ?? ''}`}>
+                          {part.label}
+                          {part.model ? ` (${getModelDisplayName(part.model)})` : ''}: {formatAnswerCost(part.credits)}
+                        </Box>
+                      ))}
+                      <Box sx={{ mt: 0.5 }}>You can hide this in your profile.</Box>
+                    </Box>
+                  ) : (
+                    'Credits this answer used. You can hide this in your profile.'
+                  )
+                }
+              >
                 <Chip
                   data-testid="credits-used"
                   size="sm"
                   variant="soft"
                   sx={messageMetaChipSx}
-                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+                  startDecorator={<CreditIcon sx={{ fontSize: 12 }} />}
                 >
-                  {messageData.creditsUsed ?? 0}
+                  {/* The balance line above the composer already says these are credits, so the
+                      row shows the bare number; screen readers still get the unit. */}
+                  {formatAnswerCostAmount(messageData.creditsUsed)}
+                  <Box component="span" sx={visuallyHidden}>
+                    {` ${answerCostUnit(messageData.creditsUsed)}`}
+                  </Box>
+                  {costParts.length > 0 && ` (${formatCostParts(costParts)})`}
                 </Chip>
               </Tooltip>
             ) : null}
 
             {!isProcessingPrompt &&
-              messageData.promptMeta?.model?.name &&
+              answeringModel &&
               !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
-                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
+                <ModelChip displayName={answeringModel.label} replaces={answeringModel.replaces} />
               )}
 
             {messageData.correctsQuestId && (

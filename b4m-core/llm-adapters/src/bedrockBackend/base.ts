@@ -7,15 +7,19 @@ import {
   stripToolArtifactMarkup,
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
+  bedrockClientConfig,
+  estimateStreamedOutputTokens,
   type ModelInfo,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
-import { executeToolsBatch } from '../executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
   type CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
+  type IChoice,
   IChoiceEndToolUse,
   ICompletionBackend,
   ICompletionOptions,
@@ -146,6 +150,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     };
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...bedrockClientConfig(),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -213,6 +218,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // Always create a fresh client to avoid stale credentials in warm Lambdas
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...bedrockClientConfig(),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -240,6 +246,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // keeps the running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads/writes are billed per InvokeModel call too, so they accumulate like input/output.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute)
     if (toolCallCount >= maxToolCalls && options.tools?.length) {
@@ -369,7 +379,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // reply on the client's truncation heuristic instead.
     let stopReason: string | undefined;
 
+    // This call's own usage appended to the chain's (see CompletionInfo.turnUsage). Anthropic-native
+    // fields: input already excludes cache, so no split.
+    const turnUsageSoFar = (): TurnUsage[] => [
+      ...(accumTurnUsage ?? []),
+      {
+        inputTokens,
+        outputTokens,
+        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
+        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+      },
+    ];
+
     const buildCompletionInfo = (): CompletionInfo => {
+      const totalCacheReadTokens = accumCacheReadTokens + cacheReadTokens;
+      const totalCacheWriteTokens = accumCacheWriteTokens + cacheWriteTokens;
       // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
       // means the last cb's tokens win; emitting accum+thisTurn at every site
       // keeps the running cross-turn total correct across recursive turns.
@@ -382,8 +406,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // with cache-INCLUSIVE input must not forward without subtracting (see the
         // warnings in openaiBackend/geminiBackend). This is one of the two adapters
         // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
-        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+        ...(totalCacheReadTokens > 0 ? { cacheReadInputTokens: totalCacheReadTokens } : {}),
+        ...(totalCacheWriteTokens > 0 ? { cacheCreationInputTokens: totalCacheWriteTokens } : {}),
+        turnUsage: turnUsageSoFar(),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
         ...(stopReason ? { stopReason } : {}),
       };
@@ -454,8 +479,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // This round's visible answer text (no reasoning), for shouldEndTurnAfterTools.
+        let streamedRoundText = '';
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
         let sawTerminalEvent = false;
+        const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
           if (streamEvent.chunk?.bytes) {
@@ -468,7 +496,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               func[choice.index] ||= {};
               func[choice.index].name ||= choice.tool?.name;
               func[choice.index].id ||= choice.tool?.id;
-              if (func[choice.index].name && choice.statusEndReason !== ChoiceEndReason.TOOL_USE) {
+              if (isToolArgument(choice) && choice.statusEndReason !== ChoiceEndReason.TOOL_USE) {
                 func[choice.index].parameters ??= choice.chunkText || '';
                 func[choice.index].parameters += choice.chunkText || '';
               }
@@ -478,19 +506,26 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
             });
 
-            // Skip callback when there is a tool being streamed
-            if (func.some(f => f.name)) {
+            // While a tool is being streamed, only choices an adapter explicitly marked as prose are
+            // forwarded; everything else is dropped as before, so adapters that never set the flag
+            // behave exactly as they always did.
+            const toolSeen = func.some(f => f.name);
+            const textChoices = toolSeen
+              ? (chunk?.choices ?? []).filter(c => c.toolArguments === false && c.chunkText)
+              : (chunk?.choices ?? []);
+            if (toolSeen && textChoices.length === 0) {
               continue;
             }
 
             const streamedText: string[] = [];
-            chunk?.choices.forEach(choice => {
+            textChoices.forEach(choice => {
               streamedText[choice.index] = choice.chunkText || '';
             });
             emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);
 
             // Reasoning arrives on its own chunk, so the tag is frame-wide.
             const channel = chunk?.choices.find(c => c.channel)?.channel;
+            if (channel !== 'reasoning') streamedRoundText += streamedText.join('');
 
             // Send streamed text from chunk text data
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
@@ -544,6 +579,23 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
               `withheld deliberately rather than returned as a finished answer.`
           );
+        }
+
+        // A Stop cut the stream before its terminal usage event, so this call reported its prompt
+        // (Claude's message_start) but no output, though the provider billed what it streamed.
+        // Estimated only on call 2+, for the reason given at anthropicBackend's
+        // withAbortedOutputEstimate; the final callback carries it to settlement.
+        if (
+          this.signalsStreamTermination &&
+          !sawTerminalEvent &&
+          options.abortSignal?.aborted &&
+          outputTokens === 0 &&
+          inputTokens + cacheReadTokens + cacheWriteTokens > 0 &&
+          accumTurnUsage?.length
+        ) {
+          const toolArgumentChars = func.reduce((n, f) => n + (f?.parameters?.length ?? 0), 0);
+          outputTokens = estimateStreamedOutputTokens(emittedTextChars + toolArgumentChars, model);
+          await callback([], buildCompletionInfo());
         }
 
         // If there is a tool being used, then
@@ -701,6 +753,22 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               }
             }
 
+            if (
+              shouldEndTurnAfterTools(
+                toolCalls.map(t => t.name),
+                options.tools,
+                streamedRoundText
+              )
+            ) {
+              Logger.globalInstance.info(
+                '[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran',
+                { model, toolsExecuted: toolCalls.map(t => t.name) }
+              );
+              await (artifactGuard?.callback ?? callback)([], { ...buildCompletionInfo(), stopReason: 'tool_use' });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], buildCompletionInfo());
 
@@ -724,6 +792,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + inputTokens,
                   accumOutputTokens: accumOutputTokens + outputTokens,
+                  accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                  accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                  accumTurnUsage: turnUsageSoFar(),
                   artifactGuard,
                 },
               },
@@ -840,6 +911,22 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 this.pushToolMessages(messages, { id, name, parameters }, sanitizedResult, roundReasoningBlocks);
               }
 
+              if (
+                shouldEndTurnAfterTools(
+                  toolChoices.map(tc => tc.tool.name),
+                  options.tools,
+                  streamedText.join('')
+                )
+              ) {
+                Logger.globalInstance.info(
+                  '[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran',
+                  { model, toolsExecuted: toolChoices.map(tc => tc.tool.name) }
+                );
+                await (artifactGuard?.callback ?? callback)([], { ...buildCompletionInfo(), stopReason: 'tool_use' });
+                if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+                return;
+              }
+
               // Add newline separator before recursive call to ensure proper markdown rendering
               await callback(['\n\n'], buildCompletionInfo());
 
@@ -861,6 +948,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     toolCallCount: toolCallCount + 1,
                     accumInputTokens: accumInputTokens + inputTokens,
                     accumOutputTokens: accumOutputTokens + outputTokens,
+                    accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                    accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                    accumTurnUsage: turnUsageSoFar(),
                     artifactGuard,
                   },
                 },

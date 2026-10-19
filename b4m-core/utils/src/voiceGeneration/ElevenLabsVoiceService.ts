@@ -1,8 +1,11 @@
 import axios from 'axios';
-import { VoiceOutputFormat, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
+import { VoiceOutputFormat, TTS_DEFAULT_MODEL, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
+const VOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+// Error-shaped bodies only; an allow-list would risk refusing a format whose audio type we have not seen.
+const NON_AUDIO_CONTENT_TYPE = /^text\/|json|xml|html/;
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
 const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
 // ElevenLabs premade "Rachel" voice - available on every account, used when the
@@ -13,7 +16,7 @@ const DEFAULT_VOICE = '21m00Tcm4TlvDq8ikWAM';
 // (multilingual v2). We don't send model_id in that case (preserving behavior),
 // but we must bill *something*, so we attribute the call to this model. It is
 // also the higher-priced tier, so an unspecified model bills conservatively.
-const DEFAULT_BILLING_MODEL = 'eleven_multilingual_v2';
+const DEFAULT_BILLING_MODEL = TTS_DEFAULT_MODEL.elevenlabs;
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly
@@ -33,6 +36,14 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     }
 
     const voiceId = options.voice ?? DEFAULT_VOICE;
+    // The id is interpolated into the request path, so a caller-supplied `/` or `..` would retarget
+    // the call to another endpoint on the account's key. Tagged 422 so the API reports it as a
+    // rejected request (the caller's input) rather than an upstream outage.
+    if (!VOICE_ID_PATTERN.test(voiceId)) {
+      throw Object.assign(new Error(`Invalid ElevenLabs voice id: ${JSON.stringify(voiceId.slice(0, 64))}`), {
+        status: 422,
+      });
+    }
     const format = options.format ?? DEFAULT_FORMAT;
     const outputFormat = ELEVENLABS_OUTPUT_FORMAT[format];
     if (!outputFormat) {
@@ -66,6 +77,12 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       params: { output_format: outputFormat },
       responseType: 'arraybuffer',
     });
+
+    // Checked before returning, since callers bill on a successful result.
+    const responseType = String(response.headers?.['content-type'] ?? '').toLowerCase();
+    if (NON_AUDIO_CONTENT_TYPE.test(responseType)) {
+      throw new Error(`ElevenLabs returned non-audio content (${responseType})`);
+    }
 
     const audio = Buffer.from(response.data, 'binary');
     return {

@@ -16,6 +16,7 @@ import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@server/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { ShareableSkill, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
+import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'name']);
 const ALLOWED_ORDER_DIRECTION = new Set(['asc', 'desc']);
@@ -66,8 +67,7 @@ const handler = baseApi()
     // can't sort by an arbitrary indexed field.
     const safeOrderBy = (ALLOWED_ORDER_BY.has(orderBy) ? orderBy : 'updatedAt') as 'createdAt' | 'updatedAt' | 'name';
     const safeOrderDirection = (ALLOWED_ORDER_DIRECTION.has(orderDirection) ? orderDirection : 'desc') as
-      | 'asc'
-      | 'desc';
+      'asc' | 'desc';
 
     // Surface system skills to admins and org-scoped skills to the orgs they
     // administer, so a creator can find a scoped skill in their listing.
@@ -96,7 +96,7 @@ const handler = baseApi()
       )
     );
 
-    res.json({ ...result, data });
+    res.json({ ...result, data: await attachMarketStatus(data) });
   })
   .post(async (req, res) => {
     const body = req.body as Partial<ISkill> & { scope?: { organizationId?: string; isSystem?: boolean } };

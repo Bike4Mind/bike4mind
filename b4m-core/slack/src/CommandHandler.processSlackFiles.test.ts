@@ -260,7 +260,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fabFileIds).toEqual([]);
     expect(create).not.toHaveBeenCalled();
     expect(upload).not.toHaveBeenCalled();
-    expect(result.errors[0]).toContain('storage limit');
+    expect(result.errors[0]).toContain('Not enough storage for this file.');
   });
 
   it('still succeeds for a normal in-limit attachment once both new checks are wired in', async () => {
@@ -305,7 +305,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fileMetadata[0].filename).toBe('one.pdf');
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('two.pdf');
-    expect(result.errors[0]).toContain('storage limit');
+    expect(result.errors[0]).toContain('Not enough storage for this file.');
   });
 
   it('does not charge a file against the same-message quota unless it is actually persisted', async () => {
@@ -332,69 +332,22 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fabFileIds).toEqual(['fab-one.pdf', 'fab-three.pdf']);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('fails-to-persist.pdf');
-    expect(result.errors[0]).not.toContain('storage limit');
+    expect(result.errors[0]).not.toContain('Not enough storage');
   });
 
-  it('checks the org storage limit for 2+ attachments from an org-affiliated user without re-executing the lookup', async () => {
-    // A real Mongoose Query is a one-shot thenable: awaiting (or `.exec()`-ing) the SAME query
-    // instance a second time throws "Query was already executed". `Organization.findById(id)`
-    // must be memoized as an already-executed Promise, not as the raw Query, or the second
-    // attachment's `checkStorageLimitForFile` call - which awaits the memoized value again -
-    // reproduces that throw and wrongly refuses an otherwise-valid file.
-    let executed = false;
-    const execute = () => {
-      if (executed) throw new Error('Query was already executed: organizations.findOne(...)');
-      executed = true;
-      return Promise.resolve({ storageLimit: 1000 });
-    };
-    // Models the real chain: `.findById(id).select(...).lean()` still returns an un-executed,
-    // one-shot Mongoose Query - only `.exec()` (or awaiting it) actually runs it.
-    organizationFindById.mockReturnValue({
-      select: () => ({
-        lean: () => ({
-          exec: execute,
-          then: (resolve: never, reject: never) => execute().then(resolve, reject),
-        }),
-      }),
-    });
-
+  it('gates an org-affiliated user on their personal quota and never looks up the organization', async () => {
+    // Slack attachments are personal files (no organizationId stamp), so the selected org is irrelevant.
     const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
-    const user = { id: 'user-1', organizationId: 'org-1' } as never;
-    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
-
-    const result = await handler.processSlackFiles([
-      attachment({ id: 'F1', name: 'one.pdf' }),
-      attachment({ id: 'F2', name: 'two.pdf' }),
-    ] as never);
-
-    expect(result.errors).toEqual([]);
-    expect(result.fabFileIds).toEqual(['fab-1', 'fab-1']);
-    // Memoized: the org lookup is resolved once per message, not once per attachment.
-    expect(organizationFindById).toHaveBeenCalledTimes(1);
-  });
-
-  it('reports a generic message and logs, instead of leaking the raw error, when the org lookup itself fails', async () => {
-    // An unexpected DB error (not the storage-limit BadRequestError) must not be echoed
-    // verbatim into a customer Slack channel - it can name internal details like a host:port.
-    organizationFindById.mockReturnValue({
-      select: () => ({
-        lean: () => ({ exec: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.5:27017')) }),
-      }),
-    });
-
-    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
-    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const user = { id: 'user-1', organizationId: 'org-1', storageLimit: 1, currentStorageSize: 1_000_000 } as never;
     const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
 
     const result = await handler.processSlackFiles([attachment()] as never);
 
     expect(result.fabFileIds).toEqual([]);
+    expect(create).not.toHaveBeenCalled();
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).not.toContain('ECONNREFUSED');
-    expect(result.errors[0]).toContain('Could not verify your storage limit');
-    expect(logger.error).toHaveBeenCalledWith(
-      '[Slack Files] Storage limit check failed',
-      expect.objectContaining({ error: expect.any(Error) })
-    );
+    expect(result.errors[0]).toContain('Not enough storage for this file.');
+    expect(result.errors[0]).not.toContain('organization');
+    expect(organizationFindById).not.toHaveBeenCalled();
   });
 });

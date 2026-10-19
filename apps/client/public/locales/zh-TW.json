@@ -30,7 +30,8 @@
     "title": "變更記錄"
   },
   "feedback": {
-    "send": "發送反饋"
+    "send": "發送反饋",
+    "rollupTitle": "你的意見回饋"
   },
   "terms_policies": "條款與政策",
   "login": "登入",
@@ -166,7 +167,8 @@
     "messages": "訊息",
     "invites": "邀請",
     "sendMessage": "發送訊息",
-    "noMessages": "沒有訊息"
+    "noMessages": "沒有訊息",
+    "title_unread": "收件匣，有未讀項目"
   },
   "addSomething": "新增{{ name }}",
   "deleteAllSomething": "刪除所有{{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "在 {{ date }} 續訂"
   },
   "billing": {
-    "title": "帳單"
+    "title": "帳單",
+    "balance": "餘額",
+    "credits_heading": "儲值點數",
+    "credits_sub": "一次性點數包，計入你的餘額。不需訂閱。",
+    "credits_sub_with_plan": "一次性點數包，在每月額度之外額外增加。",
+    "free_plan": "免費",
+    "free_plan_detail": "使用點數包按用量付費",
+    "low_org": "組織管理員可以為此帳戶新增點數。",
+    "low_with_plan": "儲值後即可繼續使用，直到額度續期。",
+    "low_without_plan": "方案每月提供點數；點數包可立即儲值。",
+    "payment_failed": "付款失敗",
+    "plan": "方案",
+    "plan_fallback": "訂閱",
+    "plan_unavailable": "無法使用",
+    "plan_unavailable_detail": "無法載入你的方案。",
+    "plans_change": "你的方案",
+    "plans_change_sub": "管理、變更或取消你的訂閱。",
+    "plans_heading": "方案",
+    "plans_heading_sub": "包含點數額度的月繳方案。",
+    "plans_upgrade": "升級",
+    "plans_upgrade_sub": "每月取得點數額度，不必手動儲值。",
+    "retry": "重試",
+    "see_plans": "查看方案",
+    "top_up": "儲值"
   },
   "credits": {
     "title": "積分",
@@ -314,7 +339,8 @@
     "usage_pattern": "根據您過去 {{days}} 天的使用模式",
     "credits_used": "已使用的點數",
     "credits_purchased": "購買的點數",
-    "net_credits": "淨點數"
+    "net_credits": "淨點數",
+    "unit": "點數"
   },
   "time": {
     "last_7_days": "過去 7 天",
@@ -362,7 +388,15 @@
       "completed": "已完成",
       "pending": "待處理",
       "failed": "失敗"
-    }
+    },
+    "buy_pack": "以 {{price}} 購買 {{credits}} 點數",
+    "choose_pack": "選擇點數包",
+    "history_usage_hint": "此處僅列出購買記錄。",
+    "organization_credits_active": "組織點數已啟用",
+    "rate_per_thousand": "每 1,000 點數 {{rate}}",
+    "see_usage": "查看用量",
+    "shared_rate": "所有點數包單價相同：每 1,000 點數 {{rate}}。",
+    "switch_to_personal": "切換到個人帳戶以購買個人使用的點數。"
   },
   "settings": {
     "title": "設定",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "訂閱",
-    "description": "通過一個統一的介面訪問每個主要的 AI 模型。私下運行類似 Deepseek R1 的高級模型。",
+    "description": "通過一個統一的介面訪問每個主要的 AI 模型。",
     "no_free_tier": "沒有免費層 - 專注於專業人士。",
     "credits_rollover": "未使用的點數會延續 3 個月。",
     "monthly_billing": "每月計費",
@@ -543,7 +577,9 @@
     "personal": "個人",
     "business": "商業",
     "team": "團隊",
-    "enterprise": "企業"
+    "enterprise": "企業",
+    "audience_label": "方案類型",
+    "includes": "包含"
   },
   "agents": {
     "title": "代理",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "技能",
     "command_palette_description": "管理可重複使用的指令範本"
+  },
+  "apiKeys": {
+    "title": "API 金鑰"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive、Slack 等整合，以及供你自己的程式碼使用的 API 金鑰",
+    "sections": "連線區段",
+    "title": "連線"
   }
 }

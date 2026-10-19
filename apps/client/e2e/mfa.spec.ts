@@ -26,7 +26,7 @@ test.describe('MFA', () => {
       name: `MFA Signin ${timestamp} e2e`,
       password: 'E2eMfaSigninPass123!',
     });
-    const { secret } = await enrollMfa(request, created.accessToken);
+    const { secret, enrolledStep } = await enrollMfa(request, created.accessToken);
 
     await basePage.clearAllStorage();
     await loginPage.goto();
@@ -35,7 +35,7 @@ test.describe('MFA', () => {
     await loginPage.submitOtcExpectingMfa();
 
     await loginPage.expectMfaChallenge();
-    await loginPage.fillMfaCode(generateTotp(secret));
+    await loginPage.fillMfaCode(generateTotp(secret, enrolledStep));
     await loginPage.submitMfa();
     await basePage.dismissModals();
 
@@ -84,7 +84,11 @@ test.describe('MFA', () => {
       password: 'E2eMfaAdminPass123!',
       isAdmin: true,
     });
-    const { secret: adminSecret, tokens: adminTokens } = await enrollMfa(request, createdAdmin.accessToken);
+    const {
+      secret: adminSecret,
+      tokens: adminTokens,
+      enrolledStep: adminEnrolledStep,
+    } = await enrollMfa(request, createdAdmin.accessToken);
 
     const targetName = `MFA Target ${timestamp} e2e`;
     await apiCreateTestUser(request, {
@@ -106,7 +110,7 @@ test.describe('MFA', () => {
     // Proves the admin's mfa.totpEnabled was projected into currentUser (the select:false
     // migration regression) - a non-enrolled admin would see login-as-mfa-required-modal instead.
     await adminPage.expectLoginAsMfaModal();
-    await adminPage.fillLoginAsMfa(generateTotp(adminSecret));
+    await adminPage.fillLoginAsMfa(generateTotp(adminSecret, adminEnrolledStep));
     await adminPage.confirmLoginAs();
 
     // Landing on /new is the success signal. The "logged in as user" toast is deliberately not

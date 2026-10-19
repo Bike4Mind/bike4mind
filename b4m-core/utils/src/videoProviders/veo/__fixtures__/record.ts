@@ -1,0 +1,299 @@
+/**
+ * One-off recorder for the Veo adapter fixtures. Spends real money (about $0.10 per generated second at 720p,
+ * 4-second clips by default): run only after a human has supplied GEMINI_API_KEY and approved the spend.
+ *
+ *   pnpm --filter @bike4mind/scripts exec tsx --env-file=<file with GEMINI_API_KEY> \
+ *     "$PWD/b4m-core/utils/src/videoProviders/veo/__fixtures__/record.ts" [scenario ...]
+ *
+ * With no arguments every scenario runs; name scenarios to re-record only those (a billed scenario that
+ * failed should be re-run alone, not with the rest). Recordings are written as `<scenario>.json` and win over
+ * the `.synthetic.json` stand-ins without any test edit. The key is checked absent from every file before it
+ * is written, and the download probe records only status and headers, never the bytes.
+ *
+ * `blocked` needs a prompt Veo actually refuses; the gory default was NOT blocked live (Veo made a normal video).
+ * Set BLOCKED_PROMPT to override it, and BLOCKED_IMAGE=<local png/jpg/webp> to submit image-to-video instead (the
+ * likeness filter fires only on an input image). One of the two must be set.
+ */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { extname } from 'node:path';
+import { deflateSync, crc32 } from 'node:zlib';
+import { classifyGeminiSubmitFailure } from '../../gemini/geminiHttp';
+import { veoTerminalIsBlocked } from '../VeoVideoProvider';
+import { assertNoSecret, scrubBody, scrubUrl } from './scrub';
+
+const BASE = 'https://generativelanguage.googleapis.com';
+const MODEL = 'veo-3.1-fast-generate-preview';
+const SUBMIT_PATH = `/v1beta/models/${MODEL}:predictLongRunning`;
+const POLL_EVERY_MS = 10_000;
+const POLL_FOR_MS = 10 * 60_000;
+const apiKey = process.env.GEMINI_API_KEY ?? '';
+if (!apiKey) throw new Error('GEMINI_API_KEY is required');
+
+type Exchange = {
+  name: string;
+  request: { method: 'GET' | 'POST'; path: string; body?: unknown };
+  response: { status: number; headers: Record<string, string>; body?: unknown };
+};
+
+const call = async (method: 'GET' | 'POST', path: string, body?: unknown) => {
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Non-JSON error page; kept as text.
+  }
+  const contentType = response.headers.get('content-type');
+  const exchange: Omit<Exchange, 'name'> = {
+    request: { method, path, ...(body !== undefined && { body: scrubBody(body) }) },
+    response: {
+      status: response.status,
+      headers: contentType ? { 'content-type': contentType } : {},
+      body: scrubBody(parsed),
+    },
+  };
+  return { exchange, parsed };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+const operationNameOf = (value: unknown): string =>
+  isRecord(value) && typeof value.name === 'string' ? value.name : '';
+const isDone = (value: unknown): boolean => isRecord(value) && value.done === true;
+
+// Depth-first search for the first `video.uri` anywhere in the operation.
+const findVideoUri = (value: unknown): string | undefined => {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findVideoUri(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  if (isRecord(value.video) && typeof value.video.uri === 'string') return value.video.uri;
+  return findVideoUri(Object.values(value));
+};
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const pollToTerminal = async (operationName: string): Promise<{ exchanges: Exchange[]; terminal: unknown }> => {
+  const exchanges: Exchange[] = [];
+  const deadline = Date.now() + POLL_FOR_MS;
+  let first = true;
+  while (Date.now() < deadline) {
+    const { exchange, parsed } = await call('GET', `/v1beta/${operationName}`);
+    process.stdout.write(`  poll ${exchange.response.status} done=${isDone(parsed)}\n`);
+    // A failed poll is a recorder problem (auth, wrong path), not a provider outcome worth replaying.
+    if (exchange.response.status >= 400) {
+      throw new Error(`poll failed: ${exchange.response.status} ${JSON.stringify(exchange.response.body)}`);
+    }
+    if (first) exchanges.push({ name: 'poll_first', ...exchange });
+    first = false;
+    if (isDone(parsed)) {
+      exchanges.push({ name: 'poll_terminal', ...exchange });
+      return { exchanges, terminal: parsed };
+    }
+    await sleep(POLL_EVERY_MS);
+  }
+  throw new Error(`operation ${operationName} did not finish in ${POLL_FOR_MS}ms`);
+};
+
+// Records whether the download needs the key and whether it redirects; never stores the bytes.
+const probeDownload = async (uri: string): Promise<Exchange> => {
+  const response = await fetch(uri, { headers: { 'x-goog-api-key': apiKey }, redirect: 'manual' });
+  const location = response.headers.get('location');
+  await response.body?.cancel();
+  const headers: Record<string, string> = {};
+  const contentType = response.headers.get('content-type');
+  if (contentType) headers['content-type'] = contentType;
+  if (location) headers.location_host = new URL(location, uri).host;
+  process.stdout.write(`  download ${response.status} ${headers.location_host ?? ''}\n`);
+  return {
+    name: 'download',
+    request: { method: 'GET', path: new URL(scrubUrl(uri)).pathname },
+    response: { status: response.status, headers },
+  };
+};
+
+// 4s at 720p is the cheapest valid clip (1080p and 4k need 8s).
+const submitBody = (instance: Record<string, unknown>, parameters: Record<string, unknown> = {}) => ({
+  instances: [instance],
+  parameters: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p', ...parameters },
+});
+
+// A 256x256 solid PNG, built here so no binary asset is committed.
+const solidPng = (): string => {
+  const size = 256;
+  const chunk = (type: string, data: Buffer) => {
+    const typed = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    typed.copy(out, 4);
+    out.writeUInt32BE(crc32(typed) >>> 0, 8 + data.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header.writeUInt8(8, 8); // bit depth
+  header.writeUInt8(2, 9); // RGB
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, 0x46)]);
+  const pixels = deflateSync(Buffer.concat(Array.from({ length: size }, () => row)));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', pixels),
+    chunk('IEND', Buffer.alloc(0)),
+  ]).toString('base64');
+};
+
+const write = (scenario: string, exchanges: Exchange[]) => {
+  const serialized = `${JSON.stringify({ scenario, recordedAt: new Date().toISOString(), exchanges }, null, 2)}\n`;
+  assertNoSecret(serialized, apiKey);
+  writeFileSync(new URL(`./${scenario}.json`, import.meta.url), serialized);
+  process.stdout.write(`wrote ${scenario}.json\n`);
+};
+
+// The docs allow only this value for image-to-video.
+const imageToVideoBody = (prompt: string, image: Record<string, unknown>) =>
+  submitBody({ prompt, image }, { personGeneration: 'allow_adult' });
+
+const recordGeneration = async (scenario: string, body: Record<string, unknown>) => {
+  const submit = await call('POST', SUBMIT_PATH, body);
+  process.stdout.write(`${scenario}: submit ${submit.exchange.response.status}\n`);
+  if (submit.exchange.response.status >= 400) {
+    throw new Error(
+      `${scenario} submit failed: ${submit.exchange.response.status} ${JSON.stringify(submit.exchange.response.body)}`
+    );
+  }
+  const { exchanges, terminal } = await pollToTerminal(operationNameOf(submit.parsed));
+  // The raw (unscrubbed) URI is needed to probe the download; only its scrubbed path is written.
+  const uri = findVideoUri(terminal);
+  if (!uri) {
+    // A success scenario without a video would win over the synthetic fixture and break the conformance suite, so
+    // it is kept as a failure fixture (a real provider failure is worth replaying) and the run exits non-zero.
+    write(`failed-${scenario}`, [{ name: 'submit', ...submit.exchange }, ...exchanges]);
+    throw new Error(`${scenario} finished without a video; saved as failed-${scenario}.json, not as ${scenario}.json`);
+  }
+  const download = await probeDownload(uri);
+  write(scenario, [{ name: 'submit', ...submit.exchange }, ...exchanges, download]);
+};
+
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+const imageMimeOf = (path: string): string => {
+  const mimeType = IMAGE_MIME_TYPES[extname(path).toLowerCase()];
+  if (!mimeType) throw new Error(`BLOCKED_IMAGE must be png, jpg or webp: ${path}`);
+  return mimeType;
+};
+
+const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
+
+// Everything echoed back from a blocked request is replaced, so the fixture never carries the prompt text.
+const redactBlocked = (value: unknown, prompt: string): unknown => {
+  // An empty prompt is a substring of every string, which would splice the marker between every character.
+  if (!prompt) return value;
+  if (Array.isArray(value)) return value.map(item => redactBlocked(item, prompt));
+  if (typeof value === 'string') return value.includes(prompt) ? value.split(prompt).join(BLOCKED_REDACTION) : value;
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, redactBlocked(inner, prompt)]));
+};
+
+// The default prompt was not blocked live, and an input image is what triggers the likeness filter, so one of the
+// two must be set. Read before any scenario runs, so a bare run fails before it is billed.
+const blockedInput = (): { imagePath: string | undefined; prompt: string } => {
+  const imagePath = process.env.BLOCKED_IMAGE;
+  if (imagePath === '') throw new Error('BLOCKED_IMAGE is empty');
+  if (imagePath === undefined && process.env.BLOCKED_PROMPT === undefined) {
+    throw new Error('blocked: set BLOCKED_IMAGE or BLOCKED_PROMPT (the default prompt is not blocked)');
+  }
+  return {
+    imagePath,
+    prompt: process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.',
+  };
+};
+
+const scenarios: Record<string, () => Promise<void>> = {
+  'text-to-video': () =>
+    recordGeneration(
+      'text-to-video',
+      submitBody({ prompt: 'A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.' })
+    ),
+
+  'image-to-video': () =>
+    recordGeneration(
+      'image-to-video',
+      imageToVideoBody('The color slowly ripples like water, camera static.', {
+        bytesBase64Encoded: solidPng(),
+        mimeType: 'image/png',
+      })
+    ),
+
+  blocked: async () => {
+    const { imagePath, prompt } = blockedInput();
+    const body = imagePath
+      ? imageToVideoBody(prompt, {
+          bytesBase64Encoded: readFileSync(imagePath).toString('base64'),
+          mimeType: imageMimeOf(imagePath),
+        })
+      : submitBody({ prompt });
+    const blocked = await call('POST', SUBMIT_PATH, body);
+    const { status } = blocked.exchange.response;
+    process.stdout.write(`blocked: submit ${status}\n`);
+    // A parameter 400 must not land as a block fixture; only one the adapter would classify as blocked does.
+    if (status >= 400 && classifyGeminiSubmitFailure(status, blocked.parsed, 'veo') !== 'blocked') {
+      throw new Error(
+        `blocked: submit ${status} is not a safety block; nothing written: ${JSON.stringify(blocked.exchange.response.body)}`
+      );
+    }
+    const exchanges: Exchange[] = [{ name: 'submit', ...blocked.exchange }];
+    if (status < 400) {
+      const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
+      // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
+      if (findVideoUri(terminal)) {
+        throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
+      }
+      // Nor may a terminal the adapter does not read as a block overwrite a good blocked.json.
+      if (!veoTerminalIsBlocked(terminal)) {
+        throw new Error('blocked: the operation did not end in a safety block; nothing written');
+      }
+      exchanges.push(...polls);
+    }
+    const redacted = redactBlocked(exchanges, prompt);
+    if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
+    write('blocked', redacted);
+  },
+
+  // An unsupported aspect ratio is rejected at submit, before any generation is billed.
+  'invalid-param': async () => {
+    const invalid = await call('POST', SUBMIT_PATH, submitBody({ prompt: 'a lighthouse' }, { aspectRatio: '1:7' }));
+    write('invalid-param', [{ name: 'submit', ...invalid.exchange }]);
+  },
+
+  // A GET on a nonexistent operation; free.
+  'unknown-operation': async () => {
+    const gone = await call('GET', `/v1beta/models/${MODEL}/operations/doesnotexist0000`);
+    write('unknown-operation', [{ name: 'poll_terminal', ...gone.exchange }]);
+  },
+};
+
+const main = async () => {
+  const requested = process.argv.slice(2);
+  const unknown = requested.filter(name => !(name in scenarios));
+  if (unknown.length > 0) throw new Error(`unknown scenario(s): ${unknown.join(', ')}`);
+  const toRun = requested.length > 0 ? requested : Object.keys(scenarios);
+  // Check the blocked inputs before the loop: a no-argument run must not pay for the billed scenarios and then throw.
+  if (toRun.includes('blocked')) blockedInput();
+  for (const name of toRun) await scenarios[name]();
+};
+
+await main();

@@ -1,11 +1,11 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
+export * from './historyBudgetConstants';
 export * from './earlyStopStamp';
 export * from './mementoGating';
 export * from './artifactGating';
 export * from './forcedRetrievalAbstention';
 export * from './ImageGeneration';
-export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';
 export * from './ImageEdit';
 export * from './imageModerationGate';
@@ -38,6 +38,7 @@ export type {
   SubagentDispatchConfig,
   ChildExecutionStatus,
   BackgroundDispatchResult,
+  SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
@@ -47,7 +48,13 @@ export * from './smallLLMHelpers';
 export * from './reranker';
 export { StatusManager } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
-export { serpApiSearch, resolveWebSearchProvider } from './tools/implementation/websearch';
+export {
+  serpApiSearch,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  searchWithHedge,
+  safeHostname,
+} from './tools/implementation/websearch';
 export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';
 

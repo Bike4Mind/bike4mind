@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { partnerSignupRuleRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  integrationRequestRepository,
+  partnerSignupRuleRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
@@ -18,7 +23,7 @@ const updateOrgBodySchema = z.object({
   billingContact: z.string().optional(),
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(),
-  maxCreditsPerMember: z.number().positive().nullable().optional(),
+  maxCreditsPerMember: z.number().int().positive().nullable().optional(),
 });
 
 const handler = baseApi()
@@ -66,9 +71,9 @@ const handler = baseApi()
     const id = req.query.id;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
-    // soft-deletes, and the org delete must commit together, or a partial failure leaves either
-    // dangling group access or an org that never actually deletes. Repositories join the session
-    // automatically via transactionAsyncLocalStorage.
+    // soft-deletes, the user organizationId reset, and the org delete must commit together, or a
+    // partial failure leaves either dangling group access or an org that never actually deletes.
+    // Repositories join the session automatically via transactionAsyncLocalStorage.
     await withTransaction(() =>
       organizationService.deleteOrganization(
         req.user!,
@@ -100,6 +105,17 @@ const handler = baseApi()
     // still apply); only the org association is dropped. Cache invalidation makes it immediate.
     await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
     invalidatePartnerRuleCache();
+    // Same for roadmap integration requests: they are the members' own votes and stay. Best-effort:
+    // the org is already gone, so a failure here must not turn the committed delete into a 500 a
+    // retry cannot fix. The request keeps a dangling organizationId, which the admin demand list
+    // already shows as a deleted organization.
+    try {
+      await integrationRequestRepository.clearOrganization(id);
+    } catch (err) {
+      req.logger.warn(
+        `Failed to clear integration requests' organization for deleted organization ${id}: ${String(err)}`
+      );
+    }
 
     return res.json({ id });
   });

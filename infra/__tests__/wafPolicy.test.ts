@@ -649,19 +649,19 @@ describe('wafPolicy', () => {
   // run since July, and the surviving one is deliberate and documented below.
   describe('terminating Allow rules', () => {
     it('leaves only the completions endpoint exempted ahead of the emergency IP block', () => {
-      const rules: WafRule[] = JSON.parse(
-        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
-      );
-
-      const emergency = rules.find(r => r.Name === 'emergency-ip-block');
-      const allowsBefore = rules
-        .filter(r => r.Action && 'Allow' in r.Action && r.Priority < emergency!.Priority)
-        .map(r => r.Name);
-
       // The completions path is a long-lived SSE POST carrying user prompt text, which the SQLi
       // and XSS signatures false-positive on, so this exemption stays until there is evidence for
       // removing it - and staging cannot supply that, since it runs the same rule.
-      expect(allowsBefore).toEqual(['Allow-LLM-API']);
+      for (const stage of ['dev', 'production']) {
+        const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+
+        const emergency = rules.find(r => r.Name === 'emergency-ip-block');
+        const allowsBefore = rules
+          .filter(r => r.Action && 'Allow' in r.Action && r.Priority < emergency!.Priority)
+          .map(r => r.Name);
+
+        expect(allowsBefore, stage).toEqual(['Allow-LLM-API']);
+      }
     });
 
     // /api/admin/ was exempted from everything by a terminating Allow at priority 1. Staging has
@@ -671,8 +671,7 @@ describe('wafPolicy', () => {
     // Default_Action, none blocked by any rule.
     // Both stages: the dev policy is what staging and every preview stage actually run, and this
     // guard being production-only meant a blanket /api/admin/ Allow could be re-added to dev and
-    // pass. The sibling test above deliberately stays production-only, because dev carries
-    // Allow-ZAP-Scanner ahead of the emergency block and that is tracked separately.
+    // pass.
     it('subjects /api/admin/ to the managed rules rather than exempting it', () => {
       for (const stage of ['dev', 'production']) {
         const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));

@@ -5,16 +5,17 @@ export type SettleableFunctionCall = { name?: string; creditsUsed?: number };
  *
  * `toolCreditsMap` holds a per-name queue of charges in call order (see
  * ToolBuilder.reserveToolCredits): a tool invoked more than once in a turn - two
- * music_generation tracks, several image_generation renders - reserves one entry per
+ * audio_generation clips, several image_generation renders - reserves one entry per
  * call. Walking the calls in order and shifting the next charge off the matching queue
  * bills the sum of every call. The previous behavior stamped the queue's last value onto
  * every same-named call, so two calls settled at 2x the later call's cost instead of
  * cost1 + cost2.
  *
- * When a call reserved nothing (a failed music_generation returns before onFinish, so no
- * charge is queued) the queue can be shorter than the matching calls; the leftover calls
- * simply keep their existing creditsUsed. Only the total is authoritative downstream, so
- * an in-order gap never changes what is billed.
+ * When a call reserved nothing (a failed image_generation, edit_image or audio_generation
+ * returns before onFinish, so no charge is queued) the queue can be shorter than the matching
+ * calls; the leftover calls simply keep their existing creditsUsed. A failed call followed by a
+ * successful retry can therefore carry the retry's charge on its own slot. Only the total is
+ * authoritative downstream, so an in-order gap never changes what is billed.
  *
  * Per-call attribution is best-effort: charges are dequeued in reservation (completion)
  * order while functionCalls is in issue order, so under parallel tool execution two

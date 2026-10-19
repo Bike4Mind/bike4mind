@@ -7,8 +7,8 @@ import {
   IUsageEventInput,
   UsageEventFeature,
   ModelInfo,
-  MusicGenerationVendor,
   materializePromptMetaSession,
+  type GenerationJobRef,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -17,11 +17,17 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
-import type { CostInput } from '../imageCostCalculator/types';
-import { estimateMusicCredits } from '../../musicCost';
+import { validateUserCredits, validateAudioCredits } from './base/utils';
+import { estimateImageCredits } from '../../imageCost';
+import {
+  toImageCostInput,
+  type ImageToolCostInput,
+  type ImageToolFinishData,
+  type ImageToolName,
+} from './imageToolBilling';
 import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
@@ -32,7 +38,7 @@ import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
-import { buildEarlyStopStamp } from '../earlyStopStamp';
+import { usageEventStatusForFinish } from '../earlyStopStamp';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -51,8 +57,8 @@ export function buildToolUsageEvent(params: {
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
   /**
-   * Defaults to 'tool'. The music and audio tools pass the feature their direct endpoint
-   * writes (music_generation, sound_effects, text_to_speech), so a track counts as a track
+   * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
+   * writes (sound_effects, text_to_speech), so a track counts as a track
    * whichever path made it - the Gears status reads these features to unlock its gears.
    */
   feature?: UsageEventFeature;
@@ -74,8 +80,8 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
-    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
-    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
+    // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
+    status: usageEventStatusForFinish(params.finishReason),
   };
 }
 
@@ -108,12 +114,16 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
+  authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -124,6 +134,8 @@ export interface ToolBuilderConfig {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -135,7 +147,7 @@ export interface ToolBuilderConfig {
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
   // Per-name queue of each tool call's reserved credits, in call order. A tool
-  // (image_generation, edit_image, music_generation, delegate_to_agent) can fire
+  // (image_generation, edit_image, delegate_to_agent) can fire
   // more than once per turn with a different cost each time, so the settlement in
   // ChatCompletionProcess assigns each call its own charge instead of stamping the
   // last value onto every same-named functionCall.
@@ -276,7 +288,12 @@ export function applyQuestStatusChanges(
   changes: Partial<IChatHistoryItemDocument>,
   userId: string
 ): void {
-  const { promptMeta: changedPromptMeta, images: changedImages, ...otherChanges } = changes;
+  const {
+    promptMeta: changedPromptMeta,
+    images: changedImages,
+    generationJobs: changedGenerationJobs,
+    ...otherChanges
+  } = changes;
 
   if (changedPromptMeta && quest.promptMeta) {
     const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
@@ -320,13 +337,22 @@ export function applyQuestStatusChanges(
         ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
         : winner;
     }
+    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
+    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
+    const finalCitables = changedPromptMeta.citables?.length
+      ? dedupedCitables.map(citable => {
+          if (citable.metadata?.citationIndex === undefined) return citable;
+          const { citationIndex: _stamp, ...metadata } = citable.metadata;
+          return { ...citable, metadata };
+        })
+      : dedupedCitables;
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
       {
         ...quest.promptMeta,
         ...changedPromptMeta,
-        citables: dedupedCitables,
+        citables: finalCitables,
         // Omit the key entirely when neither side has warnings, so an untouched quest is not
         // given an empty array it never had.
         ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
@@ -350,6 +376,14 @@ export function applyQuestStatusChanges(
       }
     }
     quest.images = accumulated;
+  }
+
+  if (changedGenerationJobs) {
+    const merged = new Map((quest.generationJobs ?? []).map(job => [job.id, job]));
+    for (const job of changedGenerationJobs) {
+      if (!merged.has(job.id)) merged.set(job.id, job);
+    }
+    quest.generationJobs = [...merged.values()];
   }
 
   Object.assign(quest, otherChanges);
@@ -444,11 +478,11 @@ export class ToolBuilder {
   /**
    * Reserve one tool call's credits for end-of-quest settlement. Appends to the
    * per-name queue in call order rather than overwriting, so a tool called more
-   * than once in a turn (e.g. a 10s then a 20s music track) settles as the sum of
+   * than once in a turn (e.g. a 10s then a 20s audio clip) settles as the sum of
    * every call, not the count times the last call's cost. Fires exactly once per
-   * call: image/edit/music via onToolStart/onToolFinish, delegate via onSubagentCredits.
+   * call: image/edit/audio via onToolStart/onToolFinish, delegate via onSubagentCredits.
    *
-   * `model` is the model that actually incurs the cost (gpt-image-2, a music vendor
+   * `model` is the model that actually incurs the cost (gpt-image-2, an audio vendor
    * model, the subagent's chat model) - never the quest's own chat model. It feeds the
    * aggregate ledger row's attribution; pass it wherever it is resolvable. A charge whose
    * model cannot be resolved still records UNATTRIBUTED_TOOL_CHARGE, so the row can never
@@ -472,67 +506,6 @@ export class ToolBuilder {
     // errs toward saying nothing, never toward a wrong name, which is the direction this
     // whole rule is built to fail in.
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
-  }
-
-  /**
-   * Up-front affordability gate for music_generation (onToolStart): throws
-   * insufficient_credits before the paid provider call when the owner can't cover the
-   * length-driven charge. The reservation itself is deferred to settleMusicCredits so a
-   * failed generation is never billed. No-op when credit enforcement is off or the
-   * credit store is unavailable. Exposed for unit-testing the music credit branch.
-   */
-  gateMusicCredits(
-    data: { provider: MusicGenerationVendor; lengthMs: number },
-    enforceCredits: boolean,
-    organization?: IOrganizationDocument | null
-  ): void {
-    if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    validateMusicCredits(this.deps.user, data.provider, data.lengthMs, this.deps.logger, organization);
-  }
-
-  /**
-   * Reserve + record a delivered music track's credits (onToolFinish) and ride its path
-   * on quest.images. Reached only after generation succeeds, so an undelivered track is
-   * never billed; uses estimateMusicCredits (pure, no throw) since affordability was
-   * already gated in gateMusicCredits. Does not persist the quest - the caller saves.
-   * Exposed for unit-testing the music credit branch.
-   */
-  settleMusicCredits(
-    quest: IChatHistoryItemDocument,
-    data: { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
-    enforceCredits: boolean,
-    organization?: IOrganizationDocument | null
-  ): void {
-    if (enforceCredits && !!this.deps.db.creditTransactions) {
-      const {
-        requiredCredits: creditsUsed,
-        usdCost,
-        billedSeconds,
-      } = estimateMusicCredits(data.provider, { lengthMs: data.lengthMs });
-      this.deps.logger.info(`Credits used for tool music_generation: ${creditsUsed}`);
-      this.reserveToolCredits('music_generation', creditsUsed, data.modelId);
-      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-      recordToolUsageEvent(
-        this.deps.db,
-        this.deps.logger,
-        'music_generation',
-        buildToolUsageEvent({
-          quest,
-          user: this.deps.user,
-          organization,
-          provider: data.provider,
-          model: data.modelId,
-          costUsd: usdCost,
-          creditsCharged: creditsUsed,
-          units: billedSeconds,
-          feature: 'music_generation',
-        })
-      );
-    }
-    if (!quest.images) quest.images = [];
-    data.paths.forEach(path => {
-      if (!quest.images?.includes(path)) quest.images?.push(path);
-    });
   }
 
   /**
@@ -613,56 +586,119 @@ export class ToolBuilder {
   }
 
   /**
-   * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
-   * cost is known up front from the model + n/size/quality, so it reserves at start
-   * (unlike music, which reserves on delivery in settleMusicCredits). One reservation per
-   * call feeds the per-name queue that settleToolCallCredits distributes, so two calls in
-   * a turn settle as the sum of both. No-op when enforcement is off, the model is unknown,
-   * or the credit store is unavailable. Exposed for unit-testing the credit branch.
+   * Write new generation jobs straight onto the stored quest. Otherwise only the ~10s streaming
+   * heartbeat persists them, so a chat process dying in that window leaves a running, billed
+   * job with no card in the chat. The in-memory quest already carries the jobs
+   * (applyQuestStatusChanges), so later whole-quest saves keep them. A failed write is logged,
+   * never thrown: the job exists and is billed, so failing the tool call would only hide it.
    */
-  async reserveImageCredits(
-    toolName: 'image_generation' | 'edit_image',
-    data: { model?: string; n?: number; size?: string; quality?: string },
+  private async persistGenerationJobs(questId: string, jobs: GenerationJobRef[]): Promise<void> {
+    try {
+      await this.deps.db.quests.addGenerationJobs(questId, jobs);
+    } catch (err) {
+      const ids = jobs.map(job => job.id).join(',');
+      this.deps.logger.error(`[generationJobs] failed to persist ${ids} on quest ${questId}:`, err);
+    }
+  }
+
+  /**
+   * Save the quest so newly reported generated-media keys are stored before the client sees them.
+   * A failed write is logged, never thrown: the file exists, and the streaming heartbeat or the
+   * end-of-turn save still records the key.
+   */
+  private async persistQuestImages(
+    quest: IChatHistoryItemDocument,
+    saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>
+  ): Promise<void> {
+    try {
+      await saveQuest(quest);
+    } catch (err) {
+      this.deps.logger.error(`[generatedMedia] failed to persist images on quest ${quest.id}:`, err);
+    }
+  }
+
+  /**
+   * Up-front affordability gate for image_generation/edit_image (onToolStart): throws
+   * insufficient_credits before the paid provider call. Like audio, the charge itself is
+   * deferred to settleImageCredits so a failed generation is never billed. No-op when
+   * enforcement is off, the model is unknown, or the credit store is unavailable. Exposed for
+   * unit-testing the credit branch.
+   */
+  async gateImageCredits(
+    toolName: ImageToolName,
+    data: ImageToolCostInput,
     enforceCredits: boolean,
     organization: IOrganizationDocument | null | undefined,
-    quest: IChatHistoryItemDocument,
-    saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>,
     availableModels: ModelInfo[]
   ): Promise<void> {
-    const { model: toolModel, n, size, quality } = data;
-    if (!toolModel) return;
-    if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    const modelInfo = availableModels.find(m => m.id === toolModel);
+    const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-
-    const { requiredCredits: creditsUsed, usdCost } = await validateUserCredits(
+    await validateUserCredits(
       this.deps.user,
       modelInfo,
-      n || 1,
-      // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      { model: toolModel, size, quality } as CostInput,
+      data.n || 1,
+      toImageCostInput(toolName, data),
       this.deps.logger,
       organization
     );
-    this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-    this.reserveToolCredits(toolName, creditsUsed, toolModel);
-    quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-    await saveQuest(quest);
-    recordToolUsageEvent(
-      this.deps.db,
-      this.deps.logger,
-      toolName,
-      buildToolUsageEvent({
-        quest,
-        user: this.deps.user,
-        organization,
-        provider: modelInfo.backend,
-        model: toolModel,
-        costUsd: usdCost,
-        creditsCharged: creditsUsed,
-        units: n || 1,
-      })
-    );
+  }
+
+  /**
+   * Reserve + record a delivered image call's credits (onToolFinish) and ride its paths on
+   * quest.images. Reached only after the image is stored, so a call that fails is never
+   * billed. One reservation per call feeds the per-name queue that settleToolCallCredits
+   * distributes, so two calls in a turn settle as the sum of both. Does not persist the
+   * quest - the caller saves. Exposed for unit-testing the credit branch.
+   */
+  settleImageCredits(
+    toolName: ImageToolName,
+    quest: IChatHistoryItemDocument,
+    data: ImageToolFinishData,
+    enforceCredits: boolean,
+    organization: IOrganizationDocument | null | undefined,
+    availableModels: ModelInfo[]
+  ): void {
+    const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
+    if (modelInfo) {
+      const units = data.n || 1;
+      const { requiredCredits: creditsUsed, usdCost } = estimateImageCredits(
+        modelInfo,
+        units,
+        toImageCostInput(toolName, data)
+      );
+      this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
+      this.reserveToolCredits(toolName, creditsUsed, modelInfo.id);
+      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+      recordToolUsageEvent(
+        this.deps.db,
+        this.deps.logger,
+        toolName,
+        buildToolUsageEvent({
+          quest,
+          user: this.deps.user,
+          organization,
+          provider: modelInfo.backend,
+          model: modelInfo.id,
+          costUsd: usdCost,
+          creditsCharged: creditsUsed,
+          units,
+        })
+      );
+    }
+    if (!quest.images) quest.images = [];
+    data.paths.forEach(path => {
+      if (!quest.images?.includes(path)) quest.images?.push(path);
+    });
+  }
+
+  /** The model an image call bills against, or undefined when it is not billed at all. */
+  private resolveBilledImageModel(
+    { model }: ImageToolCostInput,
+    enforceCredits: boolean,
+    availableModels: ModelInfo[]
+  ): ModelInfo | undefined {
+    if (!model || !enforceCredits || !this.deps.db.creditTransactions) return undefined;
+    return availableModels.find(m => m.id === model);
   }
 
   /**
@@ -730,20 +766,18 @@ export class ToolBuilder {
         let schemas = server.toolSchemas;
 
         // If cached schemas are missing, attempt a live fetch so the LLM still gets
-        // the tools for this request rather than silently ignoring the server.
-        if (!schemas?.length) {
+        // the tools for this request rather than silently ignoring the server. A marker
+        // younger than the TTL means the empty result is confirmed, so skip the fetch.
+        if (!schemas?.length && shouldLiveFetchTools(server)) {
           try {
             logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} - fetching live`);
             const client = await this.deps.getMcpClient(server);
             const liveTools = await client.getTools();
-            if (Array.isArray(liveTools) && liveTools.length > 0) {
+            if (Array.isArray(liveTools)) {
               schemas = liveTools;
-              // Persist so future requests don't need a live fetch
-              await this.deps.db.mcpServers.update({
-                id: server.id,
-                tools: liveTools.map((t: { name: string }) => t.name),
-                toolSchemas: liveTools,
-              });
+              // Persist so future requests don't need a live fetch. Written for an empty
+              // result too - that is the "confirmed zero tools" state the marker encodes.
+              await this.deps.db.mcpServers.update(buildMcpToolCacheUpdate(server.id, liveTools));
               logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
             }
           } catch (fetchError) {
@@ -826,13 +860,16 @@ export class ToolBuilder {
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        attachedFileIds: this.deps.attachedFileIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
+        sessionIncludeLibraryFiles: this.deps.sessionIncludeLibraryFiles,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         organizationId: organization?.id,
+        authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
@@ -851,6 +888,10 @@ export class ToolBuilder {
           // images) instead of overwriting them wholesale - see
           // applyQuestStatusChanges.
           applyQuestStatusChanges(quest, changes as Partial<IChatHistoryItemDocument>, this.deps.user.id);
+          if (changes.generationJobs?.length) await this.persistGenerationJobs(quest.id, changes.generationJobs);
+          // The client resolves a pushed key via GET /api/sessions/[id]/generated-media, which only
+          // signs keys the stored quest records - so the key must be durable before it is broadcast.
+          if (changes.images?.length) await this.persistQuestImages(quest, saveQuest);
           await this.deps.sendStatusUpdate(quest, status ?? null);
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -881,24 +922,17 @@ export class ToolBuilder {
             }
           }
 
+          // video_generation and music_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            await this.reserveImageCredits(
+            await this.gateImageCredits(
               toolName,
-              data,
+              data as ImageToolCostInput,
               enforceCredits,
               organization,
-              quest,
-              saveQuest,
               precomputed?.models ?? []
             );
-          }
-
-          if (toolName === 'music_generation') {
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
-            this.gateMusicCredits({ provider, lengthMs }, enforceCredits, organization);
           }
 
           if (toolName === 'audio_generation') {
@@ -911,19 +945,6 @@ export class ToolBuilder {
           if (toolName === 'deep_research') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
             quest.deepResearchState = data;
-            await saveQuest(quest);
-          }
-          if (toolName === 'music_generation') {
-            // Settle music billing HERE (not onToolStart) so only a delivered track is
-            // charged: the tool's failure paths return before calling onFinish, so nothing
-            // lands on failure. Audio rides quest.images; the client splits by extension.
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            this.settleMusicCredits(
-              quest,
-              data as { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
-              enforceCredits,
-              organization
-            );
             await saveQuest(quest);
           }
           if (toolName === 'audio_generation') {
@@ -946,14 +967,18 @@ export class ToolBuilder {
             );
             await saveQuest(quest);
           }
-          // image_generation / edit_image ride quest.images too (data is the path array).
+          // Settle image billing HERE, like audio: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
-            const generatedPaths = Array.isArray(data) ? data : [data];
-            if (!quest.images) quest.images = [];
-            generatedPaths.forEach((path: string) => {
-              if (!quest.images?.includes(path)) quest.images?.push(path);
-            });
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.settleImageCredits(
+              toolName,
+              quest,
+              data as ImageToolFinishData,
+              enforceCredits,
+              organization,
+              precomputed?.models ?? []
+            );
             await saveQuest(quest);
           }
         },

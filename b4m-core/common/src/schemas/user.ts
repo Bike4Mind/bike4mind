@@ -1,4 +1,7 @@
 import * as z from 'zod';
+import type { IUserDocument } from '../types/entities/UserTypes';
+import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
+import { passthroughField, passthroughShape } from './responseShape';
 
 export const VALID_USER_TAGS = [
   '',
@@ -126,3 +129,154 @@ export const publicUserProfileResponseSchema = z.object({
   isOnline: z.boolean(),
 });
 export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
+
+/**
+ * Mirrors `redactUserSecretsForSelf()`: the caller's OWN full profile, returned by
+ * the self-view endpoints (identify, the auth/session routes, users/[id] self and
+ * update). Also used when an admin views or edits another user (users/[id] and update admin
+ * branches, force-reset target, bulk-create rows), so do not tighten it as self-only.
+ * Unlike the schemas above this is a broad profile, so it is assembled from
+ * a key list that the compiler holds to `IUserDocument`: adding a field to IUser
+ * fails the build here until it is classified, either as a passthrough below or as a
+ * secret in USER_SECRET_FIELDS. A new field can therefore never leak by default. The
+ * guard sees IUser only: a path added to the Mongoose UserSchema
+ * (packages/database/src/models/auth/UserModel.ts) without an IUser entry is
+ * stripped from every self-view, so declare it on IUser too.
+ *
+ * Passthrough values are `z.unknown()`: what this boundary enforces is WHICH keys
+ * leave the server, not their types. These are long-lived Mongo documents, and a
+ * legacy value failing a strict type here would 500 the app's boot call (identify).
+ */
+type SelfViewPassthroughField = Exclude<keyof IUserDocument, (typeof USER_SECRET_FIELDS)[number]>;
+
+const SELF_VIEW_PASSTHROUGH_FIELDS = {
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  username: true,
+  name: true,
+  email: true,
+  hasUsablePassword: true,
+  groups: true,
+  isAdmin: true,
+  storageLimit: true,
+  currentStorageSize: true,
+  tags: true,
+  pendingCreditGrant: true,
+  level: true,
+  isBanned: true,
+  isModerated: true,
+  moderation: true,
+  disputePending: true,
+  isSystem: true,
+  subscribedUntil: true,
+  photoUrl: true,
+  systemFiles: true,
+  lastNotebookId: true,
+  counters: true,
+  team: true,
+  role: true,
+  phone: true,
+  preferredLanguage: true,
+  preferredContact: true,
+  tshirtSize: true,
+  geoLocation: true,
+  tokenVersion: true,
+  forcePasswordChangeRequired: true,
+  aupAcceptedVersion: true,
+  aupAcceptedAt: true,
+  ageAttestedAdult: true,
+  emailVerified: true,
+  emailVerifiedAt: true,
+  emailVerificationUsed: true,
+  pendingEmail: true,
+  pendingEmailUsed: true,
+  numReferralsAvailable: true,
+  regInvites: true,
+  organizationId: true,
+  lastActiveAt: true,
+  isOnline: true,
+  mementos: true,
+  showCreditsUsed: true,
+  platformEmailAddress: true,
+  authorizedEmailAddresses: true,
+  preferredVoice: true,
+  voiceOverrideId: true,
+  voiceSystemPromptOverride: true,
+  preferredReasoningEffort: true,
+  integrationRotation: true,
+  preferences: true,
+  lastCreditGrantAt: true,
+  acquisition: true,
+  isSynthetic: true,
+  firstValueAt: true,
+  currentCredits: true,
+  lastCreditsPurchasedAt: true,
+} as const satisfies Record<SelfViewPassthroughField, true>;
+
+/** A redacted integration object: only the named non-secret subfields survive. */
+function redactedSubdocument<K extends string>(fields: readonly K[]) {
+  return z
+    .object(passthroughShape(Object.fromEntries(fields.map(field => [field, true])) as Record<K, true>))
+    .nullable()
+    .optional();
+}
+
+// The subfield lists must stay in sync with the rebuild blocks in
+// redactUserSecretsForSelf (b4m-core/common/src/serializers/toSafeUser.ts).
+export const selfUserResponseSchema = z.object({
+  ...passthroughShape(SELF_VIEW_PASSTHROUGH_FIELDS),
+  // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
+  _id: passthroughField,
+  mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),
+  googleDrive: redactedSubdocument(['expiresAt']),
+  atlassianConnect: redactedSubdocument([
+    'siteName',
+    'resources',
+    'status',
+    'connectedAt',
+    'selectedResourceId',
+    'disconnectReason',
+  ]),
+  notionConnect: redactedSubdocument([
+    'workspaceId',
+    'workspaceName',
+    'workspaceIcon',
+    'status',
+    'writeEnabled',
+    'accessMode',
+    'allowedPages',
+    'excludedPageIds',
+    'rootPageId',
+    'connectedAt',
+    'disconnectReason',
+  ]),
+  slackSettings: redactedSubdocument([
+    'slackUserId',
+    'defaultNotebookId',
+    'autoCreateNotebook',
+    'notebookNamePrefix',
+    'defaultProjectId',
+    'agentNotebookRouting',
+    'keywordRouting',
+    'customAgentId',
+    'githubNotifications',
+  ]),
+  authProviders: z
+    .array(z.object({ id: passthroughField, strategy: passthroughField }))
+    .nullable()
+    .optional(),
+  blogIntegration: redactedSubdocument(['baseUrl', 'defaultAuthor', 'defaultTags', 'connectedAt']),
+});
+export type SelfUser = z.infer<typeof selfUserResponseSchema>;
+
+/**
+ * The self-view plus the opt-in fields of the profile endpoints (users/[id] and its
+ * update), which pass `keep: ['securityQuestions']` and, for an admin viewer,
+ * `keepAdminOnly: ['userNotes']`. The redactor still owns the viewer gate; this only
+ * stops every OTHER self-view endpoint from being able to emit these at all.
+ */
+export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
+  securityQuestions: passthroughField,
+  userNotes: passthroughField,
+});

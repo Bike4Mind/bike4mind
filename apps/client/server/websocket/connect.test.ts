@@ -21,9 +21,27 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { verifyToken: (...args: unknown[]) => mockVerifyToken(...args) },
 }));
 
+vi.mock('@bike4mind/services', () => ({
+  isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
+  isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
+    (payloadVersion ?? 0) === (userVersion ?? 0),
+}));
+
 const mockVerifyApiKey = vi.fn();
 vi.mock('@server/cli/auth', () => ({
   verifyApiKey: (...args: unknown[]) => mockVerifyApiKey(...args),
+}));
+
+const mockAssertAccountStateUsable = vi.fn();
+vi.mock('@server/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
+}));
+
+const mockAssertSessionActive = vi.fn();
+const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
+vi.mock('@server/websocket/realtimeSession', () => ({
+  gatewayCapExpiry: () => GATEWAY_CAP_EXPIRY,
+  assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -50,6 +68,42 @@ describe('websocket connect - token gates', () => {
     mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, save: vi.fn() });
     mockVerifyApiKey.mockRejectedValue(new Error('not an api key'));
     mockConnectionCreate.mockResolvedValue({});
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
+    mockAssertSessionActive.mockResolvedValue(undefined);
+  });
+
+  it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {
+    const exp = Math.floor(new Date('2030-01-01T00:30:00Z').getTime() / 1000);
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 'sid-9', exp });
+
+    await connect();
+
+    expect(mockAssertSessionActive).toHaveBeenCalledWith('sid-9');
+    expect(mockConnectionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ sid: 'sid-9', tokenVersion: 3, authExpiresAt: GATEWAY_CAP_EXPIRY })
+    );
+  });
+
+  it('refuses a CLI JWT whose session has been revoked', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 'sid-9' });
+    mockAssertSessionActive.mockRejectedValueOnce(new Error('Session expired'));
+
+    await expect(connect()).rejects.toThrow('Session expired');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('records the API key id and the gateway-cap expiry for an API-key connection', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('jwt malformed');
+    });
+    mockVerifyApiKey.mockResolvedValue({ keyId: 'key-1', userId: 'user-1', scopes: ['ai:chat'] });
+
+    await connect();
+
+    const created = mockConnectionCreate.mock.calls[0][0];
+    expect(created).toEqual(expect.objectContaining({ apiKeyId: 'key-1', authExpiresAt: GATEWAY_CAP_EXPIRY }));
+    expect(created).not.toHaveProperty('sid');
+    expect(created).not.toHaveProperty('tokenVersion');
   });
 
   it('registers the connection for a current access token', async () => {
@@ -66,6 +120,13 @@ describe('websocket connect - token gates', () => {
 
   it('refuses a relying-party OAuth access token on the realtime socket', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', kind: 'oauth' });
+
+    await expect(connect()).rejects.toThrow('Invalid authentication token');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an mfaPending token on the realtime socket', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', mfaPending: true });
 
     await expect(connect()).rejects.toThrow('Invalid authentication token');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
@@ -93,5 +154,14 @@ describe('websocket connect - token gates', () => {
 
     await expect(connect()).resolves.toEqual({ statusCode: 200 });
     expect(mockConnectionCreate).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['ai:chat'] }));
+  });
+
+  it('refuses a blocked account before registering the connection', async () => {
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('blocked');
+    });
+
+    await expect(connect()).rejects.toThrow('blocked');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
   });
 });

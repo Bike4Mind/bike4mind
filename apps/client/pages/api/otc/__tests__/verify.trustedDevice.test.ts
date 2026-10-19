@@ -10,9 +10,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: () => 'full-access' },
 }));
@@ -32,6 +32,10 @@ vi.mock('@server/auth/trustedDevice', () => ({
 
 // Settings are read through getSettingsValue; drive both flags from one map.
 const settingsValues: Record<string, unknown> = {};
+// Pulled in transitively by signupDomainGrant; the partner mock never matches a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(() => Promise.resolve({})),
   getSettingsValue: (key: string) => settingsValues[key],
@@ -51,14 +55,24 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
+    tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
+  },
   adminSettingsRepository: { findBySettingName: vi.fn() },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
-  pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  pendingOtcTokenRepository: {
+    validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
+    consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
+  },
   authSessionRepository: {},
+  oauthClientRepository: {},
+  passkeyCredentialRepository: { countByUser: vi.fn(() => Promise.resolve(0)) },
 }));
 
 const mockUserHasMFA = vi.fn();
@@ -87,7 +101,6 @@ function makeReqRes(cookie?: string) {
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   mockJwtVerify.mockReturnValue({
     email: EMAIL,
-    otcHash: 'hash',
     attempts: 0,
     exp: Math.floor(Date.now() / 1000) + 600,
     jti: 'jti-1',
@@ -106,7 +119,7 @@ describe('/api/otc/verify - trusted device', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(settingsValues)) delete settingsValues[key];
-    mockValidateNonce.mockResolvedValue(true);
+    mockValidateNonce.mockResolvedValue('hash');
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);
@@ -120,6 +133,11 @@ describe('/api/otc/verify - trusted device', () => {
     const body = res._getJSONData();
     expect(body.mfaRequired).toBe(true);
     expect(body.refreshToken).toBeUndefined();
+    expect(mockJwtSign).toHaveBeenCalledWith(
+      expect.objectContaining({ mfaPending: true, signInStrategy: 'otc', signInVia: 'otc' }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('skips the MFA challenge and mints a full session for a live trusted device', async () => {
@@ -182,7 +200,7 @@ describe('/api/otc/verify - trusted device', () => {
   });
 
   it('still requires a valid emailed code - a trusted device alone is not a credential', async () => {
-    mockValidateNonce.mockResolvedValue(false); // replayed / bad pending token
+    mockValidateNonce.mockResolvedValue(null); // replayed / bad pending token
     mockConsumeTrustedDevice.mockResolvedValue(LIVE_TRUST);
     const { req, res } = makeReqRes('b4m_td=abc.def');
 

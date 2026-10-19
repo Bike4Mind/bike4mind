@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getSettingsValue, getSettingByName, getSettingsByNames } from './settings';
+import { getSettingsValue, getSettingByName, getSettingsByNames, loadTeamPlanSettings } from './settings';
 import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
@@ -148,5 +148,36 @@ describe('getSettingsByNames - stored falsy values survive the cached path', () 
     expect(values.valuelessRowRegression).toBeNull();
     expect(values.absentRegression).toBeNull();
     expect(db.adminSettings.findAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadTeamPlanSettings', () => {
+  const fakeDb = (rows: Array<{ settingName: string; settingValue: unknown }>) =>
+    ({
+      adminSettings: {
+        findBySettingNames: vi.fn(async (names: string[]) => rows.filter(r => names.includes(r.settingName))),
+        findAll: vi.fn(async () => rows),
+      },
+    }) as unknown as Parameters<typeof loadTeamPlanSettings>[0];
+
+  it('returns the historical constants when no rows are stored', async () => {
+    await expect(loadTeamPlanSettings(fakeDb([]), { skipCache: true })).resolves.toEqual({
+      minSeats: 4,
+      maxSeats: 100,
+      creditsPerSeat: 50000,
+    });
+  });
+
+  it('reads stored rows and clamps a floor above the ceiling', async () => {
+    const db = fakeDb([
+      { settingName: 'teamPlanMinSeats', settingValue: '30' },
+      { settingName: 'teamPlanMaxSeats', settingValue: 25 },
+      { settingName: 'teamPlanCreditsPerSeat', settingValue: '80000' },
+    ]);
+    await expect(loadTeamPlanSettings(db, { skipCache: true })).resolves.toEqual({
+      minSeats: 25,
+      maxSeats: 25,
+      creditsPerSeat: 80000,
+    });
   });
 });

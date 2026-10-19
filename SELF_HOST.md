@@ -61,10 +61,16 @@ OPENAI_API_KEY=         # GPT
 GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
 DEEPSEEK_API_KEY=       # DeepSeek
+TYPESAFE_API_KEY=       # TypeSafe Jev (Decisions API models)
+SYSTEMONE_BASE_URL=     # optional: Jev-compatible server such as self-hosted Laya (default https://api.typesafe.ai); a malformed value logs an error and disables only the Jev models
 MOONSHOT_API_KEY=       # Kimi
 BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
+
+Hosted (non-self-host) deployments set the TypeSafe key through the `typesafeApiKey` admin setting instead; `TYPESAFE_API_KEY` is read only when `B4M_SELF_HOST=true`.
+
+**Organization feedback summaries** - set **Organization Feedback Summary Model** (`OrgFeedbackSummaryModel`) in Admin Settings to an available model for your configured provider. The default remains Claude 4.5 Haiku via Bedrock. To run without Bedrock, explicitly select another provider's model, for example Claude 4.5 Haiku with `ANTHROPIC_API_KEY` available to the worker. The job uses the system provider credentials, not the requesting user's key. An unavailable selected model fails the job instead of silently choosing another model. Completed-job replay delivers completion again without generating or uploading another summary. Generation is capped at 2,000 output tokens; provider retries can still add cost.
 
 **No API keys? Run local models instead.** You can skip every provider key and run open-weight models (Qwen, Llama, etc.) locally via Ollama, with nothing leaving your machine. See [Local models with Ollama](#local-models-with-ollama-no-api-keys) below.
 
@@ -74,7 +80,7 @@ BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
 ```
 
-This pulls the app image and starts it alongside MongoDB, MinIO, ElasticMQ, and Mailpit. When it's healthy, open:
+This pulls the app image, builds MinIO and its `mc` client from pinned upstream source, and starts the app alongside MongoDB, MinIO, ElasticMQ, and Mailpit. The first object-storage build needs network access to public GitHub source, Go modules, Docker Hub base images, and Debian packages; no MinIO registry credentials are required. Allow several minutes for the first build. Later starts reuse the local images. When it's healthy, open:
 
 ```
 http://localhost:3000
@@ -96,7 +102,7 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, and `worker` - before starting; the pure-image backing services (Mongo, MinIO, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, `worker`, MinIO, and its `mc` client - before starting; the pure-image backing services (Mongo, ElasticMQ, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
 > **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
 
@@ -107,6 +113,21 @@ docker compose -f compose.selfhost.yaml ps                      # services Up / 
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
 docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
 ```
+
+### Object-storage builds, updates, and rollback
+
+MinIO and `mc` use the unmodified upstream releases and verified source commits listed in [selfhost/minio/README.md](selfhost/minio/README.md). Their Go toolchains and Debian bases are pinned by digest for both amd64 and arm64. Debian package downloads are not frozen, so these are repeatable source builds, not a promise of byte-identical images.
+
+To build just object storage before the first start:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio createbuckets
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
+```
+
+For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+
+To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
 ### Frontend dev mode (host `next dev`)
 
@@ -203,7 +224,7 @@ The reply fields (`response`/`responses` synchronously, `reply`/`replies` when p
 - Entries are in emission order, which matters for a multi-step turn.
 - Additive only - the prose reply is byte-for-byte what it was before, so nothing that reads `response` today needs to change.
 
-If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was *offered* to the model, which is not the same thing.
+If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was _offered_ to the model, which is not the same thing.
 
 ## Streaming completions API (`/api/ai/v1/completions`)
 
@@ -221,11 +242,11 @@ Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_.
 
 **Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). The stream opens and closes in the order below, but the middle is a stream: `content` and `tool_use` frames interleave one per chunk (a tool-calling turn emits `tool_use` frames among the `content` ones), and keep-alive comments keep recurring (about every 10s) throughout:
 
-1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+1. `: keep-alive` - an SSE comment sent once the provider call begins and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
 2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
 3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
 4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
-5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on a failure after the stream has started; the stream then ends. A failure before the stream starts (invalid body, auth, rate limit, billing) is a JSON error response with a real HTTP status instead, so check the status before reading the stream.
 6. `data: [DONE]` - terminal sentinel on success.
 
 **Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):
@@ -285,13 +306,13 @@ sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
 
 **On Docker Desktop, match the row against the memory ALLOCATED TO DOCKER (Settings > Resources), not host RAM.** The VM defaults to a fraction of host RAM (commonly 8 GB) regardless of how much the host has, so a host with 24 GB does not mean the container gets 24 GB. Picking the "24 GB" row without raising the Docker VM allocation first makes chat silently fall back to the embedding model with a "Fallback Model Used" badge (the chat model failed to load, so the picker served the only other one available). Not an issue on Linux, where the daemon runs directly on the host.
 
-| System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
-|------------|-----------------------------|---------:|--------------|
-| **32 GB or more** | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b` | ~25 GB | required |
-| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b` | ~18 GB | required |
-| **16 GB** | `gpt-oss:20b qwen3-embedding:0.6b` | ~15 GB | required |
-| **8 GB** | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` | ~5 GB | not used |
-| **4 GB** | `qwen3.5:0.8b qwen3-embedding:0.6b` | ~2 GB | not used |
+| System RAM                   | Set `OLLAMA_PULL_MODELS` to                               | Download | MoE override |
+| ---------------------------- | --------------------------------------------------------- | -------: | ------------ |
+| **32 GB or more**            | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b`             |   ~25 GB | required     |
+| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b`           |   ~18 GB | required     |
+| **16 GB**                    | `gpt-oss:20b qwen3-embedding:0.6b`                        |   ~15 GB | required     |
+| **8 GB**                     | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` |    ~5 GB | not used     |
+| **4 GB**                     | `qwen3.5:0.8b qwen3-embedding:0.6b`                       |    ~2 GB | not used     |
 
 The first three rows are one sparse MoE model that handles chat, tools, artifacts, vision, and RAG on its own. The bottom two rows are small dense models: the 8 GB pair needs switching per task because a 2-4B model cannot finish an HTML artifact, and 4 GB is chat only. [Choosing a model](#choosing-a-model) has the full menu and the measured numbers behind these picks.
 
@@ -315,9 +336,9 @@ The first three rows are one sparse MoE model that handles chat, tools, artifact
 
    Adjust the override files for your setup:
 
-   | Your setup | Change |
-   |------------|--------|
-   | No NVIDIA GPU | drop `-f compose.ollama-gpu.yaml` |
+   | Your setup                           | Change                            |
+   | ------------------------------------ | --------------------------------- |
+   | No NVIDIA GPU                        | drop `-f compose.ollama-gpu.yaml` |
    | A dense model (the 8 GB or 4 GB row) | drop `-f compose.ollama-moe.yaml` |
 
    The GPU override needs the [NVIDIA Container Toolkit](#gpu-acceleration-nvidia) installed first. The MoE override is what makes the large models fit - see [MoE expert offload](#moe-expert-offload). Pass the same `-f` set every time you bring the stack up: compose only applies overrides you name, so dropping one on a later `up` silently reconfigures the `ollama` service.
@@ -330,17 +351,17 @@ The rows in [Start here](#start-here-check-your-ram) are the recommended pick pe
 
 Two things about the prefill column, because a single number for it is misleading. It rises with prompt length, so it is quoted here at the ~9K-token prompt an agent turn actually carries; see [Prefill and the prefix cache](#prefill-and-the-prefix-cache) for the curve. And it is bounded by the batch size Ollama pins on its llama.cpp runner, which is not adjustable through Ollama - the same section covers what that costs.
 
-| Model tag | Download | VRAM | RAM | gen | prefill | Notes |
-|-----------|---------:|-----:|----:|----:|--------:|-------|
-| **MoE - one model for everything** ||||||
-| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | - | - | 21B total / 3.6B active |
-| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 22/s | 53/s | 26B/4B; **default**; multimodal |
-| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 28/s | 39/s | 35B/3B; strongest coder |
-| **Small dense - needs a separate coder for artifacts** ||||||
-| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | - | - | Tiny; multimodal |
-| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 85/s | 3240/s | Fastest; general/vision/tools |
-| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
-| `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
+| Model tag                                              | Download |    VRAM |    RAM |  gen | prefill | Notes                           |
+| ------------------------------------------------------ | -------: | ------: | -----: | ---: | ------: | ------------------------------- |
+| **MoE - one model for everything**                     |          |         |        |      |         |
+| `gpt-oss:20b`                                          |   ~14 GB | ~3.3 GB | ~16 GB |    - |       - | 21B total / 3.6B active         |
+| `gemma4:26b-a4b-it-q4_K_M`                             |   ~17 GB | ~3.4 GB | ~24 GB | 22/s |    53/s | 26B/4B; **default**; multimodal |
+| `qwen3.6:35b-a3b-q4_K_M`                               |   ~24 GB | ~2.9 GB | ~32 GB | 28/s |    39/s | 35B/3B; strongest coder         |
+| **Small dense - needs a separate coder for artifacts** |          |         |        |      |         |
+| `qwen3.5:0.8b`                                         |  ~1.0 GB |   ~2 GB |  ~4 GB |    - |       - | Tiny; multimodal                |
+| `qwen3.5:2b-q4_K_M`                                    |  ~1.9 GB | ~3.0 GB |  ~8 GB | 85/s |  3240/s | Fastest; general/vision/tools   |
+| `qwen3.5:4b`                                           |  ~3.4 GB |   ~6 GB |  ~8 GB |    - |       - | Spills to CPU under 6 GB VRAM   |
+| `qwen2.5-coder:3b`                                     |  ~1.9 GB | ~3.1 GB |  ~8 GB | 73/s |  2309/s | Coding-tuned; artifacts         |
 
 The MoE rows and `qwen3.5:2b-q4_K_M` were re-measured on the reference box. `qwen2.5-coder:3b` carries an earlier figure. `gpt-oss:20b` is blank because it could not be re-measured, not because it is slow.
 
@@ -348,10 +369,10 @@ Note the shape of those numbers: a 26B MoE generates at about a quarter the spee
 
 Prefill also decides which MoE to pick, and it does not rank them the way generation does:
 
-| Prompt size | ~900 tok | ~3.5K tok | ~9K tok | gen |
-|-------------|---------:|----------:|--------:|----:|
-| `gemma4:26b-a4b` | 36/s | 44/s | 53/s | 22/s |
-| `qwen3.6:35b-a3b` | 30/s | 35/s | 39/s | 28/s |
+| Prompt size       | ~900 tok | ~3.5K tok | ~9K tok |  gen |
+| ----------------- | -------: | --------: | ------: | ---: |
+| `gemma4:26b-a4b`  |     36/s |      44/s |    53/s | 22/s |
+| `qwen3.6:35b-a3b` |     30/s |      35/s |    39/s | 28/s |
 
 On a ~10K-token tool or RAG turn that is about 190s to first token for the 26B against 256s for the 35B. The 26B generates slower and still finishes the turn about a minute sooner, because prefill dominates a turn of that shape. Choosing a local model for tool or RAG work by generation speed alone can get you the slower one.
 
@@ -373,10 +394,10 @@ They do iterate, but they need precise direction. Reporting a symptom ("the char
 
 Ollama will run these models without the override - it spills to CPU on its own - but slower and far larger. Measured on the reference box with the same prompt and context:
 
-| | Placement | Resident | gen | prefill |
-|-|-----------|---------:|----:|--------:|
-| Override off | 0/31 layers on GPU, 96%/4% CPU/GPU | 17 GB | 14/s | 21-37/s |
-| Override on | 31/31 layers on GPU, 100% GPU | 2.5 GB | 22/s | 29-51/s |
+|              | Placement                          | Resident |  gen | prefill |
+| ------------ | ---------------------------------- | -------: | ---: | ------: |
+| Override off | 0/31 layers on GPU, 96%/4% CPU/GPU |    17 GB | 14/s | 21-37/s |
+| Override on  | 31/31 layers on GPU, 100% GPU      |   2.5 GB | 22/s | 29-51/s |
 
 Generation is the clear win at +57%. The prefill ranges overlap, so treat prefill as unchanged rather than improved. The reason to keep the override on is the footprint: 17 GB resident against 2.5 GB is what decides whether the model fits on the box at all. Without it the model runs, it just runs as a CPU model with a GPU attached.
 
@@ -394,12 +415,12 @@ None of this changes the recommended setup. It is why the prefill figures here a
 
 **Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). The cap exists because KV cache is not free: a model advertising a 262K window would try to allocate far more memory than a typical box has, and nothing else clamps it. Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
 
-| VRAM | Model class | Suggested | Usable input |
-|------|-------------|----------:|-------------:|
-| 4 GB | MoE 20-35B | 32768 | ~23.5K |
-| 4 GB | dense 2-4B | 16384 | ~7.2K |
-| 8 GB | MoE 20-35B | 65536 | ~56K |
-| 12 GB+ | MoE 20-35B | 131072 | ~122K |
+| VRAM   | Model class | Suggested | Usable input |
+| ------ | ----------- | --------: | -----------: |
+| 4 GB   | MoE 20-35B  |     32768 |       ~23.5K |
+| 4 GB   | dense 2-4B  |     16384 |        ~7.2K |
+| 8 GB   | MoE 20-35B  |     65536 |         ~56K |
+| 12 GB+ | MoE 20-35B  |    131072 |        ~122K |
 
 KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Lower the cap if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
 
@@ -466,10 +487,10 @@ Without any Firecrawl config, `web_fetch` falls back to a **keyless direct fetch
 
 There are two independent paths to an image, and they support different things:
 
-| Path | Where it runs | Models |
-|------|---------------|--------|
-| The image tools in chat (`image_generation`, `edit_image`) | inline in `chatcompletion` | provider models, plus local SD.Next (`local-image/<checkpoint>`) |
-| The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only |
+| Path                                                                                 | Where it runs                  | Models                                                           |
+| ------------------------------------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------------- |
+| The image tools in chat (`image_generation`, `edit_image`)                           | inline in `chatcompletion`     | provider models, plus local SD.Next (`local-image/<checkpoint>`) |
+| The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
 **Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
@@ -508,10 +529,10 @@ Open the image model settings and pick your checkpoint. No keys, no admin settin
 
 Pick by the hardware you have. "Min GPU VRAM" is what it takes to run comfortably on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
 
-| Checkpoint | Download | Min GPU VRAM | CPU-only RAM | License |
-|------------|---------:|-------------:|-------------:|---------|
-| SD 1.5 (default) | ~4.0 GB | ~4 GB | ~8 GB | CreativeML OpenRAIL-M |
-| SDXL base 1.0 | ~6.9 GB | ~10-12 GB | ~16 GB | CreativeML Open RAIL++-M |
+| Checkpoint       | Download | Min GPU VRAM | CPU-only RAM | License                  |
+| ---------------- | -------: | -----------: | -----------: | ------------------------ |
+| SD 1.5 (default) |  ~4.0 GB |        ~4 GB |        ~8 GB | CreativeML OpenRAIL-M    |
+| SDXL base 1.0    |  ~6.9 GB |    ~10-12 GB |       ~16 GB | CreativeML Open RAIL++-M |
 
 Set one or more (space-separated) `.safetensors` URLs from a public host in `IMAGE_GEN_PULL_MODELS`. Re-running `up` downloads any new ones and skips already-present files. Any A1111-compatible checkpoint URL works. No GPU? Start with SD 1.5.
 
@@ -601,9 +622,9 @@ Known limitations:
 
 This is a separate corpus from your uploaded files: the **Help** panel and the Help AI chat search the product documentation shipped in `docs-site/docs`, not your Data Lakes. The two halves are built differently, and only one of them needs a key:
 
-| Half | Built by | Needs a key |
-|---|---|---|
-| The article index and the bundled markdown | `prebuild`, on every `next build` | no |
+| Half                                           | Built by                                          | Needs a key        |
+| ---------------------------------------------- | ------------------------------------------------- | ------------------ |
+| The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
 | The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
@@ -631,7 +652,7 @@ This is also the one place OpenAI specifically is required: help vectors are alw
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
 
-- **consumes queues** - research tasks, image generation and image edit, and the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`);
+- **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
 - **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
 
@@ -663,7 +684,22 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+
+### Amazon Bedrock (optional)
+
+Bedrock models are off on self-host by default: the stack's `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are the MinIO credentials, so no Bedrock client ever signs with them. To use Bedrock, set a dedicated pair in `.env.selfhost`:
+
+```bash
+BEDROCK_AWS_ACCESS_KEY_ID=...
+BEDROCK_AWS_SECRET_ACCESS_KEY=...
+# Required for temporary (SSO / assumed-role) credentials.
+BEDROCK_AWS_SESSION_TOKEN=...
+```
+
+With SSO, `aws configure export-credentials --format env` prints the three values; copy them under the `BEDROCK_` prefix. Temporary credentials expire after a few hours, and an expired set shows up as a Bedrock auth error in discovery runs and in chat - re-export and re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` so the services pick them up (a plain `restart` keeps the old values). The account needs Bedrock model access in us-east-1 and us-east-2, the regions chat requests are sent to. Discovery lists models from `AWS_REGION` (default `us-east-1`), the same variable the stack uses for MinIO and SQS, so keep it at a region where the account has Bedrock access. A least-privilege policy needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` for chat, embeddings and usage insights. Discovery also needs `bedrock:ListFoundationModels` and `bedrock:GetFoundationModelAvailability`. Grant them on `foundation-model/*` and `inference-profile/*`, because some models are called through cross-region inference profiles.
+
+Once set, Bedrock models appear in the picker, discovery lists and promotes them, and chat to them works. Without them, each discovery run logs one `bedrock skipped` info line. The out-of-box default chat model stays the direct-Anthropic one. If an admin picks a Bedrock model as the default in Admin > Settings, it is used once the pair is set, and chat to it fails if the pair expires. Every Bedrock client (chat, discovery, embeddings, usage insights) signs with this pair and refuses to sign without it. AWS Transcribe (speech-to-text) stays hosted-only: it reads media from S3, which self-host keeps in MinIO.
 
 ### Abandoned agent execution recovery
 
@@ -676,6 +712,40 @@ The age comparison uses elapsed time, not a local-time calendar schedule. Restar
 The worker runs the shared quest timeout sweep at startup and every five minutes, the same cadence as the hosted cron. A quest still `running` with no update for more than two minutes is settled as `done`: any reply, image, or tool output it produced is kept, and a quest with nothing to show gets a timeout error instead. A live run refreshes its quest every ten seconds, so only a run that has stopped ages past the threshold. The sweep writes the database only and sends no client notification; an open chat picks up the settled quest on its next fetch. Quests last updated more than seven days ago are left alone, and one run settles at most 500, so a backlog drains over several ticks. After an upgrade, the first runs also settle quests left `running` during the previous seven days.
 
 The age comparison uses elapsed time, not a calendar schedule. Restart runs one sweep immediately; missed slots coalesce into that scan. Startup and interval runs share the worker's in-flight guard, and shutdown drains a running sweep within the worker grace period. Each quest is written only if it is still unfinished at that moment, so a run that completes, or a client's read-time recovery that settles the quest first, is never overwritten. Keep the single worker replica. Self-host logs this sweep locally and sends no CloudWatch metrics; the hosted cron keeps its metrics.
+
+## GitHub repository data lakes
+
+A data lake can sync from a GitHub repository through a GitHub App you create and own. The integration is off until you configure it: with the App settings blank, connecting a repository fails with "The data-lake GitHub App is not configured on this deployment", and the webhook answers `503`.
+
+**GitHub must be able to reach your instance.** Pushes and uninstalls arrive as webhooks on `<APP_URL>/api/webhooks/github/lake`. A tailnet-only install ([Path A](#path-a-tailscale-tailnet-recommended-for-friends)) is not reachable from GitHub, so repositories connect and sync once but never re-sync on push, and an uninstall is never seen. Use [Path B](#path-b-public-domain-with-the-bundled-caddy-proxy), whose Caddy proxy already forwards that path, or another public HTTPS front.
+
+Create the App under **Settings -> Developer settings -> GitHub Apps** (personal or organization):
+
+| GitHub App field                                       | Value                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------ |
+| Callback URL                                           | `<APP_URL>/data-lakes/github/callback` (list it first) |
+| Request user authorization (OAuth) during installation | on (this greys out Setup URL; leave it empty)          |
+| Redirect on update                                     | on                                                     |
+| Webhook URL                                            | `<APP_URL>/api/webhooks/github/lake`                   |
+| Webhook secret                                         | a long random string (`openssl rand -hex 32`)          |
+| Repository permissions                                 | Contents: read-only, Metadata: read-only               |
+| Subscribe to events                                    | Push (installation events are always delivered)        |
+| Where can this App be installed                        | your choice; users pick repositories when installing   |
+
+`APP_URL` must be the exact public origin, the same value the CSRF allow-list uses. Then generate a client secret and a private key on the App page and fill these in `.env.selfhost`:
+
+```bash
+GITHUB_LAKE_APP_ID=123456                 # "App ID" on the App page
+GITHUB_LAKE_APP_SLUG=my-b4m-lakes         # the github.com/apps/<slug> part
+GITHUB_LAKE_APP_CLIENT_ID=Iv23...
+GITHUB_LAKE_APP_CLIENT_SECRET=...
+GITHUB_LAKE_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_LAKE_APP_WEBHOOK_SECRET=...        # the same string as the App's webhook secret
+```
+
+The private key can be written on one line with literal `\n` separators, as above. All five App credentials are needed together: if any is missing, connecting stays refused. Re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` after changing them so `app` and `worker` pick them up.
+
+This App is separate from the GitHub OAuth app behind `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`; don't reuse one for the other. The `worker` consumes the ingest and revoke queues, so nothing else needs to run. Default-branch pushes trigger a re-sync, and uninstalling the App or removing a repository from it disconnects the lake.
 
 ## Queue storage and container replacement
 
@@ -716,9 +786,11 @@ The drill derives its broker image, configuration mount, and storage mounts from
   docker volume rm "$MONGO_VOLUME"
   docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
   ```
+
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **Saving settings / generating an API key / uploading returns `403`, but reading works** - `APP_URL` does not match the origin in your browser's address bar. It is the CSRF origin allow-list and it fails closed, so only state-changing requests break; `GET` is exempt, which is why the app looks fine until you try to save something. Unset, the response is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected ...)`, which names the value it is comparing against. `APP_URL` was added to the template after the initial release, so an **upgraded install may be missing it entirely** - an existing `.env.selfhost` does not gain it. Add `APP_URL=<the origin you browse>` (scheme + host + optional port, no trailing slash) and recreate the `app` container. Reaching the stack over Tailscale or the Caddy proxy? It must be the tailnet or public origin, not `http://localhost:3000` - see "Share your instance with friends".
+- **After an upgrade, everyone gets `429 Rate limit exceeded` on sign-in** - you run your own reverse proxy and `TRUSTED_PROXY_HOPS` is unset, so all users share the proxy's rate-limit bucket. Set it in `.env.selfhost` and recreate the `app` container - see "Client IP and trusted proxies".
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
@@ -756,7 +828,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
-The FabFile safety-net filter in `apps/client/server/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 
@@ -767,6 +839,27 @@ When you put the app behind a reverse proxy, forward the original `Host` header 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
 
 Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
+
+### Browser downloads from a private object store
+
+QuestMaster ZIP exports, generic file presign responses and accessible-file download responses opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. Accessible-file responses include both the SPA file route and the public file API; external API clients need the same reachable download origin. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+
+The app adds the configured HTTP or HTTPS origin to its browser connection, image and media policy. Paths and query parameters are normalized to the origin; invalid values are omitted with a diagnostic naming `S3_PRESIGN_ENDPOINT`. Other policy directives and the default policy when unset remain unchanged. The object store must still provide appropriate CORS headers for cross-origin browser requests.
+
+For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
+
+```bash
+AWS_ENDPOINT_URL_S3=http://minio:9000
+S3_PRESIGN_ENDPOINT=http://localhost:9000
+```
+
+If `MINIO_HOST_PORT` is changed, use that host port in `S3_PRESIGN_ENDPOINT`. The signing origin is the API port, not MinIO's console port 9001.
+
+For the Kubernetes evaluation chart, follow the [chart installation guide](selfhost/kubernetes/README.md). Its default `config.S3_PRESIGN_ENDPOINT` and MinIO API port-forward match `http://localhost:19000`; override the config value for the browser's actual object-store origin.
+
+For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
+
+This override covers explicit browser-audience calls to `S3Storage.getSignedUrl`: QuestMaster ZIP completion paths, generic file presigning, SPA/public single-file reads (`GET /api/files/{id}` and `GET /api/v1/files/{id}`), file list/search/bulk, session/quest and data-lake article responses (including public `GET /api/v1/quests/{id}/files` download URLs), and SPA file creation, URL-import, edit and copied-image responses. When the override is set, these file read, creation and edit responses use request-local signing without reading or updating the shared private server URL cache. When unset or blank, normal shared URL caching remains enabled. Creation and edit responses preserve URL-less uploads and moderation withholding; upload PUT URLs retain their existing endpoint and proxy behavior. Public v1 mutation responses remain metadata-only. Default callers, including server-side file and image fetchers, retain the private endpoint. `GET /api/files/presigned-url` defaults to the browser audience; a caller may pass `audience=server` for a private-endpoint URL. The internal data-lake `getArticle` tool uses this server audience. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
 
 ## Share your instance with friends (secure internet exposure)
 
@@ -922,7 +1015,16 @@ Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (th
 docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 ```
 
-**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, uncomment the `/api/ai/v1/*` route in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://chat.example.com` in `.env.selfhost`.
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
+
+```caddyfile
+@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+handle @completions {
+	reverse_proxy chatcompletion:8080
+}
+```
+
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -934,15 +1036,34 @@ docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 
 ### What the bundled Caddy proxy does and does not do
 
-It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable.
+It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable. It also sets `TRUSTED_PROXY_HOPS=1` on the app so per-IP rate limits key on the visitor's address (which Caddy writes into `X-Forwarded-For`) rather than on Caddy's own container IP.
 
 It **does not**: enable Mongo authentication, change your MinIO credentials, configure SMTP, add application-level access control beyond the app's own invite-only sign-up, or replace a firewall. Do those yourself per the checklist. If you swap in your own reverse proxy instead of the bundled one, you must forward the original `Host` header and set `X-Forwarded-Proto=https`, and proxy both the app and the ws gateway (upgrading the WebSocket), or realtime and published artifacts will break.
+
+### Client IP and trusted proxies (`TRUSTED_PROXY_HOPS`)
+
+Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure log behind the IP blocklist, and the auth, session, API-key and integration audit records all key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
+
+Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
+
+| Setup | `TRUSTED_PROXY_HOPS` |
+| --- | --- |
+| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
+| Tailscale sidecar (Path A) | unset - tailnet members then share the sidecar's rate-limit bucket, which suits a small private tailnet; whether `tailscale serve` writes `X-Forwarded-For` is not verified, so do not raise it without checking |
+| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
+| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
+| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+
+With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number fails every request loudly rather than guessing.
+
+**Upgrading an existing install:** earlier releases read `X-Real-IP` / `X-Forwarded-For` on self-host without being told to, so an install behind its own nginx, Traefik or load balancer got per-client IPs with no setting. After upgrading it gets the proxy's address instead, and every user shares one bucket - the 16th distinct person to request a sign-in code within 15 minutes gets `429 Rate limit exceeded`. If you run your own reverse proxy, add `TRUSTED_PROXY_HOPS=1` (or your real hop count) to `.env.selfhost` before upgrading and recreate the `app` container. Bundled-Caddy installs need nothing; `compose.caddy.yaml` sets it.
 
 ## What you get (and don't)
 
 Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts (including publishing and sharing artifact bundles - uploads proxy through the app, so MinIO stays internal). It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
 
-- **Image moderation on upload** - the hosted upload path runs AWS Rekognition; self-host skips it (no AWS), so uploaded images are not content-scanned.
+- **Image moderation on upload** - the hosted upload path checks images with AWS Rekognition; self-host skips that check (no AWS), so uploaded images are not content-scanned. When `ImageModerationEnabled` is on (the default) each upload still gets its type check as it lands: the bytes are sniffed, not the declared type trusted. A file is served once that resolves, within seconds.
 - **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary). Overlay mount points are empty in this repo and `pnpm install` behaves accordingly; the mechanism is documented under [premium overlays and the tracked lockfile](./CONTRIBUTING.md#premium-overlays-and-the-tracked-lockfile).
 - **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
 
@@ -985,6 +1106,14 @@ An explicit HTTP authentication or payload rejection restores a paused resume fo
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
+### Daily credit-lot expiry
+
+The worker reconciles credit-lot consumption and expires unassigned stale credits at 04:00 UTC, using the same sweep as the hosted cron. The shared sweep groups holders in 500-holder pages and isolates failures per holder. It requires MongoDB transactions; the supplied Compose Mongo runs as a replica set. Standalone Mongo fails closed without a nontransactional fallback. No model provider, CloudWatch or hosted database reconnect is invoked by the local task.
+
+Each holder is read again inside its transaction, including retries. Balance deductions, expiry ledger entries and lot assignments commit together; a failed write rolls them all back. Concurrent attempts on the same holder retry from its fresh balance. An optional settledAt stamp distinguishes stale-run retirement from provisional live FIFO assignments. Refunds can lower unexpired assignments; once stamped, replay preserves the retired lot and its original stamp. Historical unmarked lots are recalculated from the current balance on their first stale run; no settlement is inferred from consumedAssigned and no backfill runs. Other successfully processed holders retain their committed results. After all holders have been visited, the scheduler catches a partial-failure error and logs the task as failed; no retry occurs until the next 04:00 UTC slot. The hosted handler retains its existing 200 response and per-holder counts. The sweep does not delete holders, lots or transactions.
+
+There is no startup run. Starting after 04:00 waits until the next day; an exact-boundary start runs that slot. Delayed ticks coalesce missed days, and an active local run does not overlap. Shutdown waits within the worker's existing grace period; an interrupted holder transaction cannot commit partially. This schedule has no cross-worker scheduler lock, although per-holder transactions protect its accounting writes. A restart after today's boundary does not retry the missed daily slot.
+
 ### Daily lake health trends
 
 The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
@@ -1021,3 +1150,184 @@ Verification exercises the actual calculator and disposable Mongo, including use
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
 ```
+
+## Notebook submission errors
+
+The notebook curation endpoint requires the configured local event queue to accept each start event. A missing queue URL or rejected enqueue reaches the API's existing error response instead of returning 202. The requirement is per call: the background session groomer publishes the same event with the default best-effort delivery, as do all other background enrichment events. The hosted publisher contract is unchanged.
+
+A 202 response establishes broker acceptance only; export completion is recorded later by the curation consumer. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+
+Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
+
+## Permanent data-lake cleanup
+
+The local worker consumes `dataLakeCleanupQueue` one message at a time. Configure `DATA_LAKE_CLEANUP_QUEUE` and its `DATA_LAKE_CLEANUP_QUEUE_DLQ` from `.env.selfhost.example`, then recreate the broker with the updated `elasticmq.conf`. Keep the broker's retained volume. The source queue redrives to its dedicated dead-letter queue after three deliveries; this consumer does not use the worker's default exhausted-message deletion policy. Other queues retain their existing policies.
+
+Run exactly one local worker. This path does not implement a distributed execution lease. A cleanup can take longer than the hosted twelve-minute visibility window, so the consumer renews that window every minute until dispatch settles. A renewal failure prevents acknowledgement, even if the cleanup subsequently completes; replay is idempotent. Shutdown waits only for the existing bounded grace period; it does not guarantee a full cleanup drain. If the process exits during cleanup, recovery relies on same-generation replay after visibility expires. Before maintenance or replay, verify the previous worker process has stopped, and do not start a second worker against the same queue.
+
+Cleanup atomically marks its exact purge generation as started before destructive effects. A failed enqueue may release an unstarted claim to the deleted list, but retains its identity so a delayed acknowledgement cannot bypass a newer request. Started cleanup stays `purging` after failure and cannot be restored. Restores performed by this version rotate the generation so delayed keyed and unkeyed legacy messages cannot destroy a subsequently deleted lake; restores completed before this version are not retroactively fenced. Legacy messages are admitted only while the lake has no keyed generation. Stale generations are refused without destructive effects; an already-started matching generation can resume after its own cleanup removed the manager grants, including legacy unkeyed work only while the stored generation remains unkeyed. Missing claims on keyed generations and different claims still require authorization.
+
+Stored objects are deleted before their file rows. Chunks are deleted in batches of at most 1,000, retaining the file row as a retry locator. The final transaction re-reads a bounded chunk set and commits it with the file row; an overflow returns to batch cleanup. This covers chunks committed before that transaction, not arbitrary ingestion after cleanup commits. Earlier batches can remain deleted after a failure; replay removes the remainder. Mongo must support transactions; the supplied Compose Mongo runs as a replica set. Optional connector, memory and retrieval-index cleanup retain their existing dependencies and failure behavior.
+
+### Explicit dead-letter replay
+
+Inspect and correct the failure before replaying one selected message. Preserve its complete body, including `purgeClaimId` and actor; do not create a new claim or manually mark a partly purged lake as deleted. A generation refused after restore or a newer purge is deliberately not replayable as the old request. The existing hosted DLQ admin UI is not newly wired for local queues by this change.
+
+With the previous worker stopped, use an endpoint and queue URLs reachable from the machine running these commands. This example receives one message, copies its original body to the source, and removes the dead-letter copy only after an accepted send. A failed send leaves the original available after its visibility timeout. Lost send acknowledgements can create a duplicate; the same-generation recovery checks still apply.
+
+```sh
+(
+set -e
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs receive-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --max-number-of-messages 1 --visibility-timeout 60 > cleanup-replay.json
+jq -e '.Messages | length == 1' cleanup-replay.json
+jq -r '.Messages[0].Body' cleanup-replay.json > cleanup-body.json
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs send-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE" --message-body file://cleanup-body.json &&
+  aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs delete-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' cleanup-replay.json)"
+)
+```
+
+Resume the single worker and verify the lake, file rows, chunks and exact stored objects are gone; another lake's objects must remain. Keep the payload private. Queue emptiness alone does not establish completed cleanup.
+
+Focused verification:
+
+```sh
+pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
+pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
+pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
+# Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/workers test:integration src/queueHandlers/dataLakeCleanup.e2e.test.ts
+```
+
+The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.
+
+### Daily lexical inconsistency sweep
+
+The single worker runs the existing deterministic inconsistency scan at 04:00 UTC. It reads active lakes and writes findings for human review; it does not change source documents or invoke a model. There is no startup run: starting after 04:00 waits until tomorrow, while starting exactly at 04:00 runs that slot. A delayed wake coalesces missed days into one run. The worker prevents overlapping runs and waits within its existing shutdown grace period; it does not provide distributed coordination or guarantee completion beyond that grace period.
+
+The shared scan retains the limits and between-page time budget defined in `apps/workers/src/cron/lakeInconsistencySweep.ts`. Attempted lakes are stamped for fairness even on failure. Findings use stable identities, and dismissed findings stay dismissed. A finding-write failure withholds a fresh summary timestamp; the next scheduled pass can retry. A failure in one lake does not abort the others. The local sweep emits no CloudWatch metrics; the hosted cron retains its run and outcome metrics.
+
+Verification uses the actual lexical algorithm and disposable Mongo, asserting persisted source excerpts, finding identity, dismissals, summary timestamps and recovery after injected write failures. This establishes application behavior, not a Kubernetes deployment drill. Model-driven inconsistency detection remains a separate queue workflow.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/lakeInconsistencySweep.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeInconsistencySweep.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/lakeInconsistencySweep.e2e.test.ts
+```
+
+## Local notebook curation
+
+The worker routes notebook start events to the notebook queue and consumes one curation job at a time. The default transcript export uses the existing curation service without a model. Executive summaries still require a configured operations model; transcript verification does not establish summary-provider availability.
+
+Notebook worker startup requires `NOTEBOOK_CURATION_QUEUE_DLQ` and verifies that the source queue redrives after three deliveries to that configured queue's actual ARN. Missing, malformed or mismatched redrive, or an attribute lookup failure, logs an error and disables only notebook consumption for that worker process; unrelated queues and scheduled jobs still start. Correct the configuration or broker availability and restart the worker to retry admission. Persisted queue attributes require explicit verification and repair; updating the configuration file does not migrate them. If a later delivery exceeds three attempts, it is retained without running curation again; repair broker redrive and replay the unchanged job body. The worker never substitutes local deletion for dead-letter retention.
+
+Curation uses a cooperative ten-minute budget and renews the fifteen-minute message visibility while the handler is active. The budget prevents starting subsequent persistence stages after expiry; it does not cancel an in-flight database, model or storage request. Run a single worker. Shutdown retains the existing bounded drain period, not an unlimited completion guarantee.
+
+Prepared object keys include the job identity and the digest of the actual artifact bytes. A Mongo transaction commits the file row, session cache/link, credit deduction and completion receipt together. Duplicate deliveries within the receipt retention window reuse the committed result without another debit. Completion-notification failure does not reverse the persisted result. The existing completion-receipt retention is fourteen days; this does not promise indefinite deduplication.
+
+Object storage is outside the Mongo transaction. A failed attempt without a receipt retains its content-hashed object, because deleting it could race another attempt using the same key. Identical transcript bytes reuse the key; generated summaries can differ between attempts and leave multiple unreferenced objects. A differing loser object is removed best-effort after a winning receipt is visible. A process crash can leave an unreferenced object; this change does not provide an orphan-object sweeper.
+
+The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
+
+Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+
+The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationCommit.e2e.test.ts
+# Also set AWS_ENDPOINT_URL_SQS, AWS_ENDPOINT_URL_S3, AWS_REGION and fixture AWS credentials.
+B4M_SELF_HOST=true NOTEBOOK_LIVE_PROOF=true SELF_HOST_EVENT_QUEUE=http://127.0.0.1:29324/000000000000/notebookEvents NOTEBOOK_QUEUE_URL=http://127.0.0.1:29324/000000000000/notebookCurationQueue VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationLive.e2e.test.ts
+```
+
+For operational replay, use the configured broker endpoint to receive the failed message from `notebookCurationQueueDLQ` or `selfHostEventQueueDLQ`, resolve the failure, send its unchanged body to the corresponding source queue, then delete the dead-letter message only after that send succeeds. Preserve `curationJobId`; submitting the API again creates a different job and is not the same replay guarantee.
+
+### Quest exports
+
+The hosted queue configuration uses `dlq.retry: 2` and eleven-minute visibility; the local broker uses `maxReceiveCount: 3` and fifteen-minute visibility.
+
+`QUEST_EXPORT_QUEUE` and `QUEST_EXPORT_QUEUE_DLQ` enable the local quest-export consumer. It handles both existing payload types: QuestMaster ZIP exports and organization feedback summaries. Summary authorization and model requirements are unchanged. A plain ZIP can complete without its optional executive summary; an organization feedback summary still requires its configured model.
+
+Startup verifies that the source queue redrives to the configured DLQ after three deliveries. Missing or incorrect redrive disables only this consumer. The singleton worker receives one job at a time, exposes a ten-minute cooperative budget, and renews its 900-second visibility every minute while dispatch remains in flight. Budget checks yield between stages; they do not cancel a hung storage or provider call. Failed dispatch or a final failed visibility renewal leaves the message unacknowledged. A later successful renewal allows acknowledgement after dispatch succeeds, but does not prove that the earlier visibility lease never lapsed; delivery remains at least once. Notebook curation shares this renewal behavior. Delivery-count overflow is refused rather than silently deleted.
+
+Plain export artifacts use the requesting user, plan and export job ID as their stable identity. A replay rechecks plan access and reuses an existing ZIP even after midnight or a goal edit. A metadata lookup failure emits the existing failed progress status even when the queue will retry; a later successful attempt can still deliver the download. Only a definitive missing-object response allows generation; metadata permission/network failures and failed download notification remain retryable. The hosted dispatcher shares this new key scheme. Already-created legacy date/goal-named artifacts are not migrated: replay after an upgrade may generate a new scoped artifact and leave the legacy object. There is no durable plain-export receipt or concurrent exactly-once guarantee: a failure before artifact upload, or competing workers, can repeat model work. Organization summaries retain their existing persisted completion, active-window release and completed-replay behavior.
+
+Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+
+## Kubernetes evaluation package
+
+For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
+
+### Background capability inventory guard
+
+The scripts unit suite checks hosted background triggers against
+`packages/scripts/src/selfhostParityPolicy.ts`. It is a static wiring guard: it parses
+source without running SST, and proves nothing about runtime behaviour. New or changed
+declarations, stale policy entries and changed mapped local registrations require review.
+Mapped imports must resolve; boot-path checks are syntactic inside `main` and registered
+callbacks, not proof that runtime gates are enabled. It includes disabled/conditional
+schedules, shared function targets and dead-letter infrastructure; a DLQ is not another
+application workflow.
+
+Covered shapes (inventory kind in brackets):
+
+- `sst.aws.Queue` and `aws.sqs.Queue` with their `subscribe()` consumers (`queue`)
+- `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
+- `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
+- bucket `notify()` notifications to a Function or queue (`notification`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.ses.ReceiptRule` (`sesRule`)
+- `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
+- `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
+- standalone `sst.aws.Function` that no covered trigger targets and that has no `url` (`function`)
+- `sst.aws.Service` (`service`)
+
+A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
+built inside a named factory with a computed name (for example one log subscription per log
+group) is identified by its factory site; computed queue and schedule names fail, because
+local registrations are matched by that name.
+
+Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
+reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
+(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
+covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+and infrastructure contributed by private overlays). A constructor that is neither covered nor
+listed fails the guard.
+
+Run the focused guard with:
+
+```bash
+pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+```
+
+A failing guard reports the declaration identity, current declaration/local fingerprint
+and changed AWS signals. Inspect the corresponding infra declaration, referenced cadence
+and stage gates, selected registration/route and its imports before updating the policy.
+Copy the reported fingerprint only after that review; keep the gap linked to its capability's
+roadmap epic, or a reviewed wiring mapping. Do not automatically regenerate the policy to
+clear CI. Fingerprints follow referenced handler, job, schedule, stage, link and permission
+inputs but not environment, logging, VPC or sizing option values, so adding a key to a shared
+environment constant does not invalidate every entry.
+
+Review each changed record before updating its fingerprint. `portable` means checked
+registration or routing only: it proves the mapped local symbol exists and is reachable from
+`main`, not that it is behaviourally equivalent to the hosted handler. Required
+resource/provider configuration and outcome proof remain separate. `pending` is a gap or
+capability decision linked to a shared roadmap epic (one for schedules, one for every other
+kind), not a per-gap issue. A
+`pending` queue or schedule that a self-host file now registers under the hosted name is
+reported as `Gap now has local wiring - review`. The infrastructure records excluded as
+separate workflows still require the associated consumer's broker configuration and recovery
+proof.
+
+A hosted handler whose source file is missing fails the guard by name and path. The only
+accepted absence is a handler generated from a private overlay into the gitignored
+`apps/client/server/premium-generated/` directory.
+
+AWS signals cover known exclusive hosted permissions and direct handler SDK imports.
+They are review flags, not proof that AWS is required: a configured provider or portable
+adapter can satisfy the capability. Compatible S3/SQS SDK use is not flagged as exclusive.
+The guard does not analyze arbitrary transitive dependencies or discover every application
+feature. Unsupported dynamic declaration names/options fail rather than disappear.
+Passing this static guard does not prove browser workflows, runtime configuration,
+retry/recovery behavior, actual timed effects or production parity.

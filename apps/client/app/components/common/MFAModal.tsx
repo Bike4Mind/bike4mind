@@ -1,8 +1,10 @@
-import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input, Checkbox } from '@mui/joy';
+import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input, Checkbox, Divider } from '@mui/joy';
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import Image from 'next/image';
 import CloseIcon from '@mui/icons-material/Close';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import { passkeysSupported } from '@client/app/hooks/data/passkeys';
 
 interface MFAModalProps {
   open: boolean;
@@ -23,6 +25,9 @@ interface MFAModalProps {
   description?: string;
   showVerify?: boolean;
   isEnforced?: boolean; // If true, hide close button (for enforced MFA)
+  /** Offer a passkey as an alternative to the code. Verification only - never during setup. */
+  onPasskeyVerify?: (rememberDevice: boolean) => void;
+  passkeyLoading?: boolean;
 }
 
 const MFAModal: React.FC<MFAModalProps> = ({
@@ -41,6 +46,8 @@ const MFAModal: React.FC<MFAModalProps> = ({
   isEnforced = false,
   allowRememberDevice = false,
   rememberDeviceDays = 30,
+  onPasskeyVerify,
+  passkeyLoading = false,
 }) => {
   const [code, setCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(false);
@@ -48,6 +55,8 @@ const MFAModal: React.FC<MFAModalProps> = ({
   // Setup enrolls the second factor; offering to skip it in the same breath makes no
   // sense, so the opt-in is verification-only.
   const showRememberDevice = allowRememberDevice && showVerify && !isSetupMode;
+  const showPasskey = !!onPasskeyVerify && showVerify && !isSetupMode && passkeysSupported();
+  const busy = loading || passkeyLoading;
 
   // Clear code input when modal is opened
   useEffect(() => {
@@ -195,6 +204,21 @@ const MFAModal: React.FC<MFAModalProps> = ({
           )}
           {showVerify && (
             <>
+              {showPasskey && (
+                <>
+                  <Button
+                    data-testid="mfa-modal-passkey-btn"
+                    startDecorator={<FingerprintIcon />}
+                    onClick={() => onPasskeyVerify?.(showRememberDevice && rememberDevice)}
+                    loading={passkeyLoading}
+                    disabled={busy}
+                    fullWidth
+                  >
+                    Use a passkey
+                  </Button>
+                  <Divider>or enter a code</Divider>
+                </>
+              )}
               <Input
                 className="mfa-modal-code-input"
                 data-testid="mfa-modal-code-input"
@@ -206,9 +230,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
                     : 'Enter 6-digit code or 10-character backup code'
                 }
                 sx={{ mb: 1 }}
-                disabled={loading}
+                disabled={busy}
                 onKeyDown={e => {
-                  if (e.key === 'Enter' && !loading) {
+                  if (e.key === 'Enter' && !busy) {
                     // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
                     const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
                     if (isValidLength) {
@@ -238,7 +262,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
                     data-testid="mfa-modal-remember-device-checkbox"
                     label={`Remember this device for ${rememberDeviceDays} days`}
                     checked={rememberDevice}
-                    disabled={loading}
+                    disabled={busy}
                     onChange={event => setRememberDevice(event.target.checked)}
                   />
                   <Typography level="body-xs" sx={{ mt: 0.5 }}>
@@ -257,7 +281,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
                 disabled={(() => {
                   // Setup mode: only 6-digit codes, Verification mode: 6-digit or 10-character backup codes
                   const isValidLength = qrCodeUrl ? code.length === 6 : code.length === 6 || code.length === 10;
-                  return !isValidLength || loading;
+                  return !isValidLength || busy;
                 })()}
                 fullWidth
                 sx={{ mt: 2 }}

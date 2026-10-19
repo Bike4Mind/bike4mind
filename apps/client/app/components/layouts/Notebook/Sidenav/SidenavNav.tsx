@@ -11,10 +11,12 @@ import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlin
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
-import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
+import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -22,11 +24,15 @@ import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useOptiVisible } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { firstUsableStudioModality } from '@client/app/components/Studio/studioModality';
+import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
+import { useMusicModels } from '@client/app/hooks/data/musicGenerations';
+import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
@@ -81,7 +87,7 @@ type NavItem = {
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const currentUser = useUser(s => s.currentUser);
@@ -92,11 +98,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
-  // email-domain grantees) sees OptiHashi without flipping the feature flag.
-  const hasOptiAccess = useOptiAccess();
-  // Visibility rides purely on product access (tag/entitlement); the legacy
-  // experimental toggle was retired with the open-core carve.
-  const isOptiEnabled = hasOptiAccess;
+  // email-domain grantees) sees OptiHashi without flipping the feature flag, unless the user hid
+  // the workspace in Settings (display only; /opti itself stays reachable).
+  const isOptiEnabled = useOptiVisible();
   // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
   // with product access, so an open-core build has no row and no dead-end.
   const isMeetingsEnabled = useMeetingsAccess();
@@ -110,15 +114,41 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
   // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
   const { data: entitlements } = useEntitlements();
-  const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
-    item => item.path === '/bob'
-  );
+  const visibleNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
+  const bobNavItem = visibleNavItems.find(item => item.path === '/bob');
+  // The row uses the icon the overlay contributes with its nav item (the same one ProfileMenu
+  // renders), falling back to a stock glyph when it contributes none.
+  const BobIcon = bobNavItem?.icon;
+  // Nav items an overlay opts into the sidebar (`sidebar: true`), under the same STRICT gate as Bob
+  // and drawn the same way. Bob keeps its dedicated row, so its path is skipped rather than drawn twice.
+  // Keyed by path, prefixed so a contributed row can never collide with a core row's key or test id.
+  // Paths that differ only in punctuation map to one key, so the first such item wins rather than
+  // two rows sharing a React key and a test id.
+  const sidebarNavItems = visibleNavItems
+    .filter(item => item.sidebar && item.path !== '/bob')
+    .map(item => ({ item, key: `premium${item.path.replace(/[^a-z0-9]+/gi, '-')}` }))
+    .filter(({ key }, index, all) => all.findIndex(other => other.key === key) === index);
   // Gears no longer gates navigation. A feature's row is always present; the gear
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
   // Gears page, so its row could never appear on its own.
 
   const gearsSignal = useGearsNavSignal();
+  // Shown only when a modality's endpoint (GET /api/v1/video-models, /music-models, /api/ai/audio-providers) lists a
+  // model or provider this user can run, and it opens on that modality's tab, so it never dead-ends.
+  const videoModels = useVideoModels();
+  const musicModels = useMusicModels();
+  const audioProviders = useAudioProviders();
+  // Decided once every list has settled, so a fast later answer cannot open Studio on a later tab while Video is usable.
+  const studioModality =
+    videoModels.isPending || musicModels.isPending || audioProviders.isPending
+      ? undefined
+      : firstUsableStudioModality({
+          video: (videoModels.data?.length ?? 0) > 0,
+          music: (musicModels.data?.length ?? 0) > 0,
+          speech: (audioProviders.data?.speech.length ?? 0) > 0,
+          'sound-effects': (audioProviders.data?.soundEffects.length ?? 0) > 0,
+        });
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -186,12 +216,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    ...(isBobEnabled
+    ...(bobNavItem
       ? [
           {
             key: 'bob',
             label: 'Bob',
-            icon: iconSlot(<Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
+            icon: iconSlot(BobIcon ? <BobIcon /> : <Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/bob'),
             onClick: () => {
               closeOnMobile();
@@ -229,6 +259,22 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         setFileBrowserOpen(true);
       },
     },
+    // Overlay-contributed rows go after Files Manager, so they never take the pinned slot (see the
+    // split below) and never push a core row out of it.
+    ...sidebarNavItems.map(({ item, key }) => {
+      const ContributedIcon = item.icon;
+      return {
+        key,
+        label: item.label,
+        icon: iconSlot(ContributedIcon ? <ContributedIcon /> : <ExtensionOutlinedIcon sx={{ fontSize: '18px' }} />),
+        isActive: location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+        onClick: () => {
+          closeOnMobile();
+          // Codegen-mounted, so not in Tanstack's statically-typed route union - same cast as /bob.
+          navigate({ to: item.path } as never);
+        },
+      };
+    }),
     ...(isAgentsEnabled
       ? [
           {
@@ -257,6 +303,20 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/projects' });
       },
     },
+    ...(studioModality
+      ? [
+          {
+            key: 'studio',
+            label: t('sidenav.studio', 'Studio'),
+            icon: iconSlot(<PermMediaOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/studio/'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/studio/$modality', params: { modality: studioModality } });
+            },
+          },
+        ]
+      : []),
     {
       // Live Artifacts (published shares) are the product's lead-gen surface -
       // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
@@ -269,24 +329,18 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         navigate({ to: '/profile', search: { tab: 'published' } });
       },
     },
-    // Gated on the experimental flag alone: the flag says the feature exists for
-    // this user, and that is the whole question. Sits beside Tavern/Gears - the
-    // shared-log destination.
-    ...(isFeatureEnabled('enableHearth')
-      ? [
-          {
-            key: 'hearth',
-            label: t('sidenav.hearth', 'Hearth'),
-            icon: iconSlot(<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/hearth'),
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/hearth' });
-            },
-          },
-        ]
-      : []),
-    // Single-gated on the experimental flag (unlike Hearth's flag+gear pair):
+    {
+      // A discovery surface, so it sits in the nav rather than behind Profile -> Skills.
+      key: 'skill-market',
+      label: t('sidenav.skillMarket', 'Skill Market'),
+      icon: iconSlot(<StorefrontOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname.startsWith('/skills/market'),
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/skills/market' });
+      },
+    },
+    // Single-gated on the experimental flag:
     // v5 has no gear, and the flag is opt-in-only, so anyone who turned it on
     // asked for the surface and needs a way to reach it.
     ...(isFeatureEnabled('enableQuestMasterV5')
@@ -360,7 +414,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               ...startHereTagSx(theme),
             }}
           >
-            {t('sidenav.gearsStartHere', 'Start here')}
+            {gearsSignal.startHereCredits > 0
+              ? t('sidenav.gearsStartHereCredits', {
+                  count: gearsSignal.startHereCredits,
+                  credits: gearsSignal.startHereCredits.toLocaleString(i18n.language),
+                  defaultValue: 'Start here, +{{credits}} credits',
+                  defaultValue_one: 'Start here, +{{credits}} credit',
+                  defaultValue_other: 'Start here, +{{credits}} credits',
+                })
+              : t('sidenav.gearsStartHere', 'Start here')}
           </Chip>
         ) : undefined,
       onClick: () => {
@@ -371,10 +433,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
-  // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, or Files Manager - since each
-  // is elided when absent. The split is purely positional, so it
-  // holds regardless of which entries are present.
+  // pinned at the top. items[0] is always New Chat; items[1] is the first core row
+  // present for this user - one of the conditional rows above Files Manager, each
+  // elided when absent, else Files Manager itself, which is always present.
+  // Overlay-contributed rows sit after Files Manager, so they can never be items[1].
+  // The split is purely positional, so it holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (

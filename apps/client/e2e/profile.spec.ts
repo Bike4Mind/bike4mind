@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
+import { isGettingStarted } from '../lib/gears/tabs';
 import editUserData from './fixtures/edit-user.json';
 
 const testUser = editUserData[0];
@@ -119,6 +120,23 @@ test.describe.serial('Profile - Settings', () => {
   });
 });
 
+test.describe('Profile - Storage breakdown', () => {
+  test('a new account opens the breakdown and sees no stored files', async ({ profilePage }) => {
+    const { page } = profilePage;
+    await profilePage.gotoProfile();
+
+    const breakdownResponse = page.waitForResponse(
+      r => r.url().includes('/api/users/me/storage-breakdown') && r.request().method() === 'GET'
+    );
+    await page.getByTestId('storage-breakdown-toggle-btn').click();
+    const response = await breakdownResponse;
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toMatchObject({ totalBytes: 0, unaccountedBytes: 0, buckets: [] });
+
+    await expect(page.getByTestId('storage-breakdown-empty')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+});
+
 test.describe('Profile - Agent connect', () => {
   test('should copy a key-free agent prompt and MCP snippets from the API Keys tab', async ({
     profilePage,
@@ -153,11 +171,64 @@ test.describe('Profile - Agent connect', () => {
     );
   });
 
+  test('should list provider keys after account keys and send spend to the Usage tab', async ({ profilePage }) => {
+    const { page } = profilePage;
+    await profilePage.gotoProfile();
+    await profilePage.clickTab('API-keys');
+
+    const usageLink = page.getByTestId('api-keys-usage-link');
+    const agentConnect = page.getByTestId('agent-connect-section');
+    const firstProvider = page.locator('[data-testid^="api-keys-provider-"]').first();
+    await expect(firstProvider).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(usageLink).toBeVisible();
+
+    const linkHandle = await usageLink.elementHandle();
+    const connectHandle = await agentConnect.elementHandle();
+    const providerHandle = await firstProvider.elementHandle();
+    const precedes = (a: typeof linkHandle, b: typeof linkHandle) =>
+      page.evaluate(([x, y]) => !!(x!.compareDocumentPosition(y!) & Node.DOCUMENT_POSITION_FOLLOWING), [a, b]);
+    expect(await precedes(linkHandle, connectHandle)).toBe(true);
+    expect(await precedes(connectHandle, providerHandle)).toBe(true);
+    await expect(page.getByTestId('usage-dashboard')).toHaveCount(0);
+
+    await page.getByTestId('api-keys-usage-link-btn').click();
+    await expect(page.getByTestId('usage-tab')).toHaveAttribute('aria-selected', 'true', {
+      timeout: TIMEOUTS.ELEMENT_STATE,
+    });
+    await expect(page).toHaveURL(/tab=usage/);
+    await expect(page.getByTestId('usage-spend-breakdown')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('usage-dashboard')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
   test('should serve llms.txt with an Authentication section', async ({ request }) => {
     const res = await request.get('/llms.txt');
     expect(res.ok()).toBe(true);
     const body = await res.text();
     expect(body).toContain('## Authentication');
     expect(body).toContain('B4M_API_KEY');
+  });
+});
+
+// Relies on this spec user having no claimable gear: anything here that unlocks one
+// (e.g. creating an API key) swaps the Start here tag for Claim and breaks this test.
+test.describe('Sidenav - Gears', () => {
+  test('new account sees the Getting Started reward on the Gears row', async ({ page, basePage }) => {
+    const statusResponse = page.waitForResponse(r => r.url().includes('/api/gears/status') && r.ok());
+    await page.goto('/');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+    const { gears } = (await (await statusResponse).json()) as {
+      gears: { key: string; kind: 'destination' | 'skill'; credits: number; unlocked: boolean; claimed?: boolean }[];
+    };
+    // Upper bound only: feature flags can hide a Getting Started gear from the sum.
+    const undoneCredits = gears
+      .filter(g => isGettingStarted(g) && !g.unlocked && !g.claimed)
+      .reduce((sum, g) => sum + g.credits, 0);
+
+    const tag = page.getByTestId('sidenav-gears-start-here');
+    await expect(tag).toHaveText(/^Start here, \+[\d.,\s\u00a0\u202f]+ credits?$/, { timeout: TIMEOUTS.VISIBLE });
+    const shown = Number((await tag.textContent())!.replace(/\D/g, ''));
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThanOrEqual(undoneCredits);
   });
 });

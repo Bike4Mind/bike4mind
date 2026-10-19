@@ -41,7 +41,7 @@ import {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
-  videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -52,6 +52,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -103,7 +104,6 @@ if (isMonitoredStage) {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-      logging: { retention: '3 days' },
     },
     {
       transform: {
@@ -243,9 +243,9 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: researchEngineQueueDLQ,
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
   },
@@ -362,11 +362,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
-    queue: videoGenerationDLQ,
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
   },
   {
     label: 'liveops-triage',
@@ -476,6 +476,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     sourceQueue: 'bobRunQueue',
     queue: bobRunQueueDLQ,
   },
+  // queues.ts - LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology)
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+    queue: libreoncologyAudioRenderQueueDLQ,
+  },
 ];
 
 // --- Alarm creation ---
@@ -505,7 +513,7 @@ if (isMonitoredStage) {
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
-  // It backs apps/client/server/s3/objectCreated's Lambda async-invocation dead-letter
+  // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
   // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
   // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
   // dlqRegistry.ts) resolves to a real SQS queue URL for the admin "replay" UI — but this

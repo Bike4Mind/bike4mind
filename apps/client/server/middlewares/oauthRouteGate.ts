@@ -1,4 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
+import type { IUserDocument } from '@bike4mind/common';
+import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
 
 export interface OAuthRoutePolicy {
   /**
@@ -51,10 +53,26 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
  * session or a relying-party OAuth token would otherwise act as a full user (read a subject user's
  * PRIVATE published artifacts, mint a passphrase gate-proof cookie, or create/edit annotations).
  * Returns false for both markers; such callers fall through to the same anonymous posture as an
- * un-credentialed viewer. This is the single choke point every optional-auth shim shares - keep it
- * in sync with oauthRouteGate above.
+ * un-credentialed viewer. The shims call admitsOptionalAuthSession below, which adds the enforceMFA
+ * enrollment gate - keep this in sync with oauthRouteGate above.
  */
 export function admitsOptionalAuthUser(user: unknown): user is Express.User {
   const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;
   return !!u && !u.mfaPending && !u.oauthGrant;
+}
+
+/**
+ * The optional-auth shims' admission: admitsOptionalAuthUser plus the enforceMFA enrollment gate
+ * (isMfaEnrollmentOwed), so a session that owes enrollment degrades to anonymous there instead of
+ * acting as the user. A failed settings read degrades too, the less-privileged posture on a route
+ * anonymous viewers can already reach.
+ */
+export async function admitsOptionalAuthSession(user: unknown): Promise<boolean> {
+  if (!admitsOptionalAuthUser(user)) return false;
+  const session = user as IUserDocument & { impersonatedBy?: string };
+  try {
+    return !(await isMfaEnrollmentOwed(session, { impersonatedBy: session.impersonatedBy }));
+  } catch {
+    return false;
+  }
 }

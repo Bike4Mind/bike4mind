@@ -1,6 +1,11 @@
 import { IChatHistoryItemDocument, KnowledgeType, extensionFromMimeType } from '@bike4mind/common';
 import { CreateFabFileRequestInputType } from '@bike4mind/common';
-import { createFabFileOnServerWithUpload, copyGeneratedImageToFabFile } from '@client/app/utils/filesAPICalls';
+import {
+  createFabFileOnServerWithUpload,
+  copyGeneratedImageToFabFile,
+  deleteFileUtility,
+  moderateFabFileNow,
+} from '@client/app/utils/filesAPICalls';
 import {
   ContentCopy as ContentCopyIcon,
   Download as DownloadIcon,
@@ -25,6 +30,7 @@ import { toast } from 'sonner';
 import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
 import { SendMessageOptions } from '@client/app/utils/llm';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
 
 // Add FabAPI interface
@@ -65,15 +71,16 @@ type ImageContainerProps = {
 };
 
 // Extract the S3 key from an image URL
-const extractS3KeyFromUrl = (imageUrl: string): string | null => {
+export const extractS3KeyFromUrl = (imageUrl: string): string | null => {
   try {
     const url = new URL(imageUrl);
 
     // Check if it's an S3 URL (either S3 domain or presigned URL)
     if (url.hostname.includes('generatedimagesbucket') || url.hostname.includes('s3')) {
-      // Extract the path, removing leading slash
-      const pathname = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
-      return pathname;
+      // Generated keys are bare (no prefix); take the last path segment so a path-style host
+      // (bucket in the path) works too. pathname already excludes the presign query string.
+      const lastSegment = url.pathname.split('/').filter(Boolean).pop();
+      return lastSegment ? decodeURIComponent(lastSegment) : null;
     }
 
     return null;
@@ -84,7 +91,7 @@ const extractS3KeyFromUrl = (imageUrl: string): string | null => {
 };
 
 // Whether an image URL points at the generated-images bucket
-const isGeneratedImage = (imageUrl: string): boolean => {
+export const isGeneratedImage = (imageUrl: string): boolean => {
   return imageUrl.includes('generatedimagesbucket');
 };
 
@@ -126,6 +133,9 @@ const ImageContainer: FC<ImageContainerProps> = ({
   const [downloading, setDownloading] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(index);
   const [editing, setEditing] = useState<boolean>(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // Read-only hides Edit: the masker uploads a mask file before the (no-op) send.
+  const readOnly = useSessionReadOnly();
 
   useEffect(() => {
     setCurrentIndex(index);
@@ -205,6 +215,18 @@ const ImageContainer: FC<ImageContainerProps> = ({
 
       // Save as FabFile
       const maskFabFile = await createFabFileOnServerWithUpload(formData, file);
+      // The edit is dispatched right away and the mask must be 'clean' by then; scan it now instead
+      // of racing the S3 event. 'pending' still dispatches: the server gate waits and decides.
+      if ((await moderateFabFileNow(maskFabFile.id)) === 'blocked') {
+        // No dispatch means the server's mask cleanup never runs, so drop the mask here.
+        toast.error('The edit mask was blocked by moderation. Please try again.');
+        try {
+          await deleteFileUtility(maskFabFile.id);
+        } catch (deleteError) {
+          console.error('Failed to delete blocked edit mask: ', deleteError);
+        }
+        return;
+      }
       await onSendMessage({ fabFileIds: [maskFabFile.id], prompt }, { isImageEdit: true, image: sourceImageUrl });
       setEditing(false);
     } catch (error) {
@@ -393,21 +415,23 @@ const ImageContainer: FC<ImageContainerProps> = ({
           {downloading ? <CircularProgress size="sm" /> : <DownloadIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
-      <Tooltip title="Edit Image">
-        <Box component="span" sx={{ display: 'inline-block' }}>
-          <IconButton
-            onClick={() => setEditing(true)}
-            disabled={editing}
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            sx={{ borderRadius: '50%' }}
-            data-testid="image-edit-btn"
-          >
-            {editing ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
-          </IconButton>
-        </Box>
-      </Tooltip>
+      {!readOnly && (
+        <Tooltip title="Edit Image">
+          <Box component="span" sx={{ display: 'inline-block' }}>
+            <IconButton
+              onClick={() => setEditing(true)}
+              disabled={editing}
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              sx={{ borderRadius: '50%' }}
+              data-testid="image-edit-btn"
+            >
+              {editing ? <CircularProgress size="sm" /> : <EditIcon fontSize="small" />}
+            </IconButton>
+          </Box>
+        </Tooltip>
+      )}
     </>
   );
 
@@ -534,13 +558,23 @@ const ImageContainer: FC<ImageContainerProps> = ({
           // `src` there falls through to the plain <img> below (prior behavior)
           // instead of the upload-scanning copy.
           <ImageModerationPlaceholder status="scanning" size={previewSize} />
+        ) : failedSrc === src ? (
+          // A missing object (e.g. a deleted image) reads as gone rather than a broken <img>.
+          <Typography
+            level="body-xs"
+            title="This image is no longer available."
+            data-testid="ai-response-image-unavailable"
+            sx={{ width: previewSize, height: previewSize, display: 'flex', alignItems: 'center', p: 1 }}
+          >
+            This image is no longer available.
+          </Typography>
         ) : (
           <img
             src={src}
             height={previewSize}
             width={previewSize}
             alt={`Generated image ${index + 1} of ${totalImages}`}
-            onError={handleImageError}
+            onError={() => setFailedSrc(src)}
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
             style={{
               objectFit: isThumbnail ? 'cover' : 'scale-down',
@@ -632,7 +666,12 @@ const ImageContainer: FC<ImageContainerProps> = ({
       </Modal>
 
       {editing && (
-        <ImageMaskerFlux open={editing} onSave={handleImageEdit} imageUrl={src} onClose={() => setEditing(false)} />
+        <ImageMaskerFlux
+          open={!readOnly && editing}
+          onSave={handleImageEdit}
+          imageUrl={src}
+          onClose={() => setEditing(false)}
+        />
       )}
     </Box>
   );

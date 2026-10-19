@@ -3,9 +3,11 @@ import {
   ChatModels,
   createThinkMarkerEscaper,
   IMessage,
+  isBedrockRegionProfileId,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
+  REFUSAL_FALLBACK_MODELS,
   type ModelInfo,
 } from '@bike4mind/common';
 import {
@@ -22,10 +24,10 @@ import {
 } from '../backend';
 import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
-import { getCachingAdapter } from '../caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams } from '../thinkingParams';
+import { buildThinkingParams, planReasoningEffort, resolveAnthropicEffort } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -192,7 +194,7 @@ interface ClaudeChunkContentStop extends BaseClaudeChunk {
 interface ClaudeChunkMessageDelta extends BaseClaudeChunk {
   type: ClaudeChunkTypes.MESSAGE_DELTA;
   delta: {
-    stop_reason: 'tool_use' | 'end_turn';
+    stop_reason: string;
   };
   usage: { output_tokens: number };
 }
@@ -233,6 +235,9 @@ const TEMPERATURE_ONLY_MODELS = [
   ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
   ChatModels.CLAUDE_4_6_OPUS_BEDROCK,
 ];
+
+// Account-level Bedrock setting, not a request parameter.
+const FABLE_DISABLED_REASON = 'Requires the aws_review data-retention mode on the Bedrock account';
 
 export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   /** Reports done only on message_stop (anthropic.ts translateStreamChunk), so a missing terminal event means a truncated stream. */
@@ -319,6 +324,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         rank: 6,
         supportsTools: true,
         trainingCutoff: '2023-08-01',
+        deprecationDate: '2026-09-10',
         description:
           "Anthropic's fast and efficient Claude 3 Haiku model via AWS Bedrock. Good balance of speed and capability with vision support.",
       },
@@ -416,7 +422,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -424,7 +430,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -432,6 +438,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         trainingCutoff: '2025-05-01',
         releaseDate: '2025-05-23',
+        deprecationDate: '2026-10-15',
         description:
           "Claude 4 Opus via AWS Bedrock. Anthropic's most capable model with enhanced reasoning and multimodal capabilities. Routes across us-east-1, us-east-2, us-west-2.",
         isSlowModel: true,
@@ -439,7 +446,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -447,7 +454,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -455,6 +462,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2025-08-06',
+        deprecationDate: '2027-01-08',
+        disabled: true,
+        disabledReason: 'Legacy on Bedrock; account access lapsed after inactivity',
         description:
           'Claude 4.1 Opus via AWS Bedrock. Latest iteration with improved performance and reliability. Routes across us-east-1, us-east-2, us-west-2.',
         isSlowModel: true,
@@ -462,7 +472,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -470,7 +480,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.003 / 1000, output: 0.015 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.003 / 1000, output: 0.015 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -478,13 +488,14 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsTools: true,
         trainingCutoff: '2025-05-01',
         releaseDate: '2025-05-23',
+        deprecationDate: '2026-10-14',
         description:
           'Claude 4 Sonnet via AWS Bedrock. Balanced model offering excellent performance at competitive pricing. Routes across us-east-1, us-east-2, us-west-2.',
       },
       {
         id: ChatModels.CLAUDE_4_5_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -509,14 +520,14 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 }, // Placeholder pricing - update with public rates
+          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -530,7 +541,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -553,7 +564,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Bedrock,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -578,7 +589,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET_BEDROCK,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Bedrock,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -602,9 +613,31 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           "Anthropic's newest Claude 5 Sonnet model via AWS Bedrock. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
       },
       {
+        id: ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        type: 'text',
+        name: 'Claude Sonnet 5.5',
+        backend: ModelBackend.Bedrock,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Global endpoint; cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x.
+        pricing: {
+          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 },
+        },
+        supportsVision: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1,
+        description:
+          "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
+      },
+      {
         id: ChatModels.CLAUDE_4_6_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -627,7 +660,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -651,7 +684,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Bedrock,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -669,8 +702,122 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_FABLE_5_BEDROCK,
+        type: 'text',
+        name: 'Claude Fable 5',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude Fable 5 model via AWS Bedrock for complex, long-running agentic tasks.",
+        isSlowModel: true,
+        disabled: true,
+        disabledReason: FABLE_DISABLED_REASON,
+      },
+      {
+        id: ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        type: 'text',
+        name: 'Claude Fable 5.1',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Global endpoint; cache hits are 0.025x input on Fable 5.1, not the default 0.1x.
+        pricing: {
+          1_000_000: { input: 10 / 1_000_000, output: 50 / 1_000_000, cache_read: 0.25 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude Fable 5.1 model via AWS Bedrock for complex, long-running agentic tasks.",
+        isSlowModel: true,
+        disabled: true,
+        disabledReason: FABLE_DISABLED_REASON,
+      },
+      {
+        id: ChatModels.CLAUDE_5_OPUS_BEDROCK,
+        type: 'text',
+        name: 'Claude Opus 5',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude 5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        type: 'text',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Global endpoint, first-party parity; cache hits are 0.05x input on Opus 5.5, not the default 0.1x.
+        pricing: {
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description: "Anthropic's Claude 5.5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+        type: 'text',
+        name: 'Claude Haiku 5.5',
+        backend: ModelBackend.Bedrock,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // First-party parity on the global endpoint, tiered by prompt length (over 100K prompt tokens pays the higher tier).
+        pricing: {
+          100_000: { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 },
+          1_000_000: { input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 },
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 3,
+        supportsTools: true,
+        releaseDate: '2026-10-07',
+        description:
+          "Anthropic's Claude Haiku 5.5 via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
@@ -767,8 +914,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
 
     // Check if model ID needs to be transformed
-    const hasVendorPrefix =
-      model.includes(':') || model.startsWith('global.') || model.startsWith('us.') || model.startsWith('anthropic.');
+    const hasVendorPrefix = model.includes(':') || isBedrockRegionProfileId(model) || model.startsWith('anthropic.');
     const modelId = hasVendorPrefix ? model : `anthropic.${model}`;
 
     // Ensure maxTokens is always provided and is a number
@@ -852,7 +998,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, maxTokens, effort);
 
@@ -870,6 +1020,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           body.temperature = result.temperature;
         }
         delete body.top_p;
+      } else if (options.reasoningEffort) {
+        const plan = planReasoningEffort(model, currentModelInfo, options.reasoningEffort, maxTokens);
+        if (plan.kind !== 'default') body.thinking = plan.thinking;
+        if (plan.kind === 'adaptive') body.output_config = plan.output_config;
+        if (plan.kind === 'budget') {
+          if (plan.temperature === 'delete') delete body.temperature;
+          else body.temperature = plan.temperature;
+          delete body.top_p;
+        }
       }
     }
 
@@ -918,6 +1077,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         JSON.stringify({ model: modelId })
       );
     }
+
+    Object.assign(body, capCacheControlMarkers(body));
 
     // Log the actual body being sent (first 1000 chars)
     const bodyStr = JSON.stringify(body);
@@ -1050,6 +1211,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         );
       }
 
+      const stopReason = (response as { stop_reason?: string }).stop_reason;
+      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+        throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+      }
+
       // Extract text content from the response
       const textContent = response.content
         .filter(item => item.type === 'text')
@@ -1117,6 +1283,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
+    let refused = false;
     let choice: IChoice;
 
     // Default choice with empty text
@@ -1131,6 +1298,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         this.isInThinkingBlock = false;
         this.reasoningEscaper = createThinkMarkerEscaper();
         this.assistantReasoningBlocks = [];
+        // output_tokens is deliberately omitted: message_start reports only a placeholder for it, and
+        // base.ts's stopped-call estimate keys on a 0 output count to detect that the terminal usage
+        // event never arrived. Forwarding it here would silently disable that estimate; keep in sync
+        // with the guard in base.ts.
         choice = {
           chunkText: '',
           usage: {
@@ -1202,6 +1373,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         // Reset thinking block state
         this.isInThinkingBlock = false;
       } else if (isMessageDelta(chunk)) {
+        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
         choice = {
           status: ChoiceStatus.STREAM,
           chunkText: '',
@@ -1230,6 +1402,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           choices: [choice],
         },
       };
+    }
+
+    // Thrown outside the try: the catch above swallows errors.
+    if (refused) {
+      throw new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
     }
 
     return {

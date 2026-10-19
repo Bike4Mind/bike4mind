@@ -1,0 +1,118 @@
+{
+  "scenario": "cancel",
+  "recordedAt": "2026-10-08T18:27:25.422Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "A paper boat drifting down a rainy street gutter.",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdoLURIYXQyVEotWGIycm9QM1AyTC1BcxIXaC1ESGF0MlRKLVhiMnJvUDNQMkwtQXM",
+          "status": "in_progress",
+          "created": "2026-10-08T18:27:22Z",
+          "updated": "2026-10-08T18:27:22Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "cancel",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions/v1_ChdoLURIYXQyVEotWGIycm9QM1AyTC1BcxIXaC1ESGF0MlRKLVhiMnJvUDNQMkwtQXM/cancel"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdoLURIYXQyVEotWGIycm9QM1AyTC1BcxIXaC1ESGF0MlRKLVhiMnJvUDNQMkwtQXM",
+          "status": "cancelled",
+          "created": "2026-10-08T18:27:22Z",
+          "updated": "2026-10-08T18:27:22Z",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "text": "A paper boat drifting down a rainy street gutter.",
+                  "type": "text"
+                }
+              ]
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_ChdoLURIYXQyVEotWGIycm9QM1AyTC1BcxIXaC1ESGF0MlRKLVhiMnJvUDNQMkwtQXM"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdoLURIYXQyVEotWGIycm9QM1AyTC1BcxIXaC1ESGF0MlRKLVhiMnJvUDNQMkwtQXM",
+          "status": "cancelled",
+          "created": "2026-10-08T18:27:22Z",
+          "updated": "2026-10-08T18:27:22Z",
+          "steps": [
+            {
+              "type": "user_input",
+              "content": [
+                {
+                  "text": "A paper boat drifting down a rainy street gutter.",
+                  "type": "text"
+                }
+              ]
+            }
+          ],
+          "object": "interaction",
+          "response_format": {
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "duration": "3s",
+            "resolution": "720p",
+            "type": "video"
+          },
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    }
+  ]
+}

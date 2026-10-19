@@ -21,9 +21,17 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
+import {
+  deriveTagPrefixFromLakeName,
+  isGeneratedLakeTagPrefix,
+  submittedTagPrefix,
+  tagPrefixIssue,
+} from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
+import DriveFolderEstimateSummary from './DriveFolderEstimateSummary';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -33,21 +41,44 @@ export default function ConfigStep() {
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
+  const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
   // Append mode inherits the target lake's prefix, which by definition already coexists with it.
   // The overlap lookup needs the submitted form: normalizeTagPrefix drops a colon-less value,
   // so "acme" would match no lake and its collision with an existing "acme:" go unreported.
   const duplicatePrefixLake = useDuplicatePrefixLake(submittedTagPrefix(config.tagPrefix), !!targetLake);
-  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
+  const adoptAutoTagPrefix = useDataLakeWizardStore(s => s.adoptAutoTagPrefix);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
 
-  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
-  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
-  // on the source step; they appear here read-only in the summary.
-  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+  // Name and slug are set on the source step; they appear here read-only in the summary.
+  const slug = useWizardLakeSlug();
+  // The slug-preview round trip also reports the first free tag prefix: an auto-derived one held by
+  // a lake this form cannot see (archived, deleted, gated) is swapped for it; a typed one is only flagged.
+  const { reusedLake, isAutoPrefix, suggestedTagPrefix, heldTypedPrefix } = useWizardIdentityPreview(true);
+
+  useEffect(() => {
+    if (isAutoPrefix && suggestedTagPrefix && suggestedTagPrefix !== config.tagPrefix) {
+      adoptAutoTagPrefix(suggestedTagPrefix);
+    }
+  }, [isAutoPrefix, suggestedTagPrefix, config.tagPrefix, adoptAutoTagPrefix]);
+
+  const prefixIssue =
+    tagPrefixIssue(config.tagPrefix, duplicatePrefixLake) ??
+    (heldTypedPrefix
+      ? `This prefix is held by another lake (archived and deleted lakes keep theirs until purged). Try "${suggestedTagPrefix}".`
+      : null);
+  const derivedTagPrefix = deriveTagPrefixFromLakeName(config.name);
+  const autoPickNote =
+    isAutoPrefix &&
+    !reusedLake &&
+    derivedTagPrefix &&
+    suggestedTagPrefix === config.tagPrefix &&
+    config.tagPrefix !== derivedTagPrefix
+      ? `"${derivedTagPrefix}" is held by another lake (archived and deleted lakes keep their prefix until purged), so this one uses "${config.tagPrefix}". If you meant an archived or deleted lake, restore or unarchive it instead.`
+      : null;
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
   // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
@@ -85,6 +116,8 @@ export default function ConfigStep() {
     }
   }, [hashingProgress.status]);
 
+  const generatedPrefix = !!targetLake && isGeneratedLakeTagPrefix(targetLake);
+  const accessTagNote = targetLake?.requiredUserTag ? `access tag \u201c${targetLake.requiredUserTag}\u201d` : '';
   const hashPct = hashingProgress.total > 0 ? Math.round((hashingProgress.completed / hashingProgress.total) * 100) : 0;
 
   return (
@@ -92,13 +125,23 @@ export default function ConfigStep() {
       <Stack gap={2.5} sx={{ maxWidth: 560 }}>
         {/* Append mode: files go into the existing lake; identity fields are locked. */}
         {targetLake && (
-          <Alert color="primary" variant="soft">
+          <Alert color="primary" variant="soft" data-testid="config-append-alert">
             <Box>
               <Typography level="title-sm">Adding files to “{targetLake.name}”</Typography>
               <Typography level="body-xs">
-                These files join the existing lake (prefix <code>{targetLake.fileTagPrefix}</code>
-                {targetLake.requiredUserTag ? `, access tag “${targetLake.requiredUserTag}”` : ''}). Name, prefix, and
-                access tag can’t be changed here - edit them in the lake’s settings.
+                These files join the existing lake
+                {generatedPrefix ? (
+                  accessTagNote && ` (${accessTagNote})`
+                ) : (
+                  <>
+                    {' '}
+                    (prefix <code>{targetLake.fileTagPrefix}</code>
+                    {accessTagNote && `, ${accessTagNote}`})
+                  </>
+                )}
+                {generatedPrefix
+                  ? '. Its name and access tag can\u2019t be changed here - edit them in the lake\u2019s settings.'
+                  : '. Name, prefix, and access tag can\u2019t be changed here - edit them in the lake\u2019s settings.'}
               </Typography>
             </Box>
           </Alert>
@@ -136,29 +179,33 @@ export default function ConfigStep() {
         {/* Tag Prefix - editable only in create mode (see prefixEditable), locked in append
             mode. Still reports a prefix problem even when locked, so an inherited value's
             issue is visible here rather than only disabling Start Upload. */}
-        <FormControl required={prefixEditable} error={!!prefixIssue}>
-          <FormLabel>Tag Prefix</FormLabel>
-          <Input
-            data-testid="config-tag-prefix-input"
-            value={config.tagPrefix}
-            onChange={e => setTagPrefix(e.target.value)}
-            onBlur={e => {
-              const v = e.target.value.trim();
-              if (v && !v.endsWith(':')) {
-                setTagPrefix(v + ':');
-              }
-            }}
-            placeholder="e.g. legal:"
-            sx={{ fontFamily: 'monospace' }}
-            disabled={!prefixEditable}
-          />
-          <FormHelperText data-testid="datalake-config-tagprefix-help">
-            {prefixIssue ??
-              (prefixEditable
-                ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
-                : 'Inherited from the existing data lake.')}
-          </FormHelperText>
-        </FormControl>
+        {/* A GitHub connector lake's gh-<hex> prefix is an internal key with nothing to edit. */}
+        {!(generatedPrefix && !prefixIssue) && (
+          <FormControl required={prefixEditable} error={!!prefixIssue}>
+            <FormLabel>Tag Prefix</FormLabel>
+            <Input
+              data-testid="config-tag-prefix-input"
+              value={config.tagPrefix}
+              onChange={e => setTagPrefix(e.target.value)}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                if (v && !v.endsWith(':')) {
+                  setTagPrefix(v + ':');
+                }
+              }}
+              placeholder="e.g. legal:"
+              sx={{ fontFamily: 'monospace' }}
+              disabled={!prefixEditable}
+            />
+            <FormHelperText data-testid="datalake-config-tagprefix-help">
+              {prefixIssue ??
+                autoPickNote ??
+                (prefixEditable
+                  ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
+                  : 'Inherited from the existing data lake.')}
+            </FormHelperText>
+          </FormControl>
+        )}
 
         {/* Required User Tag */}
         <FormControl>
@@ -248,6 +295,7 @@ export default function ConfigStep() {
                 </Typography>
               )}
             </Typography>
+            {pendingDriveFolder && <DriveFolderEstimateSummary driveFolderId={pendingDriveFolder.driveFolderId} />}
             {optionalSteps.taxonomy && !targetLake && (
               <Typography level="body-sm" color="neutral">
                 AI tag suggestions will run in the background after upload - review them from the Data Lakes list.

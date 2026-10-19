@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { LakeDriveConnection } from '@client/app/hooks/data/googleDrive';
@@ -8,21 +8,24 @@ import type { LakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 const h = vi.hoisted(() => ({
   connection: { current: null as LakeDriveConnection | null },
   isError: { current: false },
+  canManage: { current: true },
   connectMutate: vi.fn(),
   disconnectMutate: vi.fn(),
   openPicker: vi.fn(),
   onPicked: { current: null as null | ((folder: { driveFolderId: string; folderName?: string }) => void) },
   toastError: vi.fn(),
+  get: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
+  useLakeDriveCanManage: () => ({ data: h.canManage.current }),
   useConnectDriveFolderToLake: () => ({ mutate: h.connectMutate, isPending: false }),
   useDisconnectLakeDrive: () => ({ mutate: h.disconnectMutate, isPending: false }),
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: vi.fn() } }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: h.toastError } }));
 vi.mock('@client/app/hooks/data/useDriveFolderPicker', async importOriginal => {
   const actual = await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderPicker')>();
@@ -50,6 +53,8 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   lastError: null,
   lastUsedAt: null,
   connectedAt: null,
+  lastPolledAt: null,
+  syncSchedule: { mode: 'manual' },
   fileCount: 3,
   disconnecting: false,
   disconnectStalled: false,
@@ -58,8 +63,10 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('google', { picker: {} }); // the Picker API counts as loaded
   h.connection.current = null;
   h.isError.current = false;
+  h.canManage.current = true;
 });
 
 describe('DriveConnectAction', () => {
@@ -88,6 +95,23 @@ describe('DriveConnectAction', () => {
     expect(screen.queryByTestId('drive-connect-btn')).toBeNull();
   });
 
+  it('shows an appointed admin the status but no connect, re-sync or disconnect controls', () => {
+    h.canManage.current = false;
+    h.connection.current = connected({ lastError: 'Sync stopped short.' });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Docs');
+    expect(screen.getByTestId('drive-connection-last-error')).toHaveTextContent('Sync stopped short.');
+    expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
+    expect(screen.queryByTestId('drive-disconnect-btn')).toBeNull();
+  });
+
+  it('keeps Connect disabled for an appointed admin on a lake with no connection yet', () => {
+    h.canManage.current = false;
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connect-unavailable-btn')).toBeDisabled();
+    expect(screen.queryByTestId('drive-connect-btn')).toBeNull();
+  });
+
   it('shows the connected folder with re-sync and disconnect', () => {
     h.connection.current = connected();
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
@@ -101,6 +125,59 @@ describe('DriveConnectAction', () => {
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Connected');
     expect(screen.queryByTestId('drive-connection-last-error')).toBeNull();
+  });
+
+  it('shows when the lake last synced and that the poll keeps it current', () => {
+    h.connection.current = connected({
+      lastPolledAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      // lastUsedAt is the last Drive API call, which must not be passed off as the last sync.
+      lastUsedAt: new Date().toISOString(),
+      syncSchedule: { mode: 'automatic', intervalMs: 6 * 60 * 60 * 1000 },
+    });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent(/Last synced 2 hours ago/);
+    expect(line).toHaveTextContent('Syncs automatically about every 6 hours');
+  });
+
+  it('says Not synced yet and manual-only before any sync run has ended with the poll off', () => {
+    h.connection.current = connected({ lastPolledAt: null, syncSchedule: { mode: 'manual' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent('Not synced yet');
+    expect(line).toHaveTextContent('Syncs only on a manual Re-sync');
+  });
+
+  it('calls a failed run the last sync ATTEMPT, since a failed run stamps lastPolledAt too', () => {
+    h.connection.current = connected({
+      lastPolledAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      lastError: 'Google Drive is rate-limiting this sync.',
+    });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    const line = screen.getByTestId('drive-connection-last-synced');
+    expect(line).toHaveTextContent(/Last sync attempt 10 minutes ago/);
+    expect(line).not.toHaveTextContent('Last synced');
+  });
+
+  it('drops the schedule while disconnecting, when the disabled connection would read as paused', () => {
+    h.connection.current = connected({ disconnecting: true, syncSchedule: { mode: 'paused' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).not.toHaveTextContent('paused');
+  });
+
+  it('still renders when the API sends no schedule', () => {
+    h.connection.current = connected({ syncSchedule: undefined as never });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).toHaveTextContent(/^Not synced yet$/);
+  });
+
+  it('reports the automatic sync as paused for a connection the poll skips', () => {
+    h.connection.current = connected({ status: 'needs_reconnect', syncSchedule: { mode: 'paused' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-last-synced')).toHaveTextContent('Automatic sync paused');
   });
 
   it('does NOT report a sync that stopped short as Connected (#2394)', () => {
@@ -212,5 +289,29 @@ describe('DriveConnectAction', () => {
     const [, options] = h.disconnectMutate.mock.calls[0];
     options.onError(new Error('Network Error'));
     expect(h.toastError).toHaveBeenCalledWith('Could not disconnect. Please try again.');
+  });
+
+  it('re-syncs the stored folder in one click, without reopening the picker', async () => {
+    h.connection.current = connected();
+    h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('drive-resync-btn'));
+
+    await waitFor(() =>
+      expect(h.connectMutate).toHaveBeenCalledWith(
+        { dataLakeId: 'lake1', driveFolderId: 'FOLDER', folderName: 'Docs' },
+        expect.any(Object)
+      )
+    );
+    expect(h.openPicker).not.toHaveBeenCalled();
+  });
+
+  it('offers Reconnect instead of Re-sync on a connection whose grant is dead', () => {
+    h.connection.current = connected({ status: 'credential_error', lastError: 'Google Drive access was revoked' });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('drive-reconnect-btn')).toHaveTextContent('Reconnect Google Drive');
+    expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
 import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from '@server/services/publish';
+import { displayReplyTitle } from '@server/services/publish/plainTitle';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
@@ -9,7 +10,9 @@ import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from 
  *
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
- *   q                       - substring match on title + description
+ *   sourceMessageId         - owner-scoped lookup of the caller's publication of one chat reply
+ *   q                       - substring match on title + description (the STORED title; see
+ *                             replyTitleBody below for how a reply row's displayed title can differ)
  *   kind, visibility, gate, comments, tag - facet filters
  *   sort                    - newest (default) | oldest | views | versions | updated | title
  *   facets                  - 'true' to also compute the facet counts, in a second aggregation.
@@ -41,6 +44,9 @@ const handler = baseApi().get(async (req, res) => {
   // inherently owner-scoped (you can only update your own publication) and matches the
   // bundle source linkage written at publish time.
   const sourceArtifactId = typeof req.query.sourceArtifactId === 'string' ? req.query.sourceArtifactId : undefined;
+  // `?sourceMessageId=<questId>` is the same owner-scoped lookup for a published chat reply, so
+  // reopening Publish & Share on an answer lands on the live page instead of a blank form.
+  const sourceMessageId = typeof req.query.sourceMessageId === 'string' ? req.query.sourceMessageId : undefined;
 
   // `?mine=true` scopes to the caller's OWN artifacts - the set they can manage
   // (PATCH/restore/delete are owner-only). Otherwise apply the visibility filter.
@@ -50,6 +56,10 @@ const handler = baseApi().get(async (req, res) => {
   if (sourceArtifactId) {
     scope.ownerId = userId;
     scope['source.artifactId'] = sourceArtifactId;
+  } else if (sourceMessageId) {
+    scope.ownerId = userId;
+    scope['source.kind'] = 'reply';
+    scope['source.messageId'] = sourceMessageId;
   } else if (mine) {
     scope.ownerId = userId;
   } else {
@@ -97,6 +107,24 @@ const handler = baseApi().get(async (req, res) => {
   const derived = {
     versionsCount: { $size: { $ifNull: ['$versions', []] } },
     titleSort: { $toLower: '$title' },
+  };
+
+  // Reply rows published before deriveTitle stripped inline markdown still store "Recap: *Tides*". The
+  // list shows them the way the share page does (displayReplyTitle), which needs the reply body, so
+  // ship it only for reply rows whose title holds a marker character. `q` and the title sort still run
+  // on the stored value: a legacy title differs from its display only by markers, so a word search
+  // still hits and the order moves only for a title that opens with a link or code span.
+  const replyTitleBody = {
+    $cond: [
+      {
+        $and: [
+          { $eq: ['$source.kind', 'reply'] },
+          { $regexMatch: { input: { $ifNull: ['$title', ''] }, regex: '[*_~`\\[]' } },
+        ],
+      },
+      '$renderedBody',
+      '$$REMOVE',
+    ],
   };
 
   // AUTHORIZATION clause and caller narrowing merged into ONE leading $match, so an index can
@@ -154,6 +182,8 @@ const handler = baseApi().get(async (req, res) => {
               // The gate KIND only - never the hash, which must not leave the server even
               // though this is an aggregate rather than a select:false-honouring find.
               gateKind: '$accessGate.kind',
+              // Consumed and dropped below; never sent to the caller.
+              replyTitleBody,
             },
           },
         ],
@@ -211,7 +241,11 @@ const handler = baseApi().get(async (req, res) => {
   // and hiding them would couple those reads to ownerId staying in the projection forever.
   const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind'] as const;
 
-  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  const rows = ((result?.rows ?? []) as Array<Record<string, unknown>>).map(({ replyTitleBody: body, ...row }) =>
+    typeof body === 'string' && typeof row.title === 'string'
+      ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
+      : row
+  );
   const visibleRows = isAdmin
     ? rows
     : rows.map(row => {

@@ -61,7 +61,8 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
  *
  * The unit-test defaults these suites otherwise inherit are too tight for them. Booting mongod
  * costs an unavoidable cold start on the first write: Mongoose builds every model's index set on
- * connect (autoIndex CANNOT be disabled - index-dependent suites need it) plus first-collection
+ * connect (autoIndex is on by default - index-dependent suites need it; a suite that asserts nothing
+ * about indexes can connect with `{ autoIndex: false }`) plus first-collection
  * creation. What matters is that the cost SCALES with how contended the runner is, which is what
  * makes the resulting failure intermittent rather than reproducible. Measured spread for a whole
  * file: 3-12s on a healthy CI run, 16-22s under this shard's file parallelism (see the note in
@@ -82,13 +83,14 @@ export const MONGO_TEST_TIMEOUT_MS = 60_000;
  * Standalone mongod behind the port-collision retry above. The default choice; reach for
  * `createMongoReplSet` only when transactionality is the thing under test.
  *
- * A suite that asserts on, drops, or recreates indexes MUST settle the model's autoIndex build
- * first, right after connecting:
+ * A suite that asserts on, drops, or recreates indexes - or whose code under test relies on a
+ * unique index for correctness (Cache `key` behind the fixed-window limiter) - MUST settle the
+ * model's autoIndex build first, right after connecting:
  *
  *   await mongoose.connect(server.getUri());
  *   await MyModel.init();
  *
- * autoIndex cannot be turned off here (index-dependent suites need it), and Mongoose builds the
+ * The helpers do not turn autoIndex off (index-dependent suites need it), and Mongoose builds the
  * schema's declared indexes in the BACKGROUND on connect, resolving whenever the runner gets to
  * it. Without that `init()` await the build can land AFTER a hook has dropped an index or the
  * whole database, restoring exactly what the test needs absent. It surfaces as an assertion on an

@@ -29,12 +29,16 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   },
 }));
 vi.mock('./DriveConnectAction', () => ({ default: () => <div data-testid="drive-connect-action" /> }));
-vi.mock('./GitHubConnectAction', () => ({ default: () => <div data-testid="github-connect-action" /> }));
+vi.mock('./GitHubConnectAction', () => ({
+  default: ({ lake }: { lake: { origin?: string } }) => (
+    <div data-testid="github-connect-action" data-origin={lake.origin ?? ''} />
+  ),
+}));
 
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const orgLake = { id: 'lake1', organizationId: 'org-1' };
+const orgLake = { id: 'lake1', organizationId: 'org-1', canManage: true, isCreator: false };
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
 beforeEach(() => {
@@ -45,6 +49,11 @@ beforeEach(() => {
 });
 
 describe('LakeSourceConnectActions', () => {
+  it("hands the lake's origin to the GitHub panel, which decides whether to ask for the switch", () => {
+    wrap(<LakeSourceConnectActions lake={{ ...orgLake, origin: 'curated' }} />);
+    expect(screen.getByTestId('github-connect-action')).toHaveAttribute('data-origin', 'curated');
+  });
+
   it('offers both sources on an unconnected lake', () => {
     wrap(<LakeSourceConnectActions lake={orgLake} />);
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
@@ -60,12 +69,20 @@ describe('LakeSourceConnectActions', () => {
     expect(h.gitHubQueryEnabled).toHaveBeenCalledWith(false);
   });
 
-  it('shows only Drive, and never reads the GitHub routes, on a personal lake', () => {
-    h.gitHubConnection.current = { id: 'gh1' };
-    wrap(<LakeSourceConnectActions lake={{ id: 'lake1', organizationId: null }} />);
+  it('offers both sources to the creator of a personal lake', () => {
+    wrap(<LakeSourceConnectActions lake={{ id: 'lake1', organizationId: null, canManage: true, isCreator: true }} />);
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
+    expect(h.gitHubQueryEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('shows no source, and never reads the GitHub routes, to a non-creator of a personal lake', () => {
+    h.gitHubConnection.current = { id: 'gh1' };
+    wrap(<LakeSourceConnectActions lake={{ id: 'lake1', organizationId: null, canManage: false, isCreator: false }} />);
+    expect(screen.queryByTestId('drive-connect-action')).toBeNull();
     expect(screen.queryByTestId('github-connect-action')).toBeNull();
     expect(h.gitHubQueryEnabled).toHaveBeenCalledWith(false);
+    expect(h.gitHubQueryEnabled).not.toHaveBeenCalledWith(true);
   });
 
   it('shows only Drive once a Drive folder feeds the lake (one connector per lake)', () => {

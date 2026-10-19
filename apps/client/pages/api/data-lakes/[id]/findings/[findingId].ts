@@ -1,11 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeFindingRepository } from '@bike4mind/database';
+import { withTransaction, dataLakeFindingRepository, dataLakeRepository } from '@bike4mind/database';
 import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
@@ -73,42 +74,58 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // write, this decides the STATUS - without it a cross-lake id and an already-resolved one both
     // come back as the same null, and the 404/400 split below could not tell them apart without
     // leaking which.
-    const { lake, ctx } = await loadFindingForLake(req, { lakeId: id, findingId });
+    //
+    // The gate and the write share one transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants. The belief write below stays outside: it
+    // makes an embedding call a retry would repeat.
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
-    // AFTER the gates, deliberately: an unauthorized caller learns nothing about their own payload,
-    // and by the time a 400 is reachable the caller has already proven they manage this lake.
-    const body = UpdateBody.parse(req.body);
+    const outcome = await withTransaction(async () => {
+      const { lake } = await loadFindingForLake(req, { lakeId: id, findingId, ctx });
 
-    if (body.action === 'assign') {
-      // Shape-validated only. Whether the assignee can actually MANAGE this lake is deliberately not
-      // checked here: answering it needs the assignee's own org membership resolved into an
-      // AccessContext, which is a different read than this route holds, and half-checking it (does
-      // the user row exist?) would assure a caller of something it had not established. The picker
-      // that produces this id is #3044/#3045; a dead assignment is visible and reversible, and no
-      // assignment grants any access on its own.
-      const assigned = await dataLakeFindingRepository.assignFinding(lake.id, findingId, body.assigneeUserId);
-      if (!assigned) throw new NotFoundError('Finding not found');
-      return res.json({ data: assigned });
-    }
+      // AFTER the gates, deliberately: an unauthorized caller learns nothing about their own payload,
+      // and by the time a 400 is reachable the caller has already proven they manage this lake.
+      const body = UpdateBody.parse(req.body);
 
-    const status: LakeFindingTerminalStatus = body.action === 'resolve' ? 'resolved' : 'dismissed';
-    const resolved = await dataLakeFindingRepository.resolveFinding(lake.id, findingId, {
-      status,
-      resolvedByUserId: ctx.userId,
-      resolvedAt: new Date(),
-      resolution: body.resolution,
+      if (body.action === 'assign') {
+        // Shape-validated only. Whether the assignee can actually MANAGE this lake is deliberately not
+        // checked here: answering it needs the assignee's own org membership resolved into an
+        // AccessContext, which is a different read than this route holds, and half-checking it (does
+        // the user row exist?) would assure a caller of something it had not established. The picker
+        // that produces this id is #3044/#3045; a dead assignment is visible and reversible, and no
+        // assignment grants any access on its own.
+        const assigned = await dataLakeFindingRepository.assignFinding(lake.id, findingId, body.assigneeUserId);
+        if (!assigned) throw new NotFoundError('Finding not found');
+        // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+        await dataLakeRepository.touchIfStable(lake.id);
+        return { kind: 'assigned' as const, assigned };
+      }
+
+      const status: LakeFindingTerminalStatus = body.action === 'resolve' ? 'resolved' : 'dismissed';
+      const resolved = await dataLakeFindingRepository.resolveFinding(lake.id, findingId, {
+        status,
+        resolvedByUserId: ctx.userId,
+        resolvedAt: new Date(),
+        resolution: body.resolution,
+      });
+      // Null means the CAS filter matched nothing, which is two different things: the row is still
+      // there but no longer open (the double-resolve guard firing on a race or a double-click), or it
+      // was deleted between the read above and this write - a lake teardown and a source purge both
+      // sweep findings, so that is a real interleaving and not a theoretical one. Re-read to tell
+      // them apart rather than reporting a row that no longer exists as "already ruled on"; the
+      // `assign` branch above already 404s that same case, and this is what makes the two agree.
+      if (!resolved) {
+        const stillPresent = await dataLakeFindingRepository.findById(findingId);
+        if (!stillPresent) throw new NotFoundError('Finding not found');
+        throw new BadRequestError('This finding has already been ruled on');
+      }
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { kind: 'ruled' as const, lake, resolved, status };
     });
-    // Null means the CAS filter matched nothing, which is two different things: the row is still
-    // there but no longer open (the double-resolve guard firing on a race or a double-click), or it
-    // was deleted between the read above and this write - a lake teardown and a source purge both
-    // sweep findings, so that is a real interleaving and not a theoretical one. Re-read to tell
-    // them apart rather than reporting a row that no longer exists as "already ruled on"; the
-    // `assign` branch above already 404s that same case, and this is what makes the two agree.
-    if (!resolved) {
-      const stillPresent = await dataLakeFindingRepository.findById(findingId);
-      if (!stillPresent) throw new NotFoundError('Finding not found');
-      throw new BadRequestError('This finding has already been ruled on');
-    }
+
+    if (outcome.kind === 'assigned') return res.json({ data: outcome.assigned });
+    const { lake, resolved, status } = outcome;
 
     // The ruling is committed; this projects it into lake memory so the next session inherits it.
     // Deliberately AFTER the write and deliberately swallowing: `recordFindingResolutionBelief` does

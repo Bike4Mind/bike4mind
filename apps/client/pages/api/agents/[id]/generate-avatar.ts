@@ -1,10 +1,10 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository, imageModerationIncidentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
-  NotFoundError,
-  ForbiddenError,
   BadRequestError,
   getSettingsByNames,
   getSettingsMap,
@@ -14,14 +14,14 @@ import {
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@server/utils/imageLogger';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -121,7 +121,9 @@ const downloadImageBuffer = async (imageUrl: string): Promise<Buffer> => {
   return Buffer.from(response.data);
 };
 
-const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
   const { imageModel: userImageModel } = req.body;
@@ -133,14 +135,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   // Cheap early refusal: checkStorageLimit does no DB I/O (b4m-core/utils/src/user.ts),
   // it only reads fields already on req.user, so an already-over-quota user is turned
@@ -499,7 +494,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
     });
 
     // Let the shared error handler render this with its real status and message
-    // (400, "File size exceeds storage limit"), same as every other upload door.
+    // (400 with a storage `code` and byte counts), same as every other upload door.
     if (error instanceof BadRequestError) {
       throw error;
     }

@@ -1,6 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import { updateUser, applyBaseUserUpdates, type UpdateUserParameters } from './update';
-import { IUserDocument } from '@bike4mind/common';
+import {
+  updateUser,
+  applyBaseUserUpdates,
+  updateUserSchema,
+  type UpdateUserParameters,
+  USERNAME_TAKEN_MESSAGE,
+} from './update';
+import {
+  BadRequestError,
+  ConflictError,
+  IUserDocument,
+  IUserRepository,
+  USERNAME_RULES_MESSAGE,
+} from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 
 describe('applyBaseUserUpdates', () => {
@@ -631,6 +643,96 @@ describe('updateUser', () => {
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
     expect(persisted.preferences?.showSplashCards).toBe(true);
     expect(persisted.preferences?.showFunTools).toBe(false);
-    expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
+    // Retired preference: an older client still sending it is accepted and the key dropped.
+    expect((persisted.preferences as Record<string, unknown>)?.saveGeneratedAudio).toBeUndefined();
+  });
+});
+
+describe('updateUser username changes', () => {
+  const buildUser = (username: string) =>
+    ({
+      id: 'user-name',
+      username,
+      name: 'Name User',
+      email: 'name@example.com',
+      isAdmin: false,
+      tags: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as unknown as IUserDocument;
+
+  const buildRepository = (user: IUserDocument) => ({
+    findByIdWithPassword: vi.fn().mockResolvedValue(user),
+    existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
+    update: vi.fn().mockResolvedValue(user),
+  });
+
+  const run = (repository: ReturnType<typeof buildRepository>, params: UpdateUserParameters) =>
+    updateUser('user-name', params, { db: { users: repository as unknown as IUserRepository } });
+
+  it('stores a changed username trimmed after checking availability case-insensitively', async () => {
+    const repository = buildRepository(buildUser('oldname'));
+
+    await run(repository, { username: '  New Name ' });
+
+    expect(repository.existsOtherUserWithUsername).toHaveBeenCalledWith('New Name', 'user-name');
+    expect(repository.update.mock.calls[0][0].username).toBe('New Name');
+  });
+
+  it('rejects a changed username outside the allowed characters with a 400', async () => {
+    const repository = buildRepository(buildUser('oldname'));
+
+    const error = await run(repository, { username: '<b>x</b>' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as BadRequestError).message).toBe(USERNAME_RULES_MESSAGE);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a username another account holds with a 409', async () => {
+    const repository = buildRepository(buildUser('oldname'));
+    repository.existsOtherUserWithUsername.mockResolvedValue(true);
+
+    await expect(run(repository, { username: 'Taken' })).rejects.toThrow(ConflictError);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('maps a duplicate-key error on username during the write to the same 409', async () => {
+    const repository = buildRepository(buildUser('oldname'));
+    repository.update.mockRejectedValue(
+      Object.assign(new Error('E11000'), { code: 11000, keyPattern: { username: 1 } })
+    );
+
+    await expect(run(repository, { username: 'Raced' })).rejects.toThrow(USERNAME_TAKEN_MESSAGE);
+  });
+
+  it('leaves an unchanged legacy username alone', async () => {
+    const repository = buildRepository(buildUser('legacy@name'));
+
+    await run(repository, { username: 'legacy@name', name: 'Renamed' });
+
+    expect(repository.existsOtherUserWithUsername).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('updateUserSchema - preferences.hiddenSurfaces', () => {
+  const parse = (hiddenSurfaces: unknown) => updateUserSchema.safeParse({ preferences: { hiddenSurfaces } });
+
+  it('accepts a list of surface ids, including an empty one that shows everything again', () => {
+    expect(parse(['opti']).success).toBe(true);
+    expect(parse([]).success).toBe(true);
+  });
+
+  it('rejects an oversized id or list', () => {
+    expect(parse(['x'.repeat(65)]).success).toBe(false);
+    expect(parse(Array.from({ length: 33 }, (_, i) => `s${i}`)).success).toBe(false);
+  });
+
+  it('replaces the stored list wholesale on write', () => {
+    const user = { id: 'u', preferences: { hiddenSurfaces: ['opti'], language: 'en' } } as unknown as IUserDocument;
+    const result = applyBaseUserUpdates(user, { preferences: { hiddenSurfaces: [] } });
+    expect(result.preferences?.hiddenSurfaces).toEqual([]);
+    expect(result.preferences?.language).toBe('en');
   });
 });

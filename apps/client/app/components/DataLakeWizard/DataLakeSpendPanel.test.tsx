@@ -69,6 +69,14 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByTestId('datalake-spend-empty')).toHaveTextContent(/since this feature shipped/i);
   });
 
+  it('does not claim "no spend recorded" for a lake with research spend but no embeddings or ledger rows', () => {
+    renderPanel({ summary: baseSummary({ embeddingSpendMicroUsd: 0, researchLifetimeUsd: 3 }) });
+    expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$3.00');
+    const empty = screen.getByTestId('datalake-spend-empty');
+    expect(empty).toHaveTextContent(/since this feature shipped/i);
+    expect(empty).not.toHaveTextContent(/no spend recorded yet/i);
+  });
+
   it('renders breakdown tables once ledger rows exist', () => {
     renderPanel({
       summary: baseSummary({
@@ -147,6 +155,16 @@ describe('DataLakeSpendPanel', () => {
     expect(copy).toHaveTextContent(/research run has its own cost ceiling/i);
   });
 
+  // The panel used to tell every viewer that none of this lake's cost was charged to anyone. Research
+  // judge spend is now debited from the lake owner's credits, so a blanket denial became false and
+  // had to name which of the two streams is charged.
+  it('says research spend is credit-charged and ingestion spend is recorded only', () => {
+    renderPanel();
+    const note = screen.getByTestId('datalake-spend-credit-note');
+    expect(note).toHaveTextContent(/research judge spend is charged/i);
+    expect(note).toHaveTextContent(/ingestion spend is recorded but not charged/i);
+  });
+
   it('shows the halted-indexing alert (not an "off = unconstrained" reading) when spendEnabled is false', () => {
     renderPanel({ summary: baseSummary({ spendEnabled: false }) });
     const alert = screen.getByTestId('datalake-spend-disabled-alert');
@@ -167,6 +185,47 @@ describe('DataLakeSpendPanel', () => {
     });
     const progress = screen.getByTestId('datalake-spend-lake-progress');
     expect(progress).toHaveTextContent('140%');
+  });
+
+  // The per-lake budget gate reads the embedding meter only, so a lake at $80 embeddings + $40
+  // research against a $100 budget is at 80%, not 120% - the bar must match the gate, not the
+  // combined spend total.
+  it('measures the per-lake budget bar against embedding spend only, excluding research', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 80_000_000,
+        researchLifetimeUsd: 40,
+        perLakeBudgetMicroUsd: 100_000_000,
+      }),
+    });
+    const progress = screen.getByTestId('datalake-spend-lake-progress');
+    expect(progress).toHaveTextContent('Per-lake ingestion budget: $80.00 of $100.00 (80%)');
+    expect(progress).not.toHaveTextContent('120%');
+  });
+
+  it('shows research spend on its own line, labelled as not capped by the per-lake budget', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 80_000_000,
+        researchLifetimeUsd: 40,
+        perLakeBudgetMicroUsd: 100_000_000,
+      }),
+    });
+    const research = screen.getByTestId('datalake-spend-research-lifetime');
+    expect(research).toHaveTextContent('$40.00');
+    expect(research).toHaveTextContent(/not capped by the per-lake budget/i);
+  });
+
+  it('keeps the combined lifetime chip across ingestion and research spend', () => {
+    renderPanel({
+      summary: baseSummary({ embeddingSpendMicroUsd: 80_000_000, researchLifetimeUsd: 40 }),
+    });
+    expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$120.00');
+  });
+
+  it('hides the research line when there is no research spend', () => {
+    renderPanel({ summary: baseSummary({ embeddingSpendMicroUsd: 80_000_000, researchLifetimeUsd: 0 }) });
+    expect(screen.queryByTestId('datalake-spend-research-lifetime')).not.toBeInTheDocument();
   });
 
   it('formats a sub-cent lifetime total via the shared formatUsd floor, not as $0.00', () => {

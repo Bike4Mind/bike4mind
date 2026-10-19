@@ -33,7 +33,7 @@ import {
   LastPage as LastPageIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
-import { LLMModelConfig, ModelBackend, normalizeEntitlementKey } from '@bike4mind/common';
+import { LLMModelConfig, ModelBackend, normalizeEntitlementKey, isOAuthSourceTag } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import {
   useLLMModelConfigurationsWithDefaults,
@@ -416,7 +416,9 @@ const LLMDashboardTab: React.FC = () => {
     // Add tags from user assignments
     usersData?.users?.forEach((user, index) => {
       if (user.tags && user.tags.length > 0) {
-        user.tags.forEach(tag => allTags.add(tag.toLowerCase()));
+        user.tags.forEach(tag => {
+          if (!isOAuthSourceTag(tag)) allTags.add(tag.toLowerCase());
+        });
       }
     });
 

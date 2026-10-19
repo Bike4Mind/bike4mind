@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,
@@ -26,6 +27,8 @@ import {
   renderArtifactIndexHtml,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
+  mayRepublishSlug,
+  SLUG_OWNED_BY_OTHER,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -253,7 +256,7 @@ const handler = baseApi().post(async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate')
+    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate visibility')
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -263,7 +266,12 @@ const handler = baseApi().post(async (req, res) => {
       sha256Index?: string;
       versions?: Array<{ sha256Index: string }>;
       accessGate?: unknown;
+      visibility?: string;
     } | null>();
+
+  if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
+    return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
+  }
 
   // Validate the embed allowlist against the artifact's FINAL open-public state. A
   // re-publish PRESERVES the previous access gate (it is not in the $set below), so
@@ -329,8 +337,11 @@ const handler = baseApi().post(async (req, res) => {
     });
   }
   const publishTags = normalizePublishTags(manifest.tags ?? []);
+  const ownerId = previous ? previous.ownerId : String(req.user.id);
   const saved = await PublishedArtifact.findOneAndUpdate(
-    { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null },
+    // ownerId in the filter: if the slug changed hands after `previous` was read, the upsert's insert
+    // collides on the partial unique {tier, scopeId, slug} index instead of overwriting that row.
+    { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null, ownerId },
     {
       $set: {
         publicId,
@@ -352,7 +363,7 @@ const handler = baseApi().post(async (req, res) => {
         // []) can only ADD grants here, never clobber an existing allowlist to [].
         // Clearing is done through the PATCH path.
         ...(embed.value.length > 0 ? { embedOrigins: embed.value } : {}),
-        ownerId: previous ? previous.ownerId : String(req.user.id),
+        ownerId,
         lastPublishedBy: String(req.user.id),
         source: manifest.source,
         storageKeyPrefix: canonicalPrefix,
@@ -376,13 +387,22 @@ const handler = baseApi().post(async (req, res) => {
       $push: { versions: { $each: versionsToPush } },
     },
     { upsert: true, new: true }
-  );
+  ).catch((err: unknown) => {
+    if (isDuplicateKeyError(err)) return null;
+    throw err;
+  });
+  if (!saved) {
+    return res.status(409).json({ error: 'This slug was published by another request', code: SLUG_OWNED_BY_OTHER });
+  }
 
   // 7b. Re-publish overwrites the origin in place, but the public `/p/...` page is
   // CDN-cached (see serve route Cache-Control). Without invalidation the prior
   // version keeps serving for up to the TTL. Only public pages are cached
-  // (gated pages are no-store), so skip the invalidation otherwise. Best-effort.
-  if (saved.visibility === 'public') void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  // (gated pages are no-store), so skip the invalidation otherwise - unless the page WAS public:
+  // an update that downgrades it must purge the cached public copy too. Best-effort.
+  if (saved.visibility === 'public' || previous?.visibility === 'public') {
+    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
 
   // 8. Best-effort draft cleanup
   void (async () => {

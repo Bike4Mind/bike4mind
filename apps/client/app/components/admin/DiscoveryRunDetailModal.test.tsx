@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -72,6 +72,7 @@ const RUN = {
   catalogDiff: [],
   detailTotals: {} as Record<string, number>,
   unmatchedIds: [],
+  frozenProfileIds: [] as string[],
   droppedRecords: [],
 };
 
@@ -172,6 +173,24 @@ describe('DiscoveryRunDetailModal', () => {
     expect(screen.queryByTestId('discovery-run-catalog-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-skips-toggle')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-operator-conflicts')).not.toBeInTheDocument();
+  });
+
+  it('names the Bedrock profile ids frozen for want of a listed foundation id, and hides the line otherwise', async () => {
+    mockGet.mockResolvedValue({
+      data: { run: runWith({ frozenProfileIds: ['us.anthropic.claude-x-v1:0', 'global.anthropic.claude-y-v1:0'] }) },
+    });
+    renderModal();
+
+    const line = await screen.findByTestId('discovery-run-frozen-profiles');
+    expect(line).toHaveTextContent('(2)');
+    expect(line).toHaveTextContent('us.anthropic.claude-x-v1:0, global.anthropic.claude-y-v1:0');
+  });
+
+  it('omits the frozen profiles line when none are frozen', async () => {
+    renderModal();
+
+    await screen.findByTestId('discovery-run-price-flags-table');
+    expect(screen.queryByTestId('discovery-run-frozen-profiles')).not.toBeInTheDocument();
   });
 
   it('reads a skipped source as skipped rather than as a failure', async () => {
@@ -371,6 +390,60 @@ describe('DiscoveryRunDetailModal', () => {
     const modal = screen.getByTestId('discovery-run-modal');
     expect(modal).toHaveTextContent('Price rows planned (1)');
     expect(modal).not.toHaveTextContent('Repriced (1)');
+  });
+
+  it('lists a row recorded from the build apart from a reprice', async () => {
+    const row = (modelId: string, source: string) => ({
+      modelId,
+      unit: 'per_token',
+      inputPerMTok: 3,
+      outputPerMTok: 15,
+      effectiveFrom: '2026-07-30T12:00:00.000Z',
+      sources: [source],
+      note: `discovery:${source}@2026-07-30`,
+    });
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          changes: { ...EMPTY_CHANGES, plannedPriceRows: 2, appendedPriceRows: 2 },
+          priceRows: [row('gpt-cheap', 'openrouter'), row('kimi-k3', 'adapter-literal')],
+        }),
+      },
+    });
+    renderModal();
+
+    const modal = await screen.findByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Repriced (1)');
+    expect(modal).toHaveTextContent('Recorded from build (1)');
+    expect(within(screen.getByTestId('discovery-run-build-price-rows-table')).getByText('kimi-k3')).toBeInTheDocument();
+    expect(within(screen.getByTestId('discovery-run-price-rows-table')).queryByText('kimi-k3')).not.toBeInTheDocument();
+  });
+
+  it('splits the rows it can see and says how many the run had when the list was cut', async () => {
+    const row = (modelId: string, source: string) => ({
+      modelId,
+      unit: 'per_token',
+      inputPerMTok: 3,
+      outputPerMTok: 15,
+      effectiveFrom: '2026-07-30T12:00:00.000Z',
+      sources: [source],
+      note: `discovery:${source}@2026-07-30`,
+    });
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          changes: { ...EMPTY_CHANGES, plannedPriceRows: 5, appendedPriceRows: 5 },
+          priceRows: [row('gpt-cheap', 'openrouter'), row('kimi-k3', 'adapter-literal')],
+          detailTotals: { priceRows: 5 },
+        }),
+      },
+    });
+    renderModal();
+
+    const modal = await screen.findByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Repriced (1 shown, 5 in the run)');
+    expect(modal).toHaveTextContent('Recorded from build (1 shown, 5 in the run)');
+    expect(within(screen.getByTestId('discovery-run-build-price-rows-table')).getByText('kimi-k3')).toBeInTheDocument();
   });
 
   it('stays silent about the mode on a run document written before the field existed', async () => {

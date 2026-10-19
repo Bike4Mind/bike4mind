@@ -10,7 +10,7 @@ import {
 import { Resource } from 'sst';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';

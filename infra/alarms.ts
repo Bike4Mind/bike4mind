@@ -11,11 +11,11 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryFunction } from './cron';
+import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
+import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -97,6 +97,37 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Ungranted Credit Purchases
+   *
+   * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
+   * purchase transaction, a transaction whose balance increment never applied, or a
+   * transaction whose owner no longer exists (see UngrantedReason in the cron). The Slack
+   * post from the cron is best-effort; this alarm is the signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * the period is one day.
+   *
+   * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
+   * Namespace: Lumina5/CreditPurchases / UngrantedPurchases
+   */
+  new aws.cloudwatch.MetricAlarm('ungrantedCreditPurchases', {
+    name: `${$app.name}-${$app.stage}-ungranted-credit-purchases`,
+    alarmDescription: 'Stripe credit purchase succeeded but no credits were granted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'UngrantedPurchases',
+    namespace: 'Lumina5/CreditPurchases',
+    dimensions: { Stage: $app.stage },
+    period: 86400, // matches the daily cron
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'CreditPurchases',
       Severity: 'High',
     },
   });
@@ -760,7 +791,7 @@ if (isMonitoredStage) {
   });
 
   /**
-   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * The dimension set apps/workers/src/modelDiscovery/metrics.ts stamps on every datum.
    * CloudWatch keys a custom metric by namespace + name + the exact dimension
    * set and never rolls up, so an alarm that omits these watches an empty
    * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
@@ -776,7 +807,7 @@ if (isMonitoredStage) {
    * evaluation periods is three scheduled runs; a period with no run at all
    * does not breach, which keeps a disabled or preview stage quiet.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts
    * Namespace: Lumina5/ModelDiscovery / RunFailures
    */
   new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
@@ -797,6 +828,59 @@ if (isMonitoredStage) {
       Severity: 'High',
     },
   });
+
+  /**
+   * Alarm: Model Discovery no successful run (dead-man's switch)
+   *
+   * An independent check reads the last completed hosted 'ok' run every 15
+   * minutes. Partial runs do not refresh it. An independent schedule is needed
+   * because CloudWatch can reuse older healthy data beyond a missing 24h
+   * window when the watched discovery cron stops.
+   *
+   * Metric emitted by: apps/workers/src/cron/modelDiscoveryStaleness.ts
+   * Namespace: Lumina5/ModelDiscovery / NoSuccessfulRun
+   */
+  if (modelDiscoveryCronEnabled) {
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryNoSuccessfulRun', {
+      name: `${$app.name}-${$app.stage}-model-discovery-no-successful-run`,
+      alarmDescription: 'No completed successful hosted model discovery run in 24h',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'NoSuccessfulRun',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 1800, // Two independent checks per period; any stale check breaches.
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'breaching',
+      dimensions: modelDiscoveryDimensions,
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelDiscoveryStalenessCheckErrors', {
+      name: `${$app.name}-${$app.stage}-model-discovery-staleness-check-errors`,
+      alarmDescription: 'Model discovery staleness check failed; watchdog data may be unavailable',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: modelDiscoveryStalenessFunction.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Model Discovery Lambda Errors
@@ -919,7 +1003,7 @@ if (isMonitoredStage) {
    *
    * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
    * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
    * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
    * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).
@@ -1395,21 +1479,112 @@ if (isMonitoredStage) {
    * users before anyone noticed), so this alarms on the raw failure count rather than waiting for
    * a single error class to dominate.
    *
-   * Metric emitted by: apps/client/server/chatCompletion/internal/route.ts, in the
-   * processQuest(...).catch handler. Reads the Stage-only rollup datum (see the comment at that
-   * call site) - alarms match one exact dimension set, so the per-ErrorClass breakdown is a
-   * dashboard concern, not this alarm's.
+   * Metric emitted by: apps/client/server/chatCompletion/processingFailedMetric.ts, from the
+   * failure path of internal /process. The CLI SSE/WS and embed chat surfaces emit the same metric
+   * under their own Surface value but are deliberately not alarmed until a base rate exists: their
+   * failure definition differs and embed takes public traffic. Alarms match one exact dimension set.
    */
   new aws.cloudwatch.MetricAlarm('questProcessingFailures', {
     name: `${$app.name}-${$app.stage}-quest-processing-failures`,
-    alarmDescription: 'Quest processing is failing on the internal ChatCompletion /process path',
+    alarmDescription: 'Quest processing (/process) is failing on the ChatCompletion service',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ProcessingFailed',
-    namespace: 'Lumina5/Quests',
+    metricName: QUEST_METRICS.ProcessingFailed,
+    namespace: QUESTS_NAMESPACE,
     period: 300, // 5 minutes
     statistic: 'Sum',
     threshold: 5,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage, Surface: '/process' },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback delivery exhausted its retries
+   *
+   * A generation callback whose claim was lost or crashed on every redispatch was moved to
+   * `failed`. Steady state is 0. Webhook delivery failures never reach this metric (the delivery
+   * handler marks them failed itself; the generation-callback DLQ alarm covers them).
+   * Single period: each reclaim resets dispatchedAt for the whole cohort, so exhaustions land in
+   * one sweep run and a multi-period window would rarely see consecutive datapoints.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   * Namespace: QUESTS_NAMESPACE, dimensioned by Stage only (the sweep emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackLimitReached', {
+    name: `${$app.name}-${$app.stage}-quest-callback-limit-reached`,
+    alarmDescription: 'Quest generation callbacks are failing: redispatch retries exhausted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback past the redispatch horizon
+   *
+   * A callback whose last claim aged past the 72h redispatch horizon was failed. Steady state is
+   * ~0, so non-zero after the one-time historical backlog drain means a claim went unswept for
+   * 72h (the sweep was down or erroring and has since resumed). A sweep that is down right now
+   * emits nothing, which notBreaching reads as OK. Fires on a single period: any occurrence is a
+   * signal. The historical backlog was already drained when the sweep shipped, so deploying this
+   * alarm does not page.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackHorizonPassed', {
+    name: `${$app.name}-${$app.stage}-quest-callback-horizon-passed`,
+    alarmDescription: 'Quest generation callbacks aged past the 72h redispatch horizon and were failed',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback re-enqueued after a lost claim
+   *
+   * The sweep re-enqueued callbacks stuck at `dispatched` whose queue message never arrived - a
+   * message lost after its claim, distinct from a claim never made. Some rate is normal; a
+   * sustained one means the queue is dropping claimed callbacks. Three periods to ride out a
+   * single stale re-send.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> redispatchStaleCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questStaleCallbackReenqueued', {
+    name: `${$app.name}-${$app.stage}-quest-stale-callback-reenqueued`,
+    alarmDescription: 'Quest generation callbacks are being re-enqueued after their claim message was lost',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { Stage: $app.stage },
     alarmActions: [dlqAlarmTopic.arn],

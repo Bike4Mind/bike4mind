@@ -3,7 +3,6 @@ import NotebookExportModal from '@/app/components/ProfileModal/NotebookExportMod
 import NotebookImportModal from '@/app/components/ProfileModal/NotebookImportModal';
 import NotebookCurationModal from '@/app/components/ProfileModal/NotebookCurationModal';
 import ImportHistoryJobsList from '@/app/components/ProfileModal/ImportHistoryJobsList';
-import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useDeleteAllFiles } from '@client/app/hooks/data/fabFiles';
 import { useDeleteAllSessions } from '@client/app/hooks/data/sessions';
@@ -11,24 +10,7 @@ import { useDownload } from '@client/app/hooks/useDownload';
 import useToggle from '@client/app/hooks/useToggle';
 import { CloudUpload } from '@mui/icons-material';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
-import {
-  Button,
-  Grid,
-  Stack,
-  styled,
-  Box,
-  IconButton,
-  Dropdown,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Alert,
-  Switch,
-  Input,
-} from '@mui/joy';
+import { Button, Grid, Stack, Box, Modal, ModalDialog, ModalClose, Switch, Input } from '@mui/joy';
 import axios from 'axios';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { toast } from 'sonner';
@@ -36,7 +18,6 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import HelpIcon from '@mui/icons-material/Help';
 import { Typography } from '@mui/joy';
-import { MoreVert as MoreVertIcon } from '@mui/icons-material';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
 import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 import LanguageSelector from '@client/app/components/LanguageSelector';
@@ -45,48 +26,19 @@ import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
+import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
+import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
+import MfaCard from './MfaCard';
+import SettingsActionButton from './SettingsActionButton';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
-import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from '@client/app/hooks/data/mfa';
-import MFAModal from '@client/app/components/common/MFAModal';
 import { useEffect, useRef, useState } from 'react';
 import { useSearch } from '@tanstack/react-router';
-
-const StyledButton = styled(Button)(({ theme }) => ({
-  // Common style for action buttons for this screen
-  gap: '.5rem',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  whiteSpace: 'normal',
-  flexDirection: 'row',
-  height: '28px',
-  minHeight: '28px',
-  [theme.breakpoints.down('sm')]: {
-    flexDirection: 'column',
-    justifyContent: 'center',
-    alignItems: 'center',
-    textAlign: 'center',
-    height: 'auto',
-    minHeight: '28px',
-    paddingTop: '6px',
-    paddingBottom: '6px',
-  },
-}));
 
 const GeneralSettingsTab = () => {
   const { settings, updatePreferences } = useUserSettings();
   const { isLoading: serverSettingsLoading } = useSettingsFromServer();
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
-
-  const { data: mfaStatus } = useMFAStatus();
-  const setupMFA = useSetupMFA();
-  const verifyMFASetup = useVerifyMFASetup();
-  const cancelMFASetup = useCancelMFASetup();
-
-  // MFA modal state
-  const [showMFAModal, setShowMFAModal] = useState(false);
-  const [showBackupCodes, setShowBackupCodes] = useState<string[] | null>(null);
 
   // Scroll the Security/MFA section into view when navigated here with
   // ?section=security (e.g. the admin "Login as User -> Set Up MFA" flow).
@@ -126,14 +78,14 @@ const GeneralSettingsTab = () => {
 
   const deleteAllSessions = useDeleteAllSessions({
     onSuccess: async () => {
-      toggleDeleteAllSessionsModal();
-      toast.success('All sessions deleted');
+      toggleDeleteAllSessionsModal(false);
+      toast.success('All notebooks deleted');
     },
   });
   const deleteAllFiles = useDeleteAllFiles({
     onSuccess: async () => {
-      toggleDeleteAllFilesModal();
-      toast.success('All files deleted');
+      toggleDeleteAllFilesModal(false);
+      toast.success('All knowledge files deleted');
     },
   });
   const downloadAllFiles = useDownload('/api/files/download', 'knowledges.zip');
@@ -193,54 +145,6 @@ const GeneralSettingsTab = () => {
     toggleImportHistoryModal(false);
     toggleNotebookImportModal(false);
     toggleImportHistoryJobsView(true);
-  };
-
-  const handleEnableMFA = () => {
-    setupMFA.mutate(undefined, {
-      onSuccess: data => {
-        setShowMFAModal(true);
-        toast.success('MFA setup initiated');
-      },
-      onError: (error: { response?: { data?: { error?: string } }; message?: string }) => {
-        const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
-        toast.error(errorMessage);
-      },
-    });
-  };
-
-  const handleMFAVerification = (token: string) => {
-    verifyMFASetup.mutate(
-      { token },
-      {
-        onSuccess: (data: { backupCodes?: string[] }) => {
-          setShowMFAModal(false);
-          if (data.backupCodes) {
-            setShowBackupCodes(data.backupCodes);
-          }
-          toast.success('MFA enabled successfully');
-        },
-        onError: (error: {
-          response?: { data?: { error?: string; attemptsRemaining?: number } };
-          message?: string;
-        }) => {
-          const errorData = error.response?.data;
-          const baseError = errorData?.error || error.message || 'MFA verification failed';
-          const attemptsInfo = errorData?.attemptsRemaining
-            ? ` (${errorData.attemptsRemaining} attempts remaining)`
-            : '';
-          toast.error(baseError + attemptsInfo);
-        },
-      }
-    );
-  };
-
-  const handleCancelSetup = () => {
-    cancelMFASetup.mutate(undefined, {
-      onSuccess: () => {
-        setShowMFAModal(false);
-        toast.info('MFA setup cancelled');
-      },
-    });
   };
 
   return (
@@ -324,7 +228,7 @@ const GeneralSettingsTab = () => {
                   maxWidth: '100%',
                 }}
               >
-                <StyledButton
+                <SettingsActionButton
                   color="primary"
                   variant="outlined"
                   data-testid="notebook-import-open-btn"
@@ -332,8 +236,8 @@ const GeneralSettingsTab = () => {
                   sx={{ fontSize: '13px' }}
                 >
                   Import
-                </StyledButton>
-                <StyledButton
+                </SettingsActionButton>
+                <SettingsActionButton
                   color="primary"
                   variant="outlined"
                   data-testid="notebook-export-open-btn"
@@ -341,8 +245,8 @@ const GeneralSettingsTab = () => {
                   sx={{ fontSize: '13px' }}
                 >
                   Export All
-                </StyledButton>
-                <StyledButton
+                </SettingsActionButton>
+                <SettingsActionButton
                   color="primary"
                   variant="solid"
                   onClick={() => toggleNotebookCurationModal()}
@@ -350,45 +254,7 @@ const GeneralSettingsTab = () => {
                   data-testid="curate-btn"
                 >
                   Curate
-                </StyledButton>
-                <Dropdown>
-                  <MenuButton
-                    size={'md'}
-                    sx={{
-                      padding: '8px',
-                      border: '1px solid',
-                      borderColor: 'neutral.outlinedBorder',
-                      color: 'neutral.outlinedColor',
-                      width: '28px !important',
-                      height: '28px !important',
-                      minWidth: '28px !important',
-                      minHeight: '28px !important',
-                      '&:hover': {
-                        backgroundColor: 'neutral.outlinedHoverBg',
-                        borderColor: 'neutral.outlinedBorder',
-                      },
-                    }}
-                    slots={{ root: IconButton }}
-                    slotProps={{ root: { variant: 'outlined', color: 'neutral' } }}
-                  >
-                    <MoreVertIcon sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                  </MenuButton>
-                  <Menu
-                    className="menuSurface"
-                    sx={{
-                      zIndex: 10001,
-                      borderRadius: '10px',
-                    }}
-                    variant={'outlined'}
-                    placement={'bottom'}
-                    direction="ltr"
-                  >
-                    <MenuItem onClick={() => toggleDeleteAllSessionsModal()} color="danger">
-                      <DeleteOutline sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                      {t('deleteAllSomething', { name: t('llm.session_plural') })}
-                    </MenuItem>
-                  </Menu>
-                </Dropdown>
+                </SettingsActionButton>
               </Box>
             </Box>
           </Grid>
@@ -427,52 +293,14 @@ const GeneralSettingsTab = () => {
                   maxWidth: '100%',
                 }}
               >
-                <StyledButton
+                <SettingsActionButton
                   color="primary"
                   variant="outlined"
                   onClick={() => downloadAllFiles.mutate()}
                   sx={{ fontSize: '13px' }}
                 >
                   Export All
-                </StyledButton>
-                <Dropdown>
-                  <MenuButton
-                    size={'md'}
-                    sx={{
-                      padding: '8px',
-                      border: '1px solid',
-                      borderColor: 'neutral.outlinedBorder',
-                      color: 'neutral.outlinedColor',
-                      width: '28px !important',
-                      height: '28px !important',
-                      minWidth: '28px !important',
-                      minHeight: '28px !important',
-                      '&:hover': {
-                        backgroundColor: 'neutral.outlinedHoverBg',
-                        borderColor: 'neutral.outlinedBorder',
-                      },
-                    }}
-                    slots={{ root: IconButton }}
-                    slotProps={{ root: { variant: 'outlined', color: 'neutral' } }}
-                  >
-                    <MoreVertIcon sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                  </MenuButton>
-                  <Menu
-                    className="menuSurface"
-                    sx={{
-                      zIndex: 10001,
-                      borderRadius: '10px',
-                    }}
-                    variant={'outlined'}
-                    placement={'bottom'}
-                    direction="ltr"
-                  >
-                    <MenuItem onClick={() => toggleDeleteAllFilesModal()} color="danger">
-                      <DeleteOutline sx={{ fontSize: '18px' }} width={'16px'} height={'16px'} />
-                      {t('deleteAllSomething', { name: t('file') })}
-                    </MenuItem>
-                  </Menu>
-                </Dropdown>
+                </SettingsActionButton>
               </Box>
             </Box>
           </Grid>
@@ -490,68 +318,9 @@ const GeneralSettingsTab = () => {
       )}
 
       {/* Security Section */}
-      <Box ref={securitySectionRef}>
+      <Box ref={securitySectionRef} data-testid="settings-security-section">
         <SectionContainer title="Security">
-          <Grid container spacing={2}>
-            {/* Multi-Factor Authentication Section */}
-            <Grid xs={12} md={6}>
-              <Box
-                sx={theme => ({
-                  ...cardSurfaceSx(theme),
-                  display: 'flex',
-                  alignItems: 'center',
-                  // wrap the trailing controls below the title when the row is too
-                  // narrow, instead of squeezing them until their labels overlap.
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '12px',
-                  height: '100%',
-                })}
-              >
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
-                    Multi-Factor Authentication
-                  </Typography>
-                  <Typography level="body-sm" sx={{ mt: 0.5 }}>
-                    Status:{' '}
-                    {mfaStatus?.enabled ? (
-                      <span style={{ color: 'green', fontWeight: 'bold' }}>Enabled</span>
-                    ) : (
-                      <span style={{ color: 'orange', fontWeight: 'bold' }}>Disabled</span>
-                    )}
-                  </Typography>
-                </Box>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    gap: 1.5,
-                    alignItems: 'center',
-                    flexShrink: 0,
-                    flexWrap: 'wrap',
-                    // when the group wraps to its own line, the parent's
-                    // space-between collapses to flex-start for a single item - ml:auto
-                    // keeps it right-aligned; maxWidth prevents overflow on very narrow widths.
-                    justifyContent: 'flex-end',
-                    ml: 'auto',
-                    maxWidth: '100%',
-                  }}
-                >
-                  {!mfaStatus?.enabled && (
-                    <StyledButton
-                      color="primary"
-                      variant="solid"
-                      onClick={handleEnableMFA}
-                      loading={setupMFA.isPending}
-                      sx={{ fontSize: '13px' }}
-                    >
-                      Enable
-                    </StyledButton>
-                  )}
-                </Box>
-              </Box>
-            </Grid>
-          </Grid>
-
+          <MfaCard />
           <ActiveSessionsSection />
           <ApprovedAppsSection />
         </SectionContainer>
@@ -696,56 +465,60 @@ const GeneralSettingsTab = () => {
         </Grid>
       </SectionContainer>
 
-      {/* Files Section */}
-      <SectionContainer title="Files">
-        <Grid container spacing={2}>
-          <Grid xs={12} md={6}>
-            <Box
-              sx={theme => ({
-                ...cardSurfaceSx(theme),
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '12px',
-                height: '100%',
-              })}
+      <WorkspaceVisibilitySection />
+
+      <SectionContainer title="Danger zone">
+        <Box
+          data-testid="settings-danger-zone"
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1.5,
+            p: 2,
+            border: '1px solid',
+            borderColor: 'danger.outlinedBorder',
+            borderRadius: 'md',
+          }}
+        >
+          <Typography level="body-sm">
+            These can&apos;t be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards
+            above.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+            <Button
+              color="danger"
+              variant="outlined"
+              startDecorator={<DeleteOutline />}
+              onClick={() => toggleDeleteAllSessionsModal()}
+              data-testid="settings-delete-all-notebooks-btn"
             >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
-                  Save Generated Audio
-                </Typography>
-                <Typography level="body-sm" sx={{ mt: 0.5 }}>
-                  Keep text-to-speech, sound-effect, and music audio in your files so you can browse and replay it.
-                  Counts toward your storage limit.
-                </Typography>
-              </Box>
-              <Switch
-                data-testid="settings-save-generated-audio-switch"
-                checked={settings.saveGeneratedAudio}
-                onChange={e => updatePreferences({ saveGeneratedAudio: e.target.checked })}
-              />
-            </Box>
-          </Grid>
-        </Grid>
+              Delete all notebooks
+            </Button>
+            <Button
+              color="danger"
+              variant="outlined"
+              startDecorator={<DeleteOutline />}
+              onClick={() => toggleDeleteAllFilesModal()}
+              data-testid="settings-delete-all-files-btn"
+            >
+              Delete all knowledge files
+            </Button>
+          </Box>
+        </Box>
       </SectionContainer>
 
       {openDeleteAllSessionsModal && (
-        <ConfirmActionModal
-          title="Delete All Sessions"
-          description="Are you sure you want to delete all sessions? This action cannot be undone."
-          onGoBackward={toggleDeleteAllSessionsModal}
-          onGoForward={() => deleteAllSessions.mutate()}
-          disabledConfirm={deleteAllSessions.isPending}
+        <DeleteAllNotebooksConfirm
+          onCancel={toggleDeleteAllSessionsModal}
+          onConfirm={() => deleteAllSessions.mutate()}
+          pending={deleteAllSessions.isPending}
         />
       )}
       {openDeleteAllFilesModal && (
-        <ConfirmActionModal
-          title="Delete All Files"
-          description="Are you sure you want to delete all files? This action cannot be undone."
-          onGoBackward={toggleDeleteAllFilesModal}
-          onGoForward={() => deleteAllFiles.mutate()}
-          disabledConfirm={deleteAllFiles.isPending}
+        <DeleteAllKnowledgeFilesConfirm
+          onCancel={toggleDeleteAllFilesModal}
+          onConfirm={() => deleteAllFiles.mutate()}
+          pending={deleteAllFiles.isPending}
         />
       )}
       <UploadImportHistoryModal
@@ -772,54 +545,6 @@ const GeneralSettingsTab = () => {
           </ModalDialog>
         </Modal>
       )}
-      {/* MFA Setup Modal for Security Section */}
-      {showMFAModal && (
-        <MFAModal
-          key={`mfa-setup-${setupMFA.data?.secret || 'loading'}`}
-          open={showMFAModal}
-          onClose={() => setShowMFAModal(false)}
-          onCancel={handleCancelSetup}
-          title="Set Up Multi-Factor Authentication"
-          description="Scan the QR code with your authenticator app, then enter the verification code."
-          qrCodeUrl={setupMFA.data?.qrCodeUrl}
-          manualEntryKey={setupMFA.data?.manualEntryKey}
-          backupCodes={setupMFA.data?.backupCodes}
-          onVerify={handleMFAVerification}
-          loading={setupMFA.isPending || verifyMFASetup.isPending}
-          showVerify={!setupMFA.isPending && !setupMFA.isError && !!setupMFA.data}
-          isEnforced={false}
-        />
-      )}
-
-      {/* Backup Codes Modal for Security Section */}
-      <Modal open={!!showBackupCodes} onClose={() => setShowBackupCodes(null)}>
-        <ModalDialog>
-          <ModalClose />
-          <Typography level="h4" sx={{ mb: 2 }}>
-            Your Backup Codes
-          </Typography>
-          <Alert color="warning" sx={{ mb: 2 }}>
-            Save these backup codes in a secure location. Each code can only be used once.
-          </Alert>
-          {showBackupCodes && (
-            <Box
-              sx={{
-                fontFamily: 'monospace',
-                fontSize: '14px',
-                backgroundColor: 'background.level1',
-                p: 2,
-                borderRadius: 'md',
-                mb: 2,
-              }}
-            >
-              {showBackupCodes.map((code, index) => (
-                <div key={index}>{code}</div>
-              ))}
-            </Box>
-          )}
-          <Button onClick={() => setShowBackupCodes(null)}>I&apos;ve Saved These Codes</Button>
-        </ModalDialog>
-      </Modal>
     </Stack>
   );
 };

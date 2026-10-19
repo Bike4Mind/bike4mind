@@ -17,7 +17,7 @@ vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({
   },
 }));
 
-import { useWorkspaceTargets } from './useWorkspaceTargets';
+import { useHideableWorkspaces, useWorkspaceTargets } from './useWorkspaceTargets';
 
 const ids = (surfaces: { id: string | null }[]) => surfaces.map(surface => surface.id);
 
@@ -83,5 +83,63 @@ describe('useWorkspaceTargets', () => {
 
     expect(result.current.current?.id).toBe('opti');
     expect(ids(result.current.copyTargets)).toEqual([null]);
+  });
+});
+
+describe('useWorkspaceTargets with a hidden workspace', () => {
+  beforeEach(() => {
+    h.user = { currentUser: { id: 'user-1', tags: [], preferences: { hiddenSurfaces: ['opti'] } }, isAdmin: false };
+    h.entitlements = ['optihashi:pro'];
+    h.routes = [{ path: '/opti' }];
+  });
+
+  it('does not list a hidden surface as a move or copy target', () => {
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: undefined }));
+
+    expect(ids(result.current.copyTargets)).toEqual([null]);
+    expect(result.current.moveTargets).toEqual([]);
+  });
+
+  it('still resolves a session already in the hidden surface, and lets it copy in place or move out', () => {
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: 'opti' }));
+
+    expect(result.current.current?.id).toBe('opti');
+    expect(ids(result.current.copyTargets)).toEqual(['opti', null]);
+    expect(ids(result.current.moveTargets)).toEqual([null]);
+  });
+
+  it('shows the surface again when unhidden', () => {
+    h.user = { currentUser: { id: 'user-1', tags: [], preferences: { hiddenSurfaces: [] } }, isAdmin: false };
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: undefined }));
+
+    expect(ids(result.current.moveTargets)).toEqual(['opti']);
+  });
+});
+
+describe('useHideableWorkspaces', () => {
+  beforeEach(() => {
+    h.user = { currentUser: { id: 'user-1', tags: [] }, isAdmin: false };
+    h.entitlements = ['optihashi:pro'];
+    h.routes = [{ path: '/opti' }];
+  });
+
+  it("lists an entitled user's hideable workspaces, never the main list", () => {
+    const { result } = renderHook(() => useHideableWorkspaces());
+    expect(ids(result.current)).toEqual(['opti']);
+  });
+
+  it('lists the workspace for a user whose access comes from the tag', () => {
+    h.user = { currentUser: { id: 'user-1', tags: ['opti'] }, isAdmin: false };
+    h.entitlements = ['base'];
+    const { result } = renderHook(() => useHideableWorkspaces());
+    expect(ids(result.current)).toEqual(['opti']);
+  });
+
+  it('lists nothing without access or without the route', () => {
+    h.entitlements = ['base'];
+    expect(renderHook(() => useHideableWorkspaces()).result.current).toEqual([]);
+    h.entitlements = ['optihashi:pro'];
+    h.routes = [];
+    expect(renderHook(() => useHideableWorkspaces()).result.current).toEqual([]);
   });
 });

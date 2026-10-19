@@ -15,6 +15,7 @@ import {
   authorDisplayName,
   toAnnotationDto,
   requestHasGateProof,
+  loadLiveOwner,
   type AnnotationLean,
 } from '@server/services/publish';
 import { isValidObjectId } from '@server/utils/objectId';
@@ -53,7 +54,9 @@ async function loadArtifact(publicId: string): Promise<ArtifactGateLean | null> 
   const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
     .select('publicId visibility ownerId scopeId commentPolicy sha256Index accessGate')
     .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
-  return doc ? { ...doc, accessGate: doc.accessGate ?? null } : null;
+  // Same owner check as the serve route: an artifact whose page 404s must not list or take comments.
+  if (!doc || !(await loadLiveOwner(doc.ownerId))) return null;
+  return { ...doc, accessGate: doc.accessGate ?? null };
 }
 
 /** The gate context for annotation reads/writes: a passphrase gate is satisfied

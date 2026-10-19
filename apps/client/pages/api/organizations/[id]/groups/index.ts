@@ -1,13 +1,18 @@
 // GET /api/organizations/:id/groups
 // List an organization's groups, each with its current members.
 
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
+import { respond } from '@server/utils/respond';
+import { organizationGroupWithMembersResponseSchema } from '@bike4mind/common';
+import { z } from 'zod';
+
+const listGroupsResponseSchema = z.object({ groups: z.array(organizationGroupWithMembersResponseSchema) });
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -23,7 +28,7 @@ const handler = baseApi().get(
       { db: { organizations: organizationRepository, groups: groupRepository, users: userRepository } }
     );
 
-    return res.status(200).json({ groups });
+    return respond(res, listGroupsResponseSchema, { groups });
   })
 );
 

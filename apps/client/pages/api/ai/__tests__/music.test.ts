@@ -13,7 +13,7 @@ const {
   userIncrement,
   orgIncrement,
   recordUsage,
-  persistGeneratedAudio,
+  saveGeneratedAssetToFiles,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
@@ -25,7 +25,7 @@ const {
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
-  persistGeneratedAudio: vi.fn(),
+  saveGeneratedAssetToFiles: vi.fn(),
 }));
 
 // Contract-adapter mock: stands in for the nextRouteForContract prelude, running
@@ -104,16 +104,27 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
-vi.mock('@server/utils/persistGeneratedAudio', () => ({
-  persistGeneratedAudio: (...a: unknown[]) => persistGeneratedAudio(...a),
+vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+  saveGeneratedAssetToFiles: (...a: unknown[]) => saveGeneratedAssetToFiles(...a),
+}));
+
+const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
+// Only the oversized-audio offload touches storage; the delivery module itself is real.
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 
 import handler from '../music';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 
-const run = (body: unknown, apiKeyInfo?: unknown, userOrganizationId?: string) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const run = (
+  body: unknown,
+  apiKeyInfo?: unknown,
+  userOrganizationId?: string,
+  headers: Record<string, string> = {}
+) => {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, {
     user: { id: 'u1', organizationId: userOrganizationId ?? null },
     apiKeyInfo,
@@ -134,12 +145,14 @@ beforeEach(() => {
     userIncrement,
     orgIncrement,
     recordUsage,
-    persistGeneratedAudio,
+    saveGeneratedAssetToFiles,
   ].forEach(m => m.mockReset());
   recordUsage.mockResolvedValue(undefined);
   // Default: persistence is a no-op that reports "not saved", so tests not
   // exercising the save path see no persisted-file headers.
-  persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'error' });
+  saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'error' });
+  upload.mockReset().mockResolvedValue(undefined);
+  getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
   generate.mockResolvedValue({ audio: Buffer.from('song'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 1000 });
@@ -176,6 +189,7 @@ describe('POST /api/ai/music', () => {
     expect(params).toMatchObject({
       type: 'music_generation_usage',
       credits: 150,
+      source: 'api',
       organization: null,
       model: 'music_v1',
     });
@@ -199,37 +213,62 @@ describe('POST /api/ai/music', () => {
     );
   });
 
-  it('forwards caller-supplied forceInstrumental and format to the provider and to persistence', async () => {
+  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000 }, undefined, undefined, {
+      'user-agent': 'b4m-cli/0.9.3',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
+    expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 150 }));
+  });
+
+  it('forwards caller-supplied forceInstrumental and format to the provider and the saved copy metadata', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
-    generate.mockResolvedValue({ audio: Buffer.from('pcm'), contentType: 'audio/L16' });
-    persistGeneratedAudio.mockResolvedValue({ saved: true, fabFileId: 'fab1', fileName: 'music-x.pcm_44100' });
+    // A saveable non-mpeg type, so the provider's content type can only reach the
+    // save and the response by pass-through - a route that hardcoded audio/mpeg
+    // anywhere on this path would fail here.
+    generate.mockResolvedValue({ audio: Buffer.from('wav'), contentType: 'audio/wav' });
+    saveGeneratedAssetToFiles.mockResolvedValue({
+      saved: true,
+      fileId: 'fab1',
+      s3Key: 'k/audio.mp3',
+      fileName: 'music-x.mp3',
+    });
 
     const { res, promise } = run({
       prompt: 'instrumental study loop',
       lengthMs: 30000,
       forceInstrumental: true,
-      format: 'pcm_44100',
+      format: 'mp3_44100_192',
     });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
     // Real values, not `undefined`: toHaveBeenCalledWith uses toEqual semantics, so
     // asserting `undefined` can't tell "forwarded" from "silently dropped". Dropping
-    // either field here means a caller asking for an instrumental PCM track quietly
-    // gets vocals in mp3.
+    // either field here means a caller asking for an instrumental track in a given
+    // format quietly gets vocals in the default one.
     expect(generate).toHaveBeenCalledWith('instrumental study loop', {
       lengthMs: 30000,
       forceInstrumental: true,
       modelId: 'music_v1',
-      format: 'pcm_44100',
+      format: 'mp3_44100_192',
     });
-    // format is also the persisted file's extension fallback when the content type
-    // is unmapped, so it must survive the hand-off to persistence too.
-    expect(persistGeneratedAudio).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'music', format: 'pcm_44100', contentType: 'audio/L16' })
+    expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: 'audio/wav',
+        generation: expect.objectContaining({ generator: 'music' }),
+      }),
+      expect.anything()
     );
-    expect(res.getHeader('Content-Type')).toBe('audio/L16');
+    expect(res.getHeader('Content-Type')).toBe('audio/wav');
     expect(res.getHeader('Content-Length')).toBe(3);
   });
 
@@ -300,9 +339,10 @@ describe('POST /api/ai/music', () => {
   it('forwards the persisted-file id, name, and signed URL as response headers', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
-    persistGeneratedAudio.mockResolvedValue({
+    saveGeneratedAssetToFiles.mockResolvedValue({
       saved: true,
-      fabFileId: 'fab1',
+      fileId: 'fab1',
+      s3Key: 'k/audio.mp3',
       fileName: 'music-lofi-beat.mp3',
       fileUrl: 'https://signed.example/music.mp3',
     });
@@ -311,9 +351,22 @@ describe('POST /api/ai/music', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    // Persisted under the 'music' source so it's tagged/named as music, not a
-    // sound effect (the two routes share persistGeneratedAudio).
-    expect(persistGeneratedAudio).toHaveBeenCalledWith(expect.objectContaining({ source: 'music' }));
+    // Saved as a 'music' generation (not a sound effect) with its provenance.
+    expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      {
+        userId: expect.any(String),
+        bytes: expect.any(Buffer),
+        contentType: expect.any(String),
+        generation: {
+          generator: 'music',
+          provider: expect.any(String),
+          modelId: expect.any(String),
+          prompt: 'lofi beat',
+          durationSeconds: 30,
+        },
+      },
+      expect.anything()
+    );
     // The signed URL must ride the header: the CLI cannot re-resolve one via
     // GET /api/files/:id until the async moderation scan flips the file to 'clean'.
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
@@ -337,6 +390,33 @@ describe('POST /api/ai/music', () => {
 
     expect(res._getStatusCode()).toBe(422);
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
+  });
+
+  it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000, format });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toContain(`'${format}'`);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('still answers 502 when refunding the failed generation also fails', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    generate.mockRejectedValue(new Error('provider down'));
+    userIncrement.mockResolvedValueOnce({ currentCredits: 850 }).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
   });
 
   it('maps an upstream provider failure to 502 and refunds the reservation', async () => {
@@ -539,5 +619,77 @@ describe('POST /api/ai/music', () => {
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
     );
+  });
+
+  describe('generated-audio delivery', () => {
+    const savedCopy = {
+      saved: true,
+      fileId: 'fab1',
+      s3Key: 'k/audio.mp3',
+      fileName: 'audio-1.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    };
+    const oversized = () => Buffer.alloc(4 * 1024 * 1024 + 1);
+
+    beforeEach(() => {
+      getSettingsValue.mockReturnValue(false);
+      estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
+    });
+
+    it('returns base64 JSON with the audio and save fields for encoding: base64', async () => {
+      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000, encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({
+        delivery: 'inline',
+        audio: Buffer.from('song').toString('base64'),
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: savedCopy.fileId,
+        fileName: savedCopy.fileName,
+        fileUrl: savedCopy.fileUrl,
+      });
+    });
+
+    it('skips persistence for a throwaway preview', async () => {
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000, preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(saveGeneratedAssetToFiles).not.toHaveBeenCalled();
+      expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
+    });
+
+    it('reports saveSkippedReason in the base64 body when the save was skipped', async () => {
+      saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000, encoding: 'base64' });
+      await promise;
+      expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+    });
+
+    it('serves an oversized base64 result by the saved copy URL without offloading', async () => {
+      const audio = oversized();
+      generate.mockResolvedValue({ audio, contentType: 'audio/mpeg' });
+      saveGeneratedAssetToFiles.mockResolvedValue(savedCopy);
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000, encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        delivery: 'url',
+        url: savedCopy.fileUrl,
+        bytes: audio.length,
+        saved: true,
+      });
+      expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('redirects an unsaved oversized binary result with a 303 to an offloaded URL', async () => {
+      generate.mockResolvedValue({ audio: oversized(), contentType: 'audio/mpeg' });
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000, preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(303);
+      expect(res._getRedirectUrl()).toBe('https://s3/offload');
+      expect(upload).toHaveBeenCalledTimes(1);
+    });
   });
 });

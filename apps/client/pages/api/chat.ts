@@ -4,7 +4,15 @@ import {
   ChatCompletionProcess,
   featureNames,
 } from '@bike4mind/services/llm';
-import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  getSettingsMap,
+  getSettingsValue,
+  NotFoundError,
+  SQSService,
+  UnprocessableEntityError,
+} from '@bike4mind/utils';
+import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -14,20 +22,43 @@ import {
   isChatModelUsable,
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
-import { adminSettingsRepository, User, Session } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentRepository,
+  fabFileRepository,
+  projectRepository,
+  questRepository,
+  sessionRepository,
+  User,
+  Session,
+} from '@bike4mind/database';
 import {
   B4MLLMTools,
   chatContract,
   filterKnownTools,
+  GatewayTimeoutError,
+  REQUEST_TIMEOUT_ERROR_CODE,
+  questReplyText,
   toToolPayloads,
+  type ChatToolMode,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@server/auth/turnAuth';
+import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
+import {
+  TIMED_OUT_RUN,
+  applyRecoveryInMemory,
+  terminalRecoveryFor,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -42,10 +73,11 @@ const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  const requestStartedAt = Date.now();
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
 
@@ -78,9 +110,6 @@ const handler = nextRouteForContract(chatContract, {
       }
     }
   }
-
-  apiTimer.phase('session');
-  const sessionId = await getSessionId(simplifiedRequest.sessionId ?? undefined, req.user.id);
 
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
@@ -117,6 +146,13 @@ const handler = nextRouteForContract(chatContract, {
   // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
   // is what lets an org member whose org pool is empty still spend their own credits.
   const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
+  // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
+  // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have
+  // already minted one. `createdNotebook` marks a session this request opened, so a later reject
+  // from invoke (an unknown/disabled model) can remove it - see the invoke try/catch below.
+  apiTimer.phase('session');
+  const { sessionId, createdNotebook } = await resolveChatSessionId(req, simplifiedRequest);
 
   // Transform to internal format. The resolved organizationId (already a validated hex string,
   // or undefined for personal) also scopes team-wide system prompts downstream.
@@ -162,12 +198,32 @@ const handler = nextRouteForContract(chatContract, {
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
-  const quest = await invokeService.invoke({
-    body: internalRequest,
-    userId: req.user.id,
-    // Attributes a lake write a tool drives this turn to the key rather than its owner.
-    apiKeyId: req.apiKeyInfo?.keyId,
-  });
+  const turnAuth = requestTurnAuth(req);
+  let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
+  try {
+    quest = await invokeService.invoke({
+      body: internalRequest,
+      userId: req.user.id,
+      // The key (when one authenticated the turn) also attributes a lake write a tool drives.
+      ...turnAuth,
+    });
+  } catch (error) {
+    // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
+    // creates the quest, so a rejected turn can land here with the fresh notebook already open.
+    // Nothing references that notebook yet - remove it rather than leave an empty orphan that
+    // disguises itself as a real chat in the list. Best-effort: cleanup must not mask the original
+    // error, and invoke throws before quest creation on every path that reaches the caller.
+    if (createdNotebook) {
+      try {
+        await sessionRepository.delete(sessionId);
+      } catch (cleanupError) {
+        req.logger.warn(
+          `Failed to remove notebook ${sessionId} after a rejected turn: ${(cleanupError as Error)?.message}`
+        );
+      }
+    }
+    throw error;
+  }
 
   if (!quest) throw new NotFoundError('Failed to create quest');
 
@@ -177,31 +233,95 @@ const handler = nextRouteForContract(chatContract, {
 
     apiTimer.phase('process');
     const processService = new ChatCompletionProcess(chatCompletionOptions);
-    await processService.process({
-      body: {
-        ...internalRequest,
-        questId: quest.id,
-        userId: req.user.id,
-        embeddingModel: currentEmbeddingModel,
-        queryComplexity: 'simple',
-        // Optional schema fields - declared for QuestStartBodySchema type conformance
-        dashboardParams: undefined,
-        questMaster: undefined,
-        researchMode: undefined,
-        imageConfig: undefined,
-      },
-      logger: req.logger,
-      // Pass quest from invoke to skip redundant DB read
-      prefetchedQuest: quest,
-      // Pass session from invoke to skip redundant DB read
-      prefetchedSession: invokeService.prefetchedSession,
-      // Pass organization from invoke to skip redundant DB read
-      prefetchedOrganization: invokeService.prefetchedOrganization,
-      // Premium overlay tool implementations: a session whose enabledTools
-      // include premium names (set server-side at create) needs the merge or
-      // those tools silently no-op on this synchronous path.
-      externalTools: premiumLlmTools,
-    });
+    const turn = await runWithDeadline(
+      abortSignal =>
+        processService.process({
+          body: {
+            ...internalRequest,
+            questId: quest.id,
+            userId: req.user.id,
+            // Mirrors invoke() above: process() reads the tool context's auth from this body only.
+            ...turnAuth,
+            embeddingModel: currentEmbeddingModel,
+            queryComplexity: 'simple',
+            // Optional schema fields - declared for QuestStartBodySchema type conformance
+            dashboardParams: undefined,
+            questMaster: undefined,
+            researchMode: undefined,
+            imageConfig: undefined,
+          },
+          logger: req.logger,
+          // Pass quest from invoke to skip redundant DB read
+          prefetchedQuest: quest,
+          // Pass session from invoke to skip redundant DB read
+          prefetchedSession: invokeService.prefetchedSession,
+          // Pass organization from invoke to skip redundant DB read
+          prefetchedOrganization: invokeService.prefetchedOrganization,
+          // Premium overlay tool implementations: a session whose enabledTools
+          // include premium names (set server-side at create) needs the merge or
+          // those tools silently no-op on this synchronous path.
+          externalTools: premiumLlmTools,
+          abortSignal,
+        }),
+      { budgetMs: WAIT_TURN_BUDGET_MS - (Date.now() - requestStartedAt), windDownMs: WAIT_TURN_WIND_DOWN_MS }
+    );
+
+    // successStatus() yields 'stopped' once the turn is aborted, so an in-memory 'done' means the
+    // full answer was produced before the abort landed (the fenced final save may have dropped it).
+    const finishedBeforeAbort =
+      turn.outcome === 'aborted' && turn.error === undefined && quest.status === 'done' && quest.type !== 'error';
+    if (finishedBeforeAbort) {
+      const settled = await questRepository.settleIfUnfinished(quest.id, {
+        status: quest.status,
+        reply: quest.reply,
+        replies: quest.replies,
+        fallbackInfo: quest.fallbackInfo,
+      });
+      req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} finished before the deadline abort landed`, {
+        settled,
+      });
+    }
+
+    if (turn.outcome !== 'completed' && !finishedBeforeAbort) {
+      // After the abort, process() no longer writes the quest (its saves are fenced), so the
+      // terminal state is settled here from what streamed. An aborted turn already refunded or
+      // reconciled its own reservation; a stuck one never reached that code, so it is refunded here.
+      if (turn.outcome === 'stuck') await processService.releaseReservedCredits(quest.id, req.logger);
+      // Judge emptiness from the persisted row, not the in-memory quest: once aborted, saves are
+      // fenced, so content a tool added to memory after the last save is never written - judging from
+      // memory would skip the timeout error and leave a `done` row with nothing to render. Falls back
+      // to the in-memory quest when the row cannot be read.
+      //
+      // The text is the exception: the recovery patch writes `reply`/`replies` from whatever it is
+      // given, and the row is only a heartbeat snapshot up to 10s stale, so taking the text from it
+      // would drop the tail that streamed since (or replace a short answer with the timeout error).
+      // Keep the in-memory text and take only the fields the patch cannot write from the row.
+      const persistedQuest = await questRepository.findById(quest.id).catch(() => null);
+      const recovery = terminalRecoveryFor(
+        { ...(persistedQuest ?? quest), reply: quest.reply, replies: quest.replies },
+        TIMED_OUT_RUN
+      );
+      const settled = await questRepository.settleIfUnfinished(quest.id, recovery);
+      req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} ran past its deadline`, {
+        outcome: turn.outcome,
+        settled,
+        ...(turn.outcome === 'aborted' && turn.error !== undefined && { error: turn.error }),
+      });
+      if (settled) {
+        // process()'s own final push on a caller abort sent the still-running quest.
+        applyRecoveryInMemory(quest, recovery);
+        await processService
+          .sendStatusUpdate(quest, null, { skipPayloadOptimization: true })
+          .catch(err => req.logger.warn(`Failed to push settled timeout state for quest ${quest.id}`, { err }));
+      }
+      const timeoutError = new GatewayTimeoutError(
+        'This turn ran past the wait=true deadline and was ended. Send long turns without wait and poll the quest.',
+        { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id, sessionId }
+      );
+      // A deadline we enforce on purpose, not a server fault: errorHandler logs it at warn.
+      timeoutError.expected = true;
+      throw timeoutError;
+    }
 
     // Use the in-memory quest directly - process() mutates it in place with
     // reply, replies, status, promptMeta. No need to re-fetch from DB.
@@ -222,10 +342,11 @@ const handler = nextRouteForContract(chatContract, {
     return res.json({
       id: completedQuest.id,
       status: completedQuest.status,
+      sessionId,
       message_received: true,
       timestamp: new Date().toISOString(),
-      model: internalRequest.params.model,
-      response: completedQuest.reply,
+      model: completedQuest.promptMeta?.model?.name ?? internalRequest.params.model,
+      response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
@@ -259,9 +380,11 @@ const handler = nextRouteForContract(chatContract, {
   return res.json({
     id: quest.id,
     status: 'queued',
+    sessionId,
     message_received: true,
     timestamp: new Date().toISOString(),
-    model: internalRequest.params.model,
+    // invoke swaps a retired id for its successor; report the model the turn runs on.
+    model: quest.promptMeta?.model?.name ?? internalRequest.params.model,
     message: 'Message queued for processing. Use the quest ID to check status.',
     ...(toolMeta && { tools: toolMeta }),
     tracking_info: {
@@ -295,7 +418,7 @@ function buildToolMeta({
   autoSelectedTools,
   unrecognizedTools,
 }: {
-  toolMode: 'fast' | 'smart' | undefined;
+  toolMode: ChatToolMode | undefined;
   effectiveTools: B4MLLMTools[] | undefined;
   autoSelectedTools: B4MLLMTools[];
   unrecognizedTools: string[];
@@ -315,26 +438,73 @@ function buildToolMeta({
 }
 
 /**
- * Get session ID - either from request or user's most recent notebook
+ * Resolve the notebook/session this turn is recorded in.
+ *
+ * An API-key caller with no `sessionId` gets a BRAND-NEW notebook, and so does any caller that
+ * sends `newConversation: true`. Neither reads nor writes `User.lastNotebookId`: that field is the
+ * human's UI cursor (the notebook the web app reopens), so a script must not be able to post into
+ * it or repoint it at its own notebook. A first-party JWT caller with no `sessionId` keeps the old
+ * last-notebook fallback. An explicit `sessionId` always wins - its access check lives downstream.
+ *
+ * `createdNotebook` is true only when this call opened the notebook, so the caller can discard it if
+ * a later validation rejects the turn (see the invoke try/catch).
  */
-async function getSessionId(requestedSessionId: string | undefined, userId: string): Promise<string> {
-  if (requestedSessionId) {
-    return requestedSessionId;
+async function resolveChatSessionId(
+  req: Request,
+  request: SimplifiedChatRequest
+): Promise<{ sessionId: string; createdNotebook: boolean }> {
+  if (request.sessionId && request.newConversation) {
+    throw new UnprocessableEntityError('Pass either sessionId or newConversation, not both');
   }
 
-  const user = await User.findById(userId, { lastNotebookId: 1 });
+  if (request.sessionId) {
+    return { sessionId: request.sessionId, createdNotebook: false };
+  }
+
+  if (request.newConversation || isApiKeyAuth(req)) {
+    const session = await sessionService.createSession(
+      req.user,
+      { name: newNotebookName(req) },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
+        logger: req.logger,
+      },
+      { origin: resolveSessionOrigin(req) }
+    );
+    req.logger.info(
+      `POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`
+    );
+    return { sessionId: session.id, createdNotebook: true };
+  }
+
+  const user = await User.findById(req.user.id, { lastNotebookId: 1 });
   if (user?.lastNotebookId) {
-    return user.lastNotebookId.toString();
+    return { sessionId: user.lastNotebookId.toString(), createdNotebook: false };
   }
 
-  const mostRecentSession = await Session.findOne({ userId }).sort({ lastUpdated: -1, createdAt: -1 });
+  const mostRecentSession = await Session.findOne({ userId: req.user.id }).sort({ lastUpdated: -1, createdAt: -1 });
   if (mostRecentSession) {
     // Update user's lastNotebookId for future requests
-    await User.findByIdAndUpdate(userId, { lastNotebookId: mostRecentSession.id });
-    return mostRecentSession.id;
+    await User.findByIdAndUpdate(req.user.id, { lastNotebookId: mostRecentSession.id });
+    return { sessionId: mostRecentSession.id, createdNotebook: false };
   }
 
   throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
+}
+
+/**
+ * Notebook name for a session this endpoint creates on the caller's behalf. The `API` prefix is
+ * what makes an API-created notebook identifiable to a human scanning the notebook list; a JWT
+ * caller's `newConversation` is labelled as an ordinary new chat instead. ASCII only, UTC-stamped.
+ */
+function newNotebookName(req: Request): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  return `${isApiKeyAuth(req) ? 'API chat' : 'New chat'} - ${stamp} UTC`;
 }
 
 function transformToInternalFormat(
@@ -383,6 +553,7 @@ function transformToInternalFormat(
     fabFileIds: [], // Empty by default, clients can use the full API for fab files
     messageFileIds: request.fileIds,
     organizationId, // Include for team-wide system prompts
+    toolMode: request.toolMode,
     params: {
       model: request.model,
       // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.

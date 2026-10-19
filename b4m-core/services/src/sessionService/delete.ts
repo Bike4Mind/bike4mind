@@ -1,14 +1,17 @@
 import {
+  chargedBytes,
   IFabFileRepository,
   IProjectRepository,
   ISessionRepository,
   ISessionAgentConfigRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { bestEffortAdjustOwnerStorage, groupStorageDeltaByOwner } from '../dataLakeService/ports';
+import { grantWrite } from '../sharingService/grantWrite';
 
 const deleteSessionSchema = z.object({
   id: z.string(),
@@ -25,6 +28,9 @@ interface DeleteSessionAdapters {
     // that omits it gets no storage debit, leaving the owner's quota over-counted until the admin
     // recalculate-storage endpoint runs - so every in-repo route must wire it.
     users?: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    // Required: it arrived with owner billing, so no caller predates it, and an org-owned file left
+    // undebited would hold the whole org's quota.
+    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     // Optional: this is a published, patch-released signature (re-exported from
     // @bike4mind/services), so an existing caller built against the pre-cleanup shape must keep
     // compiling and running without it - the cleanup below is then just skipped for that caller.
@@ -51,15 +57,21 @@ export const deleteSession = async (
   // the session owner's. Deleting the session destroys only the owner's own files, mirroring the
   // owned-vs-shared-in split in DELETE /api/files; anything else just loses the grants this session
   // minted on it.
-  const fabFiles = await db.fabFiles.find({ sessionId: session.id });
-  const ownedFiles = fabFiles.filter(file => file.userId === userId);
+  // Tool-generated files link to their notebook through provenance, not `sessionId` (see
+  // persistGeneratedFileAsFabFile). They are the user's library and outlive the notebook (deleted
+  // from Files instead), so they are not in the delete set, but they still lose this session's grants.
+  const sessionFiles = await db.fabFiles.find({ sessionId: session.id });
+  const generatedFiles = await db.fabFiles.findToolGeneratedBySessionId(session.id);
+  const ownedFiles = sessionFiles.filter(file => file.userId === userId);
 
   // Both sets, because a grant this session minted and a file this session holds are not the same
   // thing: accept.ts propagates onto `knowledgeIds`, which can name files uploaded elsewhere, while
   // `sessionId` names files uploaded here that may never have been attached as knowledge.
-  const grantedFiles = [...fabFiles, ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? []))].filter(
-    (file, index, all) => all.findIndex(other => other.id === file.id) === index
-  );
+  const grantedFiles = [
+    ...sessionFiles,
+    ...generatedFiles,
+    ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
+  ].filter((file, index, all) => all.findIndex(other => other.id === file.id) === index);
 
   // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and
   // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
@@ -86,9 +98,9 @@ export const deleteSession = async (
     const remaining = file.users.filter(user => user.sessionId !== session.id);
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
-    // Whole-doc grant write on a revocation path, so it takes the version guard for the same
-    // reason sharingService/revoke.ts does: a racing guarded write must conflict, not clobber.
-    await db.fabFiles.updateGuarded!(file);
+    // Grant write on a revocation path, so it takes the version guard and reaches tombstones for
+    // the same reasons sharingService/grantWrite.ts describes.
+    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
   }
 
   session.deletedAt = new Date();
@@ -98,9 +110,15 @@ export const deleteSession = async (
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
 
-  // Same helper deleteDataLake debits through. `ownedFiles` is single-owner by the filter above,
-  // so the grouping collapses to one write today.
-  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(ownedFiles, -1), logger);
+  // Same helper deleteDataLake debits through. One uploader's files can split across a personal owner and org owners, so this may be several writes.
+  await bestEffortAdjustOwnerStorage(
+    db,
+    groupStorageDeltaByOwner(
+      ownedFiles.map(f => ({ userId: f.userId, organizationId: f.organizationId, fileSize: chargedBytes(f) })),
+      -1
+    ),
+    logger
+  );
 
   // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
   // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a

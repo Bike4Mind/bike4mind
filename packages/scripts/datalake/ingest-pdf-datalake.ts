@@ -65,10 +65,13 @@ import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4m
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   CONVERGENCE_ORIGIN,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   DATA_LAKES,
+  DEFAULT_STORAGE_LIMIT_MB,
   KnowledgeType,
   isChunkStalled,
   shouldHaltConvergence,
+  storageLimitToBytes,
 } from '@bike4mind/common';
 import {
   filterPdfCandidates,
@@ -84,10 +87,10 @@ import {
 const PDF_MIME = 'application/pdf';
 /** Default max per-file size (MB) when the MaxFileSize admin setting is unset; parity with fabFileService. */
 const DEFAULT_MAX_FILE_MB = 20;
-/** Only rescue files older than this - keep in sync with apps/client/server/s3/chunkScan.ts. */
+/** Only rescue files older than this - keep in sync with apps/workers/src/s3/chunkScan.ts. */
 const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
 /** A claim held longer than this is treated as stranded (a worker hard-killed before its finally).
- * Keep in sync with CHUNK_CLAIM_STALE_MS in apps/client/server/s3/chunkScan.ts. */
+ * Keep in sync with CHUNK_CLAIM_STALE_MS in apps/workers/src/s3/chunkScan.ts. */
 const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 export interface Options {
@@ -147,7 +150,7 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
 
 /** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
  * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
- * apps/client/server/s3/chunkScan.ts - including its stale-claim arm (a claim older than
+ * apps/workers/src/s3/chunkScan.ts - including its stale-claim arm (a claim older than
  * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
  *
  * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes a
@@ -258,7 +261,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
 /**
  * The effective `PauseLakeConvergence` flag for this lake: the platform switch folded with any
  * Lake-scope override (narrower rung wins). Mirrors `resolvePauseFlag` in
- * apps/client/server/queueHandlers/convergenceKillSwitch.ts and MUST stay in sync with it - the
+ * apps/client/server/dataLakes/convergenceKillSwitch.ts and MUST stay in sync with it - the
  * enforcement path itself lives under apps/client, which packages/scripts cannot import, so only the
  * settings read is duplicated: the halt DECISION stays shared (`shouldHaltConvergence`) and the
  * setting key is checked against common's registry by the `SettingKey` type. Fails soft to "not
@@ -280,6 +283,24 @@ async function isLakeConvergencePaused(lake: LakeTarget): Promise<boolean> {
     console.warn('PauseLakeConvergence read failed; treating as not paused:', err);
     return false;
   }
+}
+
+// findBySlug skips deleted/purging lakes, so a miss (or an org-less hit under --organizationId) may
+// be a fall-through past the scope's own lake. Returns that skipped lake for resolveLakeTarget to refuse.
+export async function findUnresolvableShadow(
+  slug: string,
+  scopeOrg: string | undefined,
+  dbLake: { organizationId?: unknown } | null
+): Promise<{ status: string; organizationId?: string } | null> {
+  if (dbLake && (!scopeOrg || String(dbLake.organizationId ?? '') === scopeOrg)) return null;
+  const sameScope = await dataLakeRepository.find({
+    ...(scopeOrg ? { organizationId: scopeOrg } : { organizationId: { $in: [null, ''] } }),
+    slug,
+  });
+  const hidden = sameScope.find(l =>
+    (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(l.status ?? '')
+  );
+  return hidden?.status ? { status: hidden.status, organizationId: scopeOrg } : null;
 }
 
 export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
@@ -412,7 +433,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
   // Advisory quota check; the service re-checks per file. Org-scoped ingest is governed
   // by the org's limit instead, so only warn when no organizationId is given.
   const currentBytes = user.currentStorageSize ?? 0;
-  const limitBytes = (user.storageLimit ?? 1000) * 1_000_000;
+  const limitBytes = storageLimitToBytes(user.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB);
   console.log(`\nOwner storage: ${mb(currentBytes)} used of ${mb(limitBytes)} limit; plan adds ${mb(plannedBytes)}`);
   if (!opts.organizationId && currentBytes + plannedBytes > limitBytes) {
     console.log('  !! plan exceeds the owner storageLimit - raise it (units: MB) before --execute');
@@ -508,7 +529,6 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
               contentHash: file.contentHash,
               relativePath: file.relativePath,
               tags: [{ name: lake.datalakeTag, strength: 1 }],
-              ...(opts.organizationId && { organizationId: opts.organizationId }),
             },
             adapters
           );
@@ -563,6 +583,7 @@ async function main(opts: Options): Promise<number> {
     opts.slug,
     opts.organizationId ? [opts.organizationId] : undefined
   );
+  const shadow = await findUnresolvableShadow(opts.slug, opts.organizationId, dbLake);
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
@@ -575,7 +596,8 @@ async function main(opts: Options): Promise<number> {
           createdByUserId: dbLake.createdByUserId,
         }
       : null,
-    DATA_LAKES
+    DATA_LAKES,
+    shadow
   );
   if (!lake)
     throw new Error(
@@ -639,7 +661,10 @@ if (isMainModule) {
     .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
     .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
     .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
-    .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
+    .option('organizationId', {
+      type: 'string',
+      describe: 'Resolve the lake within this org (storage is billed to the lake owner)',
+    })
     .option('concurrency', {
       type: 'number',
       default: 4,

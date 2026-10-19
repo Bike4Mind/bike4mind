@@ -1,7 +1,9 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileRepository,
+  IOrganizationRepository,
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -49,6 +51,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
     // would silently leave a discarded duplicate's bytes counted against its owner's storage quota
     // forever, correctable only via the admin recalculate-storage endpoint.
     users: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
   };
   /** Re-enable the lake's Drive connection, reversing archiveDataLake's disable. See ports.ts. */
   enableDriveConnection?: ConnectionEnablePort;
@@ -154,7 +157,14 @@ export const unarchiveDataLake = async (
         // takes it out of the counted set - the same transition deleteDataLake's own sweep debits,
         // just reached from the archive axis. Grouped by owner, not the lake's creator: a duplicate
         // can belong to any contributor (see groupStorageDeltaByOwner).
-        await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(duplicates, -1), logger);
+        await bestEffortAdjustOwnerStorage(
+          db,
+          groupStorageDeltaByOwner(
+            duplicates.map(f => ({ userId: f.userId, organizationId: f.organizationId, fileSize: chargedBytes(f) })),
+            -1
+          ),
+          logger
+        );
       }
     }
   }

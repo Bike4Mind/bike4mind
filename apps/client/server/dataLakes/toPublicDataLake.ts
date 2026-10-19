@@ -9,7 +9,7 @@ type ReaderDataLake = dataLakeService.ReaderDataLake;
  * so an editor-only field can never reach `/api/v1` through here even when the caller holds the full
  * document: every caller gets the same narrow resource.
  */
-export type PublicDataLakeSource = Pick<ReaderDataLake, 'id' | 'name' | 'slug'> &
+export type PublicDataLakeSource = Pick<ReaderDataLake, 'id' | 'name' | 'slug' | 'datalakeTag'> &
   Partial<
     Pick<
       ReaderDataLake,
@@ -44,6 +44,7 @@ export function toPublicDataLake(lake: PublicDataLakeSource, liveStats?: LakeSta
     id: lake.id,
     name: lake.name,
     slug: lake.slug,
+    datalake_tag: lake.datalakeTag,
     description: lake.description || null,
     organization_id: lake.organizationId || null,
     is_public: lake.isPublic ?? false,

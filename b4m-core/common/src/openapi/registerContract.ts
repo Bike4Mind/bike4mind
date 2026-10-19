@@ -7,11 +7,12 @@ import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
+import { deprecationHeaders, deprecationNotice } from '../api-contract/deprecation';
 
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
   description: string;
-  content: Record<string, { schema: ContractSchema }>;
+  content?: Record<string, { schema: ContractSchema }>;
   headers?: Record<string, { description: string; schema: { type: 'string' } }>;
 };
 
@@ -22,6 +23,12 @@ type ContractResponse = {
  * JSON shape to model, only a media type.
  */
 const BINARY_SCHEMA = { type: 'string', contentEncoding: 'binary' } as const;
+
+/** A documented response header's OpenAPI object, the same shape everywhere headers are merged. */
+const headerObjects = (headers: Record<string, string>): NonNullable<ContractResponse['headers']> =>
+  Object.fromEntries(
+    Object.entries(headers).map(([name, description]) => [name, { description, schema: { type: 'string' as const } }])
+  );
 
 /**
  * Re-apply the deprecation to a `name` a bespoke error schema inherited from
@@ -42,6 +49,12 @@ function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
   return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
 }
+
+const DEPRECATION_HEADER_DOCS: Record<string, string> = {
+  Deprecation: 'RFC 9745: when this endpoint was deprecated.',
+  Sunset: 'RFC 8594: the first day this endpoint may stop being served.',
+  Link: 'RFC 8288: the replacement endpoint (`rel="successor-version"`).',
+};
 
 /** The auto-injected scope 403's body: one shared component, $ref'd by every operation. */
 const SCOPE_FORBIDDEN_RESPONSE = annotateInheritedName(ScopeForbiddenErrorSchema).openapi('ScopeForbiddenResponse');
@@ -107,16 +120,12 @@ function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectS
  *
  * This is the ONLY place a contract's schemas meet `.openapi()` - safe here
  * because this module imports ./registry, which runs `extendZodWithOpenApi`.
- * Runs at generate time only. The request body uses `requestDoc` when present
- * (the OpenAPI-representable projection) and falls back to `request`.
+ * Runs at generate time only.
  */
 export function registerContract(contract: EndpointContract): void {
+  // A public operation gets an explicit empty list: omitting `security` fails redocly's security-defined rule.
   const security =
-    contract.auth === 'jwtOnly'
-      ? JWT_SECURITY_REQUIREMENT
-      : contract.auth === 'public'
-        ? undefined
-        : SECURITY_REQUIREMENT;
+    contract.auth === 'jwtOnly' ? JWT_SECURITY_REQUIREMENT : contract.auth === 'public' ? [] : SECURITY_REQUIREMENT;
 
   // Error bodies reuse the single shared ErrorResponse (or, for a declared scope 403,
   // ScopeForbiddenResponse) component ($ref) instead of
@@ -136,6 +145,18 @@ export function registerContract(contract: EndpointContract): void {
           : annotateInheritedName(body.schema).openapi(componentName, {
               ...(body.example !== undefined && { example: body.example }),
             });
+
+  // Only the contract's own statuses: the adapter sets these headers at the start of its
+  // prelude (ahead of rate limit and validation, hence the 422), so the 401/403/405 that
+  // baseApi answers earlier never carry them.
+  const deprecationHeaderDocs: Record<string, string> = contract.deprecated
+    ? Object.fromEntries(
+        Object.entries(deprecationHeaders(contract.deprecated)).map(([name, value]) => [
+          name,
+          `${DEPRECATION_HEADER_DOCS[name]} Always \`${value}\` on this endpoint.`,
+        ])
+      )
+    : {};
 
   const responses: Record<string, ContractResponse> = {};
   for (const [status, spec] of Object.entries(contract.responses)) {
@@ -166,44 +187,35 @@ export function registerContract(contract: EndpointContract): void {
       );
     }
 
+    const headers = { ...spec.headers, ...deprecationHeaderDocs };
     responses[status] = {
       description: spec.description,
-      content,
-      ...(spec.headers && {
-        headers: Object.fromEntries(
-          Object.entries(spec.headers).map(([name, description]) => [
-            name,
-            { description, schema: { type: 'string' as const } },
-          ])
-        ),
-      }),
+      ...(!spec.noBody && { content }),
+      ...(Object.keys(headers).length > 0 && { headers: headerObjects(headers) }),
     };
   }
 
-  // Any NON-streaming contract with a request body, path params, or query params
-  // returns 422 on validation failure. Body validation: both adapters guarantee it
-  // (Next: ZodError -> errorHandler -> UnprocessableEntity; Lambda: safeParse ->
-  // 422). Path/query-param validation currently only runs on the Next adapter (see
-  // the `pathParams`/`queryParams` doc comments in api-contract/types.ts) -
-  // documenting 422 here regardless is still correct for every contract actually
-  // served today. Auto-document it (unless the contract declares its own 422).
-  // Streaming endpoints are excluded: they open the stream first, so a bad body
-  // arrives as an in-band SSE `error` event, not a 422 JSON body.
-  if ((contract.request || contract.pathParams || contract.queryParams) && !contract.streaming && !responses['422']) {
-    responses['422'] = {
+  // Any contract with a request body, path params, or query params documents its validation
+  // failure status. 422 is the default; legacy routes can preserve a published 400 with
+  // validationErrorStatus. Streaming contracts included: they validate before the stream opens.
+  const validationStatus = contract.validationErrorStatus ?? 422;
+  if ((contract.request || contract.pathParams || contract.queryParams) && !responses[String(validationStatus)]) {
+    responses[String(validationStatus)] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
+      // The adapter sets these headers at the start of its prelude, which runs ahead of
+      // validation, so an injected 422 carries them too - unlike the 401/403/405 answered
+      // before the prelude.
+      ...(Object.keys(deprecationHeaderDocs).length > 0 && { headers: headerObjects(deprecationHeaderDocs) }),
     };
   }
 
   // Same reasoning for the auth failures every authenticated route can return:
   // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
   // Documenting them centrally keeps generated SDKs honest without every author
-  // remembering to declare them. Streaming endpoints are excluded: once the
-  // stream opens the status stays 200 and auth/scope failures arrive as an
-  // in-band SSE `error` event, not an HTTP 401/403. A contract may still
-  // override either.
-  if (contract.auth !== 'public' && !contract.streaming) {
+  // remembering to declare them. Streaming contracts authenticate before the stream
+  // opens, so they get them too. A contract may still override either.
+  if (contract.auth !== 'public') {
     if (!responses['401']) {
       responses['401'] = {
         description: 'Missing or invalid credentials.',
@@ -235,7 +247,7 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  const requestSchema = contract.requestDoc ?? contract.request;
+  const requestSchema = contract.request;
   // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
   // `request.query` into the operation's `parameters` array rather than a
   // referenceable component, so a name would never appear in the output - passing
@@ -249,7 +261,10 @@ export function registerContract(contract: EndpointContract): void {
     path: contract.path,
     operationId: contract.operationId,
     summary: contract.summary,
-    description: contract.description,
+    description: contract.deprecated
+      ? [deprecationNotice(contract.deprecated), contract.description].filter(Boolean).join(' ')
+      : contract.description,
+    ...(contract.deprecated && { deprecated: true }),
     tags: contract.tags,
     security,
     request:
@@ -259,7 +274,7 @@ export function registerContract(contract: EndpointContract): void {
             ...(query && { query }),
             ...(requestSchema && {
               body: {
-                required: true,
+                required: contract.requestBodyRequired ?? true,
                 content: {
                   'application/json': {
                     schema: requestSchema.openapi(`${contract.operationId}Request`, {

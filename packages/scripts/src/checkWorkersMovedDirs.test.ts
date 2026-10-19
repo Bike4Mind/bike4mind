@@ -17,7 +17,159 @@ const MOVED = [
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
   { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
   { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
+  { from: 'apps/client/server/agentExecutor', to: 'apps/workers/src/agentExecutor' },
+  {
+    from: 'apps/client/server/security/attackSimulation/probes',
+    to: 'apps/workers/src/security/attackSimulation/probes',
+  },
+  // A subdirectory of queueHandlers, which the per-stem check below cannot see.
+  {
+    from: 'apps/client/server/queueHandlers/agentExecutorUtils',
+    to: 'apps/workers/src/queueHandlers/agentExecutorUtils',
+  },
+  // Helpers only workers reach; nothing in apps/client imports them.
+  {
+    from: 'apps/client/server/integrations/github/handlers',
+    to: 'apps/workers/src/integrations/github/handlers',
+  },
+  { from: 'apps/client/server/integrations/sre', to: 'apps/workers/src/integrations/sre' },
+  { from: 'apps/client/server/webhooks', to: 'apps/workers/src/webhooks' },
 ] as const;
+
+/**
+ * Modules moved out of directories that can't be guarded whole, so they are guarded per module by
+ * file stem: apps/client/server/queueHandlers keeps questProcessor (the in-process chat-completion
+ * path imports it), and apps/client/server/security keeps the library the admin dashboard routes
+ * call, including attackSimulation/types (the ingest route's payload contract). Shared helpers that
+ * apps/client itself imports moved to client-side homes rather than to apps/workers, because
+ * apps/client must never import apps/workers.
+ */
+const MOVED_MODULES = [
+  {
+    from: 'apps/client/server/queueHandlers',
+    to: 'apps/workers/src/queueHandlers',
+    stems: [
+      'agentExecutor',
+      'agentExecutorDag',
+      'agentProactiveMessage',
+      'createZipBuffer',
+      'dataLakeBatchRetryGating',
+      'dataLakeCleanup',
+      'dataLakeCleanupRetrievalIndex',
+      'dataLakeResearchRun',
+      'dataLakeTaxonomyAnalysis',
+      'driveDisconnectPurge',
+      'driveLakeIngest',
+      'emailBatch',
+      'emailJobOrchestrator',
+      'emailTestRecipients',
+      'fabFileChunk',
+      'fabFileVectorize',
+      'generationCallback',
+      'generationJob',
+      'githubLakeIngest',
+      'githubLakeRevoke',
+      'githubLakeSlice',
+      'githubWebhook',
+      'imageEdit',
+      'imageGeneration',
+      'lakeInconsistencyModelDetection',
+      'lakeIngestShared',
+      'lakeMemoryExtraction',
+      'notebookCuration',
+      'notifySlackIndexingComplete',
+      'orgFeedbackSummary',
+      'questExport',
+      'researchEngineQueue',
+      'resumeEmbeddingSpace',
+      'sanitizeWebhookError',
+      'slackExport',
+      'sreAnalysis',
+      'sreFix',
+      'sreJob',
+      'sreRevision',
+      'toolBuilderDeps',
+      'vectorizeStrandRecovery',
+      'webhookDelivery',
+      'whatsNewGeneration',
+      'whatsNewHighlights',
+    ],
+  },
+  {
+    from: 'apps/client/server/queueHandlers',
+    to: 'apps/client/server/dataLakes',
+    stems: ['convergenceKillSwitch', 'dataLakeBatchProgress'],
+  },
+  // A deleted re-export shim, not a move: its vocabulary lives in common.
+  { from: 'apps/client/server/queueHandlers', to: '@bike4mind/common', stems: ['convergenceProvenance'] },
+  { from: 'apps/client/server/queueHandlers', to: 'apps/client/server/utils', stems: ['sqsDelivery'] },
+  {
+    from: 'apps/client/server/security',
+    to: 'apps/workers/src/security',
+    stems: ['alertProcessor'],
+  },
+  {
+    from: 'apps/client/server/security/attackSimulation',
+    to: 'apps/workers/src/security/attackSimulation',
+    stems: ['fingerprint', 'runner'],
+  },
+  // Standalone Lambda entries; the client-shared siblings in each directory stay put.
+  {
+    from: 'apps/client/server/s3',
+    to: 'apps/workers/src/s3',
+    stems: ['appFileUploadComplete', 'objectCreated'],
+  },
+  {
+    from: 'apps/client/server/utils',
+    to: 'apps/workers/src/database',
+    stems: ['manageDatabase', 'seedDatabase', 'dropPreviewDatabase'],
+  },
+  { from: 'apps/client/server/utils', to: 'apps/workers/src/media', stems: ['imageProcessor'] },
+  // `tools.` also covers tools.handler and tools.wiring, but not toolsHandler.shared, which stays.
+  { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['tools'] },
+  { from: 'apps/client/server/queueHandlers', to: 'apps/workers/src/queueHandlers', stems: ['slackQuestProcessor'] },
+  // Helpers only workers reach, moved out of directories whose other modules apps/client still uses.
+  {
+    from: 'apps/client/server/s3',
+    to: 'apps/workers/src/s3',
+    stems: ['chunkScan', 'chunkRescueSweep', 'moderationRescueSweep'],
+  },
+  {
+    from: 'apps/client/server/dataLakes',
+    to: 'apps/workers/src/dataLakes',
+    stems: [
+      'convergencePauseScope',
+      'extractLakeMemory',
+      'extractLakeMemoryDeadline',
+      'extractLakeMemoryFailureBreaker',
+      'extractLakeMemoryPurgeFence',
+      'runLakeResearch',
+    ],
+  },
+  {
+    from: 'apps/client/server/integrations/github/dataLake',
+    to: 'apps/workers/src/integrations/github/dataLake',
+    stems: ['githubLakeTreeDiff'],
+  },
+  {
+    from: 'apps/client/server/utils',
+    to: 'apps/workers/src/utils',
+    stems: [
+      'eventContext',
+      'dataLakeSpendNotifier',
+      'loadAgentMcpTools',
+      'getFirstIterationSkillsPreamble',
+      'getFirstIterationMementosPreamble',
+    ],
+  },
+  { from: 'apps/client/server/deepAgent', to: 'apps/workers/src/deepAgent', stems: ['missionChatTools'] },
+  { from: 'apps/client/server/services', to: 'apps/workers/src/services', stems: ['secopsTriageService'] },
+  { from: 'apps/client/server/modelDiscovery', to: 'apps/workers/src/modelDiscovery', stems: ['metrics'] },
+  { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['defineLambdaRoute'] },
+  { from: 'apps/client/lib/userSubscriptions', to: 'apps/workers/src/lib/userSubscriptions', stems: ['serverUtils'] },
+] as const;
+
+const MOVED_MODULE_CASES = MOVED_MODULES.flatMap(({ from, to, stems }) => stems.map(stem => ({ from, to, stem })));
 
 const OS_LITTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
@@ -39,17 +191,28 @@ function infraHandlers(): { file: string; handler: string }[] {
       const file = path.join(entry.parentPath, entry.name);
       return [...fs.readFileSync(file, 'utf8').matchAll(/handler:\s*['"`]([^'"`]+)['"`]/g)].map(([, handler]) => ({
         file: path.relative(REPO_ROOT, file),
-        handler,
+        handler: handler.replace(/^\.\//, ''),
       }));
     });
 }
 
-describe('directories moved into apps/workers stay moved', () => {
+describe('directories and modules moved out of apps/client/server stay moved', () => {
   it.each(MOVED)('$from has no files (they belong in $to)', ({ from, to }) => {
     expect(filesUnder(path.join(REPO_ROOT, from)), `move these into ${to}`).toEqual([]);
   });
 
-  it('no infra handler points into a moved directory', () => {
+  it.each(MOVED_MODULE_CASES)('$stem has no file left in $from (it belongs in $to)', ({ from, to, stem }) => {
+    const dir = path.join(REPO_ROOT, from);
+    const leftovers = fs.existsSync(dir)
+      ? fs
+          .readdirSync(dir)
+          .filter(name => name.startsWith(`${stem}.`))
+          .map(name => `${from}/${name}`)
+      : [];
+    expect(leftovers, `move these into ${to}`).toEqual([]);
+  });
+
+  it('no infra handler points into a moved directory or at a moved module', () => {
     const handlers = infraHandlers();
     // Proves the scan reads real handlers, so an empty result below is not a regex matching nothing.
     expect(handlers.some(({ handler }) => handler.startsWith('apps/workers/src/cron/'))).toBe(true);
@@ -59,11 +222,52 @@ describe('directories moved into apps/workers stay moved', () => {
         'apps/workers/src/jobs/dataSyncerHandler.handler',
         'apps/workers/src/emailIngestion/emailParser.dispatch',
         'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
+        'apps/workers/src/queueHandlers/sreJob.dispatch',
+        // infra/queues.ts; the Lambda Bundle Guard is path-filtered and skips infra/-only PRs.
+        'apps/workers/src/queueHandlers/imageGeneration.dispatch',
+        'apps/workers/src/queueHandlers/imageEdit.dispatch',
+        // infra/emailMarketing.ts, which no other moved handler lives in.
+        'apps/workers/src/queueHandlers/emailBatch.dispatch',
+        'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
+        'apps/workers/src/queueHandlers/driveDisconnectPurge.dispatch',
+        // infra/securityAlerts.ts, which no other moved handler lives in.
+        'apps/workers/src/security/alertProcessor.handler',
+        // infra/cron.ts
+        'apps/workers/src/security/attackSimulation/runner.handler',
+        // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
+        'apps/workers/src/queueHandlers/agentExecutor.handler',
+        // infra/buckets.ts
+        'apps/workers/src/s3/appFileUploadComplete.func',
+        // infra/queues.ts (the bucket notification subscriber)
+        'apps/workers/src/s3/objectCreated.func',
+        // infra/database.ts
+        'apps/workers/src/database/manageDatabase.updateDatabase',
+        'apps/workers/src/database/seedDatabase.handler',
+        'apps/workers/src/database/dropPreviewDatabase.handler',
+        // infra/imageProcessor.ts
+        'apps/workers/src/media/imageProcessor.handler',
+        // infra/cliToolHandler.ts
+        'apps/workers/src/cli/tools.handler.handler',
+        // infra/functions.ts
+        'apps/workers/src/queueHandlers/slackQuestProcessor.handler',
       ])
     );
     const stale = handlers
-      .filter(({ handler }) => MOVED.some(({ from }) => handler.startsWith(`${from}/`)))
+      .filter(
+        ({ handler }) =>
+          MOVED.some(({ from }) => handler.startsWith(`${from}/`)) ||
+          MOVED_MODULE_CASES.some(({ from, stem }) => handler.startsWith(`${from}/${stem}.`))
+      )
       .map(({ file, handler }) => `${file}: ${handler}`);
     expect(stale, 'retarget these handlers at apps/workers/src').toEqual([]);
+  });
+
+  it('every apps/workers infra handler resolves to a real module file', () => {
+    // A handler path can survive a rename and still point at a file that no longer exists; only a deploy fails.
+    const missing = infraHandlers()
+      .filter(({ handler }) => handler.startsWith('apps/workers/'))
+      .filter(({ handler }) => !fs.existsSync(path.join(REPO_ROOT, handler.replace(/\.[^.]+$/, '.ts'))))
+      .map(({ file, handler }) => `${file}: ${handler}`);
+    expect(missing, 'retarget these handlers at an existing file').toEqual([]);
   });
 });

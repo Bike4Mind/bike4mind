@@ -10,6 +10,7 @@ import { FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feed
  */
 export interface FeedbackPromptMetaInput {
   model?: { name?: string };
+  redirectedFrom?: string;
   tokenUsage?: {
     totalTokens?: number;
     actualTotalTokens?: number;
@@ -104,6 +105,9 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
 
   if (promptMeta.model?.name !== undefined) {
     lines.push(`Model: ${escapeLine(promptMeta.model.name)}`);
+  }
+  if (promptMeta.redirectedFrom) {
+    lines.push(`Redirected from: ${escapeLine(promptMeta.redirectedFrom)}`);
   }
 
   const tokenUsage = promptMeta.tokenUsage;

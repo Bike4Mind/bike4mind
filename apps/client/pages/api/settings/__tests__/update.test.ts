@@ -5,11 +5,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // settingsMap. Mock only the infra + middleware seams.
 let stored: Record<string, unknown> | null = null;
 const findOneAndUpdate = vi.fn();
+const deleteOne = vi.fn();
 
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
     findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
+    deleteOne: (...args: unknown[]) => deleteOne(...args),
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
@@ -33,9 +35,13 @@ vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.re
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
 }));
+vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
+  resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
+}));
 
 import handler from '../update';
 import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
 const stageWriteResult = (settingName: string, settingValue: unknown) => {
@@ -187,5 +193,73 @@ describe('settings/update sensitive value handling', () => {
       if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
       else process.env.B4M_SELF_HOST = originalSelfHost;
     }
+  });
+});
+
+describe('settings/update cleared forced-retrieval absolute floor', () => {
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    deleteOne.mockReset();
+    vi.mocked(invalidateSettingsCache).mockClear();
+  });
+
+  // A stored 75 is honored in every embedding space, so clearing the field must remove the row
+  // (back to per-space) rather than store the default.
+  it.each(['', '  ', null])('deletes the row instead of storing the default for %j', async value => {
+    const res = await runHandler('forcedRetrievalMinSimilarityPct', value);
+    expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' }, { hardDelete: true });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invalidateSettingsCache).toHaveBeenCalledWith('forcedRetrievalMinSimilarityPct');
+    // null reads as "unset" in the field, distinct from a stored 75; see AdminSettingInputField.
+    expect(res.settingValue).toBe(null);
+  });
+
+  it('rejects without invalidating the cache or upserting when the delete fails', async () => {
+    deleteOne.mockRejectedValue(new Error('db down'));
+    await expect(runHandler('forcedRetrievalMinSimilarityPct', '')).rejects.toThrow('db down');
+    expect(invalidateSettingsCache).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still stores an explicit 75 once the caller confirms it is above the measured minimum', async () => {
+    stageWriteResult('forcedRetrievalMinSimilarityPct', 75);
+    await runHandler('forcedRetrievalMinSimilarityPct', '75', { confirmAboveMeasuredFloor: true });
+    expect(deleteOne).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalMinSimilarityPct' },
+      { $set: { settingValue: 75 } },
+      expect.anything()
+    );
+  });
+
+  it('refuses a minimum above the one measured for the default embedding model without a confirmation', async () => {
+    await expect(runHandler('forcedRetrievalMinSimilarityPct', '75')).rejects.toThrow(
+      '75% is above the 58% minimum measured for text-embedding-3-small'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+    expect(invalidateSettingsCache).not.toHaveBeenCalled();
+  });
+
+  it('stores a minimum at the measured one without a confirmation', async () => {
+    stageWriteResult('forcedRetrievalMinSimilarityPct', 58);
+    await runHandler('forcedRetrievalMinSimilarityPct', '58');
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalMinSimilarityPct' },
+      { $set: { settingValue: 58 } },
+      expect.anything()
+    );
+  });
+
+  it('stores the default instead of deleting for a number key without clearDeletesRow', async () => {
+    // The delete branch is gated on clearDeletesRow. Without that check a blank save on ANY number
+    // key would hard-delete its row; this is the guard on the gate.
+    stageWriteResult('forcedRetrievalRelativeFloorPct', 85);
+    await runHandler('forcedRetrievalRelativeFloorPct', '');
+    expect(deleteOne).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalRelativeFloorPct' },
+      { $set: { settingValue: 85 } },
+      expect.anything()
+    );
   });
 });

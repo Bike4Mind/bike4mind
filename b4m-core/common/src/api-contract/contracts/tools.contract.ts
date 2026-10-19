@@ -11,8 +11,9 @@ import { ApiErrorSchema } from '../../schemas/chat';
  *
  * JWT-only (API keys are rejected): the handler runs `verifyJwtToken` only, so
  * `auth: 'jwtOnly'` and no `scopes`. Served by a Lambda Function URL in prod
- * (server/cli/tools.ts via defineLambdaRoute) and a thin Next route in local dev
- * (pages/api/ai/v1/tools.ts). Rate-limited to 100 requests/hour.
+ * (apps/workers/src/cli/tools.ts via defineLambdaRoute) and a thin Next route in
+ * local dev (apps/client/pages/api/ai/v1/tools.ts). Rate-limited to 100
+ * requests/hour.
  */
 export const executeToolContract = defineEndpoint({
   method: 'post',
@@ -42,6 +43,7 @@ export const executeToolContract = defineEndpoint({
     },
     400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
+    403: { description: 'Valid JWT, but the account is suspended or has a dispute pending.', schema: ApiErrorSchema },
     429: { description: 'Rate limit exceeded (100 requests/hour per user for this endpoint).', schema: ApiErrorSchema },
     // Two 500 shapes: a failed-but-executed tool returns the full ToolExecutionResponse
     // (`success: false` with `error`); an unexpected throw is shaped by defineLambdaRoute

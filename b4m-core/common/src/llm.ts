@@ -6,6 +6,8 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -54,6 +56,13 @@ export const ResearchModeParamsSchema = z.object({
 export const PromptIntentSchema = z.enum(['fresh', 'continuation']);
 export type PromptIntent = z.infer<typeof PromptIntentSchema>;
 
+/**
+ * How the image route treats the caller's prompt. `auto` runs the session-history resolver
+ * (pages/api/v1/image-generations.ts); `literal` sends it unchanged apart from truncation to the model's prompt limit.
+ */
+export const ImagePromptResolutionSchema = z.enum(['auto', 'literal']);
+export type ImagePromptResolution = z.infer<typeof ImagePromptResolutionSchema>;
+
 export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
@@ -67,9 +76,10 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
    * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
    * OpenAI receives them in this order - which matters, because a mask always applies to the
    * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
-   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
-   * why the cap is 4 and not OpenAI's 16.
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
+   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
+   * services drop them as a backstop. Repeated ids collapse to one anchor, and each unique one is
+   * billed as an input image (see MAX_REFERENCE_IMAGES).
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
@@ -99,8 +109,18 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
 }).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
+  organizationId: BillingOrganizationIdSchema,
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
+  prompt_resolution: ImagePromptResolutionSchema.optional().describe(
+    'How the prompt is treated before it reaches the image model. `"auto"` (the default) resolves it ' +
+      'against the session history, so a follow-up such as "make it darker" is rewritten to carry the ' +
+      'previous subject and the prior image is fed back as input. `"literal"` skips that step: the ' +
+      "prompt is sent unchanged (apart from truncation to the model's prompt limit), `intent` is " +
+      '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
+      'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
+      'self-contained, for example when an agent or pipeline builds it.'
+  ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 
@@ -147,7 +167,7 @@ export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSche
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
+  organizationId: BillingOrganizationIdSchema,
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
@@ -156,8 +176,9 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
-   * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
+   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
+   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor, and each unique one
+   * is billed as an input image (see MAX_REFERENCE_IMAGES).
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
@@ -288,6 +309,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Per-request twin of `session.disableUserIntegrations`, ORed with it: no user MCP servers, no
+   * agents or agent delegation, and no user skills (catalog or `/skill` expansion). For a server
+   * caller running a prompt the user did not author (e.g. a Slack workflow step), where the user's
+   * own integrations must not be reachable from that prompt.
+   */
+  disableUserIntegrations: z.boolean().optional(),
+  /**
    * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
    * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
    * which also withholds knowledge and MCP offers such a caller may still need.
@@ -342,6 +370,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /** Public /api/chat `toolMode`, persisted on promptMeta for tool-calling evals. */
+  toolMode: ChatToolModeSchema.optional(),
   /**
    * Agent-mode toggle state forwarded from the composer. The chat
    * completion path itself does not branch on this - that decision happens
@@ -359,11 +389,24 @@ export const ChatCompletionInvokeParamsSchema = z.object({
 });
 export type ChatCompletionInvokeParams = z.infer<typeof ChatCompletionInvokeParamsSchema>;
 
-export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
+// toolMode is omitted so an in-app request cannot stamp a mode no tool selection ran under; only
+// /api/chat sets it, after its own toolMode handling.
+export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ toolMode: true }).extend({
   /** Notebook session ID */
   sessionId: z.string().optional(),
   /** Notebook session name */
   sessionName: z.string().optional(),
+  /**
+   * Agents to stamp on a session this request creates (the composer's Agents panel on `/new`).
+   * Session-creation input, not a completion parameter, so it is applied only when `sessionId`
+   * is absent; ignored when an existing session is resolved.
+   */
+  agentIds: z.array(z.string()).optional(),
+  /**
+   * The subset of `messageFileIds` the user scoped to this message only. Every other notebook-scope
+   * message attachment is pinned to the session so it stays in context on later turns.
+   */
+  messageOnlyFileIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

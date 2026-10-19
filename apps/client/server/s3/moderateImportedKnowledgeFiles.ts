@@ -1,6 +1,7 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
+import { generateUploadConstraintFor } from '@server/files/generateUploadMarker';
 import type { moderateUploadedFile as ModerateUploadedFile } from '@server/s3/moderateUploadedFile';
 
 /**
@@ -10,6 +11,7 @@ interface ClaimedFabFile {
   _id: unknown;
   id: string;
   mimeType?: string;
+  sourceMetadata?: unknown;
   /**
    * The exact `moderationClaimedAt` this claim was acquired with. Threaded back into `persist`,
    * `release` and `retireMissingObject` so each is guarded on the claim it owns rather than on
@@ -24,7 +26,7 @@ interface ClaimedFabFile {
 }
 
 export interface ModerateImportedKnowledgeFilesArgs {
-  /** S3 keys of the just-imported knowledge files, one per FabFile. */
+  /** S3 keys of the FabFiles to scan, one per row. */
   filePaths: string[];
   userId: string;
   enabled: boolean;
@@ -66,8 +68,9 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * age floor, where a never-created object is a permanent orphan (an import whose bytes never
    * landed); releasing would re-select the same orphan every run - a poison batch that starves
    * genuinely-stranded rows. Soft-delete (a storage-cleanup outcome, not a content-policy `blocked`
-   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset,
-   * so a young row's missing object is treated as transient and released for the sweep to retry later.
+   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset
+   * and the self-host webhook passes false, so a young row's missing object is treated as transient
+   * and released for the sweep to retry later.
    */
   terminalOnMissingObject?: boolean;
   /**
@@ -79,6 +82,11 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * guard matched, so a superseded retire is not counted as a resolved file.
    */
   retireMissingObject(_id: unknown, claimedAt: Date): Promise<boolean>;
+  /**
+   * Stored object size in bytes. Needed only for an ai:generate-only upload; when absent such a file
+   * is treated as oversized and blocked, never cleared unmeasured.
+   */
+  measureSize?(filePath: string): Promise<number>;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
 }
@@ -99,15 +107,16 @@ function isMissingObjectError(err: unknown): boolean {
 }
 
 /**
- * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The import stamps every
- * file `pending` (the schema default) and returns here once its transaction has committed - the
- * natural S3 ObjectCreated scan (see server/s3/objectCreated.ts) fires at upload time, before the
+ * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The self-host object-created
+ * webhook also runs this for a single freshly landed upload. The import stamps every file `pending`
+ * (the schema default) and returns here once its transaction has committed - the
+ * natural S3 ObjectCreated scan (see apps/workers/src/s3/objectCreated.ts) fires at upload time, before the
  * row exists inside the still-open import transaction, so it always bails; without this pass an
  * imported image would sit `pending` forever (unservable) which is why the import used to
  * mis-stamp it `clean` and bypass moderation entirely. The declared mimeType is attacker-supplied,
  * so `moderate` (moderateUploadedFile) byte-sniffs the real type: non-images resolve to `clean`
  * immediately, real image bytes take the Rekognition path. Shares moderateUploadedFile's verdict
- * logic and the fail-closed invariant with the upload-time path (objectCreated.ts) - a terminal
+ * logic and the fail-closed invariant with the hosted upload-time path (objectCreated.ts) - a terminal
  * verdict is never re-scanned and a held file stays unservable 'pending' - but serializes via its
  * own atomic pending|null -> scanning claim, which is a different mechanism from objectCreated's
  * (that path never writes the interim 'scanning' state). Never throws - a failed scan leaves the
@@ -132,6 +141,7 @@ export async function moderateImportedKnowledgeFiles(
     release,
     terminalOnMissingObject,
     retireMissingObject,
+    measureSize,
     downloadBytes,
     downloadPartialBytes,
   } = args;
@@ -150,6 +160,9 @@ export async function moderateImportedKnowledgeFiles(
         enabled,
         service,
         incidents,
+        generateUpload: generateUploadConstraintFor(claimed.sourceMetadata, async () =>
+          measureSize ? measureSize(filePath) : Number.POSITIVE_INFINITY
+        ),
         downloadBytes: () => downloadBytes(filePath),
         downloadPartialBytes: length => downloadPartialBytes(filePath, length),
         moderateImageOrThrow,

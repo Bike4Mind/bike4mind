@@ -1,3 +1,4 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   DataLakeDocumentPurgeReceipt,
   IAdminSettingsRepository,
@@ -9,6 +10,7 @@ import type {
   ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -109,9 +111,11 @@ interface PurgeDataLakeDocumentAdapters {
    * writes; a throw propagates, so keep it best-effort at the call site.
    */
   onPurged?: (purged: {
-    /** The file's owner - NOT the actor, who may be an admin destroying someone else's document. */
+    /** The file's uploader - NOT the actor, who may be an admin destroying someone else's document. */
     ownerUserId: string;
-    /** Bytes to return to that owner's quota; 0 unless the stored object was actually deleted. */
+    /** The org that owns the file (FabFile.organizationId), whose quota the bytes return to; absent = personal. */
+    ownerOrganizationId?: string;
+    /** Bytes to return to the owner's quota (storageOwnerOf); 0 unless the stored object was actually deleted. */
     fileSize: number;
     /** Every tag the file carried, pre-delete - the input to the other lakes' stats rebuild. */
     tagNames: string[];
@@ -287,21 +291,34 @@ export const purgeDataLakeDocument = async (
     // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
     // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
     // so without this claim both would refund the owner's quota for the same bytes.
-    deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+    // Legal-hold errors are permanent; catch them so the caller gets a clean false return
+    // rather than an opaque 500. The file is on legal hold and must not be removed.
+    try {
+      deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+    } catch (err) {
+      if (isLegalHoldError(err)) {
+        logger?.warn('[dataLake] blocked file cannot be purged (legal hold)', { fabFileId: file.id });
+        // deletedByThisCall stays false: no quota refund, no onPurged - intentional.
+      } else {
+        throw err;
+      }
+    }
 
     // Once the row is gone there is no retry door left (the file has already vanished from the
     // owner's Files list), so this must not throw: an uncaught failure here would skip `onPurged`
     // below and silently cost the owner their quota refund with no symptom to chase. Log and fall
     // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
     // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
-    try {
-      await db.fabFileChunks.deleteManyByFabFileId(file.id);
-    } catch (error) {
-      logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
-        fabFileId: file.id,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
+    // Guard: if the legal-hold catch fired, the row was NOT deleted; skip chunk sweep entirely.
+    if (deletedByThisCall)
+      try {
+        await db.fabFileChunks.deleteManyByFabFileId(file.id);
+      } catch (error) {
+        logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
+          fabFileId: file.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
 
     // Detected findings quote their sources, so a row citing this document would keep a 240-char
     // excerpt of text this call was paid to destroy - and nothing else would ever sweep it, since a
@@ -422,10 +439,12 @@ export const purgeDataLakeDocument = async (
 
   await onPurged?.({
     ownerUserId: file.userId,
+    ownerOrganizationId: file.organizationId,
     // Gated on this call having removed the row, not merely on the object delete succeeding:
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
-    fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
+    // Charged bytes, not the raw size: a never-charged row refunds nothing (see chargedBytes).
+    fileSize: deletedByThisCall ? chargedBytes(file) : 0,
     tagNames,
   });
 

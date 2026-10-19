@@ -38,6 +38,9 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
+vi.mock('@server/utils/storage', () => ({
+  getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -81,7 +84,7 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/managers/sessionManager', () => ({ getOrCreateSession: vi.fn().mockResolvedValue({}) }));
 vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/queueHandlers/imageEdit', () => ({ getImageEdit: () => ({ invoke: mockInvoke }) }));
+vi.mock('@server/imageGenerations/imageEdit', () => ({ getImageEdit: () => ({ invoke: mockInvoke }) }));
 
 import uploadHandler from '../files/index';
 import getFileHandler from '../files/[id]/index';
@@ -218,12 +221,12 @@ describe('image edit from uploaded files (upload -> edit -> poll quest)', () => 
     });
     expect(poll.status).toBe(200);
     expect(mockQuestFindById).toHaveBeenCalledWith(QUEST_ID);
-    // The output is a generated CDN file, not a FabFile id to read back via GET /api/v1/files/{id}.
+    // The output is a generated file with a presigned URL, not a FabFile id to read back via GET /api/v1/files/{id}.
     expect(poll.json).toMatchObject({
       status: 'done',
       type: 'message',
       images: [OUTPUT_NAME],
-      files: [{ name: OUTPUT_NAME, url: `${CDN_URL}/generated/${OUTPUT_NAME}`, isImage: true }],
+      files: [{ name: OUTPUT_NAME, url: `https://signed.example.invalid/${OUTPUT_NAME}`, isImage: true }],
     });
   });
 });

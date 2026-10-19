@@ -103,6 +103,30 @@ describe('POST /api/quest-plans/[id]/continue write-time re-check', () => {
     expect(res._getJSONData().plan.state).toBe('active');
   });
 
+  it('strips fields the plan schema does not declare and keeps the context message', async () => {
+    h.continueInSession.mockResolvedValue({
+      id: PLAN_ID,
+      _id: 'raw-object-id',
+      __v: 2,
+      notInSchema: 'x',
+      state: 'active',
+      goal: 'Goal',
+      metrics: {},
+    });
+    h.questCreate.mockResolvedValue({ id: 'q1', prompt: 'p', embedding: [0.1] });
+
+    const res = await call();
+
+    const body = res._getJSONData();
+    expect(body.success).toBe(true);
+    expect(body.plan.id).toBe(PLAN_ID);
+    expect(body.sessionId).toBe(SESSION_ID);
+    expect(body.contextMessage).toEqual({ id: 'q1', prompt: 'p' });
+    for (const key of ['_id', '__v', 'notInSchema']) {
+      expect(body.plan).not.toHaveProperty(key);
+    }
+  });
+
   it('reports the stored state when the gated resume matches nothing', async () => {
     h.continueInSession.mockResolvedValue({ id: PLAN_ID, state: 'paused', goal: 'Goal', metrics: {} });
     h.resumeIfPaused.mockResolvedValue(null);

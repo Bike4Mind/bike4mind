@@ -4,14 +4,24 @@ import {
   SupportedFabFileMimeTypes,
   isImageServeable,
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  isStorageLimitError,
 } from '@bike4mind/common';
-import { FabFile, withTransaction, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import {
+  FabFile,
+  withTransaction,
+  apiKeyRepository,
+  adminSettingsRepository,
+  fabFileRepository,
+  userRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
+import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
   isAiEditableOfficeMime,
@@ -22,8 +32,14 @@ import {
 } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
+
+const rewriteStorageDb = {
+  fabFiles: fabFileRepository,
+  users: userRepository,
+  organizations: organizationRepository,
+};
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -343,7 +359,8 @@ Return only the edited content without any markdown code blocks or explanations.
             // original bytes are never overwritten.
             const newBuffer = await applyEditedText(originalBuffer, editedContent, file.mimeType || '');
             const now = new Date();
-            const { newFilePath, versions } = appendEditedVersion({
+            const maxEditedVersions = await getAiEditVersionRetention();
+            const { newFilePath, versions, droppedVersions } = appendEditedVersion({
               userId: user.id,
               fabFileId: String(file._id),
               fileName: file.fileName,
@@ -354,42 +371,43 @@ Return only the edited content without any markdown code blocks or explanations.
               newFileSize: newBuffer.length,
               now,
               nonce: uuidv4(),
+              maxEditedVersions,
             });
+            await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
             // The nonce-keyed upload can never collide with a concurrent edit's bytes.
             await getFilesStorage().upload(newBuffer, newFilePath, {
               ContentType: file.mimeType || 'application/octet-stream',
             });
             // Atomic version claim: only repoint if filePath still matches what we edited, so a
-            // concurrent edit can't silently clobber this one (its bytes are just orphaned).
-            const claimed = await FabFile.findOneAndUpdate(
-              { _id: file._id, filePath: s3Key },
+            // concurrent edit can't silently clobber this one (its bytes are just orphaned, uncharged).
+            const claimed = await fabFilesService.commitContentRewrite(
               {
-                $set: {
-                  filePath: newFilePath,
-                  fileSize: newBuffer.length,
-                  versions,
-                  updatedAt: now,
-                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                },
-              }
+                fabFileId: String(file._id),
+                newSize: newBuffer.length,
+                filter: { filePath: s3Key },
+                set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              },
+              rewriteStorageDb
             );
             if (!claimed) {
               throw new BadRequestError('File was modified by another edit. Please reload and try again.');
             }
+            // Only once the trimmed history is committed: a lost claim must leave history intact.
+            await deleteDroppedVersions(droppedVersions);
           } else {
+            const newSize = Buffer.byteLength(editedContent, 'utf8');
+            await fabFilesService.assertRewriteFits(file, newSize, rewriteStorageDb, user);
             await getFilesStorage().upload(editedContent, s3Key, {
               ContentType: file.mimeType || 'text/plain',
             });
 
-            await FabFile.updateOne(
-              { _id: file._id },
+            await fabFilesService.commitContentRewrite(
               {
-                $set: {
-                  updatedAt: new Date(),
-                  fileSize: Buffer.byteLength(editedContent, 'utf8'),
-                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                },
-              }
+                fabFileId: String(file._id),
+                newSize,
+                set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              },
+              rewriteStorageDb
             );
           }
 
@@ -399,6 +417,9 @@ Return only the edited content without any markdown code blocks or explanations.
         return res.json(result);
       } catch (error) {
         console.error('Edit file error:', error);
+        // The storage gate and a missing owner already carry their own status code; rethrow them
+        // instead of flattening every error to a 400.
+        if (isStorageLimitError(error) || error instanceof HTTPError) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to generate edit');
       }
     })

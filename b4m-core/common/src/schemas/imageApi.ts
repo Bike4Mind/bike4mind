@@ -22,8 +22,8 @@ export type ImageQuest = z.infer<typeof ImageQuestSchema>;
 
 export const GenerateImageResponseSchema = z.object({
   quest: ImageQuestSchema,
-  // Only the id is modelled: the body carries the full session document, which is not
-  // part of this endpoint's contract.
+  // Only the id is modelled: the body carries the client-redacted session document
+  // (redactSessionForClient), which is not part of this endpoint's contract.
   session: z.object({ id: z.string() }),
   originalPrompt: z.string(),
   enhancedPrompt: z.string(),

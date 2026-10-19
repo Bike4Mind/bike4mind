@@ -168,6 +168,37 @@ export const RESEARCH_COST_CEILING_MICRO_USD_DEFAULT = 50_000; // $0.05
 export const RESEARCH_COST_CEILING_MICRO_USD_LIMIT = 5_000_000; // $5.00
 
 /**
+ * Quick picks for the config form: each sets the judge model, depth and cost ceiling together.
+ * Quick MUST equal the lever defaults above, so a manager who never opens the advanced section
+ * saves exactly what the form saved before presets existed. An absent `model` means the default
+ * judge. Any model allow list or price-clamped ceiling belongs here, where all three are chosen.
+ */
+export const RESEARCH_PRESET_IDS = ['quick', 'standard', 'deep'] as const;
+export type ResearchPresetId = (typeof RESEARCH_PRESET_IDS)[number];
+
+export interface ResearchPreset {
+  model?: string;
+  maxResults: number;
+  maxProposals: number;
+  costCeilingMicroUsd: number;
+}
+
+export const RESEARCH_PRESETS: Record<ResearchPresetId, ResearchPreset> = {
+  quick: {
+    maxResults: RESEARCH_MAX_RESULTS_DEFAULT,
+    maxProposals: RESEARCH_MAX_PROPOSALS_DEFAULT,
+    costCeilingMicroUsd: RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+  },
+  standard: { maxResults: 25, maxProposals: 10, costCeilingMicroUsd: 250_000 },
+  deep: {
+    model: ChatModels.GPT4_1,
+    maxResults: RESEARCH_MAX_RESULTS_LIMIT,
+    maxProposals: RESEARCH_MAX_PROPOSALS_LIMIT,
+    costCeilingMicroUsd: 1_000_000,
+  },
+};
+
+/**
  * The saved, reusable run configuration - the object this issue exists to make first-class. Every
  * field is a lever, and every lever is read in `executeResearchRun`.
  */
@@ -228,6 +259,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'run_in_progress',
   /** The lake had already started its daily allowance of runs. */
   'daily_cap',
+  /** The lake's owner (or their org) could not cover the run's cost ceiling. Clears when they top up. */
+  'insufficient_credits',
   /** The lake is not active (archived, deleted or missing). */
   'lake_inactive',
 ] as const;

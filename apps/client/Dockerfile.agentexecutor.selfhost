@@ -22,22 +22,40 @@ COPY apps/client/scripts ./apps/client/scripts
 #     present before it runs or the install ENOENTs.
 COPY patches ./patches
 
-# 2) Install the client workspace + all workspace deps INCLUDING devDeps (tsx). No --prod.
-RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
+# 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
+#    No --prod. The service and the queue handler it runs live in apps/workers/src; client stays
+#    because that handler still reaches shared server code through @server/*.
+#    A hydrated premium overlay is absent from the tracked lockfile, so it is linked and the
+#    install runs unfrozen (which needs git); without one the install stays frozen.
+COPY scripts/link-premium-overlays.mjs ./scripts/
+RUN if ls packages/premium/*/package.json >/dev/null 2>&1; then \
+      apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+      && B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    else \
+      pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+    fi
 
-# 3) Source.
+# 3) Source. The copy restores apps/client/package.json, so declare the overlay again for turbo.
+#    It also brings back the gitignored premium glue, which a build host that only ran a local
+#    install holds in the ABSENT form (the overlay is not linked there), so regenerate it from
+#    the linked state - otherwise the overlay's LLM tools and system prompts silently drop.
 COPY . .
+RUN B4M_SELF_HOST=true node scripts/link-premium-overlays.mjs \
+    && node apps/client/scripts/generate-premium-glue.mjs
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
+#    Workers' @bike4mind/* deps are a subset of the client's, so they need no filter of their own.
 RUN pnpm turbo build --filter=@bike4mind/client^...
 
 ENV NODE_ENV=production
 ENV B4M_SELF_HOST=true
 ENV PORT=8080
 EXPOSE 8080
-WORKDIR /app/apps/client
+WORKDIR /app/apps/workers
 
-# tsx resolves @server/* and @/* from apps/client/tsconfig.json (cwd here); the --import hook
-# aliases `sst` -> @bike4mind/resource so Resource.* resolves from env.
-CMD ["pnpm", "exec", "tsx", "--import", "./server/chatCompletion/selfhostSstAlias.mjs", "server/agentExecutor/main.ts"]
+# Same wiring as compose.selfhost.yaml's `worker` service: tsconfig.selfhost.json carries the
+# @workers/* paths plus the interim @server/* bridge into apps/client, with an include wide
+# enough that the bridged client files also transpile in strict mode. The --import hook (still
+# in apps/client) aliases `sst` -> @bike4mind/resource so Resource.* resolves from env.
+CMD ["pnpm", "exec", "tsx", "--tsconfig", "tsconfig.selfhost.json", "--import", "../client/server/chatCompletion/selfhostSstAlias.mjs", "src/agentExecutor/main.ts"]

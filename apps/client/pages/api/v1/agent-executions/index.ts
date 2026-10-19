@@ -24,7 +24,7 @@ import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
@@ -73,6 +73,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       organizationId: body.organization_id,
       agentId: body.agent_id,
       enabledTools: body.tools,
+      apiKeyInfo: req.apiKeyInfo,
       maxIterations: body.max_iterations,
       messageFileIds: body.file_ids,
       sessionFabFileIds: body.session_file_ids,

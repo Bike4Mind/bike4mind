@@ -38,7 +38,12 @@ export const listFabFilesBySession = async (
     .flat()
     .filter(f => f !== undefined);
 
-  const fabFiles = await db.fabFiles.findAllByIds([...(session.knowledgeIds || []), ...(chatHistoryFabFileIds || [])]);
+  const [linkedFiles, generatedFiles] = await Promise.all([
+    db.fabFiles.findAllByIds([...(session.knowledgeIds || []), ...(chatHistoryFabFileIds || [])]),
+    db.fabFiles.findToolGeneratedBySessionId(session.id),
+  ]);
+  const linkedIds = new Set(linkedFiles.map(f => f.id));
+  const fabFiles = [...linkedFiles, ...generatedFiles.filter(f => !linkedIds.has(f.id))];
 
   const result = await Promise.allSettled(
     fabFiles.map(fabFile => getFabFile(userId, { id: fabFile.id }, { db, storage }))

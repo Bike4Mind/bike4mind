@@ -6,6 +6,7 @@
  */
 
 import type { GoogleDriveConnectionStatus } from '@bike4mind/common';
+import { lastSyncedSuffix } from './lastSyncedSuffix';
 
 /**
  * Derived from the stored enum rather than re-listed. The drive-connection endpoint returns
@@ -41,6 +42,8 @@ export type DescribableDriveConnection = {
   driveFolderId: string;
   disconnecting?: boolean;
   syncStale?: boolean;
+  /** Stamped by failed runs too, but the idle branch that reads it has no lastError, so it is the last sync. */
+  lastPolledAt?: string | Date | null;
 };
 
 /**
@@ -92,7 +95,11 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
           title: `Google Drive folder "${folder}": last sync stopped short - ${connection.lastError}`,
           color: 'warning',
         }
-      : { label: badge.label, title: `Syncing the Google Drive folder "${folder}"`, color: badge.color };
+      : {
+          label: badge.label,
+          title: `Kept in sync with the Google Drive folder "${folder}"${lastSyncedSuffix(connection.lastPolledAt)}`,
+          color: badge.color,
+        };
   }
 
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';
@@ -101,4 +108,33 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
     title: `Google Drive folder "${folder}": ${badge.label.toLowerCase()}${detail}`,
     color: badge.color,
   };
+}
+
+/**
+ * Whether the scheduled re-sync poll keeps this connection current. Mirrors the server's
+ * syncScheduleOf (pages/api/data-lakes/[id]/drive-connection.ts), which derives it from the poll's
+ * admin flags and the connection's own state.
+ */
+export type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mode: 'paused' } | { mode: 'manual' };
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Null when there is nothing to say: like `status` (see DriveConnectionStatus), the field arrives
+ * unvalidated, so an API that predates it or a mode this build does not know must not crash the panel.
+ */
+export function describeDriveSyncSchedule(schedule: DriveSyncSchedule | undefined): string | null {
+  switch (schedule?.mode) {
+    case 'automatic': {
+      // The hourly cron tick and its per-run cap make the real gap a little longer than the interval.
+      const hours = Math.max(1, Math.round(schedule.intervalMs / HOUR_MS));
+      return `Syncs automatically about every ${hours === 1 ? 'hour' : `${hours} hours`}`;
+    }
+    case 'paused':
+      return 'Automatic sync paused';
+    case 'manual':
+      return 'Syncs only on a manual Re-sync';
+    default:
+      return null;
+  }
 }

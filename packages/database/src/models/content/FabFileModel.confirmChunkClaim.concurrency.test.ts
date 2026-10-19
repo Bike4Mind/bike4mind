@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { MongoClient, ObjectId } from 'mongodb';
 import { withTransaction } from '@bike4mind/db-core';
 import { KnowledgeType } from '@bike4mind/common';
-import { createMongoReplSet } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
 // #1802 Phase 2: unlike confirmChunkClaim.test.ts (sequential setup-then-check, standalone Mongo),
@@ -17,7 +17,8 @@ let externalClient: MongoClient;
 beforeAll(async () => {
   server = await createMongoReplSet();
   const uri = server.getUri();
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   // A genuinely separate driver connection/session - the takeover below must NOT be able to run
   // inside chunkFabfile's transaction, or this test would not be testing concurrency at all.
   externalClient = new MongoClient(uri);
@@ -145,7 +146,8 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
     // The deadlines above cover the HANDSHAKE only. So a bare 120s timeout with no deadline message
     // means the handshake was fine and the time went somewhere unguarded - most likely the first
     // write's cold start (vitest.config.ts explains why: Mongoose builds every model's indexes on
-    // connect and autoIndex cannot be disabled) or confirmChunkClaim's WriteConflict re-attempts.
+    // connect; this suite connects with autoIndex: false and settles the rest) or confirmChunkClaim's
+    // WriteConflict re-attempts.
     // Look there, not at the handshake.
     //
     // Raised 90s -> 120s (#1098) alongside the inner handshake deadline (20s -> 90s): the real CI

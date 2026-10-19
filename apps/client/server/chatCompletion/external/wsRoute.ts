@@ -1,10 +1,13 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   IMessage,
   normalizeCompletionRequest,
+  resolveApiCompletionSource,
+  resolveRequestClient,
   type CompletionSource,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
@@ -28,9 +31,11 @@ import {
   type ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { ForbiddenError } from '@server/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
-import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -84,10 +89,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: WS_COMPLETIONS_ENDPOINT } });
 
-    // This endpoint is the CLI's HTTP->WS completion path - it requires an
-    // already-registered CLI WebSocket connection, so it can only be reached by
-    // the CLI. Hardcode 'cli' to match the WS-frame handler (cliCompletion.ts).
-    const source: CompletionSource = 'cli';
+    // Preserve the legacy WS source except for an explicitly identified Desktop caller.
+    const source: CompletionSource = resolveApiCompletionSource(headers) === 'desktop' ? 'desktop' : 'cli';
 
     let body: z.infer<typeof WsCompletionRequestSchema>;
     let userId: string;
@@ -129,8 +132,17 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           const user = await verifyJwtToken(token);
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source);
-        } catch {
+          await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
+        } catch (authError) {
+          // verifyJwtToken refuses an authenticated session for reasons the caller can act on
+          // (MFA enrollment, account dispute or suspension) with a ForbiddenError; relaying it as
+          // 401 makes the CLI report an expired session and tell the user to sign in again, which
+          // cannot help.
+          // The message is server-authored guidance (sanitizeErrorMessage would blank it).
+          if (authError instanceof ForbiddenError) {
+            res.status(403).json({ error: authError.message });
+            return;
+          }
           res.status(401).json({ error: 'Authentication failed' });
           return;
         }
@@ -139,6 +151,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       logger.error('[CLI_WS_HTTP] Pre-completion error', {
         error: error instanceof Error ? error.message : String(error),
       });
+      track(emitProcessingFailed('cli-ws', error));
       res.status(500).json({ error: sanitizeErrorMessage(error) });
       return;
     }
@@ -177,6 +190,9 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
         let finalInputTokens = 0;
         let finalOutputTokens = 0;
+        let finalCacheReadTokens = 0;
+        let finalCacheWriteTokens = 0;
+        let finalTurnUsage: TurnUsage[] | undefined;
         let hasToolCalls = false;
 
         try {
@@ -211,9 +227,12 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             onChunk: async (text, info) => {
               if (info?.inputTokens) finalInputTokens = info.inputTokens;
               if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+              if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+              if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
+              if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-              const chunk = buildSSEEvent(text, info);
+              const chunk = buildCompletionStreamEvent(text, info);
               await sendToConnections({
                 action: 'cli_completion_chunk' as const,
                 requestId,
@@ -240,19 +259,23 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             method: 'POST',
             finalInputTokens,
             finalOutputTokens,
+            finalCacheReadTokens,
+            finalCacheWriteTokens,
+            finalTurnUsage,
             hasToolCalls,
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,
           });
         } catch (error) {
           logger.error('[CLI_WS_HTTP] Completion error:', error);
+          track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.
           try {
             await sendToConnections({
               action: 'cli_completion_error' as const,
               requestId,
-              error: sanitizeErrorMessage(error),
+              ...cliCompletionErrorFields(error),
             });
           } catch {
             // Best effort

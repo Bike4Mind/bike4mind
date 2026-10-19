@@ -1,6 +1,8 @@
+import { questMasterPlanResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { verifyQuestPlanReadAccess } from '@server/utils/questMasterPlanAccess';
 import { Request } from 'express';
 
@@ -13,7 +15,7 @@ const handler = baseApi()
 
     const questMasterPlan = await verifyQuestPlanReadAccess(req.user?.id, id);
 
-    return res.status(200).json(questMasterPlan);
+    return respond(res, questMasterPlanResponseSchema, questMasterPlan);
   });
 
 export default handler;

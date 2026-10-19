@@ -86,6 +86,14 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
       type: Number,
       required: false,
     },
+    paymentFailureNotifiedInvoiceIds: {
+      type: [String],
+      default: undefined,
+    },
+    nonPaymentCancelNotifiedAt: {
+      type: Date,
+      required: false,
+    },
     acquisition: {
       type: new mongoose.Schema(
         {
@@ -116,6 +124,10 @@ SubscriptionSchema.index({ periodEndsAt: 1, status: 1 }); // For subscription ex
 // Admin grants listing in /api/admin/organizations/grants - small cardinality query
 SubscriptionSchema.index({ ownerType: 1, source: 1, status: 1 });
 
+// Invoices remembered per row for the payment-failed claim. Only invoices still inside Stripe's
+// retry window can fire again, so a short history is enough and keeps the row bounded.
+const PAYMENT_FAILURE_NOTICE_HISTORY = 12;
+
 export const Subscription =
   mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', SubscriptionSchema);
 
@@ -144,6 +156,21 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .find({
         ownerType,
         ownerId,
+        status: 'active',
+      })
+      .lean({ virtuals: true });
+  }
+
+  /** Active subscriptions of any of `ownerIds`, in one `$in` read on the {ownerType, ownerId, status} index. */
+  findActiveSubscriptionsByOwners(
+    ownerType: SubscriptionOwnerType,
+    ownerIds: readonly string[]
+  ): Promise<(ISubscription & IMongoDocument)[]> {
+    if (ownerIds.length === 0) return Promise.resolve([]);
+    return this.model
+      .find({
+        ownerType,
+        ownerId: { $in: [...ownerIds] },
         status: 'active',
       })
       .lean({ virtuals: true });
@@ -199,6 +226,47 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         }
       )
       .lean({ virtuals: true });
+  }
+
+  markPastDue(subscriptionId: string): Promise<ISubscription | null> {
+    if (!subscriptionId) return Promise.resolve(null);
+    return this.model
+      .findOneAndUpdate(
+        { subscriptionId, status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } },
+        { status: 'past_due' },
+        { new: true }
+      )
+      .lean({ virtuals: true });
+  }
+
+  async claimPaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    // On an array, `$ne` matches only when no element equals invoiceId, including an unset field.
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, paymentFailureNotifiedInvoiceIds: { $ne: invoiceId } },
+      { $push: { paymentFailureNotifiedInvoiceIds: { $each: [invoiceId], $slice: -PAYMENT_FAILURE_NOTICE_HISTORY } } }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releasePaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne({ subscriptionId }, { $pull: { paymentFailureNotifiedInvoiceIds: invoiceId } });
+  }
+
+  async claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    // `null` matches both an unset field and an explicit null.
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, nonPaymentCancelNotifiedAt: null },
+      { $set: { nonPaymentCancelNotifiedAt: new Date() } }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne({ subscriptionId }, { $unset: { nonPaymentCancelNotifiedAt: '' } });
   }
 
   /**

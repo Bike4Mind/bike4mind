@@ -13,6 +13,8 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
+  ILakeFindingListItem,
+  LakeSkippedFilesResponse,
   InconsistencyKind,
   LakeCorpusAction,
   LakeCorpusActionTarget,
@@ -61,6 +63,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -77,7 +80,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
  * Declared here rather than beside its first caller so all of them can read it without a
  * forward reference.
  */
-function serverRefusalMessage(error: unknown): string | undefined {
+export function serverRefusalMessage(error: unknown): string | undefined {
   if (!isAxiosError(error)) return undefined;
   return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
@@ -101,7 +104,7 @@ function isPermissionRejection(error: unknown): boolean {
  */
 export function activeOrgId(): string | undefined {
   const { selectedAccount } = useSelectedAccount.getState();
-  return selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  return orgIdOfAccount(selectedAccount);
 }
 
 // ── Lake catalog & lifecycle ────────────────────────────────────────────────
@@ -577,6 +580,30 @@ export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
 }
 
 /**
+ * The slug and tag prefix the server would mint for a new lake named `name` in the active org,
+ * `-N` suffix included. `tagPrefix` is the first free prefix starting from the given one, or from
+ * the name-derived default when it is omitted, and null when that base is unusable. The client
+ * cannot compute either: disambiguation counts lakes it cannot see (deleted, archived, gated).
+ * Advisory (create stays authoritative), and never cached, since any create or delete can change
+ * the answer.
+ */
+export function useDataLakeSlugPreview(name: string, tagPrefix: string | undefined, enabled = true) {
+  const orgId = activeOrgId();
+  return useQuery({
+    queryKey: dataLakeKeys.slugPreview(name, orgId, tagPrefix),
+    enabled,
+    retry: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ slug: string; tagPrefix: string | null }>('/api/data-lakes/slug-preview', {
+        params: { name, ...(orgId ? { organizationId: orgId } : {}), ...(tagPrefix ? { tagPrefix } : {}) },
+      });
+      return response.data;
+    },
+  });
+}
+
+/**
  * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
@@ -635,9 +662,10 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 }
 
 /**
- * Updates an existing data lake configuration.
+ * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
+ * write whose caller raises its own (e.g. DataLakeSettingsModal's follow-up write).
  */
-export function useUpdateDataLake() {
+export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -657,7 +685,7 @@ export function useUpdateDataLake() {
       // so without this they keep rendering the pre-change verdict against the new policy.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
-      toast.success('Data lake updated');
+      if (notifySuccess) toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');
@@ -1289,10 +1317,13 @@ export function invalidateLakeFileMembershipQueries(
   // A finding cites lake members, so the findings queue moves when membership does; the forward
   // corpus action and the supersede Undo already refresh it, and folding it in here gives the
   // merge Undo (which mutates only through `useAddFileToDataLake`) the same refresh.
-  queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+  const findingsRefetch = queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
   // The retag seed is read from membership too; a stale seed would under-report the file's current
   // tags and, under replace semantics, strip the ones it missed.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeFileTagsOf(dataLakeId) });
+  // Only the findings refetch is returned, so a mutation returning it keeps `isPending` true until
+  // the list the UI reads has refreshed and a fast second click cannot act on stale rows.
+  return findingsRefetch;
 }
 
 /** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
@@ -1301,6 +1332,8 @@ export function invalidateLakeFileMembershipQueries(
  *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
  *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
 const UNDO_TOAST_DURATION_MS = 15000;
+
+const returnedToRankingMessage = (name: string) => `"${name}" returned to ranking.`;
 
 /** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
  *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
@@ -1562,6 +1595,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
 export type LakeRebuildStatus = {
   underChunkedCount: number;
   failedCount: number;
+  /** Files reset for a rebuild that has not committed yet: no passages, no error. */
+  rebuildingCount: number;
   /**
    * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
    * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
@@ -1586,37 +1621,48 @@ export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
 export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
 
 /**
- * The REPAIRABLE work outstanding on a lake: both counts that drain to zero as waves complete.
- * Pure and exported for the same reason `nextRebuildPoll` is - it decides when the badge stops
- * polling, and a closure inside the hook is not executed by anything.
+ * The work outstanding on a lake: the two REPAIRABLE counts, plus the files whose rebuild has not
+ * committed yet. Pure and exported for the same reason `nextRebuildPoll` is - it decides when the
+ * badge stops polling, and a closure inside the hook is not executed by anything.
  *
  * A re-embed is normally run on a lake whose under-chunked count is already zero, so summing is
  * what keeps the badge alive for that wave rather than going quiet the moment it starts. A `null`
  * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
+ *
+ * `rebuildingCount` is in FLIGHT, not repairable - a reset file leaves the count when its own chunk
+ * job commits or fails - so it is here only because the chip still has to refresh when that
+ * happens. `nextRebuildPoll` keeps a backlog made only of these off the fast cadence.
  */
 export const rebuildBacklog = (
-  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
-): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'> &
+    Partial<Pick<LakeRebuildStatus, 'rebuildingCount'>>
+): number =>
+  (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0) + (status?.rebuildingCount ?? 0);
 
 /**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `backlog` is the sum of the two REPAIRABLE counts - under-chunked and stale-embedding-space -
- * because each drains to zero on its own as waves complete. `failedCount` deliberately is NOT in
- * it: a failed file never retries (see countFailedFilesByScope - it is invisible to both the
- * detection query and the rescue sweep), so including it gives a term that can never reach zero and
- * the badge polls forever on any lake holding one. But the counts alone stop too early: they drop
- * the instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
- * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
- * extra times to catch that, then stop for good.
+ * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The size
+ * tiers read the TOTAL backlog, because each tick is a full lake rescan, so one straggler beside a
+ * 1000-file wave stays on the slow lane. The in-flight slice only parks a backlog with nothing
+ * repairable left at the slow cadence, since a rebuild in flight commits on the chunk worker's own
+ * clock. `failedCount` deliberately is NOT in the sum: a failed file never
+ * retries (see countFailedFilesByScope - it is invisible to both the detection query and the rescue
+ * sweep), so including it gives a term that can never reach zero and the badge polls forever on any
+ * lake holding one. But the backlog alone still stops too early: a wave is RESET minutes before
+ * those chunk jobs finish, so a job that later fails lands in failedCount after this sum has
+ * already read zero. So once the backlog clears we keep polling a bounded number of extra times to
+ * catch that, then stop for good.
  */
 export function nextRebuildPoll(
   backlog: number,
-  prev: RebuildPollState
+  prev: RebuildPollState,
+  rebuilding = 0
 ): { interval: number | false; next: RebuildPollState } {
   if (backlog > 0) {
-    const interval = backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
+    const repairable = backlog - rebuilding;
+    const interval = repairable <= 0 || backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
@@ -1643,6 +1689,7 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
       return {
         underChunkedCount: res.data.underChunkedCount,
         failedCount: res.data.failedCount ?? 0,
+        rebuildingCount: res.data.rebuildingCount ?? 0,
         // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
         // zero would advertise "no stale files" on a lake nobody has measured.
         staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
@@ -1654,7 +1701,12 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      const { interval, next } = nextRebuildPoll(rebuildBacklog(query.state.data), pollState.current);
+      const status = query.state.data;
+      const { interval, next } = nextRebuildPoll(
+        rebuildBacklog(status),
+        pollState.current,
+        status?.rebuildingCount ?? 0
+      );
       pollState.current = next;
       return interval;
     },
@@ -2072,31 +2124,29 @@ export function useAddFilesToLake() {
 
 export interface DataLakeArticlesParams {
   id?: string;
+  lakeId?: string[];
   tags?: string[];
   search?: string;
   page?: number;
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
-  /**
-   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
-   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
-   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
-   */
-  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
 export interface DataLakeTagCountsResponse {
-  /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
-  tagCounts: { tag: string; count: number }[];
+  /**
+   * One row per tag-tree path (ancestors included) driving the Data Lake Explorer's tag tree:
+   * `count` is files tagged with exactly `tag`, `fileCount` distinct files at or under it. See
+   * countDataLakeTagsByPrefix.
+   */
+  tagCounts: { tag: string; count: number; fileCount: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
   /**
    * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
    * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
-   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
-   * tree's branches.
+   * counts a multi-tagged file once. `tagCounts` above still drives the tag tree's branches.
    */
   lakeFileCounts: Record<string, number>;
   /**
@@ -2123,12 +2173,6 @@ export interface DataLakeTagCountsResponse {
    * meta-tag contributes 0 there while its own row reads its full size.
    */
   totalLakeFileCount: number;
-  /**
-   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
-   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
-   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
-   */
-  totalUncategorizedFileCount: number;
 }
 
 /**
@@ -2152,6 +2196,33 @@ export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
       const response = await api.get<DataLakeTagCountsResponse>(`${browseBase(source)}/tag-counts`);
       return response.data;
     },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+/** Response shape for the tag-counts endpoint when scoped to selected lakes (`?lakeId=`). */
+export interface DataLakeScopedTagCountsResponse {
+  tagCounts: { tag: string; count: number; fileCount: number }[];
+}
+
+/**
+ * Tag-tree counts for the selected lakes only, counted server-side over their membership. The
+ * unscoped payload is merged by prefix, and two creators' lakes may share a prefix, so it cannot
+ * be narrowed to one lake on the client. Disabled for an empty selection.
+ */
+export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lakeIds: readonly string[]) {
+  return useQuery({
+    queryKey: dataLakeKeys.tagCountsScoped(source, lakeIds),
+    queryFn: async () => {
+      const search = new URLSearchParams();
+      for (const id of lakeIds) search.append('lakeId', id);
+      const response = await api.get<DataLakeScopedTagCountsResponse>(
+        `${browseBase(source)}/tag-counts?${search.toString()}`
+      );
+      return response.data;
+    },
+    enabled: lakeIds.length > 0,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
@@ -2422,7 +2493,7 @@ export function useDataLakeFindings(
     queryKey: dataLakeKeys.findings(dataLakeId, filters),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+      const { data } = await api.get<{ data: ILakeFindingListItem[]; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/findings`,
         { params: { ...filters, offset: pageParam } }
       );
@@ -2448,6 +2519,37 @@ export function useDataLakeFindings(
     ...query,
     data: findings,
     isForbidden: isPermissionRejection(query.error),
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
+}
+
+const SKIPPED_FILES_PAGE_SIZE = 25;
+
+/** One lake's files the connected source holds but the sync did not ingest. Manage-gated server-side. */
+export function useDataLakeSkippedFiles(dataLakeId: string | undefined, enabled: boolean) {
+  const query = useInfiniteQuery({
+    queryKey: dataLakeKeys.skippedFiles(dataLakeId ?? null),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<LakeSkippedFilesResponse>(`/api/data-lakes/${dataLakeId}/skipped-files`, {
+        params: { limit: SKIPPED_FILES_PAGE_SIZE, offset: pageParam },
+      });
+      return data;
+    },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((loaded, page) => loaded + page.data.length, 0) : undefined,
+    enabled: !!dataLakeId && enabled,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60,
+  });
+  const files = useMemo(() => query.data?.pages.flatMap(page => page.data) ?? [], [query.data]);
+  return {
+    ...query,
+    files,
+    total: query.data?.pages[0]?.total ?? 0,
     hasMore: query.hasNextPage,
     loadMore: query.fetchNextPage,
     isLoadingMore: query.isFetchingNextPage,
@@ -2606,8 +2708,10 @@ export function useLakeFileTags(dataLakeId: string | null, fabFileId: string | n
 /**
  * The `POST .../findings/:findingId/corpus-action` request union. Re-declared here rather than
  * imported: the contract lives in the route (a zod discriminated union) and in
- * `@bike4mind/services`' internal type, neither of which the browser bundle may reach, and the
- * client additionally never sends `unsupersede` from a picker (only the supersede Undo does).
+ * `@bike4mind/services`' internal type, neither of which the browser bundle may reach. The client
+ * sends `unsupersede` from two places: the findings detail's "Return to ranking" button (only for a
+ * file the list reports in `supersededFabFileIds`) and the supersede Undo toast (which posts it
+ * directly, for a file the list has not reported yet).
  */
 export type CorpusActionBody =
   | { action: 'merge'; keepFabFileId: string; retireFabFileIds: string[]; note?: string }
@@ -2656,14 +2760,16 @@ export function useApplyCorpusAction() {
       const { data } = await api.post<{ data: ApplyCorpusActionSuccess }>(corpusActionUrl(dataLakeId, findingId), body);
       return data.data;
     },
+    // Returning the refresh keeps `isPending` true until the findings list has refetched, so the
+    // "Return to ranking" button cannot be clicked again against a row that still reads superseded.
     onSuccess: (result, { dataLakeId, findingId }) => {
-      refresh(dataLakeId);
+      const refreshed = refresh(dataLakeId);
 
       if (result.action === 'merge') {
         const removed = result.targets.filter(target => target.role === 'retired');
         if (removed.length === 0) {
           toast.success('Merged. No document left this lake.');
-          return;
+          return refreshed;
         }
         const toastId = toast.success(
           `Removed ${removed.length} ${removed.length === 1 ? 'document' : 'documents'} from this lake.`,
@@ -2684,14 +2790,14 @@ export function useApplyCorpusAction() {
             },
           }
         );
-        return;
+        return refreshed;
       }
 
       if (result.action === 'supersede') {
         const retired = result.targets.find(target => target.role === 'retired');
         if (!retired) {
           toast.success('Superseded.');
-          return;
+          return refreshed;
         }
         const name = retired.fileName ?? 'The older document';
         const retiredFabFileId = retired.fabFileId;
@@ -2706,7 +2812,7 @@ export function useApplyCorpusAction() {
                 .post(corpusActionUrl(dataLakeId, findingId), { action: 'unsupersede', fabFileId: retiredFabFileId })
                 .then(() => {
                   refresh(dataLakeId);
-                  toast.success(`"${name}" returned to ranking.`, { id: toastId });
+                  toast.success(returnedToRankingMessage(name), { id: toastId });
                 })
                 .catch((error: unknown) => {
                   toast.error(serverRefusalMessage(error) || 'Could not undo the supersede', { id: toastId });
@@ -2714,12 +2820,22 @@ export function useApplyCorpusAction() {
             },
           },
         });
-        return;
+        return refreshed;
+      }
+
+      if (result.action === 'unsupersede') {
+        const restored = result.targets.find(target => target.role === 'restored');
+        toast.success(returnedToRankingMessage(restored?.fileName ?? 'The document'));
+        return refreshed;
       }
 
       if (result.action === 'retag') toast.success('Tags updated.');
+      return refreshed;
     },
-    onError: (error: Error) => {
+    // A refusal can mean this client's rows are stale (another curator already changed the ruling),
+    // so the list is refreshed rather than left showing a chip or button that no longer applies.
+    onError: (error: Error, { dataLakeId }) => {
+      refresh(dataLakeId);
       toast.error(serverRefusalMessage(error) || error.message || 'Could not change the corpus');
     },
   });

@@ -103,15 +103,18 @@ describe('self-host process paths resolve', () => {
 
   // Exact counts, so a parser that stopped matching an arg fails here instead of passing
   // vacuously: the worker service's tsconfig, hook and entry, and each Dockerfile CMD's hook and
-  // entry. Adding a service, or a selfhost Dockerfile whose CMD is also hook + entry, needs no edit.
+  // entry, plus its tsconfig when it passes one (the images that run from apps/workers do). The
+  // tsconfig is detected from the raw text, not the parser. Adding a service, or a selfhost
+  // Dockerfile of either CMD shape, needs no edit.
   it('finds the worker service and every selfhost Dockerfile CMD', () => {
     expect(dockerfiles.length).toBeGreaterThanOrEqual(2);
     expect(refs.filter(ref => ref.source === `${composeFile} service worker`)).toHaveLength(3);
     for (const file of dockerfiles) {
+      const passesTsconfig = /^CMD\s+\[.*"--tsconfig"/m.test(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
       expect(
         refs.filter(ref => ref.source === `${file} CMD`),
         file
-      ).toHaveLength(2);
+      ).toHaveLength(passesTsconfig ? 3 : 2);
     }
   });
 
@@ -120,6 +123,57 @@ describe('self-host process paths resolve', () => {
       .filter(ref => !existsSync(path.join(REPO_ROOT, ref.cwd, ref.arg)))
       .map(ref => `${ref.source}: ${ref.arg} (from /app/${ref.cwd})`);
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * The self-host images wire the premium overlay, and nothing else checks that wiring: the self-host
+ * workflow builds the root `Dockerfile` only, so a dropped step in these two files stays green
+ * everywhere until an operator builds one with an overlay hydrated.
+ *
+ * Two of the steps are load bearing. `COPY scripts/link-premium-overlays.mjs` fails the build when
+ * the script is renamed. The re-link and glue regeneration after `COPY . .` are what keep the
+ * overlay's LLM tools and system prompts in the image: the copy restores apps/client/package.json
+ * and whatever gitignored glue the build host has, and a host that only ran a local install holds
+ * the ABSENT form (the link script refuses to run off a self-host build), so without the
+ * regeneration a linked overlay ships un-wired.
+ */
+describe('self-host Dockerfiles keep the premium overlay wired', () => {
+  const LINK_SCRIPT = 'scripts/link-premium-overlays.mjs';
+  const REGEN = 'node apps/client/scripts/generate-premium-glue.mjs';
+
+  const dockerfiles = readdirSync(path.join(REPO_ROOT, 'apps/client'))
+    .filter(name => /^Dockerfile\..+\.selfhost$/.test(name))
+    .map(name => `apps/client/${name}`);
+
+  const sourceOf = (file: string): string => readFileSync(path.join(REPO_ROOT, file), 'utf8');
+
+  it('re-links the overlay and regenerates its glue after the source copy', () => {
+    expect(dockerfiles.length).toBeGreaterThanOrEqual(2);
+    expect(existsSync(path.join(REPO_ROOT, LINK_SCRIPT))).toBe(true);
+    for (const file of dockerfiles) {
+      const source = sourceOf(file);
+      expect(source, `${file}: COPY ${LINK_SCRIPT}`).toContain(`COPY ${LINK_SCRIPT}`);
+      // lastIndexOf: the pre-install link must not satisfy the post-copy assertion.
+      const copyStep = source.indexOf('COPY . .');
+      const relink = source.lastIndexOf(`B4M_SELF_HOST=true node ${LINK_SCRIPT}`);
+      const regen = source.lastIndexOf(REGEN);
+      expect(copyStep, `${file}: no 'COPY . .'`).toBeGreaterThan(-1);
+      expect(relink, `${file}: overlay not re-linked after 'COPY . .'`).toBeGreaterThan(copyStep);
+      expect(regen, `${file}: glue not regenerated after the re-link`).toBeGreaterThan(relink);
+    }
+  });
+
+  it('gates the unfrozen install on a hydrated overlay', () => {
+    for (const file of dockerfiles) {
+      // `\bfi\b`: a bare `fi` would match inside `--frozen-lockfile`.
+      const branch = /if ls packages\/premium\/\*\/package\.json[\s\S]*?then([\s\S]*?)else([\s\S]*?)\bfi\b/.exec(
+        sourceOf(file)
+      );
+      if (!branch) throw new Error(`${file}: overlay install branch not found`);
+      expect(branch[1], file).toContain('pnpm install --no-frozen-lockfile');
+      expect(branch[2], file).toContain('pnpm install --frozen-lockfile');
+    }
   });
 });
 

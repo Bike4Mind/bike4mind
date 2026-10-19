@@ -22,9 +22,15 @@ import {
   assertCanManageOrgGroups,
   listOrganizationGroups,
 } from './groupMembership';
+import { reconcileOrganizationStorage } from './reconcileOrganizationStorage';
+import type {
+  OrganizationStorageReconciliation,
+  ReconcileOrganizationStorageAdapters,
+} from './reconcileOrganizationStorage';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
+import { setMemberCreditDefault, setMemberCreditOverride } from './memberCreditBudget';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
 import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
 
@@ -35,6 +41,8 @@ export {
   addMember,
   canAdministerOrganization,
   isCurrentOrgMember,
+  setMemberCreditDefault,
+  setMemberCreditOverride,
   applyPartnerRuleMembership,
   assignManager,
   removeManager,
@@ -57,8 +65,10 @@ export {
   resolveGroupTypesForUser,
   resolveCapabilitiesForUser,
   userHasCapability,
+  reconcileOrganizationStorage,
 };
 
 export type { SearchParameters };
+export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
 export type { GroupTypeResolutionOverride };
 export type { GroupTypeCapabilityMap };

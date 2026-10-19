@@ -59,16 +59,21 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  settingsMap,
+  isBlankSettingValue,
   backgroundScoreOf,
   citationTagDescription,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
+  forcedRetrievalFloorAboveMeasured,
   forcedRetrievalRelativeCutoff,
   forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
+  retrievalTagsNameALake,
   materializePromptMetaSession,
   ModelBackend,
+  type WorkspaceDeniedToolsTable,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -80,18 +85,28 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionExcludesLibraryFiles,
+  hasLakeArms as accessHasLakeArms,
   sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
-import { resolveScopedSettingValues, scopeForCaller } from '../settings/resolveScopedSetting';
+import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
   classifyLoadedChunk,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import {
+  lakeOrderScopes,
+  lakeScopeArms,
+  orderFilesFairlyAcrossLakes,
+  type LakeOrderScope,
+  type LakeOrderScopeSources,
+  type LakeScopeArms,
+} from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
@@ -101,6 +116,7 @@ import {
   withDeadline,
   type ForcedRetrievalCandidateSelection,
 } from './forcedRetrievalCandidateSelection';
+import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
   formatSupersededSample,
@@ -136,6 +152,7 @@ import {
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
   getProviderFromModel,
+  getSettingsByNames,
   IQueueService,
   ITokenizer,
   normalizeId,
@@ -149,11 +166,8 @@ import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
-import {
-  ChatCompletionProcess,
-  DEFAULT_VERBATIM_WINDOW_FRACTION,
-  SYSTEM_PROMPT_RESERVE_TOKENS,
-} from './ChatCompletionProcess';
+import type { ChatCompletionProcess } from './ChatCompletionProcess';
+import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
@@ -163,8 +177,10 @@ import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalS
 import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
+  // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
+  // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
   // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'> &
+  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'> &
     Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
   users: Pick<
     IUserRepository,
@@ -358,6 +374,13 @@ export interface IChatCompletionServiceOptions {
   slackWebhookUrl: string;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
+  /**
+   * `{ surface id: tool names }` denied to sessions on that surface, unioned with `session.disabledTools`.
+   * Required on purpose: it is an options property every construction site must answer, so a new site
+   * that forgets it is a compile error rather than a silent hole in the surface denials. The open-core
+   * value is the generated empty table.
+   */
+  workspaceDeniedTools: WorkspaceDeniedToolsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,
@@ -519,6 +542,7 @@ export type ChatCompletionContext = Pick<
   | 'resolveEntitlementKeys'
   | 'personalCorpusOnly'
   | 'embeddingBinding'
+  | 'priorUserPrompts'
 > & {
   sendStatusUpdate: (
     q: IChatHistoryItemDocument,
@@ -573,6 +597,12 @@ export interface ChatCompletionFeature {
     /** Input-window-derived; deliberately NOT the model's output cap. */
     attachedFileTokenBudget: number
   ) => Promise<IMessage[]>;
+  /**
+   * Called when the input budget dropped a system message this feature returned, so it can take
+   * back what it published on the strength of the dropped ones. `deliveredMessages` is the final
+   * payload, so a feature can tell which of its own messages survived.
+   */
+  onContextDropped?: (quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>) => void;
 }
 
 /**
@@ -1758,8 +1788,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
-// Metadata rows listed when the candidates can be chosen by relevance: the ANN query ranks this
-// many files down to the cap above. Metadata only (no chunks), so it is cheap next to the scan.
+// Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
+// many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
+// each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
 const FORCED_RETRIEVAL_MAX_LISTED_FILES = 1000;
 // Chunk hits requested from the ANN query - several per candidate file, so a few chunk-dense
 // documents cannot fill the pool alone and leave the cap short of distinct files.
@@ -1819,23 +1850,33 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
 }
 
 /**
+ * `forcedRetrievalMinSimilarityPct`'s twin of {@link forcedRetrievalFloorPct}, except an unusable value
+ * lands on unset (per embedding space) rather than the coded 75, which is an ada-002 number.
+ */
+function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): number | undefined {
+  // Blank/null is "nobody chose a value", NOT 0 - `Number(null)` is 0, which a lower bound of 0
+  // would accept and then disable the floor instead of resolving it per embedding space.
+  if (isBlankSettingValue(raw)) return undefined;
+  const pct = Number(raw);
+  // min 1, matching the setting's schema: 0 is a cleared field, not a floor.
+  if (Number.isFinite(pct) && pct >= 1 && pct <= 100) return pct;
+  logger.warn(
+    `\u{1F512} Forced retrieval: forcedRetrievalMinSimilarityPct ${JSON.stringify(raw)} is unusable; resolving per embedding space`
+  );
+  return undefined;
+}
+
+/**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
  *
- * A configured value is honored as-is: it is a raw cosine, the operator picked it for the corpus in
- * front of them, and `forcedRetrievalMinSimilarityPct`'s whole point is that it be tunable. What
- * cannot be honored is a value nobody chose. The setting's DECLARED default is 75, fitted to
- * ada-002, and both settings read paths manufacture that 75 for a key no one has ever written - so
- * an untouched deployment that flips `defaultEmbeddingModel` would carry an ada-002 number into a
- * space whose entire band sits below it and reject every chunk on every turn.
- *
- * Neither read path can distinguish "never set" from "set to exactly the default" without a second
- * scoped query per turn, which this path deliberately does not spend (see `readForcedRetrievalSettings`
- * on why all three keys share one read). So the declared default doubles as the "nobody chose this"
- * signal: a configured value EQUAL to it resolves per embedding space instead. The one case that
- * misreads is an operator who deliberately types the default's own number for a space whose measured
- * floor differs - they get the measured floor rather than their typed one, which is more results
- * than they asked for rather than fewer, and it is logged. The opposite mistake is a silent blackout.
+ * A configured value is honored as-is, the declared default's own number included: it is a raw
+ * cosine, the operator picked it for the corpus in front of them, and `forcedRetrievalMinSimilarityPct`'s
+ * whole point is that it be tunable. What cannot be honored is a value nobody chose (`undefined`). The
+ * setting's DECLARED default is 75, fitted to ada-002 - an untouched deployment that flips
+ * `defaultEmbeddingModel` and inherited it would carry an ada-002 number into a space whose entire
+ * band sits below it and reject every chunk on every turn. So an unset value resolves per embedding
+ * space instead; `readForcedRetrievalSettings` is what tells unset apart from a stored 75.
  *
  * An unmeasured space yields 0, leaving the scale-free relative floor as the only gate. That is a
  * real loss of precision, and it beats every alternative: there is no floor that transfers across
@@ -1859,15 +1900,16 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * The log below therefore names the space the floor was chosen FOR, which is always right, and says
  * nothing about whether every scored chunk really lives there.
  */
-function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
-  if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;
-
+function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  // Honored even above the measured floor; a turn it empties is reported by the no-match exit.
+  if (configuredPct !== undefined) return configuredPct / 100;
+
   if (spacePct !== undefined) {
-    if (spacePct !== configuredPct) {
+    if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
       logger.log(
         `\u{1F512} Forced retrieval: absolute floor ${spacePct}% resolved for embedding space "${space}" ` +
-          `(the ${configuredPct}% default is an ada-002 value and does not transfer)`
+          `(no floor configured; the ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% ada-002 default does not transfer)`
       );
     }
     return spacePct / 100;
@@ -1879,7 +1921,7 @@ function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: strin
   // ignore the channel. Measuring a floor is the fix, and it happens offline.
   logger.warn(
     `\u{1F512} Forced retrieval: no measured absolute floor for embedding space "${space}"; gating on ` +
-      `the relative floor alone. Applying the ${configuredPct}% default here would have been an ` +
+      `the relative floor alone. Applying the declared ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% default here would have been an ` +
       `ada-002 number in a space nobody has measured - above its band that rejects every chunk on ` +
       `every turn. Measure one into FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE.`
   );
@@ -1920,7 +1962,8 @@ interface ForcedRetrievalFloors {
 interface ForcedRetrievalConfig {
   charBudget: number;
   relativeFloor: number;
-  configuredAbsolutePct: number;
+  /** `undefined` = nobody chose a value; it resolves per embedding space. */
+  configuredAbsolutePct: number | undefined;
   /** Ready to use for the same reason the relative floor is: a fraction of the turn's own span. */
   spreadFloor: number;
 }
@@ -1944,7 +1987,7 @@ interface ForcedRetrievalCoverage {
    */
   moreFilesBeyondCap: boolean;
   candidateSelection: ForcedRetrievalCandidateSelection;
-  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick available, else the cap. */
+  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick or several lakes, else the cap. */
   listingLimit: number;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
@@ -1995,6 +2038,70 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
 }
 
 /**
+ * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
+ * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
+ * listing reported more, so the caller still marks the candidate set as truncated.
+ */
+export function mergeLakeFirstListing<T extends { id: string }>(
+  lakeListing: { data: T[]; hasMore?: boolean },
+  scopeListing: { data: T[]; hasMore?: boolean },
+  listingLimit: number
+): { data: T[]; hasMore: boolean } {
+  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
+  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
+  return {
+    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+    hasMore:
+      lakeListing.hasMore === true ||
+      scopeListing.hasMore === true ||
+      lakeListing.data.length + libraryRows.length > listingLimit,
+  };
+}
+
+/** Most lakes listed on their own per turn; the union listing covers the rest. Each is a blocking-sort query. */
+export const FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS = 8;
+
+/**
+ * Lake rows for the candidate listing: the union page plus, when `scopes` is non-empty, one bounded
+ * page per lake (the first FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS by key) so a lake that fills the
+ * union page alone cannot leave the others out. Per-lake rows lead, deduped by id, and the union
+ * fills the rest of `limit`.
+ */
+export async function listLakesFirst<
+  T extends { id: string },
+  M extends LakeOrderScopeSources['lakeMemberships'][number],
+>(args: {
+  scopes: LakeOrderScope[];
+  /** Also list the lake-only union and fill the page with it; false leaves the fill to the caller's own union. */
+  includeUnion?: boolean;
+  arms: LakeScopeArms<M>;
+  limit: number;
+  list: (limit: number, arms: LakeScopeArms<M>) => Promise<{ data: T[]; hasMore?: boolean }>;
+}): Promise<{ data: T[]; hasMore?: boolean }> {
+  const { scopes, arms, limit, list, includeUnion = true } = args;
+  const listed = [...scopes].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  listed.length = Math.min(listed.length, FORCED_RETRIEVAL_MAX_PER_LAKE_LISTINGS);
+  const share = Math.max(1, Math.floor(limit / Math.max(1, scopes.length)));
+  const [union, ...perLake] = await Promise.all([
+    includeUnion ? list(limit, arms) : Promise.resolve(null),
+    ...listed.map(scope => list(share, lakeScopeArms(scope, arms))),
+  ]);
+  if (perLake.length === 0) return union ?? { data: [], hasMore: false };
+  return mergeLakeFirstListing(
+    {
+      data: [...new Map(perLake.flatMap(r => r.data).map(f => [f.id, f])).values()],
+      // Not the per-lake hasMore: each page is capped at its share, so it flips for any lake over
+      // its share even when the union page holds every row; the union's own flag covers truncation.
+      hasMore: false,
+    },
+    union ?? { data: [], hasMore: false },
+    limit
+  );
+}
+
+const citableKey = (c: CitableSource) => c.id || c.url || c.title;
+
+/**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
  *
  * Generic capability: when a session sets `forceKnowledgeRetrieval`, every user
@@ -2040,6 +2147,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
   private readerConsentTags: string[];
+  /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
+  private includeLibraryFiles: boolean | undefined;
+  /** Keys of the citables this turn's injection added, withdrawn if the block never reaches the model. */
+  private publishedCitableKeys = new Set<string>();
+  /**
+   * The retrieved-passages message this turn returned, or undefined when it returned none. The lake
+   * prompt is a separate message of the same source, so withdrawal keys on THIS message: a kept lake
+   * prompt must not pass the chips through when the passages behind them were dropped.
+   */
+  private retrievedContextMessage?: IMessage;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2048,7 +2165,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
     lakeScopeExplicit?: boolean,
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2058,6 +2176,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
     this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
+    this.includeLibraryFiles = includeLibraryFiles;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2144,8 +2263,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       reasons.push(
         cutAtCandidateCap
           ? `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, and candidates are ` +
-              'selected alphabetically by file name - so the same documents are considered on every turn and the rest ' +
-              'of the library is never reached'
+              'selected alphabetically by file name (taken in turn from each lake when several are in scope) - so the ' +
+              'same documents are considered on every turn and the rest of the library is never reached'
           : `more than ${coverage.listingLimit} documents matched; only the first ${coverage.listingLimit} by file ` +
               `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
               'so the rest of the library is never reached'
@@ -2331,7 +2450,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * Cuts the servable files (in stable scan order) down to FORCED_RETRIEVAL_MAX_CANDIDATE_FILES.
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
-   * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
+   * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
@@ -2590,12 +2709,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
         // which is not known until the candidate files have voted on one, mid-scan. See
         // `resolveForcedRetrievalAbsoluteFloor`.
-        configuredAbsolutePct: forcedRetrievalFloorPct(
-          absolute,
-          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-          'forcedRetrievalMinSimilarityPct',
-          this.logger
-        ),
+        // `undefined` = no rung stored a parseable value. Both read paths schema-parse (1..100), so
+        // the range guard is a backstop only.
+        configuredAbsolutePct: forcedRetrievalConfiguredAbsolutePct(absolute, this.logger),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2606,16 +2722,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           `forcedRetrievalSpreadFloorPct; falling back to ` +
           `${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT} chars, ` +
           `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ` +
-          `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute / ` +
+          `per-space absolute / ` +
           `${FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT}% spread`,
         err
       );
       return {
         charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
         relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-        // The coded default, which then resolves per embedding space like any unchosen value - so a
-        // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
-        configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+        // Unset, so it resolves per embedding space - a settings outage cannot reintroduce the
+        // ada-002 floor in a space it does not belong to.
+        configuredAbsolutePct: undefined,
         spreadFloor: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT / 100,
       };
     }
@@ -2641,7 +2757,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * already have, and the trade for it is one fewer uncached `findOne` per Data-Lake-mode turn.
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
-   * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
+   * `resolveScopedSettingEntries` documents that it never throws and wraps both of its own reads, so
    * the only thing the catch can realistically see is an argument-evaluation error - now including
    * the membership read below, which has its own real failure mode. The corollary is worth knowing
    * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
@@ -2669,17 +2785,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
           : [];
         const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
-        const values = await resolveScopedSettingValues(
+        const entries = await resolveScopedSettingEntries(
           FORCED_RETRIEVAL_SETTING_KEYS,
           scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
+        const absolute = entries.forcedRetrievalMinSimilarityPct;
         return {
-          charBudget: values.forcedRetrievalCharBudget,
-          relative: values.forcedRetrievalRelativeFloorPct,
-          absolute: values.forcedRetrievalMinSimilarityPct,
-          spread: values.forcedRetrievalSpreadFloorPct,
+          charBudget: entries.forcedRetrievalCharBudget.value,
+          relative: entries.forcedRetrievalRelativeFloorPct.value,
+          absolute: absolute.stored ? absolute.value : undefined,
+          spread: entries.forcedRetrievalSpreadFloorPct.value,
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
@@ -2691,13 +2808,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
     }
-    const [charBudget, relative, absolute, spread] = await Promise.all([
+    const [charBudget, relative, absoluteRaw, spread] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
-      db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
+      // Not getSettingsValue: it manufactures the declared 75 for a missing row, which would read as
+      // an explicit 75. The cached raw read yields null for a missing row instead.
+      getSettingsByNames(['forcedRetrievalMinSimilarityPct'], db, { logger: this.logger }),
       db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
-    return { charBudget, relative, absolute, spread };
+    // A missing or blank row is unset: the schema would preprocess either into the same manufactured 75.
+    const raw = absoluteRaw.forcedRetrievalMinSimilarityPct;
+    const parsed = isBlankSettingValue(raw)
+      ? undefined
+      : settingsMap.forcedRetrievalMinSimilarityPct.schema.safeParse(raw);
+    return { charBudget, relative, absolute: parsed?.success ? parsed.data : undefined, spread };
   }
 
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
@@ -2730,20 +2854,53 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     });
   }
 
+  /**
+   * The budget dropped the retrieved-context block, so the model saw neither the passages nor the
+   * abstention text. Its chips would credit sources the answer never read, so take them back and
+   * warn that the passages were not used.
+   */
+  onContextDropped(quest: IChatHistoryItemDocument, deliveredMessages: ReadonlySet<IMessage>): void {
+    const published = this.publishedCitableKeys;
+    this.publishedCitableKeys = new Set();
+    const passages = this.retrievedContextMessage;
+    this.retrievedContextMessage = undefined;
+    // The lake prompt can survive the budget while the passages behind it do not, and only the
+    // passages justify the chips - so a delivered passages block keeps them.
+    if (published.size === 0 || !quest.promptMeta || (passages && deliveredMessages.has(passages))) return;
+    quest.promptMeta.citables = (quest.promptMeta.citables ?? []).filter(c => !published.has(citableKey(c)));
+    this.logger.warn('\u{1F512} Forced retrieval: context block dropped by the input budget, citations withdrawn');
+    quest.promptMeta.warnings = [
+      ...(quest.promptMeta.warnings ?? []),
+      "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+    ];
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string
   ): Promise<IMessage[]> {
+    this.publishedCitableKeys = new Set();
+    this.retrievedContextMessage = undefined;
     const query = message?.trim();
     if (!query) return [];
 
-    // Skip when the turn carries attached files - the question is about the
-    // attachment (e.g. "read this figure"), not the curated library. Forcing lake
-    // retrieval here injects off-topic context and emits spurious citations for
-    // sources the answer never used. The model can still call search_knowledge_base
-    // itself if it genuinely needs the library alongside the attachment.
-    if (quest.fabFileIds && quest.fabFileIds.length > 0) {
+    // Skip when the turn carries attached files and the chat did not choose a lake - the question is
+    // about the attachment (e.g. "read this figure"), and grounding it against every reachable lake
+    // injects off-topic context and spurious citations for sources the answer never used. The model
+    // can still call search_knowledge_base itself if it genuinely needs the library alongside the
+    // attachment.
+    //
+    // A chat with a chosen lake scope keeps retrieving: the picker records the choice
+    // (`lakeScopeExplicit`) and a lake start leaves the caller's library off. The test is the tag
+    // SHAPE, not how the tag got there - a session whose `datalake:` tag was derived from an attached
+    // file also passes the library-off arm. A tag that names no lake (a content tag, or no tags at
+    // all) keeps the skip. Prefixes are matched by identity only: a lake's file-tag prefix is known
+    // only after the access read below, which this pre-access check deliberately precedes.
+    const lakeChosen =
+      retrievalTagsNameALake(this.retrievalTags, []) &&
+      (!!this.lakeScopeExplicit || this.includeLibraryFiles === false);
+    if (quest.fabFileIds && quest.fabFileIds.length > 0 && !lakeChosen) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
       this.recordForcedSkip(quest, 'attached_files');
       return [];
@@ -2751,11 +2908,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
     // Skipping is the whole handling: narrowing to nothing and running anyway would either search
-    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
-    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
-    // reads as a broken lake rather than a chosen scope. The model can still call
-    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
-    // reason (resolveSessionLakeAccess).
+    // the caller's entire personal library (`restrictToDataLake` follows sessionExcludesLibraryFiles,
+    // which is false here unless the library was turned off) or abstain through the `no_lakes` exit
+    // and stamp an outcome that reads as a broken lake rather than a chosen scope. The model can
+    // still call search_knowledge_base, whose lake arms are empty for the same reason
+    // (resolveSessionLakeAccess); it reads the caller's own files only while the library is on.
     //
     // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
     // attachment") assumes the session would otherwise ground on a lake, which is never true once
@@ -2830,11 +2987,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // query to one lake); narrowing without restrictToDataLake still leaks the personal library
       // through the own/shared/group base arms.
       //
-      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // Both halves are gated, NOT applied unconditionally. The narrowing no-ops
       // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
       // restrictToDataLake would drop the base arms for a session that never asked to be
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
-      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      // files. `restrictToDataLake` must mean "the session excludes the library", not "this code
+      // ran": `lakeScoped` while `includeLibraryFiles` is unset, the explicit flag once set. Explicit
+      // false therefore also confines an all-lakes session (no lake named) to lake content. The
+      // knowledge tools derive it through the same sessionExcludesLibraryFiles call, so they agree.
       //
       // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
       // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
@@ -2848,6 +3008,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+      const excludeLibrary = sessionExcludesLibraryFiles(this.includeLibraryFiles, resolvedAccess, this.retrievalTags);
+      const hasLakeArms = accessHasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
       // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
@@ -2855,9 +3017,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
       // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
       // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
-      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
-      // is never empty and the fail-fast cannot fire.
-      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+      // Also the exit for a library-excluding session with no lake at all to reach. Only reachable
+      // while `excludeLibrary` - otherwise the base arms survive, so `conditions` is never empty
+      // and the fail-fast cannot fire.
+      if (excludeLibrary && !hasLakeArms) {
         recordRetrieval('no_lakes', []);
         this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
         return this.noContextMessages('unavailable');
@@ -2886,40 +3049,79 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    similarity below, but the ORDER still matters: on a lake larger than the listing limit
       //    it decides which files are considered at all, so it must be stable turn to turn. With a
       //    relevance pick available the listing is wider and an ANN query cuts it to the cap (see
-      //    selectForcedRetrievalCandidates); without one the listing IS the cut.
+      //    selectForcedRetrievalCandidates); without one the cut is by name (fair across lakes, see below).
       //    The widening cannot wait on index queryability: the embedding model whose index would be
       //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
-      //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
+      //    is the wider listing whenever the setting is on or the scope spans several lakes, even on a
+      //    turn that falls back by name.
       const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
-      const listingLimit = relevanceSelectionAvailable
-        ? FORCED_RETRIEVAL_MAX_LISTED_FILES
-        : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
-      const fileResults = await db.fabfiles.search(
-        user.id,
-        '',
-        { tags: nonLakeRetrievalTags, shared: false },
-        { page: 1, limit: listingLimit },
-        { by: 'fileName', direction: 'asc' },
-        {
-          textSearch: true,
-          includeShared: true,
-          userGroups: user.groups || [],
-          dataLakeTags,
-          dataLakeTagPrefixes, // static-registry (open) prefixes
-          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
-          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
-          // the session actually named a lake; see the `lakeScoped` note above.
-          restrictToDataLake: lakeScoped,
-          excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // supersededInLakes is select:false by default; forced retrieval feeds the same
-          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
-          // FabFileModel.executeSearch.
-          includeSupersessionRulings: true,
-          // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
-          // so this arm agrees with the surface's document-listing predicate. No-op when unset.
-          ...this.retrievalFilter,
-        }
-      );
+      // A by-name cut over several lakes takes its slots in turn from each lake, so one lake whose
+      // names sort first cannot fill the cap alone. That needs a listing wider than the cap to pick from.
+      const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+      // Counted by lake id, not by scope arm: a registry lake arrives as both its meta-tag and its
+      // prefix, which lakeOrderScopes keeps as two arms.
+      const spansSeveralLakes = new Set(lakes.map(lake => lake.id)).size > 1;
+      const listingLimit =
+        relevanceSelectionAvailable || spansSeveralLakes
+          ? FORCED_RETRIEVAL_MAX_LISTED_FILES
+          : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
+      const unionArms = { dataLakeTags, dataLakeTagPrefixes, lakeMemberships };
+      const listFiles = (
+        restrictToDataLake: boolean,
+        limit = listingLimit,
+        arms: LakeScopeArms<(typeof lakeMemberships)[number]> = unionArms
+      ) =>
+        db.fabfiles.search(
+          user.id,
+          '',
+          { tags: nonLakeRetrievalTags, shared: false },
+          { page: 1, limit },
+          { by: 'fileName', direction: 'asc' },
+          {
+            textSearch: true,
+            includeShared: true,
+            userGroups: user.groups || [],
+            dataLakeTags: arms.dataLakeTags,
+            dataLakeTagPrefixes: arms.dataLakeTagPrefixes, // static-registry (open) prefixes
+            lakeMemberships: arms.lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+            restrictToDataLake,
+            excludeContent: true, // metadata only; chunk text + vectors fetched below
+            // supersededInLakes is select:false by default; forced retrieval feeds the same
+            // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+            // FabFileModel.executeSearch.
+            includeSupersessionRulings: true,
+            // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
+            // so this arm agrees with the surface's document-listing predicate. No-op when unset.
+            ...this.retrievalFilter,
+          }
+        );
+      // An explicit "+ My files" turns the listing into a union where a large personal library,
+      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
+      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
+      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
+      // One name-sorted page over the union of every lake is filled by whichever lake sorts first, so
+      // a lake holding a whole page alone would leave the others out of the listing before the fair
+      // cut ever runs. Each lake is therefore also listed on its own, a share of the page each.
+      const listLakesSeparately = spansSeveralLakes && orderScopes.length > 1;
+      const listLakesOnly = () =>
+        listLakesFirst({
+          scopes: listLakesSeparately ? orderScopes : [],
+          arms: unionArms,
+          limit: listingLimit,
+          includeUnion: prioritizeLakeFiles || excludeLibrary,
+          list: (limit, arms) => listFiles(true, limit, arms),
+        });
+      // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
+      // session excludes the library; see the gating note above.
+      const [lakeListing, scopeListing] = await Promise.all([
+        prioritizeLakeFiles || listLakesSeparately ? listLakesOnly() : null,
+        // A library-excluding scope is the lake-only listing already; listing it again adds nothing.
+        (prioritizeLakeFiles || listLakesSeparately) && excludeLibrary
+          ? { data: [], hasMore: false }
+          : listFiles(excludeLibrary),
+      ]);
+      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
+      const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
@@ -2935,8 +3137,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fileById = new Map(files.map(f => [f.id, f]));
       // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
-      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves.
+      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves. Prioritized
+      // lake files sort first so a by-name candidate cut keeps them (see prioritizeLakeFiles).
       const scanOrder = [...files].sort((a, b) => {
+        const al = prioritizeLakeFiles && lakeFileIds.has(a.id);
+        if (al !== (prioritizeLakeFiles && lakeFileIds.has(b.id))) return al ? -1 : 1;
         const an = a.fileName ?? '';
         const bn = b.fileName ?? '';
         if (an !== bn) return an < bn ? -1 : 1;
@@ -2976,7 +3181,34 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         fallbackModel
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
-      const queryVector = await embeddingService.generateEmbedding(query);
+      // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
+      // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
+      const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
+      const [messageVector, contextVector] = await Promise.all([
+        embeddingService.generateEmbedding(query),
+        followUp
+          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+              this.logger.warn(
+                '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
+                error
+              );
+              return undefined;
+            })
+          : undefined,
+      ]);
+      const queryVector = contextVector ? blendFollowUpQueryVector(messageVector, contextVector) : messageVector;
+      // A blended query keeps the bare message vector as a second reading for the absolute floor.
+      // That floor was swept on single-message query vectors, and the blend scales a passage's cosine
+      // down whenever the earlier turns pull away from it - a topic switch after an earlier turn, the
+      // case this path must not break. Admitting on EITHER reading means a chunk the bare message alone
+      // cleared cannot be dropped by blending, so the blend can never lower recall below the path it
+      // replaced; ranking and the relative/spread floors still run on the blended score.
+      const bareQueryVector = contextVector ? messageVector : undefined;
+      if (followUp && contextVector) {
+        this.logger.log(
+          `\u{1F512} Forced retrieval: follow-up scored with ${followUp.priorTurnsUsed} earlier user turn(s)`
+        );
+      }
 
       // The pair is only complete HERE. `embeddingModel` above is the space every score below is
       // computed in - the corpus's own majority, not the admin default - which is exactly the space
@@ -3032,8 +3264,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         : { servable: modelMatchedFiles, superseded: [] };
       // The cap applies HERE, after every partition above, so a withheld, foreign-model or
       // superseded file never takes a candidate slot from one that can actually be served.
+      // Ordered fairly across lakes BEFORE the cut, not only inside it: the chunk scan below spends
+      // its budget down this order, so a scope under the cap would otherwise still let a chunk-heavy
+      // first lake exhaust the budget. Library rows stay behind the lake rows when the lake listing
+      // was prioritized above. The relevance pick re-ranks, so the order only binds by-name scans.
+      const fairByName = <F extends { id: string; tags?: { name: string }[] }>(byName: F[]): F[] => {
+        const lakeRows = prioritizeLakeFiles ? byName.filter(f => lakeFileIds.has(f.id)) : byName;
+        const libraryRows = prioritizeLakeFiles ? byName.filter(f => !lakeFileIds.has(f.id)) : [];
+        const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
+        return [...ordered, ...libraryRows];
+      };
       const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
-        collapse.servable,
+        spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
         relevanceSelectionAvailable
@@ -3141,7 +3383,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             scoredCount++;
             scannedScores.push(score);
             if (score > topScore) topScore = score;
-            if (score < floors.minSimilarity) continue;
+            const clearsFloor =
+              score >= floors.minSimilarity ||
+              (bareQueryVector !== undefined &&
+                computeCosineSimilarity(bareQueryVector, row.vector) >= floors.minSimilarity);
+            if (!clearsFloor) continue;
             pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
             if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
               pool.sort(compareForcedRetrievalCandidates);
@@ -3202,30 +3448,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return this.noContextMessages('unavailable');
       }
       const ranked = pool.sort(compareForcedRetrievalCandidates);
+      // Both cutoffs below measure from this turn's best ADMITTED candidate, `ranked[0]`, not from
+      // `topScore`. The two stopped being the same score when the absolute floor started clearing on
+      // EITHER the blended or the bare reading: the chunk with the highest blended score can now be
+      // rejected outright while a chunk it outscored was admitted on its bare score alone. A cutoff
+      // anchored on `topScore` would then sit above the only admitted candidate and empty the turn,
+      // which is the one thing a ranking floor must never do - `ranked` is score-descending, so its
+      // head is the candidate that has to survive. `topScore` is the fallback for an empty `ranked`,
+      // where neither cutoff has anything to act on either way.
+      const anchorScore = ranked.length > 0 ? ranked[0].score : topScore;
       // The relative floor runs HERE rather than inside the scan above: it is a fraction of the
-      // turn's FINAL top score, which is not known until the last batch has been scored. This is
+      // turn's top admitted score, which is not known until the last batch has been scored. This is
       // the floor that ranks - it moves with the turn, so it keeps discriminating whichever band a
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing.
       //
-      // Skipped when the top score is not positive - that guard now lives in
-      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it.
-      // `topScore` is not derived from `pool`: it is updated one line BEFORE the absolute-floor
-      // `continue`, so it tracks every finite scored candidate while `pool` holds only those that
-      // cleared the floor, and can therefore be negative here. The guard is inert on THIS path (a
-      // non-positive `topScore` makes the product non-positive, so the unfiltered branch is taken
-      // either way) and load-bearing on the sweep's, which is handed arbitrary floor pairs.
+      // Skipped when the anchor is not positive - that guard now lives in
+      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it. It
+      // is inert on THIS path (a non-positive anchor makes the product non-positive, so the
+      // unfiltered branch is taken either way) and load-bearing on the sweep's, which is handed
+      // arbitrary floor pairs.
       //
-      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
-      // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
-      // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
-      // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
-      const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, floors.relativeFloor);
+      // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100), so the head of
+      // `ranked` always clears its own cutoff. No new empty-handed exit is introduced.
+      const relativeCutoff = forcedRetrievalRelativeCutoff(anchorScore, floors.relativeFloor);
       const afterRelative = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
       if (afterRelative.length < ranked.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: relative floor kept ${afterRelative.length}/${ranked.length} candidates ` +
-            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${topScore.toFixed(3)})`
+            `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${anchorScore.toFixed(3)})`
         );
       }
 
@@ -3240,17 +3491,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // would move with the very floor this one exists to be independent of.
       //
       // Runs after the relative floor purely so the two `pre`/`post` counts on promptMeta stay a
-      // chain; the two cuts are independent, and applying both is an AND either way. Cannot empty
-      // the turn at any setting: the cutoff never exceeds `topScore`, which the head of `ranked`
-      // meets, and `ranked` is non-empty here.
+      // chain; the two cuts are independent, and applying both is an AND either way. Anchored on
+      // `anchorScore` for the reason above, and cannot empty the turn at any setting: the cutoff lands
+      // between the anchor and the background when the background is the lower of the two, and is 0
+      // otherwise, so it never sits above the head of `ranked`, which is non-empty here.
       const backgroundScore = backgroundScoreOf(scannedScores);
-      const spreadCutoff = forcedRetrievalSpreadCutoff(topScore, backgroundScore, floors.spreadFloor);
+      const spreadCutoff = forcedRetrievalSpreadCutoff(anchorScore, backgroundScore, floors.spreadFloor);
       const scored = spreadCutoff > 0 ? afterRelative.filter(c => c.score >= spreadCutoff) : afterRelative;
       if (scored.length < afterRelative.length) {
         this.logger.log(
           `\u{1F512} Forced retrieval: spread floor kept ${scored.length}/${afterRelative.length} candidates ` +
             `(cutoff ${spreadCutoff.toFixed(3)} = ${(floors.spreadFloor * 100).toFixed(0)}% of the way from ` +
-            `top ${topScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
+            `top ${anchorScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
         );
       }
 
@@ -3343,7 +3595,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // walk above skips a candidate only via its budget `break`, and `used` starts at 0
           // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
           // an empty `sections` means an empty `scored`. And the top candidate always survives
-          // BOTH per-turn cutoffs - the relative one is `topScore * fraction` with fraction <= 1,
+          // BOTH per-turn cutoffs - the relative one is `anchorScore * fraction` with fraction <= 1,
           // the spread one interpolates between the top and the background and so never exceeds the
           // top - meaning an empty `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE
           // floor, which is exactly what the `chunks: 0` beside it says. If that budget ever admits
@@ -3358,10 +3610,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // below the line - and no per-turn test separates them, so the line carries what an
         // operator needs to tell them apart instead: a top score far below the floor across a whole
         // scanned corpus is the misconfiguration, one just below it is a genuine miss.
-        this.logger.log(
+        const noneClearedLine =
           `\u{1F512} Forced retrieval: no chunk cleared the ${(floors.minSimilarity * 100).toFixed(0)}% absolute ` +
-            `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`
-        );
+          `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`;
+        // An operator floor above the measured one can empty every turn, so that case warns on every
+        // turn it happens and tells the reader; a measured floor emptying a turn is an ordinary miss.
+        // The top candidate always survives the relative and spread cutoffs (see above), so the
+        // configured floor is what emptied the turn exactly when the top score cleared the measured
+        // floor too - below it, clearing the setting would still return nothing.
+        const measuredPct =
+          configuredAbsolutePct !== undefined
+            ? forcedRetrievalFloorAboveMeasured(configuredAbsolutePct, embeddingModel)
+            : undefined;
+        if (configuredAbsolutePct !== undefined && measuredPct !== undefined && topScore >= measuredPct / 100) {
+          this.logger.warn(
+            `${noneClearedLine}; the configured floor is above the ${measuredPct}% measured for this space, ` +
+              'clear forcedRetrievalMinSimilarityPct to use the measured floor'
+          );
+          quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+            sessionId: quest.sessionId,
+            userId: this.chatCompletion.user.id,
+          });
+          quest.promptMeta.retrievalFloorRejection = {
+            floorPct: configuredAbsolutePct,
+            measuredPct,
+            embeddingModel,
+          };
+        } else {
+          this.logger.log(noneClearedLine);
+        }
         // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
         // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
         // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the
@@ -3461,6 +3738,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             sourceSystem: 'knowledge_base',
             tags: fileTagNames,
             relevanceScore: 1 - index * 0.1,
+            // Matches the `### [N]` heading above; the client links an inline marker only to a
+            // citable carrying it, so named style must leave it off.
+            ...(this.citationStyle === 'indexed' ? { citationIndex: index + 1 } : {}),
             // Spread rather than assigned: every fid in sourceFileIds was recorded in the same
             // walk, so `cited` is always present - but an absent key must leave the fields off
             // entirely, since an empty-string anchor would make the reader chase a passage that
@@ -3489,7 +3769,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         userId: user.id,
       });
       const existingCitables = quest.promptMeta.citables || [];
-      const citableKey = (c: CitableSource) => c.id || c.url || c.title;
+      const withoutCitationIndex = (c: CitableSource): CitableSource => {
+        if (c.metadata?.citationIndex === undefined) return c;
+        const { citationIndex: _staleIndex, ...metadata } = c.metadata;
+        return { ...c, metadata };
+      };
       if (this.citationStyle === 'indexed') {
         // INVARIANT (indexed style): the [N] headings above number sources 1..k in
         // `citables` order, so the emitted manifest MUST keep these forced-retrieval
@@ -3506,11 +3790,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           );
         }
         const newKeys = new Set(citables.map(citableKey).filter(Boolean));
-        const keptExisting = existingCitables.filter(c => {
-          const key = citableKey(c);
-          return !key || !newKeys.has(key);
-        });
+        // A kept citable's stamp numbered an earlier injection, so it would link a marker of this
+        // turn to whatever document happens to sit at that position now.
+        const keptExisting = existingCitables
+          .filter(c => {
+            const key = citableKey(c);
+            return !key || !newKeys.has(key);
+          })
+          .map(withoutCitationIndex);
         quest.promptMeta.citables = [...citables, ...keptExisting];
+        this.publishedCitableKeys = newKeys;
       } else {
         // Named style: legacy order - existing citables first, then de-duplicated new ones.
         const seenKeys = new Set(existingCitables.map(citableKey).filter(Boolean));
@@ -3521,6 +3810,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           return true;
         });
         quest.promptMeta.citables = [...existingCitables, ...newCitables];
+        this.publishedCitableKeys = new Set(newCitables.map(citableKey).filter(Boolean));
       }
       await this.chatCompletion.sendStatusUpdate(quest, 'Grounded in the knowledge base');
 
@@ -3626,6 +3916,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
 
+      this.retrievedContextMessage = retrievedContext;
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {
       // A failed search still leaves the turn ungrounded, so it gets the abstention block for the

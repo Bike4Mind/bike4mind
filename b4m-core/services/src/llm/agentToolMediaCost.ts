@@ -1,14 +1,13 @@
-import { ModelInfo, MusicGenerationVendor, SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import { ModelInfo, SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { estimateImageCredits } from '../imageCost';
-import { estimateMusicCredits } from '../musicCost';
 import { AudioCostInput, estimateAudioCredits } from '../audioCost';
-import { CostInput } from './imageCostCalculator/types';
+import { toImageCostInput, type ImageToolCostInput } from './tools/imageToolBilling';
 
 /**
  * Provider media-cost (USD) of one generative-tool call, for the AGENT-MODE billing rail.
  *
  * The classic-chat path bills these tools through `ToolBuilder` + `toolCreditsMap` +
- * `ChatCompletionProcess` (reserve-on-start / settle-on-finish). Agent mode does not run
+ * `ChatCompletionProcess` (gate-on-start / settle-on-finish). Agent mode does not run
  * that path at all - it bills per iteration in `billIteration`, folding a tool's cost into
  * `pendingToolUsage.costUsd` (see agentExecutor). This maps the same `onToolStart` /
  * `onToolFinish` payloads the tools already emit to a USD figure the agent rail can charge,
@@ -19,26 +18,19 @@ import { CostInput } from './imageCostCalculator/types';
  * estimators themselves throw on an unsupported model / non-finite cost, so the caller wraps
  * this and logs rather than letting a cost-estimate edge crash the agent run.
  *
- * Timing mirrors the classic host: image cost is known up front (from n/size/quality) so it
- * is read from the `onToolStart` payload; music/audio settle from the `onToolFinish` payload
- * so only a delivered clip is billed.
+ * Timing mirrors the classic host: image and audio both settle from the `onToolFinish`
+ * payload so only a delivered image or clip is billed. video_generation and music_generation are
+ * not here: their jobs hold and settle credits themselves.
  */
 export function estimateGeneratedMediaUsd(toolName: string, data: unknown, models: ModelInfo[]): number {
   switch (toolName) {
     case 'image_generation':
     case 'edit_image': {
-      const d = data as { model?: string; n?: number; size?: string; quality?: string };
+      const d = data as ImageToolCostInput;
       if (!d?.model) return 0;
       const modelInfo = models.find(m => m.id === d.model);
       if (!modelInfo) return 0;
-      // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      const input = { model: d.model, size: d.size, quality: d.quality } as CostInput;
-      return estimateImageCredits(modelInfo, d.n || 1, input).usdCost;
-    }
-    case 'music_generation': {
-      const d = data as { provider?: MusicGenerationVendor; lengthMs?: number };
-      if (!d?.provider || typeof d.lengthMs !== 'number') return 0;
-      return estimateMusicCredits(d.provider, { lengthMs: d.lengthMs }).usdCost;
+      return estimateImageCredits(modelInfo, d.n || 1, toImageCostInput(toolName, d)).usdCost;
     }
     case 'audio_generation': {
       const d = data as {

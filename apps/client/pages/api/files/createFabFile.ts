@@ -1,3 +1,4 @@
+import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
 import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -5,6 +6,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
+  organizationRepository,
   FabFile,
   User,
   withTransaction,
@@ -99,6 +101,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
             adminSettings: adminSettingsRepository,
             fabFiles: FabFile,
             users: User,
+            organizations: organizationRepository,
             dataLakes: dataLakeRepository,
             // The service re-gates the lake tag internally, so its inputs must stay at least as
             // wide as the route's own prologue above: without the grant repo that re-gate loses
@@ -116,8 +119,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               });
               return filepath;
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-              getFilesStorage().getSignedUrl(filepath, 'put', {
+            generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+              getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
               }),
           },
@@ -144,7 +147,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      return res.json(result);
+      return res.json(await signBrowserFileResponse(result));
     })
   );
 

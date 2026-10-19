@@ -1,0 +1,140 @@
+import React, { useState } from 'react';
+import { Box, Button, Chip, Divider, Input, Stack, Typography } from '@mui/joy';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import { toast } from 'sonner';
+import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
+import {
+  describePasskeyError,
+  passkeysSupported,
+  usePasskeys,
+  useRegisterPasskey,
+  useRemovePasskey,
+} from '@client/app/hooks/data/passkeys';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
+
+const formatDate = (value: string | null): string =>
+  value ? new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Never';
+
+/**
+ * Passkeys as an alternative second factor to the authenticator code. Shown only once MFA is
+ * on: the server refuses enrollment otherwise, and disabling MFA removes them.
+ */
+const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
+  const { data: passkeys, isLoading } = usePasskeys(enabled);
+  const registerPasskey = useRegisterPasskey();
+  const removePasskey = useRemovePasskey();
+  const [name, setName] = useState('');
+
+  if (!enabled) return null;
+
+  const supported = passkeysSupported();
+
+  const handleAdd = () => {
+    registerPasskey.mutate(
+      { name: name.trim() || undefined },
+      {
+        onSuccess: passkey => {
+          setName('');
+          toast.success(`Added passkey "${passkey.name}"`);
+        },
+        onError: error => {
+          if (isStepUpCancelled(error)) return;
+          toast.error(describePasskeyError(error, 'Could not add the passkey'));
+        },
+      }
+    );
+  };
+
+  const handleRemove = (id: string, label: string) => {
+    removePasskey.mutate(
+      { id },
+      {
+        onSuccess: () => toast.success(`Removed passkey "${label}"`),
+        onError: error => {
+          if (isStepUpCancelled(error)) return;
+          toast.error(`Could not remove passkey "${label}"`);
+        },
+      }
+    );
+  };
+
+  return (
+    <Box sx={theme => ({ ...cardSurfaceSx(theme), mt: 2 })} data-testid="passkeys-section">
+      <Typography level="h4" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <FingerprintIcon /> Passkeys
+      </Typography>
+      <Typography level="body-sm" sx={{ mb: 2 }}>
+        Use Face ID, Touch ID, Windows Hello or a security key instead of typing an authenticator code. Passkeys only
+        work on this site, so they cannot be phished. Adding one asks you to confirm it&apos;s you first.
+      </Typography>
+
+      {!supported && (
+        <Typography level="body-sm" color="warning" data-testid="passkeys-unsupported">
+          This browser does not support passkeys.
+        </Typography>
+      )}
+
+      {isLoading && <Typography level="body-sm">Loading...</Typography>}
+
+      {!isLoading && (!passkeys || passkeys.length === 0) && (
+        <Typography level="body-sm" sx={{ mb: 2 }} data-testid="passkeys-empty">
+          No passkeys yet.
+        </Typography>
+      )}
+
+      {!isLoading && passkeys && passkeys.length > 0 && (
+        <Stack spacing={1} divider={<Divider />} sx={{ mb: 2 }}>
+          {passkeys.map(passkey => (
+            <Box
+              key={passkey.id}
+              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, py: 0.5 }}
+            >
+              <Box sx={{ minWidth: 0 }}>
+                <Typography level="body-md" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {passkey.name}
+                  {passkey.backedUp && (
+                    <Chip size="sm" variant="soft">
+                      Synced
+                    </Chip>
+                  )}
+                </Typography>
+                <Typography level="body-xs">
+                  Added {formatDate(passkey.createdAt)} - last used {formatDate(passkey.lastUsedAt)}
+                </Typography>
+              </Box>
+              <Button
+                size="sm"
+                color="danger"
+                variant="outlined"
+                data-testid={`passkey-remove-btn-${passkey.id}`}
+                loading={removePasskey.isPending && removePasskey.variables?.id === passkey.id}
+                onClick={() => handleRemove(passkey.id, passkey.name)}
+              >
+                Remove
+              </Button>
+            </Box>
+          ))}
+        </Stack>
+      )}
+
+      {supported && (
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+          <Input
+            size="sm"
+            placeholder="Name (e.g. MacBook)"
+            value={name}
+            onChange={event => setName(event.target.value.slice(0, 64))}
+            disabled={registerPasskey.isPending}
+            sx={{ flex: 1 }}
+            slotProps={{ input: { 'data-testid': 'passkey-name-input', 'aria-label': 'Passkey name' } }}
+          />
+          <Button size="sm" data-testid="passkey-add-btn" loading={registerPasskey.isPending} onClick={handleAdd}>
+            Add a passkey
+          </Button>
+        </Stack>
+      )}
+    </Box>
+  );
+};
+
+export default PasskeysSection;

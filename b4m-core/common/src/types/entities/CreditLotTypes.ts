@@ -29,11 +29,12 @@ export const CreditLot = z.object({
   amount: z.number(),
   expiresAt: z.date(),
   /**
-   * How much of `amount` the daily sweep has attributed to consumption so
-   * far. `consumedAssigned === amount` marks the lot as fully realized/expired
-   * - the sweep's sole idempotency guard (no separate status flag needed).
+   * Current FIFO consumption estimate while live; refunds can lower it.
+   * A stale sweep retires the lot and sets this to amount.
    */
   consumedAssigned: z.number().default(0),
+  /** First stale reconciliation. Absence does not imply settled consumption. */
+  settledAt: z.date().optional(),
   /**
    * The grant's Stripe reference (payment intent id), when one exists.
    * Clawback handlers look up lots by this field.

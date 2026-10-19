@@ -45,6 +45,17 @@ export interface LatticeModelServiceDeps {
 }
 
 /**
+ * Minimal deps for the read-only authorization path (`getModel`, `getModelForWrite`).
+ * Accepts any object that exposes `findById` -- including the narrow stub in ToolContext --
+ * without requiring the full repository interface.
+ */
+export interface LatticeAuthDeps {
+  db: {
+    latticeModels: Pick<ILatticeModelRepository, 'findById'>;
+  };
+}
+
+/**
  * User context for authorization.
  *
  * Both ids are id-ish rather than `string` because callers pass them straight off a hydrated
@@ -90,9 +101,7 @@ export interface HydrationResult {
 /**
  * The model's creator, compared through `normalizeId` on both sides.
  *
- * This is the WRITE gate (via `getModelForWrite`) and the owner arm of the read gate, and the
- * subagent Lattice tools in `llm/tools/implementation/lattice` import it so the two surfaces
- * cannot drift apart again.
+ * This is the WRITE gate (via `getModelForWrite`) and the owner arm of the read gate.
  */
 export function isModelOwner(model: Pick<ILatticeModel, 'userId'>, user: Pick<LatticeModelUser, 'id'>): boolean {
   const ownerId = normalizeId(model.userId);
@@ -183,7 +192,7 @@ export async function createModel(
 export async function getModel(
   user: LatticeModelUser,
   modelId: string,
-  deps: LatticeModelServiceDeps
+  deps: LatticeAuthDeps
 ): Promise<ILatticeModel | null> {
   const model = await deps.db.latticeModels.findById(modelId);
 
@@ -207,13 +216,12 @@ export async function getModel(
  * Lattice models carry no share/grant field, so the creator is the only principal that can hold
  * write authority today. If an explicit write grant is ever added, this is the one place to admit
  * it - keeping the check here rather than inlined in six mutators is what makes that a one-line
- * change instead of a six-site audit. The subagent Lattice tools mutate outside this helper (they
- * hit the repository directly) and so import `isModelOwner` to stay on the same rule.
+ * change instead of a six-site audit.
  */
-async function getModelForWrite(
+export async function getModelForWrite(
   user: LatticeModelUser,
   modelId: string,
-  deps: LatticeModelServiceDeps
+  deps: LatticeAuthDeps
 ): Promise<ILatticeModel | null> {
   const model = await getModel(user, modelId, deps);
   if (!model) return null;

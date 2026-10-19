@@ -8,6 +8,7 @@ import {
   adminSettingsRepository,
   dataLakeRepository,
   connectDB,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 // @ts-ignore - service may not be exported in types yet
@@ -17,7 +18,7 @@ import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 
-const { processIngestedEmail } = emailIngestionService;
+const { processIngestedEmail, readSenderAuthenticationHeaders } = emailIngestionService;
 type IEmailParserAdapter = emailIngestionService.IEmailParserAdapter;
 type ParsedEmailObject = emailIngestionService.ParsedEmailObject;
 
@@ -70,6 +71,7 @@ class MailparserAdapter implements IEmailParserAdapter {
       bcc: parsed.bcc,
       subject: parsed.subject,
       date: parsed.date,
+      senderAuthentication: readSenderAuthenticationHeaders(parsed.headerLines),
       text: parsed.text,
       html: parsed.html || undefined, // Convert false to undefined
       attachments: parsed.attachments.map(att => ({
@@ -226,6 +228,7 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
           {
             db: {
               users: userRepository,
+              organizations: organizationRepository,
               ingestedEmails: ingestedEmailRepository,
               fabFiles: fabFileRepository,
               adminSettings: adminSettingsRepository,
@@ -253,16 +256,16 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
         });
       }
     } catch (error) {
-      Logger.error('❌ ERROR processing email:', error);
-      Logger.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-
-      // Check if it's an authorization error
+      // An unauthenticated or unauthorized sender is an expected rejection, not a Lambda error.
+      // Drop it from the queue without a bounce: its From may be forged, so a bounce would be
+      // backscatter to an innocent address.
       if (error instanceof UnauthorizedError) {
-        Logger.warn('Unauthorized email - consider sending bounce notification');
-        // TODO: Implement bounce notification via SES SendEmail
-        // Don't report as failed - we want to remove this from the queue
+        Logger.warn('Dropped unauthorized email', { sqsMessageId: record.messageId, reason: error.message });
         continue;
       }
+
+      Logger.error('❌ ERROR processing email:', error);
+      Logger.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
 
       // Report this record as failed so SQS retries/DLQs it; keep processing the rest.
       batchItemFailures.push({ itemIdentifier: record.messageId });

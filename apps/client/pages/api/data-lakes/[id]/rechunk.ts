@@ -9,19 +9,20 @@ import {
   fabFileChunkRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { CONVERGENCE_ORIGIN } from '@bike4mind/common';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 
 /**
- * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, staleEmbeddingSpaceCount,
- *                                        embeddingSpaceResolved }
+ * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, rebuildingCount,
+ *                                        staleEmbeddingSpaceCount, embeddingSpaceResolved }
  * POST /api/data-lakes/:id/rechunk  { limit, select } -> { detected, enqueued, remaining }
  *
  * "Rebuild passages": re-chunks the lake's files whose passages predate the passage-target fix
@@ -59,6 +60,9 @@ const RechunkInput = z.object({
 });
 
 const detectDeps = { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } };
+const gateDeps = {
+  db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+};
 const spaceDeps = { db: { fabFiles: fabFileRepository } };
 
 /**
@@ -83,14 +87,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // `failedCount` distinguishes "rebuild finished" from "some files gave up": a failed re-chunk
     // (error set, no chunks) is invisible to detection, so the badge alone would read it as done.
     const embeddingSpace = await resolveLakeEmbeddingSpace();
-    const [underChunked, failedCount, stale] = await Promise.all([
+    // `rebuildingCount` covers the gap between those two: a reset file has no passages and no error
+    // until its rebuild commits or finally fails, so neither count above sees it.
+    const [underChunked, failedCount, rebuildingCount, stale] = await Promise.all([
       dataLakeService.detectUnderChunkedFiles(lake, detectDeps),
       dataLakeService.countFailedLakeFiles(lake, { db: { fabFiles: fabFileRepository } }),
+      dataLakeService.countRebuildingLakeFiles(lake, { db: { fabFiles: fabFileRepository } }),
       embeddingSpace ? dataLakeService.detectStaleEmbeddingSpaceFiles(lake, spaceDeps, embeddingSpace) : null,
     ]);
     return res.json({
       underChunkedCount: underChunked.length,
       failedCount,
+      rebuildingCount,
       // `null`, never 0, when the space could not be resolved. Zero here reads as "nothing to
       // migrate", and the one case this cannot see is exactly the one where every label comparison
       // would be wrong - so the caller is told it has no answer instead of a reassuring one.
@@ -106,9 +114,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const { limit, select } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps, { idOnly: true });
 
     let detected: dataLakeService.LakeRebuildTarget[];
     if (select === 'stale-embedding-space') {
@@ -181,7 +187,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // rather than having its lease released - so `resetIds` is a subset of the wave and is what we
       // enqueue. Mutual exclusion itself remains the chunk worker's compare-and-set.
       const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+      // Gated a second time inside the transaction: the early gate keeps strangers from triggering
+      // detection, and this one is what serializes the reset against a concurrent grant revoke (see
+      // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
+      const resetIds = await withTransaction(async () => {
+        await dataLakeService.assertLakeRebuildAccess(lake.id, ctx, gateDeps, { idOnly: true });
+        // Sequential: the ambient transaction session rejects concurrent operations.
+        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
+        // A fallback lake has no Mongo doc and no grants to revoke, and its slug id is not a valid _id.
+        if (!dataLakeService.isFallbackLake(lake)) await dataLakeRepository.touchIfStable(lake.id);
+        return reset;
+      });
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.

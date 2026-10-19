@@ -35,10 +35,15 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+const prefixPreview = vi.hoisted(() => ({
+  current: undefined as { slug: string; tagPrefix: string | null } | undefined,
+}));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: () => ({ data: prefixPreview.current }),
   usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // SourceSelectionStep renders LakeSourceConnectActions, which pulls in React Query (useConfig /
@@ -49,12 +54,41 @@ vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', 
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => null,
 }));
+// The source cards and the GitHub panel read the account scope through react-query; this file is
+// about the wizard's step order and commit gating, and every seed below answers the source question
+// directly, so neither screen is what these tests render.
+vi.mock('@client/app/components/DataLakeWizard/steps/CreateSourceCards', () => ({
+  default: () => <div data-testid="create-source-cards" />,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubCreatePanel', () => ({
+  default: () => <div data-testid="github-create-panel" />,
+}));
+vi.mock('@client/app/components/datalake/createLakeSources', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/components/datalake/createLakeSources')>()),
+  useCreateLakeScope: () => ({ organizationId: undefined, isOrgOwnerOrManager: false }),
+}));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true }),
+}));
 // ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
 // wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders
 // nothing without a resolved spendEnabled/budget/model, which is not what this file tests.
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
   useEffectiveEmbeddingModel: () => undefined,
+}));
+
+// The Drive folder estimate is a ~20s server walk; each test sets the query state it needs.
+const driveEstimate = vi.hoisted(() => ({
+  current: { data: undefined, isLoading: false, isError: false } as {
+    data?: Record<string, unknown>;
+    isLoading: boolean;
+    isError: boolean;
+  },
+}));
+vi.mock('@client/app/hooks/data/useDriveFolderEstimate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderEstimate')>()),
+  useDriveFolderEstimate: () => driveEstimate.current,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -65,6 +99,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   beforeEach(() => {
     prefixClash.current = undefined;
+    prefixPreview.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
     driveCommitMutate.mockClear();
@@ -72,6 +107,7 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
       isOpen: true,
       step: 'config',
       targetLake: null,
+      createSource: 'upload',
       // Configure is only reachable with a source in hand, and the button gates on that too - so
       // seed one file, or every prefix assertion below would be measuring the missing-source gate.
       allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
@@ -278,6 +314,30 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
   });
 
+  // The overlap lookup above only sees attachable lakes; an archived or deleted one still holds
+  // its prefix, and only the server preview knows.
+  it('disables Start Upload when the server reports the typed prefix held by a lake the form cannot see', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: 'docs-1:' };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+  });
+
+  it('leaves Start Upload enabled while the server preview has no answer', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: null };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
   it('leaves Start Upload enabled when the prefix is free', () => {
     render(
       <TestWrapper>
@@ -303,6 +363,8 @@ describe('DataLakeWizardModal - streamlined step order', () => {
       isOpen: true,
       step: 'source',
       targetLake: (over.targetLake ?? null) as never,
+      // The source question is answered before this step shows anything else (#3817).
+      createSource: 'upload',
       allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
       optionalSteps: over.optionalSteps ?? { preview: false, taxonomy: false },
       config: { ...state.config, name: over.name ?? 'Legal Contracts', tagPrefix: '' },
@@ -317,6 +379,27 @@ describe('DataLakeWizardModal - streamlined step order', () => {
 
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  // The source question comes first in create mode (#3817), so Next cannot advance past a screen
+  // that has not been answered - and the GitHub card never advances through the wizard at all: its
+  // Continue creates the lake server-side and leaves the page.
+  it('blocks Next until a source card is picked', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: null });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('keeps Next disabled on the GitHub card, which leaves the wizard instead of advancing', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: 'github' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
   it('shows only source, configure and upload when neither optional step is enabled', () => {
@@ -349,6 +432,22 @@ describe('DataLakeWizardModal - streamlined step order', () => {
 
     renderModal();
 
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('keeps the upload-path steps in append mode with no files, where Next waits for a file', () => {
+    // Append mode puts the source connect actions beside the upload picker. GitHub's connect leaves
+    // the wizard, so the stepper and footer Next still describe the upload path.
+    seedSource({
+      targetLake: { id: 'lake-1', name: 'Legal Contracts', fileTagPrefix: 'legal:', organizationId: 'org-1' },
+    });
+    useDataLakeWizardStore.setState({ allFiles: [] });
+
+    renderModal();
+
+    expect(screen.getByText('Add Files \u2014 Legal Contracts')).toBeInTheDocument();
+    const labels = screen.getAllByTestId('wizard-step-label').map(el => el.textContent);
+    expect(labels).toEqual(['Select Source', 'Configure', 'Upload']);
     expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
@@ -430,6 +529,7 @@ describe('DataLakeWizardModal - Drive-only create', () => {
       isOpen: true,
       step: over.step ?? 'source',
       targetLake: null,
+      createSource: 'googleDrive',
       allFiles: [],
       pendingDriveFolder: driveFolder,
       config: { ...state.config, name: over.name ?? 'Drive Only Lake', tagPrefix: 'drive:' },
@@ -452,13 +552,54 @@ describe('DataLakeWizardModal - Drive-only create', () => {
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
     useUser.setState({ currentUser: null });
+    driveEstimate.current = { data: undefined, isLoading: false, isError: false };
   });
 
-  // Nothing uploads on this path (uploadBytes is 0), so a user already over quota must still be
-  // able to create-and-sync - the block exists to stop bytes the server would refuse, and this
-  // commit sends none.
-  it('is not blocked by a storage limit the commit sends no bytes against', () => {
-    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 1 } as IUserDocument });
+  const estimate = (over: Record<string, unknown> = {}) => ({
+    data: {
+      folderId: 'FOLDER1',
+      fileCount: 3,
+      knownBytes: 0,
+      unknownSizeCount: 0,
+      overSizeLimitCount: 0,
+      unsupportedCount: 0,
+      truncated: false,
+      overCandidateCap: false,
+      maxFileSizeBytes: 100 * 1024 * 1024,
+      candidateCap: 20000,
+      ...over,
+    },
+    isLoading: false,
+    isError: false,
+  });
+  // 1 MB limit, stored in MB like the real user document.
+  const userUsing = (currentStorageSize: number) =>
+    useUser.setState({
+      currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument,
+      refreshUser: () => Promise.resolve(),
+    });
+
+  // A pending estimate holds Create until it settles, so a folder over the file cap cannot slip
+  // through before its estimate lands.
+  it('holds Create while the folder estimate is pending', () => {
+    driveEstimate.current = { data: undefined, isLoading: true, isError: false };
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeDisabled();
+    commitBtn.click();
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('drive-estimate-loading')).toBeInTheDocument();
+  });
+
+  // A failed estimate carries no bytes, so it never locks out a user already over quota - the
+  // sync stays the boundary.
+  it('is not blocked by a storage limit when the folder estimate failed', () => {
+    driveEstimate.current = { data: undefined, isLoading: false, isError: true };
+    userUsing(2_000_000);
     seedDriveOnly({ step: 'config' });
 
     renderModal();
@@ -467,6 +608,75 @@ describe('DataLakeWizardModal - Drive-only create', () => {
     expect(commitBtn).toBeEnabled();
     commitBtn.click();
     expect(driveCommitMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks Create and sync when the folder known bytes alone exceed the quota, and shows the numbers', () => {
+    driveEstimate.current = estimate({ knownBytes: 2_000_000 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeDisabled();
+    commitBtn.click();
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toHaveTextContent(
+      'The Drive folder holds at least 2 MB'
+    );
+  });
+
+  it('warns but allows the commit when only the unknown-size worst case would exceed the quota', () => {
+    driveEstimate.current = estimate({ knownBytes: 100_000, unknownSizeCount: 1 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeEnabled();
+    expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
+    expect(screen.queryByTestId('storage-limit-exceeded-alert')).toBeNull();
+  });
+
+  it('blocks a mixed commit whose local and Drive bytes exceed the quota together but not apart', () => {
+    driveEstimate.current = estimate({ knownBytes: 600_000 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+    useDataLakeWizardStore.setState(state => ({
+      allFiles: [
+        { relativePath: 'a.txt', size: 600_000, type: 'text/plain', excluded: false, isDuplicate: false },
+      ] as never,
+      config: { ...state.config, conflictResolution: 'skip' },
+    }));
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toBeInTheDocument();
+  });
+
+  it('agrees with the summary on a truncated estimate whose partial Drive bytes already exceed the quota', () => {
+    driveEstimate.current = estimate({ knownBytes: 2_000_000, truncated: true, truncatedReason: 'deadline' });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    // The button blocks on those partial bytes, so the summary must report them rather than claiming
+    // the folder could not be estimated.
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('drive-estimate-summary')).toHaveTextContent('at least');
+    expect(screen.queryByTestId('drive-estimate-unavailable')).toBeNull();
+  });
+
+  it('blocks a folder over the per-sync file cap, which the sync would refuse whole', () => {
+    driveEstimate.current = estimate({ fileCount: 20001, truncated: true, overCandidateCap: true });
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('drive-estimate-over-cap')).toBeInTheDocument();
   });
 
   it('advances past the source step on a Drive folder alone, with no files', () => {
@@ -549,6 +759,7 @@ describe('DataLakeWizardModal - storage limit', () => {
       isOpen: true,
       step,
       targetLake: null,
+      createSource: 'upload',
       allFiles: [{ relativePath: 'a.txt', size: 10, type: 'text/plain', excluded: false, isDuplicate: false }] as never,
       config: {
         name: 'Test Lake',

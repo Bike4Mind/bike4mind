@@ -22,7 +22,7 @@ describe('TavernService — quest workflow methods', () => {
 
   describe('getQuestPlan', () => {
     it('calls GET /api/quest-master-plans/[id] with the plan ID as query param', async () => {
-      const mockPlan = { _id: 'plan-1', goal: 'Test', quests: [] };
+      const mockPlan = { id: 'plan-1', goal: 'Test', quests: [] };
       (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue(mockPlan);
 
       const result = await service.getQuestPlan('plan-1');

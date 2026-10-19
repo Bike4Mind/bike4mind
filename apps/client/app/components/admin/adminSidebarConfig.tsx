@@ -36,6 +36,8 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import HandshakeIcon from '@mui/icons-material/Handshake';
 import EventBusyIcon from '@mui/icons-material/EventBusy';
 import SummarizeIcon from '@mui/icons-material/Summarize';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 
 export enum AdminTab {
   Users = 0,
@@ -98,6 +100,10 @@ export enum AdminTab {
   PrReport = 59,
   RetrievalRate = 60,
   ApiKeyScopePreflight = 61,
+  ReleaseNotes = 62,
+  OAuthClients = 63,
+  GrowthPricing = 64,
+  IntegrationDemand = 65,
 }
 
 /**
@@ -155,6 +161,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
       { Icon: BusinessIcon, tab: AdminTab.Organizations, label: 'Organizations' },
       { Icon: CreditCardIcon, tab: AdminTab.CreditAnalytics, label: 'Credit Analytics' },
+      {
+        Icon: TrendingUpIcon,
+        tab: AdminTab.GrowthPricing,
+        label: 'Growth & Pricing',
+        testid: 'admin-growth-pricing-btn',
+      },
       { Icon: GroupsIcon, tab: AdminTab.Team, label: 'Team' },
     ],
   },
@@ -179,6 +191,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: SecurityIcon, tab: AdminTab.SecretsRotation, label: 'Secrets Rotation' },
       { Icon: SecurityIcon, tab: AdminTab.SystemSecrets, label: 'System Secrets' },
       { Icon: AccountBoxIcon, tab: AdminTab.IdentityProviders, label: 'Identity Providers' },
+      { Icon: VpnKeyIcon, tab: AdminTab.OAuthClients, label: 'OAuth Clients', testid: 'admin-oauth-clients-btn' },
     ],
   },
   {
@@ -253,6 +266,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Integration Health',
         testid: 'admin-integration-health-btn',
       },
+      {
+        Icon: TrendingUpIcon,
+        tab: AdminTab.IntegrationDemand,
+        label: 'Integration Demand',
+        testid: 'admin-integration-demand-btn',
+      },
       { Icon: WebhookIcon, tab: AdminTab.WebhookAuditLogs, label: 'Webhook Logs' },
       { Icon: QueryStatsIcon, tab: AdminTab.SlackMetrics, label: 'Slack Metrics' },
       { Icon: SummarizeIcon, tab: AdminTab.PrReport, label: 'PR Status Digest', testid: 'admin-pr-report-btn' },
@@ -289,6 +308,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
       { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
+      { Icon: SummarizeIcon, tab: AdminTab.ReleaseNotes, label: 'Release notes', testid: 'admin-release-notes-btn' },
       { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },
     ],
   },

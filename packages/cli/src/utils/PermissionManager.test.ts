@@ -7,30 +7,40 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PermissionManager } from './PermissionManager';
-import type { ToolCategory } from '../config/toolSafety';
+import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
+import type { ToolCategory } from '../tools/gateway/toolDescriptor.js';
+
+/** A catalog with extra (non-core) tools registered at the given approval tier. */
+function catalogWith(approvals: Record<string, ToolCategory>): ToolCatalog {
+  const catalog = new ToolCatalog();
+  for (const [name, approval] of Object.entries(approvals)) {
+    const effect = approval === 'prompt_always' ? 'write' : 'read';
+    catalog.register(name, { source: { kind: 'builtin-module', module: 'test' }, effect, approval });
+  }
+  return catalog;
+}
 
 describe('PermissionManager', () => {
   describe('constructor', () => {
     it('should initialize with empty trusted tools by default', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.getTrustedTools()).toEqual([]);
     });
 
     it('should initialize with provided trusted tools', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search']);
       expect(manager.getTrustedTools()).toEqual(['file_read', 'grep_search']);
     });
 
-    it('should initialize with custom tool categories', () => {
-      const customCategories: Record<string, ToolCategory> = {
-        custom_tool: 'auto_approve',
-      };
-      const manager = new PermissionManager([], customCategories);
+    it('should resolve categories through the injected catalog', () => {
+      const catalog = catalogWith({ custom_tool: 'auto_approve' });
+      const manager = new PermissionManager(catalog);
+      expect(manager.catalog).toBe(catalog);
       expect(manager.getCategory('custom_tool')).toBe('auto_approve');
     });
 
     it('should initialize with denied tools from project config', () => {
-      const manager = new PermissionManager([], {}, ['shell_execute']);
+      const manager = new PermissionManager(new ToolCatalog(), [], ['shell_execute']);
       expect(manager.isDenied('shell_execute')).toBe(true);
       expect(manager.getDeniedTools()).toEqual(['shell_execute']);
     });
@@ -38,43 +48,43 @@ describe('PermissionManager', () => {
 
   describe('needsPermission', () => {
     it('should return false for auto_approve tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.needsPermission('math_evaluate')).toBe(false);
       expect(manager.needsPermission('current_datetime')).toBe(false);
     });
 
     it('should return true for prompt_always tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.needsPermission('edit_file')).toBe(true);
       expect(manager.needsPermission('shell_execute')).toBe(true);
       expect(manager.needsPermission('git_commit')).toBe(true);
     });
 
     it('should return true for prompt_default tools that are not trusted', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.needsPermission('file_read')).toBe(true);
       expect(manager.needsPermission('grep_search')).toBe(true);
     });
 
     it('should return false for prompt_default tools that are trusted', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search']);
       expect(manager.needsPermission('file_read')).toBe(false);
       expect(manager.needsPermission('grep_search')).toBe(false);
     });
 
     it('should return true for unknown tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.needsPermission('unknown_tool')).toBe(true);
     });
 
     it('should always return true for denied tools, even if trusted', () => {
-      const manager = new PermissionManager(['bash_execute'], {}, ['bash_execute']);
+      const manager = new PermissionManager(new ToolCatalog(), ['bash_execute'], ['bash_execute']);
       // Even though bash_execute is in trusted list, it's denied by project config
       expect(manager.needsPermission('bash_execute')).toBe(true);
     });
 
-    it('should respect custom tool categories', () => {
-      const manager = new PermissionManager([], { custom_safe_tool: 'auto_approve' });
+    it('should respect registered tool descriptors', () => {
+      const manager = new PermissionManager(catalogWith({ custom_safe_tool: 'auto_approve' }));
       expect(manager.needsPermission('custom_safe_tool')).toBe(false);
     });
   });
@@ -83,7 +93,7 @@ describe('PermissionManager', () => {
     let manager: PermissionManager;
 
     beforeEach(() => {
-      manager = new PermissionManager();
+      manager = new PermissionManager(new ToolCatalog());
     });
 
     it('should add prompt_default tool to trusted list', () => {
@@ -107,7 +117,7 @@ describe('PermissionManager', () => {
     });
 
     it('should return false when trying to trust denied tool', () => {
-      const manager = new PermissionManager([], {}, ['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), [], ['file_read']);
       const result = manager.trustTool('file_read');
       expect(result).toBe(false);
       expect(manager.isTrusted('file_read')).toBe(false);
@@ -132,7 +142,7 @@ describe('PermissionManager', () => {
 
   describe('untrustTool', () => {
     it('should remove tool from trusted list', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search']);
       manager.untrustTool('file_read');
 
       expect(manager.isTrusted('file_read')).toBe(false);
@@ -141,7 +151,7 @@ describe('PermissionManager', () => {
     });
 
     it('should be idempotent (safe to call multiple times)', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       manager.untrustTool('file_read');
       manager.untrustTool('file_read');
 
@@ -149,7 +159,7 @@ describe('PermissionManager', () => {
     });
 
     it('should handle untrusting non-existent tool gracefully', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       manager.untrustTool('file_read');
 
       expect(manager.getTrustedTools()).toEqual([]);
@@ -158,107 +168,103 @@ describe('PermissionManager', () => {
 
   describe('getTrustedTools', () => {
     it('should return empty array when no tools trusted', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.getTrustedTools()).toEqual([]);
     });
 
     it('should return sorted list of trusted tools', () => {
-      const manager = new PermissionManager(['zebra_tool', 'alpha_tool', 'middle_tool']);
+      const manager = new PermissionManager(new ToolCatalog(), ['zebra_tool', 'alpha_tool', 'middle_tool']);
       expect(manager.getTrustedTools()).toEqual(['alpha_tool', 'middle_tool', 'zebra_tool']);
     });
   });
 
   describe('isTrusted', () => {
     it('should return true for trusted tools', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       expect(manager.isTrusted('file_read')).toBe(true);
     });
 
     it('should return false for non-trusted tools', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       expect(manager.isTrusted('grep_search')).toBe(false);
     });
 
     it('should return false for empty manager', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.isTrusted('file_read')).toBe(false);
     });
   });
 
   describe('getCategory', () => {
     it('should return correct category for default tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.getCategory('math_evaluate')).toBe('auto_approve');
       expect(manager.getCategory('edit_file')).toBe('prompt_always');
       expect(manager.getCategory('file_read')).toBe('prompt_default');
     });
 
     it('should return prompt_default for unknown tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.getCategory('unknown_tool')).toBe('prompt_default');
     });
 
-    it('should respect custom categories', () => {
-      const manager = new PermissionManager([], {
-        custom_tool: 'auto_approve',
-      });
+    it('should respect registered descriptors', () => {
+      const manager = new PermissionManager(catalogWith({ custom_tool: 'auto_approve' }));
       expect(manager.getCategory('custom_tool')).toBe('auto_approve');
     });
 
-    it('should prioritize custom categories over default', () => {
-      const manager = new PermissionManager([], {
-        file_read: 'auto_approve', // Override default
-      });
-      expect(manager.getCategory('file_read')).toBe('auto_approve');
+    it('should not let a registration override a core tool category', () => {
+      expect(() => catalogWith({ file_read: 'auto_approve' })).toThrow(/core tool/);
+      expect(new PermissionManager(new ToolCatalog()).getCategory('file_read')).toBe('prompt_default');
     });
   });
 
   describe('canBeTrusted', () => {
     it('should return true for auto_approve tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.canBeTrusted('math_evaluate')).toBe(true);
     });
 
     it('should return false for prompt_always tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.canBeTrusted('edit_file')).toBe(false);
       expect(manager.canBeTrusted('shell_execute')).toBe(false);
     });
 
     it('should return true for prompt_default tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.canBeTrusted('file_read')).toBe(true);
       expect(manager.canBeTrusted('grep_search')).toBe(true);
     });
 
     it('should return false for denied tools', () => {
-      const manager = new PermissionManager([], {}, ['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), [], ['file_read']);
       expect(manager.canBeTrusted('file_read')).toBe(false);
     });
   });
 
   describe('isDenied and getDeniedTools', () => {
     it('should identify denied tools', () => {
-      const manager = new PermissionManager([], {}, ['bash_execute', 'git_push']);
+      const manager = new PermissionManager(new ToolCatalog(), [], ['bash_execute', 'git_push']);
       expect(manager.isDenied('bash_execute')).toBe(true);
       expect(manager.isDenied('git_push')).toBe(true);
       expect(manager.isDenied('file_read')).toBe(false);
     });
 
     it('should return sorted list of denied tools', () => {
-      const manager = new PermissionManager([], {}, ['zebra', 'alpha', 'middle']);
+      const manager = new PermissionManager(new ToolCatalog(), [], ['zebra', 'alpha', 'middle']);
       expect(manager.getDeniedTools()).toEqual(['alpha', 'middle', 'zebra']);
     });
 
     it('should return empty array when no tools denied', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.getDeniedTools()).toEqual([]);
     });
   });
 
   describe('clearTrustedTools', () => {
     it('should remove all trusted tools', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search', 'git_status']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search', 'git_status']);
       manager.clearTrustedTools();
 
       expect(manager.getTrustedTools()).toEqual([]);
@@ -267,7 +273,7 @@ describe('PermissionManager', () => {
     });
 
     it('should be idempotent', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       manager.clearTrustedTools();
       manager.clearTrustedTools();
 
@@ -277,13 +283,13 @@ describe('PermissionManager', () => {
 
   describe('getStats', () => {
     it('should return correct trusted count', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search']);
       const stats = manager.getStats();
       expect(stats.trustedCount).toBe(2);
     });
 
     it('should return zero for empty manager', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       const stats = manager.getStats();
       expect(stats.trustedCount).toBe(0);
     });
@@ -293,7 +299,7 @@ describe('PermissionManager', () => {
     let manager: PermissionManager;
 
     beforeEach(() => {
-      manager = new PermissionManager();
+      manager = new PermissionManager(new ToolCatalog());
     });
 
     it('should trust prompt_default tools for session', () => {
@@ -309,7 +315,7 @@ describe('PermissionManager', () => {
     });
 
     it('should not trust project-denied tools for session', () => {
-      const mgr = new PermissionManager([], {}, ['bash_execute']);
+      const mgr = new PermissionManager(new ToolCatalog(), [], ['bash_execute']);
       const result = mgr.trustToolForSession('bash_execute');
       expect(result).toBe(false);
       expect(mgr.isSessionTrusted('bash_execute')).toBe(false);
@@ -331,19 +337,19 @@ describe('PermissionManager', () => {
 
   describe('isSessionTrusted', () => {
     it('should return false for tools not session-trusted', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.isSessionTrusted('file_read')).toBe(false);
     });
 
     it('should return false for permanently trusted tools', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       expect(manager.isSessionTrusted('file_read')).toBe(false);
     });
   });
 
   describe('clearSessionTrust', () => {
     it('should clear all session-trusted tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       manager.trustToolForSession('edit_file');
       manager.trustToolForSession('bash_execute');
       manager.clearSessionTrust();
@@ -354,7 +360,7 @@ describe('PermissionManager', () => {
     });
 
     it('should not affect permanent trust', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       manager.trustToolForSession('edit_file');
       manager.clearSessionTrust();
 
@@ -363,7 +369,7 @@ describe('PermissionManager', () => {
     });
 
     it('should be idempotent', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       manager.trustToolForSession('edit_file');
       manager.clearSessionTrust();
       manager.clearSessionTrust();
@@ -372,11 +378,8 @@ describe('PermissionManager', () => {
   });
 
   describe('security edge cases', () => {
-    it('should prevent trusting dangerous tools via custom categories', () => {
-      // Attempt to override prompt_always tool to auto_approve (should not work)
-      const manager = new PermissionManager([], {
-        edit_file: 'prompt_always', // Keep it dangerous
-      });
+    it('should prevent trusting dangerous tools', () => {
+      const manager = new PermissionManager(new ToolCatalog());
 
       const result = manager.trustTool('edit_file');
       expect(result).toBe(false);
@@ -385,7 +388,7 @@ describe('PermissionManager', () => {
 
     it('should respect project denied tools over local trusted tools', () => {
       // Project denies bash_execute, but user tries to trust it locally
-      const manager = new PermissionManager(['bash_execute'], {}, ['bash_execute']);
+      const manager = new PermissionManager(new ToolCatalog(), ['bash_execute'], ['bash_execute']);
 
       // Tool is in trusted list but denied by project
       expect(manager.isTrusted('bash_execute')).toBe(true); // Locally trusted
@@ -395,13 +398,13 @@ describe('PermissionManager', () => {
     });
 
     it('should handle empty string tool names', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       expect(manager.needsPermission('')).toBe(true);
       expect(manager.getCategory('')).toBe('prompt_default');
     });
 
     it('should handle special characters in tool names', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
       const specialTools = ['tool-with-dash', 'tool_with_underscore', 'tool.with.dots', 'tool$with$dollars'];
 
       specialTools.forEach(tool => {
@@ -412,7 +415,7 @@ describe('PermissionManager', () => {
     });
 
     it('should maintain immutability of trusted tools list', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
       const trustedList1 = manager.getTrustedTools();
       trustedList1.push('grep_search'); // Try to mutate
 
@@ -421,7 +424,7 @@ describe('PermissionManager', () => {
     });
 
     it('should handle concurrent trust/untrust operations', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
 
       manager.trustTool('file_read');
       manager.trustTool('grep_search');
@@ -436,7 +439,7 @@ describe('PermissionManager', () => {
   describe('integration scenarios', () => {
     it('should handle typical development workflow', () => {
       // Start with no trusted tools
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
 
       // User approves file_read for first time
       expect(manager.needsPermission('file_read')).toBe(true);
@@ -459,7 +462,7 @@ describe('PermissionManager', () => {
     it('should handle project config restrictions', () => {
       // Project config denies certain tools
       const deniedTools = ['bash_execute', 'shell_execute'];
-      const manager = new PermissionManager([], {}, deniedTools);
+      const manager = new PermissionManager(new ToolCatalog(), [], deniedTools);
 
       // These tools always need permission, cannot be trusted
       deniedTools.forEach(tool => {
@@ -474,7 +477,7 @@ describe('PermissionManager', () => {
     });
 
     it('should handle user revoking trust', () => {
-      const manager = new PermissionManager(['file_read', 'grep_search']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read', 'grep_search']);
 
       // Initially trusted
       expect(manager.needsPermission('file_read')).toBe(false);
@@ -491,7 +494,7 @@ describe('PermissionManager', () => {
     });
 
     it('should handle session trust workflow for dangerous tools', () => {
-      const manager = new PermissionManager();
+      const manager = new PermissionManager(new ToolCatalog());
 
       // edit_file always needs permission (prompt_always)
       expect(manager.needsPermission('edit_file')).toBe(true);
@@ -507,7 +510,7 @@ describe('PermissionManager', () => {
     });
 
     it('should handle coexistence of session and permanent trust', () => {
-      const manager = new PermissionManager(['file_read']);
+      const manager = new PermissionManager(new ToolCatalog(), ['file_read']);
 
       // file_read permanently trusted, edit_file session-trusted
       manager.trustToolForSession('edit_file');

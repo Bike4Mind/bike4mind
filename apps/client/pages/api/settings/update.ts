@@ -1,5 +1,6 @@
 import {
   SettingKeySchema,
+  isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
   isMaskedSensitiveSettingValue,
@@ -16,6 +17,7 @@ import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
+import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -23,7 +25,11 @@ let warnedSelfHostPlaintext = false;
 
 // Update Admin Setting
 const handler = baseApi().put(
-  asyncHandler<unknown, unknown, { key: string; value: unknown; confirmClear?: boolean }>(async (req, res) => {
+  asyncHandler<
+    unknown,
+    unknown,
+    { key: string; value: unknown; confirmClear?: boolean; confirmAboveMeasuredFloor?: boolean }
+  >(async (req, res) => {
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
     // Authorize before any branch reads or returns stored setting data.
@@ -32,7 +38,21 @@ const handler = baseApi().put(
 
     const key = SettingKeySchema.parse(req.body.key);
 
+    // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
+    // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
+    if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
+      await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
+      invalidateSettingsCache(key);
+      // null, not the declared default: the client renders that as "per embedding space", so an
+      // admin can tell a cleared setting apart from one pinned to the default's own number.
+      return res.json({ settingName: key, settingValue: null });
+    }
+
     let value = settingsMap[key].schema.parse(req.body.value);
+
+    if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
+      await refuseFloorAboveMeasured(Number(value), req.logger);
+    }
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;
 

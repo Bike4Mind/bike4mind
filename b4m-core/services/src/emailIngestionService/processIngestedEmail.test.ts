@@ -12,6 +12,10 @@ vi.mock('./validateSender', () => ({
   }),
 }));
 
+vi.mock('./authenticateSender', () => ({
+  authenticateSender: vi.fn(),
+}));
+
 vi.mock('./processAttachments', () => ({
   processAttachments: vi.fn(),
 }));
@@ -21,6 +25,7 @@ vi.mock('./processEmailBody', () => ({
 }));
 
 import { validateSenderAuthorization } from './validateSender';
+import { authenticateSender } from './authenticateSender';
 import { processAttachments } from './processAttachments';
 import { processEmailBody } from './processEmailBody';
 
@@ -43,6 +48,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn().mockResolvedValue(null), // No duplicate by default
           findByThreadId: vi.fn(),
@@ -107,6 +113,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
     };
 
     // Default mocks for successful flow
+    vi.mocked(authenticateSender).mockReturnValue({ authenticated: true, senderDomain: 'example.com', via: 'dmarc' });
     vi.mocked(validateSenderAuthorization).mockResolvedValue({
       userId: 'user123',
       platformEmail: 'john.doe@app.example.com',
@@ -138,6 +145,27 @@ describe('emailIngestionService - processIngestedEmail', () => {
   });
 
   describe('Authorization', () => {
+    it('should reject a sender that fails email authentication before looking up the user', async () => {
+      vi.mocked(authenticateSender).mockReturnValue({ authenticated: false, reason: 'dmarc-failed' });
+
+      await expect(processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters)).rejects.toThrow(
+        new UnauthorizedError('Sender failed email authentication')
+      );
+      expect(validateSenderAuthorization).not.toHaveBeenCalled();
+      expect(mockAdapters.db.ingestedEmails.create).not.toHaveBeenCalled();
+    });
+
+    it('should authenticate the From address against the Authentication-Results header', async () => {
+      const email = {
+        ...mockParsedEmail,
+        senderAuthentication: { authenticationResults: 'amazonses.com;\r\n dmarc=pass', fromHeaderCount: 1 },
+      };
+
+      await processIngestedEmail(email, 's3://bucket/email.eml', mockAdapters);
+
+      expect(authenticateSender).toHaveBeenCalledWith(email.from, email.senderAuthentication);
+    });
+
     it('should throw UnauthorizedError when sender is not authorized', async () => {
       vi.mocked(validateSenderAuthorization).mockResolvedValue(null);
 
@@ -323,13 +351,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
 
       const result = await processIngestedEmail(mockParsedEmail, 's3://bucket/email.eml', mockAdapters);
 
-      expect(processAttachments).toHaveBeenCalledWith(
-        mockParsedEmail,
-        'user123',
-        'Test Email',
-        expect.anything(),
-        undefined
-      );
+      expect(processAttachments).toHaveBeenCalledWith(mockParsedEmail, 'user123', 'Test Email', expect.anything());
       expect(result.attachments).toEqual(attachments);
     });
 
@@ -353,8 +375,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
             adminSettings: expect.anything(),
             users: expect.anything(),
           }),
-        }),
-        undefined
+        })
       );
       expect(result.bodyFabFileCreated).toBe(true);
     });
@@ -374,8 +395,7 @@ describe('emailIngestionService - processIngestedEmail', () => {
             adminSettings: expect.anything(),
             users: expect.anything(),
           }),
-        }),
-        undefined
+        })
       );
     });
 

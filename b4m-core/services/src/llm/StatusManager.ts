@@ -161,16 +161,21 @@ export class StatusManager {
           // Include fallback info if present (for backend fallback mechanism)
           ...(quest.fallbackInfo ? { fallbackInfo: quest.fallbackInfo } : {}),
           images: quest.images ?? [],
+          ...(quest.videoJobIds?.length ? { videoJobIds: quest.videoJobIds } : {}),
+          ...(quest.generationJobs?.length ? { generationJobs: quest.generationJobs } : {}),
           // Include pendingAction for MCP button confirmation flow
           ...(quest.pendingAction ? { pendingAction: quest.pendingAction } : {}),
           // Include uiSideEffects so the client can dispatch them when streaming completes
           ...(quest.uiSideEffects?.length ? { uiSideEffects: quest.uiSideEffects } : {}),
-          // Include promptMeta when citables or artifacts exist so source chips and
-          // tool-generated content (chess boards, etc.) render during streaming
-          ...(quest.promptMeta?.citables?.length || quest.promptMeta?.artifacts?.length
+          // Include promptMeta when citables or artifacts are present so source chips and
+          // tool-generated content (chess boards, etc.) render during streaming. An explicitly empty
+          // `citables` is sent too: forced retrieval publishes chips before the input budget runs, so
+          // a later frame carrying `citables: []` is what clears them once the budget drops the
+          // passages - leaving the field out would instead let the client keep the stale chips.
+          ...(quest.promptMeta?.citables || quest.promptMeta?.artifacts?.length
             ? {
                 promptMeta: {
-                  ...(quest.promptMeta?.citables?.length ? { citables: quest.promptMeta.citables } : {}),
+                  ...(quest.promptMeta?.citables ? { citables: quest.promptMeta.citables } : {}),
                   ...(quest.promptMeta?.artifacts?.length ? { artifacts: quest.promptMeta.artifacts } : {}),
                 },
               }

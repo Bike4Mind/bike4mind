@@ -3,12 +3,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getGeneratedImageStorage } from '@server/utils/storage';
 import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
+import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { z } from 'zod';
 
 const refSchema = z
   .string()
   .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z]+$/i,
+    GENERATED_CONTENT_KEY_RE,
     'Invalid ref format. Expected UUID with extension (e.g. 9db8f846-08d5-47d7-9166-a039d3c3d4d7.png)'
   );
 
@@ -34,7 +35,7 @@ const handler = baseApi({ exemptReadsFromDailyRateLimit: true }).get(
     // otherwise read another user's image by supplying its key. Only serve an image the caller
     // created (or one shared with them via the source chat). Return 404 (not 403) so a foreign key
     // is indistinguishable from a nonexistent one and existence itself is not confirmed.
-    if (!req.user?.id || !(await userCanAccessGeneratedImage(ref, req.user.id))) {
+    if (!req.user?.id || !(await userCanAccessGeneratedImage(ref, req.user))) {
       throw new NotFoundError(`Content not found: ${ref}`);
     }
 

@@ -9,7 +9,7 @@
  */
 
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -18,7 +18,7 @@ import { allSecrets, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
-import { agentContinuationQueue } from './queues';
+import { agentContinuationQueue, generationJobQueue } from './queues';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export websocketApi route setup for the agent_execute route.
@@ -30,7 +30,7 @@ import { toolRuntimeAssets } from './toolRuntimeAssets';
 // keeps the two definitions in lockstep and prevents the "asymmetric IAM" class
 // of bug (e.g., xray missing on one side) noted during review.
 const SHARED_AGENT_EXECUTOR_CONFIG = {
-  handler: 'apps/client/server/queueHandlers/agentExecutor.handler',
+  handler: 'apps/workers/src/queueHandlers/agentExecutor.handler',
   runtime: 'nodejs24.x' as const,
   timeout: '15 minutes' as const,
   memory: '2048 MB' as const,
@@ -45,10 +45,14 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     eventBus,
     imageProcessor,
     agentContinuationQueue,
+    // The music/video tools enqueue their generation job from here, same as the chat path
+    // (infra/chatCompletion.ts). resolveGenerationJobQueueUrl reads this direct link; the
+    // sourceQueueUrls registry it falls back to is only linked on the web function.
+    generationJobQueue,
   ],
-  logging: { retention: '3 days' as const },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // Instance-service dataset seam, consumed by optihashi_decompose. It reads these as

@@ -2,6 +2,7 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -11,7 +12,7 @@ import './schemas';
 import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
-// real deployment domain in this public repo (matches apiReferenceContent.ts).
+// real deployment domain in this public repo.
 // Real deployments set B4M_OPENAPI_PROD_URL at build time.
 const PLACEHOLDER_PROD_URL = 'https://your-deployment.example.com';
 
@@ -23,8 +24,7 @@ function prodUrl(): string {
 /**
  * Server URLs are env-overridable with neutral placeholder defaults so the
  * committed openapi.json never hardcodes a real deployment domain in this public
- * repo (matches the placeholder convention in apiReferenceContent.ts). Real
- * deployments set these at build time.
+ * repo. Real deployments set these at build time.
  */
 function servers() {
   return [
@@ -54,7 +54,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Sessions**, **Files**, **Data Lakes** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -73,20 +73,23 @@ function infoDescription(): string {
     `Each API key has a per-minute and a per-day request ceiling, by default ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
       `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
-      'Rate-limited operations return the current window state on every response:',
-    ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
+      'Responses from rate-limited operations carry the current state of both windows (the streaming completions endpoint sends them only on an API-key `429`):',
+    ...API_KEY_RATE_LIMIT_HEADER_NAMES.map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it ' +
+      'opens its event stream. ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
+      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
-      'limit applies. A ' +
-      'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
-      'no rate-limit headers.',
+      'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
+      'the limiter and carries no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
       "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
-      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      'which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with ' +
       '`422` and ' +
       '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
       '(see Async jobs), so check both places.',
@@ -100,6 +103,12 @@ function infoDescription(): string {
       'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
       'the body for each.',
     '',
+    'The shared statuses: a malformed JSON body is `400`, a body that fails schema validation is `422`, a ' +
+      'missing or invalid credential is `401`, a valid key without the required scope is `403`, an unknown ' +
+      'resource is `404` and an exceeded rate limit is `429`. A `401` carrying `errorCode: "provider_rejected"` ' +
+      'means the upstream provider refused the provider key the request used - the platform key by default, ' +
+      'or your own stored provider key when you configured one - so your API key itself was accepted.',
+    '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
     '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
@@ -112,9 +121,16 @@ function infoDescription(): string {
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
+    '- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call ' +
+      'returns the text. Long audio can outlast the request timeout and fail with a `504`; see that ' +
+      'endpoint for the limit.',
     '',
     'Poll with a backoff of a few seconds: each poll counts against the per-minute limit.',
     '',
@@ -171,7 +187,14 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+function codeSamples(
+  path: string,
+  body: unknown,
+  streaming: boolean,
+  authToken: string,
+  method: string,
+  hasBody: boolean
+) {
   // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
   // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
   // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
@@ -183,10 +206,6 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
   // matching the lowercase HTTP method name exactly.
   const pyMethod = method.toLowerCase();
-  // A GET/HEAD request cannot carry a body: browser and Node `fetch` both throw
-  // `TypeError: Request with GET/HEAD method cannot have body`, so a sample that
-  // sent one would be copy-paste-broken rather than merely redundant.
-  const hasBody = !['get', 'head'].includes(pyMethod);
   return [
     {
       lang: 'curl',
@@ -283,22 +302,16 @@ const REQUEST_ID_HEADER_SPEC = {
 
 /**
  * The rate-limit headers `apiKeyRateLimit` actually sets - two windows, six
- * headers. These names are load-bearing: a client reading the unwindowed
- * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
- * apps/client/server/middlewares/apiKeyRateLimit.ts.
+ * headers, derived from API_KEY_RATE_LIMIT_HEADERS (apiKeyRateLimitHeaders.ts).
+ * These names are load-bearing: a client reading the unwindowed
+ * `X-RateLimit-Limit` gets `undefined`.
  */
 const INTEGER_HEADER = { type: 'integer' as const };
-const RATE_LIMIT_HEADER_SPEC = {
-  'X-RateLimit-Limit-Minute': { description: 'Request quota per minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Minute': { description: 'Requests remaining in the current minute.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Minute': {
-    description: 'Unix epoch (seconds) when the minute window resets.',
-    schema: INTEGER_HEADER,
-  },
-  'X-RateLimit-Limit-Day': { description: 'Request quota per day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Remaining-Day': { description: 'Requests remaining in the current day.', schema: INTEGER_HEADER },
-  'X-RateLimit-Reset-Day': { description: 'Unix epoch (seconds) when the day window resets.', schema: INTEGER_HEADER },
-};
+const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
+  API_KEY_RATE_LIMIT_HEADER_NAMES.map(
+    header => [header, { description: API_KEY_RATE_LIMIT_HEADERS[header], schema: INTEGER_HEADER }] as const
+  )
+);
 
 /**
  * The failures `registerContract` INJECTS carry no rate-limit headers:
@@ -346,16 +359,52 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
   doc.tags = [
     { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
-    { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
+    {
+      name: 'Audio',
+      description:
+        'Speech, music, and sound-effect generation. For music, use `POST /api/v1/music-generations`; ' +
+        '`/api/ai/music` is deprecated.',
+    },
+    {
+      name: 'Music',
+      description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',
+    },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Transcriptions',
+      description: 'Speech-to-text: upload an audio file, then transcribe it.',
+    },
+    {
+      name: 'Artifacts',
+      description: 'Diagrams, charts, code and documents kept in sessions, with their version history.',
+    },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
-    { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Videos',
+      description: 'Video generation, queued with `202` and polled at `GET /api/v1/video-generations/{id}`.',
+    },
+    {
+      name: 'Voice',
+      description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
+    },
+    { name: 'Models', description: 'The models the caller can use, and the parameters each one accepts.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
     {
       name: 'Data Lakes',
       description:
         'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
         "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
+    {
+      name: 'Projects',
+      description:
+        'Workspaces that group sessions and files: list and read the projects you can reach, and create new ones.',
+    },
+    {
+      name: 'Agents',
+      description:
+        'Custom agents with their own system prompt, model settings and tool access: list, read and manage them.',
     },
   ];
 
@@ -374,7 +423,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
       const sample = meta.codeSamples[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
+      // Send a body only when the operation declares one. That keeps GET/HEAD samples runnable
+      // (`fetch` throws on a GET/HEAD body) and stops a body-less DELETE or POST from sending `{}`.
+      if (sample) {
+        op['x-codeSamples'] = codeSamples(
+          pathKey,
+          sample.body,
+          sample.streaming,
+          sample.authToken,
+          method,
+          op.requestBody !== undefined
+        );
+      }
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);

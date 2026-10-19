@@ -1,8 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
-import { describeGitHubConnection } from './githubConnectionDisplay';
+import { describeGitHubConnection, describeGitHubSyncProgress } from './githubConnectionDisplay';
 
-const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}) => ({
+const conn = (
+  over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}
+): Parameters<typeof describeGitHubConnection>[0] => ({
   status: 'connected' as const,
   enabled: true,
   lastError: null,
@@ -12,11 +14,42 @@ const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}
   ...over,
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('describeGitHubConnection', () => {
+  it('appends the last-synced time to the idle connected tooltip', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: '2026-01-01T11:42:00Z' }));
+    expect(title).toBe('Kept in sync with the GitHub repository acme/docs - last synced 18 minutes ago');
+  });
+
+  it('says never synced for a null lastSyncedAt rather than printing an invalid date', () => {
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: null }));
+    expect(title).toBe('Kept in sync with the GitHub repository acme/docs - not synced yet');
+    expect(title).not.toContain('Invalid');
+  });
+
+  it('reads a future timestamp as just now, never as in the future', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: '2026-01-01T12:30:00Z' }));
+    expect(title).toContain('last synced a few seconds ago');
+    expect(title).not.toContain('synced in ');
+  });
+
+  it('adds no time for an unparseable timestamp', () => {
+    const { title } = describeGitHubConnection(conn({ lastSyncedAt: 'not-a-date' }));
+    expect(title).toBe('Kept in sync with the GitHub repository acme/docs');
+  });
+
+  it('keeps the time out of tooltips that are not the idle connected state', () => {
+    const { title } = describeGitHubConnection(conn({ status: 'syncing', lastSyncedAt: '2026-01-01T11:42:00Z' }));
+    expect(title).not.toContain('last synced');
+  });
+
   it('reads a clean connected sync as healthy', () => {
     expect(describeGitHubConnection(conn())).toEqual({
       label: 'Connected',
-      title: 'Syncing the GitHub repository acme/docs',
+      title: 'Kept in sync with the GitHub repository acme/docs',
       color: 'success',
     });
   });
@@ -36,6 +69,29 @@ describe('describeGitHubConnection', () => {
       'GitHub repository acme/docs: sync failed - Not Found. Re-sync to retry, or reconnect if access was removed.'
     );
     expect(color).toBe('danger');
+  });
+
+  it('separates access lost from a plain sync failure, since a re-sync alone cannot fix it', () => {
+    const { label, title, color } = describeGitHubConnection(
+      conn({ status: 'access_lost', lastError: 'The App can no longer read this repository.' })
+    );
+    expect(label).toBe('Access lost');
+    expect(title).toBe(
+      'GitHub repository acme/docs: the App can no longer read it - The App can no longer read this repository.. Fix access on GitHub, then re-sync.'
+    );
+    expect(color).toBe('danger');
+  });
+
+  it('reads an archived lake whose access was lost as paused, so no repair is urged on a paused lake', () => {
+    expect(describeGitHubConnection(conn({ enabled: false, status: 'access_lost' }))).toMatchObject({
+      label: 'Paused',
+    });
+  });
+
+  it('reads a disconnecting connection that lost access as Disconnecting, not as needing a repair', () => {
+    expect(
+      describeGitHubConnection(conn({ enabled: false, status: 'access_lost', disconnecting: true }))
+    ).toMatchObject({ label: 'Disconnecting' });
   });
 
   it('reads an archived lake whose last sync failed as paused, not as re-syncable', () => {
@@ -82,5 +138,47 @@ describe('describeGitHubConnection', () => {
       title: 'GitHub repository acme/docs: unrecognized status suspended',
       color: 'warning',
     });
+  });
+});
+
+describe('describeGitHubSyncProgress', () => {
+  const progressing = (over: Partial<Parameters<typeof describeGitHubSyncProgress>[0]> = {}) => ({
+    status: 'syncing' as const,
+    syncStale: false,
+    fileCount: 4,
+    candidateCount: 10 as number | null,
+    ...over,
+  });
+
+  it('reports indexed, total and percent for a running sync', () => {
+    expect(describeGitHubSyncProgress(progressing())).toEqual({ indexed: 4, total: 10, percent: 40 });
+  });
+
+  it('reports nothing when no sync is running', () => {
+    expect(describeGitHubSyncProgress(progressing({ status: 'connected' }))).toBeNull();
+  });
+
+  it('reports nothing for a stalled sync, which is not making progress', () => {
+    expect(describeGitHubSyncProgress(progressing({ syncStale: true }))).toBeNull();
+  });
+
+  it.each([
+    ['not yet known', null],
+    ['zero', 0],
+  ])('has no total or percent while the candidate count is %s', (_name, candidateCount) => {
+    expect(describeGitHubSyncProgress(progressing({ candidateCount }))).toEqual({
+      indexed: 4,
+      total: null,
+      percent: null,
+    });
+  });
+
+  it('rounds the percent to a whole number', () => {
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 1, candidateCount: 3 }))?.percent).toBe(33);
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 2, candidateCount: 3 }))?.percent).toBe(67);
+  });
+
+  it('caps the percent at 100 when more files are indexed than the tree admitted', () => {
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 12, candidateCount: 10 }))?.percent).toBe(100);
   });
 });

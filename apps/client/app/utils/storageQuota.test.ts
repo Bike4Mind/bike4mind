@@ -56,13 +56,51 @@ describe('checkStorageForUpload', () => {
 describe('serverStorageLimitMessage', () => {
   const axiosError = (status: number, data: unknown) => ({ isAxiosError: true, response: { status, data } });
 
-  it('returns the server refusal verbatim', () => {
+  const info = (errorCode: string, fields = {}) => ({
+    errorCode,
+    used_bytes: 800_000,
+    limit_bytes: 1_000_000,
+    requested_bytes: 300_000,
+    owner: 'user',
+    ...fields,
+  });
+
+  it('builds the text from the numbers on the response, not from the server message', () => {
+    for (const error of ['File size exceeds storage limit', 'Reworded entirely']) {
+      expect(serverStorageLimitMessage(axiosError(400, { error, ...info('storage_limit_exceeded') }))).toBe(
+        'Not enough storage: you are using 800 kB of 1 MB, and this upload needs 300 kB. Free up at least 100 kB to continue.'
+      );
+    }
+  });
+
+  it('words the organization refusal from its numbers', () => {
+    expect(
+      serverStorageLimitMessage(
+        axiosError(400, { error: 'x', ...info('org_storage_limit_exceeded', { owner: 'org', used_bytes: 0 }) })
+      )
+    ).toBe("This upload (300 kB) is larger than your organization's storage limit of 1 MB.");
+  });
+
+  it('leaves the per-file size refusal to the generic upload error', () => {
+    expect(serverStorageLimitMessage(axiosError(400, { error: 'x', ...info('file_too_large') }))).toBeUndefined();
+  });
+
+  it("describes a share editor's refusal from its code alone, with no byte counts", () => {
+    const body = { error: 'x', errorCode: 'storage_limit_exceeded', owner: 'user' };
+    expect(serverStorageLimitMessage(axiosError(400, body))).toBe(
+      "This change would exceed the file owner's storage limit."
+    );
+  });
+
+  // Deprecated fallback for a server that predates the code on storage refusals; remove with
+  // LEGACY_SERVER_STORAGE_LIMIT_MESSAGE after 2026-11-15.
+  it('still surfaces a legacy refusal that carries no code, verbatim', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'File size exceeds storage limit' }))).toBe(
       'File size exceeds storage limit'
     );
   });
 
-  it('also matches the organization refusal (checkOrganizationStorageLimit)', () => {
+  it('also matches the legacy organization refusal', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'Organization storage limit exceeded' }))).toBe(
       'Organization storage limit exceeded'
     );

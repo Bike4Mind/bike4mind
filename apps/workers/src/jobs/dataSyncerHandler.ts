@@ -1,7 +1,7 @@
 /**
  * DataSyncer Lambda Handler
  *
- * Seeds a preview environment (pr* stages) with staging's config on its first deploy:
+ * Seeds a preview environment (pr* stages) with staging's config on preview deploys:
  * adminsettings (minus sensitive rows) and rapid reply mappings, copied directly between
  * the two MongoDB databases. A syncmarkers doc makes later deploys of the same preview skip.
  *
@@ -14,7 +14,7 @@ import { MongoClient } from 'mongodb';
 import { settingsMap } from '@bike4mind/common';
 
 interface DataSyncerEvent {
-  // Whether to sync preview settings from staging (only on initial PR deploy)
+  // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
   syncPreviewSettings?: boolean;
 }
 
@@ -54,6 +54,8 @@ function syncSourceFilter(collectionName: string): Record<string, unknown> {
 // Batch size for memory-efficient streaming
 const BATCH_SIZE = 1000;
 
+const PREVIEW_STAGE_PATTERN = /^pr\d+$/;
+
 const SYNC_MARKER_COLLECTION = 'syncmarkers';
 const SYNC_MARKER_KEY = 'staging-config-sync';
 
@@ -62,13 +64,17 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 
 // `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
 // an already-synced preview from a misconfigured one.
-async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipped?: string }> {
+async function syncPreviewSettingsFromStaging(): Promise<{
+  synced: number;
+  skipped?: string;
+  emptyCollections?: string[];
+}> {
   console.log('=== Syncing Preview Settings from Staging ===');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
 
   // Strict validation: only allow preview stages (pr<number>), never staging/production
-  if (!/^pr\d+$/.test(stage)) {
+  if (!PREVIEW_STAGE_PATTERN.test(stage)) {
     console.error(
       `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
@@ -96,6 +102,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
   const targetClient = new MongoClient(previewUri);
 
   let totalSynced = 0;
+  const skippedCollections: string[] = [];
 
   try {
     // Connect to target first to check sync marker
@@ -137,6 +144,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
       if (totalDocs === 0) {
         console.log(`  - No documents found in ${collectionName}. Skipping.`);
+        skippedCollections.push(collectionName);
         continue;
       }
 
@@ -234,9 +242,15 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
               }
             });
           } catch (rollbackError) {
+            const originalMessage = error instanceof Error ? error.message : String(error);
+            const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
             console.error(
               `  ✗ Rollback failed:`,
               rollbackError instanceof Error ? rollbackError.message : rollbackError
+            );
+            throw new Error(
+              `Sync of ${collectionName} failed: ${originalMessage} (rollback also failed: ${rollbackMessage})`,
+              { cause: error }
             );
           }
         } else {
@@ -245,6 +259,22 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
         throw error;
       }
+    }
+
+    // An all-empty source points at a misconfigured staging, so leave the marker unset and retry.
+    // A single empty collection is a normal state and must not make later deploys re-copy.
+    if (totalSynced === 0) {
+      const allSourcesEmpty = skippedCollections.length === COLLECTIONS_TO_SYNC.length;
+      const reason = allSourcesEmpty
+        ? `source was empty for ${skippedCollections.join(', ')}`
+        : 'no documents were copied';
+      console.log(`  - Sync marker not set: ${reason}`);
+      return {
+        synced: 0,
+        skipped: allSourcesEmpty
+          ? 'source empty for all collections; will retry next deploy'
+          : 'no documents copied; will retry next deploy',
+      };
     }
 
     // Mark sync as complete so subsequent deploys skip this step
@@ -260,14 +290,14 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
     console.log('✓ MongoDB connections closed');
   }
 
-  return { synced: totalSynced };
+  return { synced: totalSynced, emptyCollections: skippedCollections };
 }
 
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
   console.log('DataSyncer invoked with event:', event);
 
-  const isPreviewEnvironment = process.env.SEED_STAGE_NAME?.startsWith('pr') || false;
-  // syncPreviewSettings is passed from the invoke script, true only on initial PR deploy
+  const isPreviewEnvironment = PREVIEW_STAGE_PATTERN.test(process.env.SEED_STAGE_NAME ?? '');
+  // syncPreviewSettings is passed from the invoke script on preview deploys; the syncmarker makes repeat runs skip
   const shouldSyncPreviewSettings = event.syncPreviewSettings === true;
 
   console.log(
@@ -287,16 +317,17 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       throw new Error('SEED_STAGE_NAME environment variable is not set - required for MONGODB_URI stage replacement');
     }
 
-    // Sync preview settings from staging (only on initial PR deploy when SYNC_PREVIEW_SETTINGS=true)
+    // Sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
     if (shouldSyncPreviewSettings) {
       try {
-        const { synced, skipped } = await syncPreviewSettingsFromStaging();
+        const { synced, skipped, emptyCollections } = await syncPreviewSettingsFromStaging();
         previewSettingsSyncedCount = synced;
         const collectionsStr = COLLECTIONS_TO_SYNC.join(', ');
         messages.push(
           skipped
             ? `Skipped staging sync: ${skipped}`
-            : `Synced ${synced} documents from staging (collections: ${collectionsStr})`
+            : `Synced ${synced} documents from staging (collections: ${collectionsStr})` +
+                (emptyCollections?.length ? `; empty in source: ${emptyCollections.join(', ')}` : '')
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -305,7 +336,7 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       }
     } else {
       console.log('⏭️  Skipping preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
-      messages.push('Skipped preview settings sync (not initial PR deploy)');
+      messages.push('Skipped preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
     }
 
     return {

@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 import { HearthLog } from './log';
 import { InMemoryHearthStore } from './store';
 import type { AppendEventInput } from './types';
 
-const message = (overrides: Partial<AppendEventInput> = {}): AppendEventInput => ({
+const message = (overrides: Partial<AppendEventInput> = {}) => ({
   channelId: 'ch1',
   actorId: 'agent1',
-  kind: 'message',
-  human: { text: 'hello', format: 'md' },
+  kind: 'message' as const,
+  human: { text: 'hello', format: 'md' as const },
   refs: {},
+  origin: 'session' as const,
   ...overrides,
 });
 
@@ -79,6 +81,21 @@ describe('HearthLog', () => {
 
     const readAgain = await log.catchup('agent1', 'ch1');
     expect(readAgain).toHaveLength(1);
+  });
+
+  it('append keeps the server-set origin', async () => {
+    const log = new HearthLog(new InMemoryHearthStore());
+    const event = await log.append(message({ origin: 'api-key' }));
+    expect(event.origin).toBe('api-key');
+  });
+
+  it('rejects an append with no origin', async () => {
+    const log = new HearthLog(new InMemoryHearthStore());
+    const { origin: _origin, ...noOrigin } = message();
+    // any: deliberately missing origin to exercise runtime validation
+    const err = await log.append(noOrigin as any).catch(e => e);
+    expect(err).toBeInstanceOf(ZodError);
+    expect((err as ZodError).issues.some(i => i.path[0] === 'origin')).toBe(true);
   });
 
   it('rejects malformed input', async () => {

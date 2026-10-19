@@ -22,7 +22,13 @@ import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
-import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import {
+  verifyJwtToken,
+  checkRateLimit,
+  verifyApiKey,
+  checkApiKeyRateLimitOrThrow,
+  type ApiKeyInfo,
+} from '@server/cli/auth';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
@@ -32,7 +38,7 @@ import {
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema } from '@bike4mind/common';
+import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -85,6 +91,7 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // knowledge is re-read server-side from the session document; these two
   // arrays capture the workbench + per-message snapshots taken at dispatch.
   messageFileIds: z.array(z.string()).optional(),
+  messageOnlyFileIds: z.array(z.string()).optional(),
   sessionFabFileIds: z.array(z.string()).optional(),
   // LLM runtime knobs. All optional - the executor falls back to
   // ReActAgent defaults when omitted. `imageConfig` was previously persisted
@@ -141,6 +148,12 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // classifier-routed responses on reload. Pure metadata - the executor
   // doesn't branch on it.
   routingSource: z.enum(['mention', 'agent_literal', 'toggle', 'classifier', 'user-default', 'complexity']).optional(),
+  // Per-send system context (a programmatic launch's `systemContext`). Forwarded on the
+  // executor's start payload, where it joins the run's system message. Kept off the
+  // AgentExecution doc's own fields and the Quest; carried in the server-only checkpoint so
+  // continuations keep it. Capped like every other caller-supplied prompt body (the client
+  // refuses an over-cap launch before sending). Must stay in sync with `StartExecutionSchema`.
+  systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
 });
 
 const AbortCommandSchema = BaseMessageSchema.extend({
@@ -199,8 +212,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // Authenticate
   let userId: string;
+  let apiKeyInfo: ApiKeyInfo | undefined;
   try {
-    const apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
+    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
     userId = apiKeyInfo.userId;
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
@@ -208,10 +222,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
     });
   } catch {
+    apiKeyInfo = undefined;
     try {
       const user = await verifyJwtToken(body.accessToken);
       userId = user.id;
-      await checkRateLimit(userId);
+      await checkRateLimit(userId, undefined, { bucket: 'ws' });
     } catch {
       await sendAgentEvent(connectionId, endpoint, {
         action: 'agent_error',
@@ -229,7 +244,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   switch (body.command) {
     case 'start': {
       const startCmd = StartCommandSchema.parse(rawBody);
-      await handleStart(startCmd, userId, connectionId, endpoint, logger);
+      await handleStart(startCmd, userId, apiKeyInfo, connectionId, endpoint, logger);
       break;
     }
     case 'abort': {
@@ -264,6 +279,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 async function handleStart(
   cmd: z.infer<typeof StartCommandSchema>,
   userId: string,
+  apiKeyInfo: ApiKeyInfo | undefined,
   connectionId: string,
   endpoint: string,
   logger: Logger
@@ -283,8 +299,12 @@ async function handleStart(
       agentId: cmd.agentId,
       enabledTools: cmd.enabledTools,
       enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
+      // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
+      apiKeyInfo,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
+      pinMessageFiles: true,
+      messageOnlyFileIds: cmd.messageOnlyFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,
       temperature: cmd.temperature,
       maxTokens: cmd.maxTokens,
@@ -295,6 +315,7 @@ async function handleStart(
       imageConfig: cmd.imageConfig,
       audioConfig: cmd.audioConfig,
       routingSource: cmd.routingSource,
+      systemContext: cmd.systemContext,
     },
     logger
   );
@@ -839,6 +860,8 @@ async function handleReconnect(
     action: 'reconnect_result',
     found: true,
     executionId: execution.id,
+    // Safe to echo: only sent past the ownership check above.
+    sessionId: execution.sessionId,
     status: execution.status,
     // Projected, not passed through: `pendingPermission` also stores the withheld
     // tool calls the executor replays on approval, and their arguments are

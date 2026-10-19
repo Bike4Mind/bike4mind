@@ -5,13 +5,15 @@ import {
   creditTransactionRepository,
   organizationRepository,
   userRepository,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config, isDevelopment } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@server/utils/errors';
 import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
@@ -19,6 +21,10 @@ import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunnin
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
+import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
+import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -74,61 +80,122 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   switch (event.type) {
     case 'payment_intent.succeeded': {
       const intent = event.data.object;
-      if (!intent.customer) {
-        req.logger.debug(`Ignoring intent without customer: ${intent.id}`);
-        break;
-      }
-
-      const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer.id;
-      const user = await userRepository.findByStripeCustomerId(customerId);
-      if (!user) {
-        req.logger.debug(`no such user with stripe ID: ${intent.customer}`);
-        break;
-      }
+      const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+      const trace = { paymentIntentId: intent.id, metadataUserId: intent.metadata?.userId };
 
       if (intent.object !== 'payment_intent') {
         req.logger.debug(`Ignoring non-invoice webhook: ${intent.object}`);
-      } else if (intent.metadata?.environment !== Resource.App.stage) {
+        break;
+      }
+      if (intent.metadata?.environment !== Resource.App.stage) {
         req.logger.debug(
           `Ignoring webhook for wrong environment: ${intent.metadata?.environment}, wanted ${Resource.App.stage}`
         );
-      } else if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
+        break;
+      }
+      if (!intent.metadata?.credits || Number(intent.metadata.credits) < 1) {
         // Subscription-related payment intents don't carry credits metadata
         // and are handled via invoice.payment_succeeded instead
         req.logger.debug(`Ignoring intent without credits: ${intent.id}`);
-      } else {
-        req.logger.info(`Adding ${intent.metadata.credits} credits to user ${user.id}`);
-
-        // Records the CreditTransaction (idempotent on stripePaymentIntentId),
-        // then atomically $inc's the balance and stamps the pack lot. Replaces a
-        // former read-modify-$set of the whole user doc, which reverted any concurrent
-        // balance write. (The unique stripePaymentIntentId index already blocked
-        // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
-        // the increment. The $inc additionally makes the balance update itself atomic.)
-        await creditService.addCredits(
-          {
-            type: 'purchase',
-            ownerId: user.id,
-            ownerType: CreditHolderType.User,
-            amount: intent.amount,
-            credits: Number(intent.metadata.credits),
-            status: CreditPurchaseStatus.Completed,
-            stripePaymentIntentId: intent.id,
-            packageId: intent.metadata.packageId,
-            metadata: {
-              environment: intent.metadata.environment,
-              paymentMethod: intent.payment_method_types?.[0],
-            },
-          },
-          {
-            db: {
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-            },
-            creditHolderMethods: userRepository,
-          }
-        );
+        break;
       }
+
+      req.logger.info('[CreditPurchase] Webhook received', { step: 'webhook_received', ...trace });
+
+      // The customer is the primary link; the server-set metadata.userId covers an intent whose
+      // customer is no longer on the user (e.g. after a customer.deleted).
+      const customerUser = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
+      const user =
+        customerUser ?? (intent.metadata?.userId ? await userRepository.findById(intent.metadata.userId) : null);
+      // Both come from the same user at start-payment, so a difference means drift or tampering.
+      // The customer's user still wins; this only makes the mismatch visible.
+      if (customerUser && intent.metadata?.userId && customerUser.id !== intent.metadata.userId) {
+        req.logger.error('[CreditPurchase] customer/metadata user mismatch', {
+          step: 'user_mismatch',
+          ...trace,
+          customerUserId: customerUser.id,
+        });
+      }
+      if (!user) {
+        // A paid intent with no purchaser is money taken with no credits granted. Logged loudly
+        // here; the creditPurchaseReconciliation cron also alerts on it.
+        req.logger.error('[CreditPurchase] No user for paid credit intent, credits not granted', {
+          step: 'grant_failed',
+          ...trace,
+        });
+        break;
+      }
+
+      const credits = Number(intent.metadata.credits);
+      // Ledger row and balance commit together (grantCreditPurchase), so 'already_granted' means
+      // the credits really landed and a redelivery can be acknowledged. Any other failure rolled
+      // back whole and throws, so Stripe retries.
+      const outcome = await grantCreditPurchase(
+        {
+          userId: user.id,
+          paymentIntentId: intent.id,
+          credits,
+          amount: intent.amount,
+          packageId: intent.metadata.packageId,
+          environment: intent.metadata.environment,
+          paymentMethod: intent.payment_method_types?.[0],
+        },
+        req.logger
+      );
+
+      // Credit the pack to the product the buyer came through, from the touches stored at
+      // signup. Sent on a redelivery too: the eventId is keyed on the payment intent, so the
+      // receiver keeps one event, and a first attempt that timed out gets another chance.
+      // Never throws, so it cannot fail a delivery whose credits already landed.
+      await emitPurchaseForSourceProducts({
+        user,
+        paymentId: intent.id,
+        kind: 'credits',
+        amountMinor: intent.amount_received ?? intent.amount,
+        currency: intent.currency,
+      });
+
+      if (outcome === 'already_granted') {
+        req.logger.info('[CreditPurchase] Credits already granted for intent', {
+          step: 'already_granted',
+          userId: user.id,
+          ...trace,
+        });
+        // A first delivery that crashed after the commit never wrote its funnel row; a distinct
+        // step backfills it without implying a second grant. The ledger row stays authoritative.
+        await logEventSafe(
+          {
+            type: CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+            userId: user.id,
+            metadata: { paymentIntentId: intent.id, amount: intent.amount, credits },
+          },
+          undefined,
+          req.logger
+        );
+        break;
+      }
+
+      req.logger.info('[CreditPurchase] Credits granted', {
+        step: 'credits_granted',
+        userId: user.id,
+        credits,
+        amount: intent.amount,
+        ...trace,
+      });
+      await logEventSafe(
+        {
+          type: CreditPurchaseEvents.CREDITS_GRANTED,
+          userId: user.id,
+          metadata: {
+            paymentIntentId: intent.id,
+            amount: intent.amount,
+            credits,
+            ...(intent.metadata.packageId && { packageId: intent.metadata.packageId }),
+          },
+        },
+        undefined,
+        req.logger
+      );
       break;
     }
 
@@ -209,6 +276,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // swallows its own failures, so it cannot fail a delivery that already landed.
       if (cleanupFailed) {
         await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
+      }
+
+      // Only when Stripe's retry schedule ended in cancel. A Dashboard setting of "mark unpaid"
+      // never reaches here, and would need the same notice on customer.subscription.updated.
+      if (subscription.cancellation_details?.reason === 'payment_failed') {
+        await notifyCanceledForNonPayment(updated, req.logger);
       }
 
       break;
@@ -345,7 +418,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       if (user) {
         const { deactivatedKeys } = await userService.flagDisputePending(user, {
-          db: { users: userRepository, userApiKeys: userApiKeyRepository },
+          db: {
+            users: userRepository,
+            userApiKeys: userApiKeyRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
         });
 
         await postMessageToSlack(
@@ -497,11 +574,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
-      await subscriptionRepository.updateByStripeSubscriptionId(subscriptionId, {
-        status: 'past_due',
-      });
+      const updated = await subscriptionRepository.markPastDue(subscriptionId);
 
-      const userId = invoice.metadata?.userId ?? null;
+      // Same ownership guard as customer.subscription.deleted: a stage with no row for this
+      // subscription does not own it, and must not email its owner. Also null for a row already
+      // closed, since a late delivery of this event can arrive after the deletion.
+      if (!updated) {
+        req.logger.warn(
+          `Ignoring payment failure on subscription ${subscriptionId}: no row in this stage, or it is already closed`
+        );
+        break;
+      }
+
+      // The owner comes from the row: Stripe does not copy subscription metadata onto the invoice,
+      // so `invoice.metadata.userId` is never set.
+      const userId = updated.ownerType === SubscriptionOwnerType.User ? updated.ownerId : null;
       if (userId) {
         sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'invalidate_query',
@@ -510,9 +597,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       await postMessageToSlack(
-        `⚠️ *Subscription Payment Failed* — invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n${userId ? `*User ID:* ${userId}\n` : ''}Status set to past_due.`
+        `⚠️ *Subscription Payment Failed* \u2014 invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n*Owner:* ${updated.ownerType} ${updated.ownerId}\nStatus set to past_due.`
       );
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
+
+      await notifyPaymentFailed(updated, invoice, req.logger);
 
       break;
     }

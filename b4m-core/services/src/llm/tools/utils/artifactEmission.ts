@@ -26,28 +26,5 @@ export function sanitizeArtifactTitle(title: string): string {
     .trim();
 }
 
-/**
- * Escape the literal "</artifact>" sequence in a JSON artifact body so it cannot
- * truncate the parser's non-greedy body match. JSON.parse reads "\/" as "/", so the
- * client restores the original losslessly. JSON bodies only - in a raw body the
- * backslash would be visible.
- */
-export function escapeArtifactBodyJson(body: string): string {
-  return body.replace(/<\/artifact>/gi, '<\\/artifact>');
-}
-
-/**
- * Neutralize artifact tag syntax in a RAW (non-JSON) artifact body, where the JSON
- * backslash escape would render as garbage. A closing tag would truncate the body and
- * leave any following "<artifact ...>" to be parsed as a second, model-chosen artifact;
- * no diagram or markup language this wraps has a legitimate use for the sequence.
- *
- * Matches exactly what the parsers match and no more: every artifact matcher in the repo
- * (artifactParser, sharedToolBuilder, openaiBackend, notebookCurationService) requires a
- * bare "<artifact" / "</artifact>" with no whitespace inside the tag name, so tolerating
- * "< / artifact" here neutralizes nothing real - and two adjacent unbounded \s* runs make
- * this scan quadratic on a long whitespace/newline run after a lone "<".
- */
-export function stripArtifactTagsFromRawBody(body: string): string {
-  return body.replace(/<(\/?)artifact\b/gi, '&lt;$1artifact');
-}
+// Body escapes for tool-emitted artifacts, shared with the core artifact parser.
+export { escapeArtifactBodyJson, stripArtifactTagsFromRawBody } from '@bike4mind/utils/artifactParser';

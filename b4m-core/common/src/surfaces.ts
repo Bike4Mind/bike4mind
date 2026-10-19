@@ -43,6 +43,10 @@ export interface WorkspaceSurface {
   routePrefix: string;
   /** Client URL that opens `sessionId` in this workspace. */
   sessionHref: (sessionId: string) => string;
+  /** Whether a user may hide this workspace from their own UI (`isSurfaceHidden`). The main list never is. */
+  hideable: boolean;
+  /** Name prefix of the LLM tools this workspace contributes, filtered while it is hidden (`isToolHiddenBySurface`). */
+  toolNamePrefix?: string;
 }
 
 export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
@@ -54,6 +58,7 @@ export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
     movable: true,
     routePrefix: '/notebooks',
     sessionHref: sessionId => `/notebooks/${encodeURIComponent(sessionId)}`,
+    hideable: false,
   },
   {
     id: OPTI_SURFACE,
@@ -65,6 +70,8 @@ export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
     movable: true,
     routePrefix: '/opti',
     sessionHref: sessionId => `/opti?mode=canvas&session=${encodeURIComponent(sessionId)}`,
+    hideable: true,
+    toolNamePrefix: 'optihashi_',
   },
 ];
 
@@ -73,10 +80,57 @@ export function normalizeSurfaceId(surface: string | null | undefined): SurfaceI
   return surface ? surface : null;
 }
 
+/**
+ * A contributed `{ surface id: tool names }` table of tools denied to sessions on that surface. The
+ * one home for the shape, so the generated table and both the server and the client can name it
+ * without reaching into `apps/client/app` (workers must not import the UI layer).
+ */
+export type WorkspaceDeniedToolsTable = Readonly<Record<string, readonly string[]>>;
+
+/** Tools a contributed `WorkspaceDeniedToolsTable` denies to a session on `surface`. */
+export function resolveWorkspaceDeniedTools(
+  surface: string | null | undefined,
+  table: WorkspaceDeniedToolsTable | null | undefined
+): string[] {
+  const id = normalizeSurfaceId(surface);
+  if (id === null || !table || !Object.prototype.hasOwnProperty.call(table, id)) return [];
+  return [...table[id]];
+}
+
 /** The registered workspace for `surface`, or undefined for a surface this repo does not know. */
 export function getWorkspaceSurface(surface: string | null | undefined): WorkspaceSurface | undefined {
   const id = normalizeSurfaceId(surface);
   return WORKSPACE_SURFACES.find(entry => entry.id === id);
+}
+
+/**
+ * True when the user's `hiddenSurfaces` display preference hides `id`. Hiding is display-only: it
+ * never changes access, so route gates and `canUseSurface` deliberately ignore it. The main list
+ * and any unregistered or non-hideable id are never hidden.
+ */
+export function isSurfaceHidden(hiddenSurfaces: readonly string[] | undefined | null, id: SurfaceId): boolean {
+  if (!id || !hiddenSurfaces?.includes(id)) return false;
+  return getWorkspaceSurface(id)?.hideable === true;
+}
+
+/**
+ * True when `toolName` belongs to a workspace the user has hidden and the active session is not in
+ * that workspace. Inside the workspace's own sessions its tools stay available.
+ */
+export function isToolHiddenBySurface(
+  toolName: string,
+  hiddenSurfaces: readonly string[] | undefined | null,
+  activeSurface: string | null | undefined
+): boolean {
+  if (!hiddenSurfaces?.length) return false;
+  const active = normalizeSurfaceId(activeSurface);
+  return WORKSPACE_SURFACES.some(
+    surface =>
+      !!surface.toolNamePrefix &&
+      surface.id !== active &&
+      toolName.startsWith(surface.toolNamePrefix) &&
+      isSurfaceHidden(hiddenSurfaces, surface.id)
+  );
 }
 
 /** What `canUseSurface` reads off a user: no DB access, so the caller resolves entitlements first. */
@@ -85,6 +139,12 @@ export interface SurfaceAccessUser {
   tags?: readonly string[] | null;
   /** The user's resolved entitlement keys (subscriptions, tag grants, domain grants). */
   entitlements?: readonly string[] | null;
+  /**
+   * Extra entitlement keys per workspace id whose holders may keep a fork, snip or clone of a session
+   * in that workspace (see `canCopyWithinSurface`). Host-supplied from what the build's premium
+   * overlays declare (apps/client `PremiumWorkspaceCopyEntitlements`); this repo registers none.
+   */
+  copyEntitlements?: Readonly<Record<string, readonly string[]>> | null;
 }
 
 /** True when `surface` is registered and the user may use it. */
@@ -95,6 +155,26 @@ export function canUseSurface(user: SurfaceAccessUser | null | undefined, surfac
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return true;
   const required = entry.requiredEntitlement.trim().toLowerCase();
   return (user.entitlements ?? []).some(key => key.trim().toLowerCase() === required);
+}
+
+/**
+ * True when `user` may fork, snip or clone a session that lives in `surface` and keep the copy there:
+ * anyone `canUseSurface` admits, plus holders of a key `user.copyEntitlements` lists for that
+ * workspace. A copy grant is deliberately weaker than use: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target all still go through `canUseSurface`.
+ */
+export function canCopyWithinSurface(
+  user: SurfaceAccessUser | null | undefined,
+  surface: string | null | undefined
+): boolean {
+  if (canUseSurface(user, surface)) return true;
+  const entry = getWorkspaceSurface(surface);
+  // A null id is the main list, which is ungated, so canUseSurface has already answered for it.
+  if (!entry?.id || !user?.copyEntitlements) return false;
+  const granted = user.copyEntitlements[entry.id];
+  if (!Array.isArray(granted) || granted.length === 0) return false;
+  const held = new Set((user.entitlements ?? []).map(key => key.trim().toLowerCase()));
+  return granted.some(key => held.has(key.trim().toLowerCase()));
 }
 
 export type SurfaceTransitionDenial = {

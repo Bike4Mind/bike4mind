@@ -10,6 +10,7 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
@@ -194,6 +195,18 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
+  /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
+  videoJobIds?: string[];
+
+  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  generationJobs?: GenerationJobRef[];
+
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentVideoClipsClaimed?: number;
+
+  /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentMusicTracksClaimed?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -249,6 +262,14 @@ export interface IChatHistoryItem {
    * (previous answer, what the user said was wrong, corrected answer).
    */
   correctsQuestId?: string;
+
+  /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
 
   /**
    * Provenance of the routing decision that produced this quest (M4).
@@ -311,7 +332,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -322,8 +344,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation
@@ -600,6 +623,19 @@ export interface SessionListFilters {
   hasImages?: boolean;
 }
 
+/** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
+export type ListSessionsByUserQuery = {
+  userId: string;
+  /** Same semantics as searchByUserId: case-insensitive match on name, summary or tag name. */
+  search?: string;
+  /** Same semantics as searchByUserId: unset lists only sessions with no surface. */
+  surface?: string;
+  filters?: SessionListFilters;
+  /** Exclusive: only sessions whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
+
 export interface ISession {
   id: string;
   name: string;
@@ -683,6 +719,12 @@ export interface ISession {
    * attaching a lake file does not silently re-scope a session the user scoped by hand.
    */
   lakeScopeExplicit?: boolean;
+  /**
+   * Whether a lake-scoped chat also grounds on the user's own library (owned, shared and group
+   * files) alongside the lake. Unset falls back to "only when no lake is named", which is the
+   * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
+   */
+  includeLibraryFiles?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
@@ -813,6 +855,29 @@ export interface ISession {
    * Used to enforce the 60-minute hard cap.
    */
   voiceSessionStartedAt?: Date | null;
+
+  /**
+   * When the open voice call was first seen connected (the client's connect report or the first
+   * provider turn). Null until then and cleared when the hold settles; a call that never
+   * connected is not billed.
+   */
+  voiceConnectedAt?: Date | null;
+
+  /** Latest sign of life from the open voice call (client heartbeat, provider turn or transcript frame). */
+  voiceLastActivityAt?: Date | null;
+
+  /**
+   * Credits billed so far against the open realtime voice hold, one response at a time.
+   * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
+   */
+  voiceBilledCredits?: number;
+}
+
+/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
+export interface VoiceHoldMarkers {
+  voiceConnectedAt?: Date | null;
+  voiceLastActivityAt?: Date | null;
+  voiceBilledCredits?: number | null;
 }
 
 ///////////
@@ -896,6 +961,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     data: Partial<ISessionDocument> & { id: string },
     opts?: { includeGlobalWrite?: boolean }
   ) => Promise<ISessionDocument | null>;
+  /**
+   * updateWithUpdateAccess that adds `knowledgeIds` ($addToSet) rather than replacing the stored list,
+   * so a concurrent detach is not undone by a caller's stale read.
+   */
+  addKnowledgeIdsWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<Omit<ISessionDocument, 'knowledgeIds'>> & { id: string },
+    knowledgeIds: string[],
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,
@@ -973,6 +1048,13 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     surface?: string,
     filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
+   * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
+   * so a page boundary stays put while sessions are added or edited (lastUpdated moves, _id does
+   * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
+   */
+  listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;
@@ -1085,4 +1167,79 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The count of active voice sessions
    */
   countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Add `credits` to the billed total of the voice hold that started at `startedAt`. Resolves the
+   * total billed before this charge, or null when that hold is no longer open.
+   */
+  addVoiceBilledCredits: (sessionId: string, startedAt: Date, credits: number) => Promise<number | null>;
+
+  /**
+   * Oldest-first sessions whose voice credit hold was reserved before `startedBefore` (or, for a
+   * realtime hold, before `realtimeStartedBefore`) and never settled, at most `limit` of them.
+   * `realtime` marks a hold billed per response (it carries `voiceBilledCredits`).
+   */
+  findStaleVoiceHolds: (
+    startedBefore: Date,
+    realtimeStartedBefore: Date,
+    limit: number
+  ) => Promise<
+    Array<{
+      id: string;
+      userId: string;
+      voiceReservedCredits: number;
+      voiceSessionStartedAt: Date;
+      voiceConnectedAt: Date | null;
+      voiceLastActivityAt: Date | null;
+      realtime: boolean;
+    }>
+  >;
+
+  /**
+   * Record that the session's open voice call is connected and alive at `at`: sets
+   * voiceConnectedAt the first time and advances voiceLastActivityAt. With `holdStartedAt`, only the
+   * hold that started then is touched; with `realtimeOnly`, only a realtime hold (one carrying
+   * voiceBilledCredits). Resolves false (and writes nothing) when no matching open hold exists.
+   */
+  recordVoiceActivity: (
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<boolean>;
+
+  /**
+   * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller
+   * that cleared it, what realtime responses had billed against it (null for a hold never billed per
+   * response); null when it was already settled or replaced by a newer call. With `realtimeOnly`,
+   * a hold without the realtime marker (an ElevenLabs call) is left untouched and resolves null.
+   */
+  claimVoiceHold: (
+    sessionId: string,
+    startedAt: Date,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<{ billedCredits: number | null } | null>;
+
+  /**
+   * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
+   * before the reserve was taken) or no hold at all. A realtime hold gets the billed-credits marker;
+   * any other has it removed. Resolves false (and writes nothing) when a concurrent bootstrap won.
+   */
+  openVoiceHold: (
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) => Promise<boolean>;
+
+  /**
+   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
+   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
+   * already holds a newer call.
+   */
+  restoreVoiceHold: (
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    markers?: VoiceHoldMarkers
+  ) => Promise<boolean>;
 }

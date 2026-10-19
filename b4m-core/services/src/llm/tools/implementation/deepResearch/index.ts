@@ -1,11 +1,12 @@
 import { ChatModels } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { getFirecrawlConfig } from '../../../../apiKeyService';
 import { createFirecrawlApp } from '../webfetch/firecrawlApp';
 import { plainFetchScrape, isPdfUrl } from '../webfetch/plainFetch';
-import { resolveWebSearchProvider } from '../websearch';
+import { resolveWebSearchProviders, searchWithHedge } from '../websearch';
 import { parseTolerantJson } from './parseJson';
 
 // Shape the planner prompt asks the model to return (inside an `analysis` envelope).
@@ -159,7 +160,7 @@ export async function performDeepResearch(
   // a keyless plain fetch when Firecrawl is not configured (self-host). Error only when there is no
   // way to search at all.
   const firecrawlApp = createFirecrawlApp(await getFirecrawlConfig({ db: context.db }));
-  const provider = await resolveWebSearchProvider({ db: context.db });
+  const [provider, backup] = await resolveWebSearchProviders({ db: context.db });
 
   if (!provider && !firecrawlApp) {
     log('🔬 Deep Research: no web-search provider or Firecrawl configured');
@@ -198,7 +199,8 @@ export async function performDeepResearch(
       }
     : async (query: string) => {
         if (!provider) return []; // unreachable: guarded above, but narrows the type
-        const results = await provider.search(query);
+        // 3 matches the providers' own default result count.
+        const { results } = await searchWithHedge(provider, backup, query, 3);
         return results.map(r => ({ url: r.url, title: r.title, description: r.snippet, type: 'web_url' }));
       };
 
@@ -427,6 +429,13 @@ export async function performDeepResearch(
             depth: state.depth,
           });
           log(`🔬 Deep Research: ${searcher.name} search failed:`, error);
+          // The provider attempts log transient failures at warn, and a search that throws has no
+          // caller here to alert on it, so this catch is deep research's only error-level record.
+          Logger.globalInstance.error('Deep Research: search failed', {
+            searcher: searcher.name,
+            query: currentQuery,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 

@@ -1,4 +1,5 @@
-import FirecrawlApp, { ScrapeResponse } from '@mendable/firecrawl-js';
+import { UnsafeScrapeTargetError } from './errors';
+import type { FirecrawlClient, FirecrawlScrapeParams, FirecrawlScrapeResult } from './firecrawlApp';
 
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -8,14 +9,14 @@ const ACTIONS_NOT_SUPPORTED_PATTERN = 'Actions are not supported';
 
 type ScrapeResult = {
   rawHtml: string;
-  metadata: ScrapeResponse['metadata'];
+  metadata: FirecrawlScrapeResult['metadata'];
 };
 
 type ScrapeOptions = {
   maxRetries?: number;
   getDelayMs?: (attempt: number, maxRetries: number) => number;
   formats?: ('markdown' | 'html')[];
-  actions?: ScrapeResponse['actions'];
+  actions?: FirecrawlScrapeParams['actions'];
 };
 
 type MinimalLogger = {
@@ -39,7 +40,7 @@ const buildScrapeParams = (options?: ScrapeOptions) => ({
 });
 
 export const scrapeWithRetry = async (
-  app: FirecrawlApp,
+  app: FirecrawlClient,
   url: string,
   logger: MinimalLogger,
   options?: ScrapeOptions
@@ -47,21 +48,22 @@ export const scrapeWithRetry = async (
   const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
   const getDelayMs = options?.getDelayMs ?? defaultGetDelayMs;
   let remainingRetries = maxRetries;
-  let result: ScrapeResponse | null = null;
+  let result: FirecrawlScrapeResult | null = null;
 
   while (remainingRetries > 0) {
     try {
-      result = (await app.scrapeUrl(url, buildScrapeParams(options))) as ScrapeResponse;
+      result = await app.scrapeUrl(url, buildScrapeParams(options));
       break;
     } catch (e) {
+      if (e instanceof UnsafeScrapeTargetError) throw e;
       const errorMessage = (e as Error).message ?? '';
 
       if (isActionsNotSupportedError(errorMessage)) {
         logger.info(`Actions not supported for URL: ${url}, retrying without actions...`);
         try {
-          result = (await app.scrapeUrl(url, {
+          result = await app.scrapeUrl(url, {
             formats: options?.formats ?? ['markdown', 'html'],
-          })) as ScrapeResponse;
+          });
           break;
         } catch (fallbackError) {
           const domain = new URL(url).hostname;

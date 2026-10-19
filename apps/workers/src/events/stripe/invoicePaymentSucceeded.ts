@@ -1,15 +1,17 @@
+import { userRepository } from '@bike4mind/database';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
-} from '@client/lib/userSubscriptions/serverUtils';
+} from '@workers/lib/userSubscriptions/serverUtils';
 import { StripeEvents } from '@server/utils/eventBus';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
+import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -87,6 +89,29 @@ export const handler = withEventContext(async (event, logger) => {
       invoiceId,
       email: invoice.customer_email ?? undefined,
       ownerType: metadata.ownerType,
+    });
+  }
+
+  // An organization subscription belongs to the organization, not the user who started checkout.
+  // That user's signup touches cannot attribute the organization's payments.
+  // Legacy subscriptions without ownerType were handled as User above. Check the raw value too:
+  // the compatibility parse can erase an invalid Organization ownerType.
+  if (metadata.userId && (metadata.ownerType === SubscriptionOwnerType.User || !subscription.metadata.ownerType)) {
+    let payer: Awaited<ReturnType<typeof userRepository.findById>> = null;
+    try {
+      payer = await userRepository.findById(metadata.userId);
+    } catch (error) {
+      logger.warn(`Purchase not credited to a source product: payer lookup failed for invoice ${invoiceId}`, {
+        error,
+      });
+    }
+    await emitPurchaseForSourceProducts({
+      user: payer,
+      paymentId: invoiceId,
+      kind: 'subscription',
+      amountMinor: invoice.amount_paid,
+      currency: invoice.currency,
+      billingReason: invoice.billing_reason,
     });
   }
 });

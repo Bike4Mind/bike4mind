@@ -108,6 +108,27 @@ describe('OperationsModelService.getOperationsTextModel', () => {
 
     expect(result.modelId).toBe('gpt-4o-mini');
   });
+
+  it('fails with a named error when no text model is available', async () => {
+    mockAdminSettings.findOne.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, ollama: null });
+    mockGetAvailableModels.mockResolvedValue([]);
+
+    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
+      'No text models available for operations'
+    );
+  });
+
+  it('fails with a named error when the picked model has no usable backend', async () => {
+    mockAdminSettings.findOne.mockResolvedValue(null);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, openai: 'sk-test' });
+    mockGetAvailableModels.mockResolvedValue([GPT_MINI]);
+    mockGetLlmByModel.mockReturnValue(null);
+
+    await expect(OperationsModelService.getOperationsTextModel()).rejects.toThrow(
+      'Failed to initialize operations text model gpt-4o-mini'
+    );
+  });
 });
 
 // A deployment with no OpenAI key (e.g. a PR preview) cannot run the configured
@@ -117,7 +138,7 @@ describe('OperationsModelService.getOperationsTextModel', () => {
 // auto-name and tag event on such a deployment.
 describe('OperationsModelService.getOperationsModel without the configured backend', () => {
   const LEGACY_HAIKU = model('anthropic.claude-3-haiku-20240307-v1:0', 'text', ModelBackend.Bedrock);
-  const HAIKU_4_5 = model('us.anthropic.claude-haiku-4-5-20251001-v1:0', 'text', ModelBackend.Bedrock);
+  const HAIKU_5_5 = model('global.anthropic.claude-haiku-5-5', 'text', ModelBackend.Bedrock);
   const configured = { settingValue: { modelId: 'gpt-4.1-mini-2025-04-14', imageModelId: 'x', speechModelId: 'y' } };
 
   beforeEach(() => {
@@ -130,12 +151,12 @@ describe('OperationsModelService.getOperationsModel without the configured backe
   });
 
   it('redirects a superseded fallback pick to its available successor', async () => {
-    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_4_5]);
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_5_5]);
 
     const result = await OperationsModelService.getOperationsModel();
 
-    expect(result.modelId).toBe(HAIKU_4_5.id);
-    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining(`using its successor ${HAIKU_4_5.id}`));
+    expect(result.modelId).toBe(HAIKU_5_5.id);
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining(`using its successor ${HAIKU_5_5.id}`));
   });
 
   it('keeps the superseded pick when its successor is not available', async () => {
@@ -148,7 +169,7 @@ describe('OperationsModelService.getOperationsModel without the configured backe
   });
 
   it('does not overwrite the admin-configured operations model when falling back', async () => {
-    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_4_5]);
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_5_5]);
 
     await OperationsModelService.getOperationsModel();
 

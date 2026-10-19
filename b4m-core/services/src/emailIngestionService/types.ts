@@ -1,5 +1,6 @@
 import type {
   IUserRepository,
+  IOrganizationRepository,
   IFabFileRepository,
   IAdminSettingsRepository,
   IIngestedEmailRepository,
@@ -26,6 +27,8 @@ export interface ParsedEmailObject {
   bcc?: EmailAddress | EmailAddress[];
   subject?: string;
   date?: Date;
+  /** Headers SES authentication is judged on; see readSenderAuthenticationHeaders */
+  senderAuthentication?: SenderAuthenticationHeaders;
 
   // Content
   text?: string; // Plain text body
@@ -34,6 +37,12 @@ export interface ParsedEmailObject {
   // Attachments
   attachments?: EmailAttachment[];
 }
+
+export type SenderAuthenticationHeaders = {
+  /** Topmost Authentication-Results value, folding kept */
+  authenticationResults?: string;
+  fromHeaderCount: number;
+};
 
 /**
  * Email address object (compatible with mailparser)
@@ -104,6 +113,7 @@ export interface IQueueAdapter {
 export interface EmailIngestionAdapters {
   db: {
     users: IUserRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     ingestedEmails: IIngestedEmailRepository;
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
@@ -197,6 +207,9 @@ export const parsedEmailObjectSchema = z.object({
   bcc: z.any().optional(),
   subject: z.string().optional(),
   date: z.date().optional(),
+  senderAuthentication: z
+    .object({ authenticationResults: z.string().optional(), fromHeaderCount: z.number().int().min(0) })
+    .optional(),
   text: z.string().optional(),
   html: z.string().optional(),
   attachments: z.array(emailAttachmentSchema).optional(),

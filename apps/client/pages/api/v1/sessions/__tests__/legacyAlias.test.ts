@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 // The legacy path must re-export the nextRouteForContract handler and keep its inline config.
 const v1Handler = vi.hoisted(() => ({ handler: 'session-create' }));
-vi.mock('@pages/api/v1/sessions/index', () => ({ default: v1Handler }));
+vi.mock('@pages/api/v1/sessions/index', () => ({ createSessionRouter: v1Handler }));
 
 describe('POST /api/sessions/create legacy alias', () => {
   it('serves the same handler as POST /api/v1/sessions and keeps externalResolver', async () => {

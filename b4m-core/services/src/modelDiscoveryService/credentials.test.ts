@@ -77,12 +77,31 @@ describe('getDiscoveryCredentials', () => {
 
   it('reports Bedrock as credential-free when hosted and unconfigured under self-host', async () => {
     const hosted = await getDiscoveryCredentials(adapters(keys()), {});
-    const selfHost = await getDiscoveryCredentials(adapters(keys()), { B4M_SELF_HOST: 'true' });
+    // AWS_* on self-host is the MinIO credential, so it must not count.
+    const selfHost = await getDiscoveryCredentials(adapters(keys()), {
+      B4M_SELF_HOST: 'true',
+      AWS_ACCESS_KEY_ID: 'minioadmin',
+      AWS_SECRET_ACCESS_KEY: 'minioadmin',
+    });
 
+    expect(hosted.bedrock).toBe(true);
     expect(hosted.awsIam).toBe(true);
     expect(hosted.isSelfHost).toBe(false);
+    expect(selfHost.bedrock).toBe(false);
     expect(selfHost.awsIam).toBe(false);
     expect(selfHost.isSelfHost).toBe(true);
+  });
+
+  it('enables only Bedrock on self-host with the dedicated BEDROCK_AWS_* pair', async () => {
+    const creds = await getDiscoveryCredentials(adapters(keys()), {
+      B4M_SELF_HOST: 'true',
+      BEDROCK_AWS_ACCESS_KEY_ID: 'AKIAIOSFODNN7EXAMPLE',
+      BEDROCK_AWS_SECRET_ACCESS_KEY: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    });
+
+    expect(creds.bedrock).toBe(true);
+    // Transcribe stays hosted-only: it reads media from S3, which self-host keeps in MinIO.
+    expect(creds.awsIam).toBe(false);
   });
 
   it('prefers the discovery-only env secrets over the demo-key tier', async () => {

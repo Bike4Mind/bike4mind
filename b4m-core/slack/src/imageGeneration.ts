@@ -30,7 +30,7 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
   const { chatCompletionDefaults, eventBus } = getSlackDeps();
   const { User: SlackUser, Quest } = getSlackDb();
   const { SQSService } = await import('@bike4mind/utils');
-  const { ChatCompletionInvoke } = await import('@bike4mind/services/llm');
+  const { ChatCompletionInvoke } = await import('@bike4mind/services/llm/ChatCompletionInvoke');
 
   // getSlackDb() DI models don't preserve Mongoose static method types
   const user = await (SlackUser as Record<string, (...args: unknown[]) => unknown>).findById(userId);
@@ -90,6 +90,8 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
       organizationId: (user as Record<string, unknown>).organizationId?.toString(),
     },
     userId,
+    // A Slack-linked user, not a B4M session or a b4m_live_ key (see ToolContext.authOrigin).
+    authOrigin: 'internal',
   });
 
   if (quest) {

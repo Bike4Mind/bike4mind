@@ -742,9 +742,10 @@ export class NotebookExportService {
 
     // Add metadata
     if (message.promptMeta && options.includeMetadata) {
-      const { model, tokenUsage, performance, context } = message.promptMeta;
+      const { model, redirectedFrom, tokenUsage, performance, context } = message.promptMeta;
       exportedMessage.promptMeta = {
         model,
+        redirectedFrom,
         tokenUsage,
         // performance and context are projected, not passed through: the full context group
         // carries systemPrompt, userPrompt and conversationContext - raw prompt text that this

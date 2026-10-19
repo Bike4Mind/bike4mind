@@ -1,4 +1,4 @@
-import { userRepository, authSessionRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
@@ -14,6 +14,8 @@ import {
   setRefreshCookie,
 } from '@server/auth/refreshCookie';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { respond } from '@server/utils/respond';
+import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 
 /**
  * End an impersonation and restore the admin's own session ("Return to safety").
@@ -41,9 +43,14 @@ const handler = baseApi({ auth: false })
     const impersonatedSid = impersonatedToken ? authSessionService.parseRefreshToken(impersonatedToken)?.sid : null;
 
     const restored = await authSessionService.rotateSession(adminRefreshToken, {
-      db: { authSessions: authSessionRepository, users: userRepository },
+      db: {
+        authSessions: authSessionRepository,
+        users: userRepository,
+        realtimeConnections: realtimeConnectionRepository,
+      },
       signAccessToken: (id, tokenVersion, extra) => authTokenGenerator.signAccessToken(id, tokenVersion, extra),
-      audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
+      audit: event =>
+        logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
       logger: req.logger,
     });
     requireNonSystemUser(restored.user);
@@ -62,6 +69,10 @@ const handler = baseApi({ auth: false })
         await authSessionRepository
           .revokeBySid(impersonatedSid)
           .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
+        await authSessionService.endRealtimeConnections(
+          { sid: impersonatedSid },
+          { db: { realtimeConnections: realtimeConnectionRepository }, logger: req.logger }
+        );
       }
     }
 
@@ -81,7 +92,7 @@ const handler = baseApi({ auth: false })
       clearAdminReturnCookie(res);
     }
 
-    return res.status(200).json({
+    return respond(res, selfSessionResponseSchema, {
       user: redactUserSecretsForSelf(restored.user),
       accessToken: restored.accessToken,
       impersonating: false,

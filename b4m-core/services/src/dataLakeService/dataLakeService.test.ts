@@ -13,10 +13,13 @@ import {
   type IDataLakeBatchDocument,
   FIND_ACCESSIBLE_ARMS,
   type FindAccessibleArm,
+  STORAGE_CHARGE_STAMP_CUTOFF,
 } from '@bike4mind/common';
 import {
   canAccessLake,
   assertLakeAccess,
+  assertLakeAccessById,
+  assertLakeAccessWithGrantsById,
   assertLakeWritable,
   assertLakeGrantable,
   isFallbackLake,
@@ -574,6 +577,87 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
       '[dataLakes] grant-held slug fallback query failed; resolving with no grant reach',
       expect.any(Error)
     );
+  });
+});
+
+describe('assertLakeAccessById - no slug fall-through', () => {
+  const lakeHex = '507f1f77bcf86cd799439011';
+  const db = (byId: IDataLakeDocument | null) => ({
+    dataLakes: {
+      // BaseModel.findById resolves null for a non-ObjectId string; it does not throw.
+      findById: vi.fn().mockResolvedValue(byId),
+      // The next lake sharing the slug, which the slug arm would hand back once the first is deleted.
+      findBySlug: vi.fn().mockResolvedValue(lake({ id: 'other-lake', slug: 'shared', createdByUserId: 'owner' })),
+      findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('refuses a slug with a 400 instead of resolving the next lake that shares it', async () => {
+    const d = db(null);
+    const err = await assertLakeAccessById('shared', ctx({ userId: 'owner' }), { db: d }).catch(e => e);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.message).toMatch(/needs the data lake id/);
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a deleted lake by id, so a retried delete reaches the same lake', async () => {
+    const deleted = lake({ id: lakeHex, slug: 'shared', status: 'deleted', createdByUserId: 'owner' });
+    await expect(assertLakeAccessById(lakeHex, ctx({ userId: 'owner' }), { db: db(deleted) })).resolves.toBe(deleted);
+  });
+
+  it('answers an id-shaped miss with not-found, not the slug 400', async () => {
+    const d = db(null);
+    await expect(assertLakeAccessById(lakeHex, ctx({ userId: 'owner' }), { db: d })).rejects.toThrow(/not found/i);
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a registry lake, so assertLakeWritable can give its read-only refusal', async () => {
+    const resolved = await assertLakeAccessById('opti-knowledge', ctx({ isAdmin: true }), { db: db(null) });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(() => assertLakeWritable(resolved)).toThrow(/read-only/);
+  });
+
+  const withGrants = (byId: IDataLakeDocument | null) => {
+    const d = db(byId);
+    return {
+      dataLakes: d.dataLakes,
+      dataLakeAccessGrants: {
+        listByLake: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+      },
+    };
+  };
+
+  it('assertLakeAccessWithGrantsById refuses a slug the same way', async () => {
+    const d = withGrants(null);
+    await expect(assertLakeAccessWithGrantsById('shared', ctx({ userId: 'owner' }), { db: d })).rejects.toThrow(
+      BadRequestError
+    );
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+    expect(d.dataLakeAccessGrants.listByPrincipal).not.toHaveBeenCalled();
+  });
+
+  it('assertLakeAccessWithGrantsById resolves a lake by id and hands back its grants', async () => {
+    const owned = lake({ id: lakeHex, createdByUserId: 'owner' });
+    await expect(
+      assertLakeAccessWithGrantsById(lakeHex, ctx({ userId: 'owner' }), { db: withGrants(owned) })
+    ).resolves.toEqual({ lake: owned, grants: [] });
+  });
+
+  it.each([
+    ['assertLakeWriteAccess', assertLakeWriteAccess],
+    ['assertLakeRebuildAccess', assertLakeRebuildAccess],
+  ] as const)('%s with idOnly refuses a slug, and without it still resolves one', async (_name, gate) => {
+    const idOnly = withGrants(null);
+    await expect(gate('shared', ctx({ userId: 'owner' }), { db: idOnly }, { idOnly: true })).rejects.toThrow(
+      BadRequestError
+    );
+    expect(idOnly.dataLakes.findBySlug).not.toHaveBeenCalled();
+
+    const bySlug = withGrants(null);
+    await expect(gate('shared', ctx({ userId: 'owner' }), { db: bySlug })).resolves.toMatchObject({
+      id: 'other-lake',
+    });
   });
 });
 
@@ -1211,6 +1295,30 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
     // Absent, not blanked - a reader must not tell "unset" from "withheld".
     expect(entry && 'groundingMode' in entry).toBe(false);
   });
+
+  it('returns the pending connector to the lake owner and withholds it from a reader', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', pendingConnector: 'github' });
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      pendingConnector: 'github',
+    });
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const readerEntry = result.find(l => l.id === 'theirs');
+
+    expect(result.find(l => l.id === 'mine')?.pendingConnector).toBe('github');
+    expect(readerEntry && 'pendingConnector' in readerEntry).toBe(false);
+  });
 });
 
 // embeddingSpendMicroUsd is EDITOR-ONLY too, but unlike the fields above it is ALWAYS present
@@ -1432,6 +1540,129 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
 
     expect(fallback?.isOwn).toBe(false);
     expect(fallback && 'ownerDisplayName' in fallback).toBe(false);
+    expect(fallback && 'ownerUserId' in fallback).toBe(false);
+  });
+
+  const ownerGrants = (rows: { dataLakeId: string; principalId: string }[]) => ({
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue(rows.map(r => ({ ...r, principalType: 'user', role: 'owner' }))),
+  });
+  const listDb = (lakes: IDataLakeDocument[], extra: Record<string, unknown> = {}) => ({
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: vi.fn().mockResolvedValue(lakes),
+      find: vi.fn().mockResolvedValue(lakes),
+    },
+    ...extra,
+  });
+
+  it('keys two same-named creators apart by ownerUserId and carries each username', async () => {
+    const a = lake({ id: 'a', slug: 'a', createdByUserId: 'u1', isPublic: true });
+    const b = lake({ id: 'b', slug: 'b', createdByUserId: 'u2', isPublic: true });
+    const users = usersPort([
+      { id: 'u1', name: 'Dana', username: 'dana42' },
+      { id: 'u2', name: 'Dana', username: 'dana7' },
+    ]);
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db: listDb([a, b], { users }) });
+
+    expect(result.find(l => l.id === 'a')).toMatchObject({
+      ownerDisplayName: 'Dana',
+      ownerUserId: 'u1',
+      ownerUsername: 'dana42',
+    });
+    expect(result.find(l => l.id === 'b')).toMatchObject({
+      ownerDisplayName: 'Dana',
+      ownerUserId: 'u2',
+      ownerUsername: 'dana7',
+    });
+  });
+
+  it.each([
+    ['listDataLakes', listDataLakes, false],
+    ['listAllDataLakes', listAllDataLakes, true],
+  ] as const)('%s labels a transferred lake with the owner-grant holder, not the creator', async (_, list, isAdmin) => {
+    const moved = lake({ id: 'moved', slug: 'moved', createdByUserId: 'creator', isPublic: true });
+    const users = usersPort([
+      { id: 'creator', name: 'Cora Creator' },
+      { id: 'grantee', name: 'Gus Grantee', username: 'gus' },
+    ]);
+    const db = listDb([moved], {
+      users,
+      dataLakeAccessGrants: ownerGrants([{ dataLakeId: 'moved', principalId: 'grantee' }]),
+    });
+
+    const result = await list(ctx({ userId: 'caller', isAdmin }), { db });
+
+    expect(users.findByIds).toHaveBeenCalledTimes(1);
+    expect(users.findByIds).toHaveBeenCalledWith(['grantee']);
+    expect(result.find(l => l.id === 'moved')).toMatchObject({
+      isOwn: false,
+      ownerDisplayName: 'Gus Grantee',
+      ownerUserId: 'grantee',
+      ownerUsername: 'gus',
+    });
+  });
+
+  it('shows the creator their transferred-away lake under the new owner, and the new owner as their own', async () => {
+    const moved = lake({ id: 'moved', slug: 'moved', createdByUserId: 'creator', isPublic: true });
+    const dbFor = () =>
+      listDb([moved], {
+        users: usersPort([{ id: 'grantee', name: 'Gus Grantee' }]),
+        dataLakeAccessGrants: ownerGrants([{ dataLakeId: 'moved', principalId: 'grantee' }]),
+      });
+
+    const asCreator = (await listDataLakes(ctx({ userId: 'creator' }), { db: dbFor() })).find(l => l.id === 'moved');
+    expect(asCreator).toMatchObject({ isOwn: false, ownerDisplayName: 'Gus Grantee', ownerUserId: 'grantee' });
+
+    const asGrantee = (await listDataLakes(ctx({ userId: 'grantee' }), { db: dbFor() })).find(l => l.id === 'moved');
+    expect(asGrantee?.isOwn).toBe(true);
+    expect(asGrantee && ('ownerDisplayName' in asGrantee || 'ownerUserId' in asGrantee)).toBe(false);
+  });
+
+  it('picks the lexically smallest owner id when a lake has two owner grants, whatever the row order', async () => {
+    const shared = lake({ id: 'shared', slug: 'shared', createdByUserId: 'creator', isPublic: true });
+    const db = listDb([shared], {
+      users: usersPort([
+        { id: 'owner-a', name: 'Ann' },
+        { id: 'owner-b', name: 'Bob' },
+      ]),
+      dataLakeAccessGrants: ownerGrants([
+        { dataLakeId: 'shared', principalId: 'owner-b' },
+        { dataLakeId: 'shared', principalId: 'owner-a' },
+      ]),
+    });
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'shared')).toMatchObject({ ownerDisplayName: 'Ann', ownerUserId: 'owner-a' });
+  });
+
+  it('omits every owner field on own lakes, without a user lookup, and when no name resolves', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const ownerFields = (l?: object) => ['ownerDisplayName', 'ownerUserId', 'ownerUsername'].filter(k => l && k in l);
+
+    const withNameless = await listDataLakes(ctx({ userId: 'me' }), {
+      db: listDb([mine, theirs], { users: usersPort([{ id: 'other' }]) }),
+    });
+    expect(ownerFields(withNameless.find(l => l.id === 'mine'))).toEqual([]);
+    expect(ownerFields(withNameless.find(l => l.id === 'theirs'))).toEqual([]);
+
+    const noLookup = await listDataLakes(ctx({ userId: 'me' }), { db: listDb([theirs]) });
+    expect(ownerFields(noLookup.find(l => l.id === 'theirs'))).toEqual([]);
+  });
+
+  it('omits ownerUsername alone when the owner has a name but no username', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), {
+      db: listDb([theirs], { users: usersPort([{ id: 'other', name: 'Ada' }]) }),
+    });
+    const theirsResult = result.find(l => l.id === 'theirs');
+
+    expect(theirsResult).toMatchObject({ ownerDisplayName: 'Ada', ownerUserId: 'other' });
+    expect(theirsResult && 'ownerUsername' in theirsResult).toBe(false);
   });
 });
 
@@ -1558,6 +1789,8 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     // Same for the grounding mode: editor-only, never shipped to a reader.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('groundingMode')).toBe(false);
     expect(LAKE_FIELD_VISIBILITY.groundingMode).toBe('withheld');
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('pendingConnector')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.pendingConnector).toBe('withheld');
     // Who last changed the lake's config is editor-only: a reader gets the config history surface,
     // never a raw actor id on the lake document.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('lastUpdatedByUserId')).toBe(false);
@@ -2557,7 +2790,7 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
     const db = makeDb(null);
     await expect(
       assertCanWriteDataLakeTags({ userId: 'anyone', isAdmin: false }, ['acme:sales', 'notes'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([]);
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
@@ -2565,14 +2798,14 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
     const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
     await expect(
       assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['datalake:lake'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([expect.objectContaining({ datalakeTag: 'datalake:lake' })]);
   });
 
   it('allows an admin to apply the lake meta-tag', async () => {
     const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
     await expect(
       assertCanWriteDataLakeTags({ userId: 'other', isAdmin: true }, ['datalake:lake'], { db })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([expect.objectContaining({ datalakeTag: 'datalake:lake' })]);
   });
 
   it('rejects a read-only member injecting into a lake they do not own', async () => {
@@ -2596,7 +2829,7 @@ describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => 
       assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, [null, undefined, 42, {}, 'notes'] as unknown[], {
         db,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([]);
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
@@ -2741,12 +2974,14 @@ describe('createDataLake', () => {
 
   it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
-    // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
-    // second free. `lake()` uses prefix `lk:`, which cannot collide with this lake's `xy:`.
-    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    // Call order: the tag-prefix availability check, then the slug probes (first slug taken,
+    // second free), then the tag probe for the free one. `lake()` uses prefix `lk:`, which cannot
+    // collide with this lake's `xy:`. The default answers every later probe.
+    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValue([]);
     const db = { dataLakes: { create, find } };
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
+    expect(find).toHaveBeenCalledWith({ datalakeTag: 'datalake:orgA:xy-1' });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
   });
 
@@ -2839,8 +3074,20 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
   // of the counted set.
   it("debits each discarded duplicate's own owner, grouped by owner", async () => {
     const archived = [
-      { id: 'a1', contentHash: 'h1', userId: 'creator', fileSize: 100 },
-      { id: 'a2', contentHash: 'h2', userId: 'contributor', fileSize: 50 },
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
     ];
     const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
     const fabFiles = {
@@ -2875,6 +3122,125 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
     expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
     expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
     expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', -50);
+  });
+
+  it('does not debit a discarded duplicate that was never charged', async () => {
+    const archived = [
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        status: 'pending',
+        storageChargedAt: null,
+        createdAt: new Date('2026-10-10T00:00:00Z'),
+      },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Both a1 and a2 have a live re-upload - both are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).not.toHaveBeenCalledWith('contributor', expect.anything());
+  });
+
+  // The legacy arm both ways: a pre-stamp `complete` row was charged by the upload event, so its
+  // duplicate is debited, while a post-stamp `complete` row that never won the charge is not.
+  it('debits a legacy pre-stamp complete duplicate but not a post-stamp one that was never charged', async () => {
+    const archived = [
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'legacy-owner',
+        fileSize: 200,
+        status: 'complete',
+        createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+      },
+      {
+        id: 'a3',
+        contentHash: 'h3',
+        userId: 'uncharged-owner',
+        fileSize: 400,
+        status: 'complete',
+        createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+      },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Every one of a1/a2/a3 has a live re-upload, so all three are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+        { id: 'live3', contentHash: 'h3' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('legacy-owner', -200);
+    expect(incrementCurrentStorage).not.toHaveBeenCalledWith('uncharged-owner', expect.anything());
   });
 
   it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
@@ -5308,14 +5674,15 @@ describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1
 });
 
 describe('setLakeVisibility - personal ↔ org promotion', () => {
-  const noDriveConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
+  const noConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
   const makeDb = (existing: Partial<IDataLakeDocument> = {}, clashes: IDataLakeDocument[] = []) => ({
     dataLakes: {
       findById: vi.fn().mockResolvedValue(lake(existing)),
       find: vi.fn().mockResolvedValue(clashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   // A connection's owner follows its lake's scope, so a move would strand a bound row: every manage
@@ -5332,6 +5699,78 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       } as any)
     ).rejects.toThrow(/Disconnect this data lake's Google Drive folder/);
     expect(db.orgGoogleDriveConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['promoting a personal lake to an org', {}, 'organization'],
+    ['demoting an org lake to private', { organizationId: 'orgA' }, 'private'],
+  ] as const)('refuses %s while a GitHub repository is bound', async (_label, existing, visibility) => {
+    const db = makeDb(existing);
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', enabled: false });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', visibility, {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's GitHub repository/);
+    expect(db.orgGitHubLakeConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  // A move that lands the lake on the row's own owner strands nothing, so an already-stranded row can
+  // recover by moving the lake back to where the row lives.
+  it('allows promoting a personal lake whose GitHub row already belongs to the target org', async () => {
+    const db = makeDb({ createdByUserId: 'owner' });
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      connectedBy: 'owner',
+    });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: 'orgA' }));
+  });
+
+  it("allows making an org lake private whose Drive row is the lake creator's personal row", async () => {
+    const db = makeDb({ createdByUserId: 'owner', organizationId: 'orgA' });
+    db.orgGoogleDriveConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: null,
+      connectedBy: 'owner',
+    });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: null }));
+  });
+
+  it.each([
+    ['a row owned by another org', { organizationId: 'orgB', connectedBy: 'owner' }],
+    ['a personal row connected by someone other than the creator', { organizationId: null, connectedBy: 'stranger' }],
+  ])('still refuses a promotion to orgA over %s', async (_label, row) => {
+    const db = makeDb({ createdByUserId: 'owner' });
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', ...row });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's GitHub repository/);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('still refuses making an org lake private over a row owned by the org', async () => {
+    const db = makeDb({ createdByUserId: 'owner', organizationId: 'orgA' });
+    db.orgGoogleDriveConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      connectedBy: 'owner',
+    });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's Google Drive folder/);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
@@ -5361,7 +5800,8 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {
