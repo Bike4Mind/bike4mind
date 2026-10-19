@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockPostToSlack = vi.fn();
 const mockRecordAdminAction = vi.fn();
+const mockFindUserById = vi.fn();
 
 vi.mock('@server/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostToSlack(...args),
@@ -10,6 +11,7 @@ vi.mock('@server/integrations/slack/slack', () => ({
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { recordAdminAction: (...args: unknown[]) => mockRecordAdminAction(...args) },
 }));
+vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: (id: string) => mockFindUserById(id) } }));
 vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
@@ -50,7 +52,8 @@ describe('auditSeatCeilingRaised', () => {
     expect(mockRecordAdminAction.mock.calls[0][0].details).not.toHaveProperty('actingAdminId');
   });
 
-  it('records the acting admin in the details of a bulk backfill raise', async () => {
+  it('records the acting admin as the actor with source script for a bulk backfill raise', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'admin-9', name: 'Ada', email: 'ada@example.test' });
     await auditSeatCeilingRaised(
       {
         organizationId: 'org-1',
@@ -63,21 +66,32 @@ describe('auditSeatCeilingRaised', () => {
       logger
     );
 
-    expect(mockRecordAdminAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actor: expect.objectContaining({ kind: 'system' }),
-        details: expect.objectContaining({ actingAdminId: 'admin-9', trigger: 'admin-backfill' }),
-      }),
-      expect.objectContaining({ logger })
+    const input = mockRecordAdminAction.mock.calls[0][0];
+    expect(input.actor).toEqual(
+      expect.objectContaining({ kind: 'user', userId: 'admin-9', name: 'Ada', wasAdmin: true })
     );
+    expect(input.context).toEqual({ source: 'script' });
+    expect(input.details).not.toHaveProperty('actingAdminId');
   });
-});
 
-describe('notifySeatCeilingRaised', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockRecordAdminAction.mockResolvedValue(undefined);
-    mockPostToSlack.mockResolvedValue(undefined);
+  it('falls back to an unknown-admin actor and logs when the admin lookup rejects', async () => {
+    mockFindUserById.mockRejectedValue(new Error('db down'));
+    await auditSeatCeilingRaised(
+      {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        previousSeats: 4,
+        newSeats: 5,
+        trigger: 'admin-backfill',
+        actingAdminId: 'admin-9',
+      },
+      logger
+    );
+
+    expect(mockRecordAdminAction.mock.calls[0][0].actor).toEqual(
+      expect.objectContaining({ userId: 'admin-9', name: 'Unknown admin' })
+    );
+    expect(logger.error).toHaveBeenCalledWith('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', expect.anything());
   });
 
   it('posts the Slack alert AND writes the audit event for a live signup raise', async () => {

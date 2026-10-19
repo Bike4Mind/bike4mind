@@ -1,6 +1,8 @@
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { adminAuditService } from '@bike4mind/services';
+import { userRepository } from '@bike4mind/database/auth';
+import type { AuditActor } from '@bike4mind/common';
 import { systemAuditActor } from '@server/utils/adminAudit';
 
 interface SeatCeilingRaisedLogger {
@@ -26,9 +28,39 @@ interface SeatCeilingRaisedParams {
   previousSeats: number;
   newSeats: number;
   trigger: SeatCeilingRaiseTrigger;
-  /** The admin who ran a bulk raise (backfill). Recorded in the audit details; absent on live signup. */
+  /** The admin who ran a bulk raise (backfill). Becomes the audit actor; absent on live signup. */
   actingAdminId?: string;
 }
+
+const resolveAdminActor = async (adminId: string, logger?: SeatCeilingRaisedLogger): Promise<AuditActor> => {
+  try {
+    const admin = await userRepository.findById(adminId);
+    if (admin) {
+      return {
+        kind: 'user',
+        scope: 'platform',
+        userId: adminId,
+        email: admin.email ?? undefined,
+        name: admin.name || admin.username,
+        wasAdmin: true,
+      };
+    }
+  } catch (error) {
+    // Attribution must not abort the raise; the fallback actor still names who acted.
+    logger?.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', { adminId, error });
+    return unknownAdminActor(adminId);
+  }
+  logger?.error('[ADMIN_AUDIT_ACTOR_LOOKUP_FAILED]', { adminId, error: 'user not found' });
+  return unknownAdminActor(adminId);
+};
+
+const unknownAdminActor = (adminId: string): AuditActor => ({
+  kind: 'user',
+  scope: 'platform',
+  userId: adminId,
+  name: 'Unknown admin',
+  wasAdmin: true,
+});
 
 /**
  * Write the AUDIT record for a partner-rule seat-ceiling raise (#1239) - no Slack.
@@ -42,15 +74,16 @@ export async function auditSeatCeilingRaised(
   { organizationId, userId, previousSeats, newSeats, trigger, actingAdminId }: SeatCeilingRaisedParams,
   logger?: SeatCeilingRaisedLogger
 ): Promise<void> {
+  const actor = actingAdminId ? await resolveAdminActor(actingAdminId, logger) : systemAuditActor('Seat ceiling');
   await adminAuditService.recordAdminAction(
     {
       action: 'org.seats.ceiling_raised',
-      actor: systemAuditActor('Seat ceiling'),
+      actor,
       target: { kind: 'organization', id: organizationId, displayName: organizationId },
       summary: `raised seat ceiling from ${previousSeats} to ${newSeats}`,
       reason: `partner-rule domain signup (${trigger})`,
-      context: { source: 'worker' },
-      details: { userId, previousSeats, newSeats, trigger, ...(actingAdminId ? { actingAdminId } : {}) },
+      context: { source: actingAdminId ? 'script' : 'worker' },
+      details: { userId, previousSeats, newSeats, trigger },
     },
     { db: { adminAuditLog: adminAuditLogRepository }, logger }
   );

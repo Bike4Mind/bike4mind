@@ -182,6 +182,28 @@ describe('POST /api/[type]/[id]/invites', () => {
     );
   });
 
+  it('still returns success and records the entry when the audit-only group lookup rejects', async () => {
+    createInvite.mockResolvedValue({ id: 'i3', token: TOKEN, recipients: { pending: [] } });
+    groupFindById.mockRejectedValue(new Error('db down'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'groups', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.invite.created',
+        target: expect.objectContaining({ kind: 'system', id: '507f1f77bcf86cd799439011' }),
+      })
+    );
+  });
+
   it('records no admin audit entry for a non-group invite', async () => {
     createInvite.mockResolvedValue({ id: 'i1', token: TOKEN, recipients: { pending: [] } });
     const { req, res } = createMocks({
