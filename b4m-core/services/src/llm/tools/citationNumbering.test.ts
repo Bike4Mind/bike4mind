@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { CitableSource, IChatHistoryItemDocument } from '@bike4mind/common';
 import { applyQuestStatusChanges } from './ToolBuilder';
-import { areCitablesNumbered, assignCitationIndices, citationNumbersById } from './citationNumbering';
+import { areCitablesNumbered } from '@bike4mind/common';
+import { assignCitationIndices, citationNumbersById } from './citationNumbering';
 
 const citable = (id: string, citationIndex?: number): CitableSource =>
   ({

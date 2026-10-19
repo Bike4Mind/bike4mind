@@ -57,3 +57,12 @@ export const sourceNamedIn = (text: string, name: string): boolean => {
   // word boundary there.
   return new RegExp(`(?<!\\w)${words.join('[\\s_-]+')}(?!\\w)`, 'i').test(text);
 };
+
+/**
+ * Whether every citable carries the stamp of its own position (`metadata.citationIndex`), which is
+ * what lets `[N]` mean `citables[N-1]`. An empty list counts as numbered. The one definition shared
+ * by the server, which keeps or strips a turn's stamps on that basis (citationNumbering.ts), and
+ * the reply renderer, which links the markers only when it holds.
+ */
+export const areCitablesNumbered = (citables: readonly { metadata?: { citationIndex?: number } }[]): boolean =>
+  citables.every((citable, position) => citable.metadata?.citationIndex === position + 1);

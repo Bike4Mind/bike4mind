@@ -1,4 +1,4 @@
-import type { CitableSource } from '@bike4mind/common';
+import { areCitablesNumbered, type CitableSource } from '@bike4mind/common';
 
 /**
  * One [N] numbering per turn: in an indexed-citation session, `[N]` in the reply means
@@ -10,15 +10,6 @@ import type { CitableSource } from '@bike4mind/common';
 /** The identity the citables merge dedupes on (see applyQuestStatusChanges). */
 export const citableKey = (citable: Pick<CitableSource, 'id' | 'url' | 'title'>): string | undefined =>
   citable.id || citable.url || citable.title || undefined;
-
-/**
- * True when every citable carries the stamp of its own position. An empty list counts as numbered:
- * nothing has broken the sequence yet. Must stay in sync with the client's citationMarkersLinkable
- * (apps/client/app/components/Session/markdown/inlineCitations.tsx), which gates the links on the
- * same rule for a non-empty list.
- */
-export const areCitablesNumbered = (citables: readonly CitableSource[]): boolean =>
-  citables.every((citable, position) => citable.metadata?.citationIndex === position + 1);
 
 /**
  * Stamp `incoming` with the positions the citables merge will give them after `existing`: a

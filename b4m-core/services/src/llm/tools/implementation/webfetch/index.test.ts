@@ -543,3 +543,43 @@ describe('firecrawlFetch keyless plain-fetch fallback', () => {
     await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
   });
 });
+
+describe('web_fetch turn-wide citation numbering', () => {
+  async function runNumbered(numberCitables?: ToolContext['numberCitables']) {
+    scrapeMarkdown = 'page body';
+    const citables: CitableSource[] = [];
+    const statusUpdate = vi.fn(async (q: Parameters<ToolContext['statusUpdate']>[0]) => {
+      const emitted = q?.promptMeta?.citables as CitableSource[] | undefined;
+      if (emitted) citables.push(...emitted);
+    });
+    const context = { ...makeContext(statusUpdate), numberCitables } as ToolContext;
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+    return { result: result as string, citables };
+  }
+
+  it('leads the page with its turn number and ships the numbered citable', async () => {
+    const stamp: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((citable, position) => ({
+        ...citable,
+        metadata: { ...citable.metadata, citationIndex: position + 3 },
+      }));
+
+    const { result, citables } = await runNumbered(stamp);
+
+    expect(result.startsWith('This page is source [3].')).toBe(true);
+    expect(result).toContain('page body');
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata?.citationIndex).toBe(3);
+  });
+
+  it.each([
+    ['numberCitables returns undefined', vi.fn(() => undefined)],
+    ['numberCitables is absent', undefined],
+  ])('leaves the output unnumbered when %s', async (_label, numberCitables) => {
+    const { result, citables } = await runNumbered(numberCitables);
+
+    expect(result).not.toContain('[3]');
+    expect(result).not.toContain('This page is source');
+    expect(citables[0].metadata?.citationIndex).toBeUndefined();
+  });
+});
