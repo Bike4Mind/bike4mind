@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { SIDEBAR_SESSION_ID_MAX_LENGTH } from '@shared/sidebarSections';
-import { registerSidebarIpc } from './sidebarIpc';
+import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 
 const current = { sections: [{ id: 's1', name: 'Work' }], assignments: {} };
@@ -81,5 +81,36 @@ describe('sidebar IPC handlers', () => {
       ['made-up', null],
       ['real', 's1'],
     ]);
+  });
+});
+
+describe('placeNewSession', () => {
+  it('moves the new session into the section asked for and answers the state', async () => {
+    const placed = { sections: current.sections, assignments: { fresh: 's1' } };
+    const store = { move: vi.fn(() => Promise.resolve(placed)) };
+    const onError = vi.fn();
+
+    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toBe(placed);
+
+    expect(store.move).toHaveBeenCalledWith('fresh', 's1');
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, 42, {}])('writes nothing when the section is %j', async sectionId => {
+    const store = { move: vi.fn(() => Promise.resolve(current)) };
+
+    await expect(placeNewSession(store, 'fresh', sectionId, vi.fn())).resolves.toBeUndefined();
+
+    expect(store.move).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed write and answers no state, so the create still succeeds', async () => {
+    const failure = new Error('disk full');
+    const store = { move: vi.fn(() => Promise.reject(failure)) };
+    const onError = vi.fn();
+
+    await expect(placeNewSession(store, 'fresh', 's1', onError)).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledWith(failure);
   });
 });

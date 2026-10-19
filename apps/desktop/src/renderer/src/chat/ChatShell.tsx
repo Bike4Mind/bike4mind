@@ -55,7 +55,7 @@ import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { WebLinkContext } from './WebResults';
-import { useConversation, useModelCatalog, useSessionStatuses, useSessions } from './useChat';
+import { useConversation, useModelCatalog, useSessionStatuses, useSessions, type SessionPlacement } from './useChat';
 import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
@@ -165,6 +165,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const {
     sections: userSections,
     actions: sectionActions,
+    adopt: adoptSections,
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
@@ -430,11 +431,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * first, which meant dismissing that dialog produced nothing at all: no session, no message,
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
-  const startSession = useCallback(async () => {
-    if (mode !== 'code') return await create();
-    clearCodeError();
-    return await createCode({});
-  }, [mode, create, createCode, clearCodeError]);
+  const startSession = useCallback(
+    async (placement?: SessionPlacement) => {
+      if (mode !== 'code') return await create(placement);
+      clearCodeError();
+      return await createCode({}, placement);
+    },
+    [mode, create, createCode, clearCodeError]
+  );
 
   /** New, from the sidebar: it makes a session, opens it, and opens nothing else. */
   const onCreate = useCallback(async () => {
@@ -442,6 +446,23 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const created = await startSession();
     if (created) setActiveId(created);
   }, [startSession]);
+
+  /**
+   * New, from a user section's header or menu: the same session New makes, but in that section
+   * from the moment main mints its id - see CreateSessionRequest.
+   *
+   * The global New deliberately does not follow the open session into its section. What it
+   * makes would then depend on which row happens to be selected, which nothing on the button
+   * shows, and a user who wanted a loose session would have to move it back out.
+   */
+  const onCreateInSection = useCallback(
+    async (sectionId: string) => {
+      setScreen('conversation');
+      const created = await startSession({ sectionId, placed: adoptSections });
+      if (created) setActiveId(created);
+    },
+    [startSession, adoptSections]
+  );
 
   /**
    * On first arrival in a mode with nothing in it, make the session instead of sitting on a
@@ -534,6 +555,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onCreate={() => void onCreate()}
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
+        onCreateInSection={sectionId => void onCreateInSection(sectionId)}
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}

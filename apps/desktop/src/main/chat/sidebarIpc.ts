@@ -1,6 +1,6 @@
 import type { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { SIDEBAR_SESSION_ID_MAX_LENGTH } from '@shared/sidebarSections';
+import { SIDEBAR_SESSION_ID_MAX_LENGTH, type SidebarSectionsState } from '@shared/sidebarSections';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 
 const isText = (value: unknown): value is string => typeof value === 'string';
@@ -33,4 +33,25 @@ export function registerSidebarIpc(
     if (sectionId === null) return store.move(sessionId, null);
     return isText(sectionId) && (await knownSession(sessionId)) ? store.move(sessionId, sectionId) : store.read();
   });
+}
+
+/**
+ * Puts a session main has just created into the section the renderer asked for, before the reply
+ * naming it leaves main, so its row is never drawn in the default groups first. No section asked
+ * for is no state. A failed write is reported and answered with no state: the session exists
+ * either way, and simply starts in the default groups.
+ */
+export async function placeNewSession(
+  store: Pick<SidebarSectionStore, 'move'>,
+  sessionId: string,
+  sectionId: unknown,
+  onError: (error: unknown) => void
+): Promise<SidebarSectionsState | undefined> {
+  if (!isText(sectionId)) return undefined;
+  try {
+    return await store.move(sessionId, sectionId);
+  } catch (error) {
+    onError(error);
+    return undefined;
+  }
 }

@@ -71,6 +71,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onCreate={() => {}}
       onOpenArtifacts={() => {}}
       onCreateInProject={() => {}}
+      onCreateInSection={() => {}}
       onDelete={id => void remove(id)}
       onTogglePin={session => void togglePin(session)}
       onToggleArchived={session => void toggleArchived(session)}

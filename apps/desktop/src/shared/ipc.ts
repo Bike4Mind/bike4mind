@@ -30,6 +30,8 @@ import type {
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
+  CreateSessionRequest,
+  CreatedSession,
   CreateCodeSessionResult,
   ProjectInspection,
   RecentFolder,
@@ -471,7 +473,7 @@ export interface DesktopApi {
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
-    createSession(): Promise<ChatSessionSummary>;
+    createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.

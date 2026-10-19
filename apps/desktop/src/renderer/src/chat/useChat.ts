@@ -11,11 +11,13 @@ import type {
   ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
+  CreatedSession,
   ModelPhase,
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
+import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
 import { describeReturn } from './queuedMessages';
@@ -32,9 +34,9 @@ export interface SessionsController {
   sessions: ChatSessionSummary[];
   loading: boolean;
   reload: () => Promise<void>;
-  create: () => Promise<string>;
+  create: (placement?: SessionPlacement) => Promise<string>;
   /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
-  createCode: (request: CreateCodeSessionRequest) => Promise<string | null>;
+  createCode: (request: CreateCodeSessionRequest, placement?: SessionPlacement) => Promise<string | null>;
   /** Set while a Code session is being created - resolving a worktree can take a moment. */
   creatingCode: boolean;
   codeError: string | null;
@@ -48,6 +50,13 @@ export interface SessionsController {
   clearRenameError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
+}
+
+/** A user sidebar section to start a session in; see CreateSessionRequest. */
+export interface SessionPlacement {
+  sectionId: string;
+  /** Gets main's section state in the same update that adds the row, so it is drawn in place. */
+  placed: (sections: SidebarSectionsState) => void;
 }
 
 export function useSessions(): SessionsController {
@@ -77,27 +86,42 @@ export function useSessions(): SessionsController {
     });
   }, []);
 
-  const create = useCallback(async () => {
-    const created = await window.b4m.chat.createSession();
-    setSessions(current => [created, ...current]);
-    return created.id;
+  // The section state and the new row are set in one synchronous block, so React renders them
+  // together and the row never shows in the default groups on its way into its section.
+  const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
+    if (created.sidebarSections) placement?.placed(created.sidebarSections);
+    setSessions(current => [created.session, ...current]);
   }, []);
 
-  const createCode = useCallback(async (request: CreateCodeSessionRequest) => {
-    setCreatingCode(true);
-    setCodeError(null);
-    try {
-      const result = await window.b4m.chat.createCodeSession(request);
-      if (!result.ok) {
-        setCodeError(result.error);
-        return null;
+  const create = useCallback(
+    async (placement?: SessionPlacement) => {
+      const created = await window.b4m.chat.createSession(placement && { sectionId: placement.sectionId });
+      list(created, placement);
+      return created.session.id;
+    },
+    [list]
+  );
+
+  const createCode = useCallback(
+    async (request: CreateCodeSessionRequest, placement?: SessionPlacement) => {
+      setCreatingCode(true);
+      setCodeError(null);
+      try {
+        const result = await window.b4m.chat.createCodeSession(
+          placement ? { ...request, sectionId: placement.sectionId } : request
+        );
+        if (!result.ok) {
+          setCodeError(result.error);
+          return null;
+        }
+        list(result, placement);
+        return result.session.id;
+      } finally {
+        setCreatingCode(false);
       }
-      setSessions(current => [result.session, ...current]);
-      return result.session.id;
-    } finally {
-      setCreatingCode(false);
-    }
-  }, []);
+    },
+    [list]
+  );
 
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);

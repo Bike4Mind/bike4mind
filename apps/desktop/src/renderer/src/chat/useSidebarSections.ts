@@ -17,6 +17,8 @@ export interface SidebarSectionActions {
 export function useSidebarSections(): {
   sections: SidebarSectionsState;
   actions: SidebarSectionActions;
+  /** Takes a state main handed back from another call - creating a session in a section. */
+  adopt: (state: SidebarSectionsState) => void;
   /** Set when the last change failed to save; cleared by the next one that succeeds. */
   error: string | null;
   dismissError: () => void;
@@ -51,6 +53,7 @@ export function useSidebarSections(): {
       });
   }, []);
   const dismissError = useCallback(() => setError(null), []);
+  const adopt = useCallback((state: SidebarSectionsState) => setSections(state), []);
 
   const actions = useMemo<SidebarSectionActions>(
     () => ({
@@ -62,5 +65,5 @@ export function useSidebarSections(): {
     [apply]
   );
 
-  return { sections, actions, error, dismissError };
+  return { sections, actions, adopt, error, dismissError };
 }

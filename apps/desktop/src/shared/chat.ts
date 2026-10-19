@@ -12,6 +12,7 @@
 import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
+import type { SidebarSectionsState } from './sidebarSections';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -1350,6 +1351,26 @@ export interface CreateCodeSessionRequest {
   branch?: string;
   workspace?: boolean;
   contextDirectories?: string[];
+  /** The user sidebar section to start in; see CreateSessionRequest. */
+  sectionId?: string;
+}
+
+/** Start a Chat session. */
+export interface CreateSessionRequest {
+  /**
+   * The user sidebar section the new session belongs to. Main assigns it right after minting the
+   * id and before replying, so the row never shows in the default groups first.
+   */
+  sectionId?: string;
+}
+
+/**
+ * A new session, plus the sidebar sections as main left them when the request named a section.
+ * The renderer applies both together, so the row's first render is already inside the section.
+ */
+export interface CreatedSession {
+  session: ChatSessionSummary;
+  sidebarSections?: SidebarSectionsState;
 }
 
 /**
@@ -1357,7 +1378,7 @@ export interface CreateCodeSessionRequest {
  * that could not be made. Nothing is stored when it fails, so there is no half-created session
  * to clean up.
  */
-export type CreateCodeSessionResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
+export type CreateCodeSessionResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /**
  * A change to what an EXISTING Code session is grounded in. Every field is optional; an
