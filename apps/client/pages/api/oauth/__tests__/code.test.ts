@@ -164,6 +164,19 @@ describe('POST /api/oauth/code PKCE hardening', () => {
     expect(res.body?.error_description).toMatch(/admin:everything/);
     expect(h.generateAuthCode).not.toHaveBeenCalled();
   });
+
+  it('rejects offline_access for a first-party client not registered for it', async () => {
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'client_secret_post',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    const res = await call({ ...baseBody, scope: 'openid offline_access' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_scope');
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -214,6 +227,17 @@ describe('POST /api/oauth/code relying-party consent gate', () => {
     });
     expect(res.body?.code).toBe('the-code');
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
+  });
+
+  it('admits offline_access for a relying party whose allowedScopes lack it', async () => {
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue(null);
+    (h.decideConsent as Mock).mockReturnValue('mint');
+
+    const res = await call({ ...baseBody, scope: 'openid offline_access', consent: true });
+
+    expect(res.body?.code).toBe('the-code');
+    expect(h.upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['openid', 'offline_access'] }));
   });
 
   it('parses prompt as a space-delimited set: "login consent" still forces consent', async () => {

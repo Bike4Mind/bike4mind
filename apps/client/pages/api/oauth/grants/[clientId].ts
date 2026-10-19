@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { oauthGrantRepository } from '@bike4mind/database';
+import { oauthGrantRepository, oauthRefreshTokenRepository } from '@bike4mind/database';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
@@ -19,6 +19,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).delete(
 
     const revoked = await oauthGrantRepository.revoke(userId, clientId);
     if (!revoked) throw new NotFoundError('OAuth grant not found');
+    // A later re-consent clears the grant's revokedAt, so kill the refresh families now rather than
+    // relying on the refresh-time grant check alone.
+    await oauthRefreshTokenRepository.revokeAllForGrant(userId, clientId);
 
     await logAuthAudit(req, { userId, event: 'oauth_grant_revoked', metadata: { clientId } });
     return res.status(200).json({ revoked: true, clientId });

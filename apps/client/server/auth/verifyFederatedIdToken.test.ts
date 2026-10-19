@@ -123,6 +123,15 @@ describe('verifyFederatedIdToken - B4M-issued ID token (subjectSource: sub)', ()
     });
   });
 
+  it('accepts a refreshed, scope-limited id_token with no nonce (OIDC Core 12.2)', async () => {
+    // generateIdToken from the refresh_token grant: openid-only claims and no nonce.
+    mockVerify.mockResolvedValue({ iss: B4M_IDP.issuer, sub: 'b4m-user-777', aud: B4M_IDP.audience });
+
+    const result = await verifyFederatedIdToken('tok', B4M_IDP);
+
+    expect(result.b4mUserId).toBe('b4m-user-777');
+  });
+
   it('ignores an identities claim and never requires providerName', async () => {
     mockVerify.mockResolvedValue({
       sub: 'b4m-user-777',

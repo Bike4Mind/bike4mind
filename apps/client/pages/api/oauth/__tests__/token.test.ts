@@ -24,6 +24,13 @@ const h = vi.hoisted(() => ({
   signAccessToken: vi.fn(() => 'oauth.jwt'),
   grantCovers: vi.fn(() => true),
   oauthAccessTokenAudience: vi.fn(() => 'https://app.example'),
+  findByClientId: vi.fn(),
+  verifyClientSecret: vi.fn(),
+  findByFamilyId: vi.fn(),
+  rotate: vi.fn(),
+  revokeFamily: vi.fn(),
+  mintRefreshFamily: vi.fn(async () => 'fam1.secret0'),
+  assertAccountStateUsable: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,7 +53,28 @@ vi.mock('@bike4mind/database', () => ({
   oauthAuthorizationCodeRepository: { findValidCode: h.findValidCode, consumeValidCode: h.consumeValidCode },
   userRepository: { findById: h.findById },
   oauthGrantRepository: { findGrant: h.findGrant },
+  oauthClientRepository: { findByClientId: h.findByClientId, verifyClientSecret: h.verifyClientSecret },
+  oauthRefreshTokenRepository: { findByFamilyId: h.findByFamilyId, rotate: h.rotate, revokeFamily: h.revokeFamily },
 }));
+// Deterministic stand-ins for the pure token-format helpers (the real ones are pinned in
+// oauthRefreshToken.test.ts): hash(s) = 'h:' + s, and every new secret is 'secret1'.
+vi.mock('@bike4mind/services', () => ({
+  isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
+  authSessionService: {
+    parseRefreshToken: (t: string) => {
+      const [sid, secret] = t.split('.');
+      return sid && secret ? { sid, secret } : null;
+    },
+    hashRefreshSecret: (s: string) => `h:${s}`,
+    generateRefreshSecret: () => 'secret1',
+    buildRefreshToken: (sid: string, secret: string) => `${sid}.${secret}`,
+  },
+}));
+vi.mock('@server/auth/oauthRefreshToken', () => ({
+  mintRefreshFamily: h.mintRefreshFamily,
+  refreshFamilyExpiresAt: () => new Date('2030-01-01T00:00:00Z'),
+}));
+vi.mock('@server/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: h.assertAccountStateUsable }));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 3600,
@@ -61,7 +89,14 @@ import handler from '../token';
 
 type Res = {
   statusCode: number;
-  body?: { error?: string; error_description?: string; access_token?: string };
+  body?: {
+    error?: string;
+    error_description?: string;
+    access_token?: string;
+    refresh_token?: string;
+    id_token?: string;
+    scope?: string;
+  };
   status: (c: number) => Res;
   json: (b: unknown) => Res;
 };
@@ -333,5 +368,194 @@ describe('POST /api/oauth/token relying-party issuance', () => {
     expect(res.body?.error).toBe('access_denied');
     expect(h.signAccessToken).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
+  it('issues a refresh_token when the code carries offline_access', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none', clientType: 'relying-party' });
+    seedValidCode({ ...authCode('challenge'), scopes: ['openid', 'offline_access'] });
+    (h.verifyPkce as Mock).mockReturnValue(true);
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'offline_access'] });
+
+    const res = await call({ ...baseBody, code_verifier: VALID_VERIFIER });
+
+    expect(res.body?.refresh_token).toBe('fam1.secret0');
+    expect(h.mintRefreshFamily).toHaveBeenCalledWith({
+      userId: 'u1',
+      clientId: 'client-1',
+      scopes: ['openid', 'offline_access'],
+      tokenVersion: 0,
+    });
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/token refresh_token grant', () => {
+  const SCOPES = ['openid', 'email', 'offline_access'];
+  const rp = { clientId: 'client-1', clientType: 'relying-party', tokenEndpointAuthMethod: 'none' };
+  const family = (overrides: Record<string, unknown> = {}) => ({
+    familyId: 'fam1',
+    userId: 'u1',
+    clientId: 'client-1',
+    scopes: SCOPES,
+    tokenHash: 'h:secret0',
+    tokenVersion: 0,
+    expiresAt: new Date(Date.now() + 60_000),
+    revokedAt: null,
+    createdAt: new Date(),
+    ...overrides,
+  });
+  const refreshBody = { grant_type: 'refresh_token', refresh_token: 'fam1.secret0', client_id: 'client-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.findByClientId as Mock).mockResolvedValue(rp);
+    (h.assertAccountStateUsable as Mock).mockImplementation(() => undefined);
+    (h.findByFamilyId as Mock).mockResolvedValue(family());
+    (h.rotate as Mock).mockImplementation(async () => family({ tokenHash: 'h:secret1' }));
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', username: 'u', tokenVersion: 0 });
+    (h.findGrant as Mock).mockResolvedValue({ scopes: SCOPES });
+    (h.grantCovers as Mock).mockReturnValue(true);
+    (h.signAccessToken as Mock).mockReturnValue('oauth.jwt');
+  });
+
+  const expectRejected = (res: Res, error = 'invalid_grant') => {
+    expect(res.body?.error).toBe(error);
+    expect(res.body?.access_token).toBeUndefined();
+    expect(h.signAccessToken).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  };
+
+  it('rotates and returns a kind:oauth access token, a no-nonce scope-limited id_token and the next refresh token', async () => {
+    const res = await call(refreshBody);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      access_token: 'oauth.jwt',
+      id_token: 'id.jwt',
+      refresh_token: 'fam1.secret1',
+      scope: SCOPES.join(' '),
+    });
+    expect(h.rotate).toHaveBeenCalledWith(
+      'fam1',
+      expect.objectContaining({ expectedHash: 'h:secret0', nextHash: 'h:secret1' })
+    );
+    expect(h.signAccessToken).toHaveBeenCalledWith(
+      'u1',
+      0,
+      expect.objectContaining({ kind: 'oauth', client_id: 'client-1', scope: SCOPES.join(' ') })
+    );
+    const idTokenParams = (h.generateIdToken as Mock).mock.calls[0][0];
+    expect(idTokenParams).toMatchObject({ scopeLimited: true, scopes: SCOPES });
+    expect(idTokenParams.nonce).toBeUndefined();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
+  it('treats a superseded token as reuse: revokes the family and rejects', async () => {
+    // The family has already rotated past secret0.
+    (h.findByFamilyId as Mock).mockResolvedValue(family({ tokenHash: 'h:secret1' }));
+
+    const res = await call(refreshBody);
+
+    expectRejected(res);
+    expect(h.revokeFamily).toHaveBeenCalledWith('fam1');
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects even the newest token once the family is revoked', async () => {
+    (h.findByFamilyId as Mock).mockResolvedValue(family({ tokenHash: 'h:secret1', revokedAt: new Date() }));
+
+    expectRejected(await call({ ...refreshBody, refresh_token: 'fam1.secret1' }));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('treats a lost rotate race as reuse and revokes the family', async () => {
+    (h.rotate as Mock).mockResolvedValue(null);
+
+    expectRejected(await call(refreshBody));
+    expect(h.revokeFamily).toHaveBeenCalledWith('fam1');
+  });
+
+  it('rejects an expired family', async () => {
+    (h.findByFamilyId as Mock).mockResolvedValue(family({ expiresAt: new Date(Date.now() - 1000) }));
+
+    expectRejected(await call(refreshBody));
+  });
+
+  it('rejects a revoked grant without consuming the token', async () => {
+    (h.findGrant as Mock).mockResolvedValue(null);
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a grant that no longer includes offline_access', async () => {
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'email'] });
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects after a tokenVersion bump', async () => {
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', tokenVersion: 1 });
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blocked account', async () => {
+    (h.assertAccountStateUsable as Mock).mockImplementation(() => {
+      throw new Error('banned');
+    });
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deactivated client (findByClientId filters isActive)', async () => {
+    (h.findByClientId as Mock).mockResolvedValue(null);
+
+    const res = await call(refreshBody);
+
+    expect(res.statusCode).toBe(401);
+    expectRejected(res, 'invalid_client');
+  });
+
+  it('rejects a different client_id than the family was issued to, without revoking it', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, clientId: 'client-2' });
+
+    expectRejected(await call({ ...refreshBody, client_id: 'client-2' }));
+    expect(h.revokeFamily).not.toHaveBeenCalled();
+  });
+
+  it('requires a valid client_secret from a confidential client (401)', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.verifyClientSecret as Mock).mockResolvedValue(null);
+
+    for (const body of [refreshBody, { ...refreshBody, client_secret: 'wrong' }]) {
+      const res = await call(body);
+      expect(res.statusCode).toBe(401);
+      expectRejected(res, 'invalid_client');
+    }
+    expect(h.findByFamilyId).not.toHaveBeenCalled();
+  });
+
+  it('never gives a first-party client a session through the refresh_token grant', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, clientType: 'first-party' });
+
+    expectRejected(await call(refreshBody), 'unauthorized_client');
+    expect(h.findByFamilyId).not.toHaveBeenCalled();
+  });
+
+  it('narrows the response to a requested subset of scopes', async () => {
+    const res = await call({ ...refreshBody, scope: 'openid' });
+
+    expect(res.body?.scope).toBe('openid');
+    expect(h.signAccessToken).toHaveBeenCalledWith('u1', 0, expect.objectContaining({ scope: 'openid' }));
+    expect(h.generateIdToken).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['openid'] }));
+  });
+
+  it('rejects a scope wider than the family with invalid_scope, without consuming the token', async () => {
+    expectRejected(await call({ ...refreshBody, scope: 'openid files:write' }), 'invalid_scope');
+    expect(h.rotate).not.toHaveBeenCalled();
   });
 });

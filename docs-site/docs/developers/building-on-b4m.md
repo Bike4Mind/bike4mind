@@ -83,7 +83,7 @@ On your callback, check that `state` matches the stored value, then POST to `tok
 
 | Parameter       | Value                                                                   |
 | --------------- | ----------------------------------------------------------------------- |
-| `grant_type`    | `authorization_code` (the only grant this endpoint accepts)             |
+| `grant_type`    | `authorization_code` (see below for `refresh_token`)                    |
 | `code`          | from the callback                                                       |
 | `redirect_uri`  | the same value as in the authorization request                          |
 | `client_id`     | your client id                                                          |
@@ -92,7 +92,7 @@ On your callback, check that `state` matches the stored value, then POST to `tok
 
 Codes live for 10 minutes and are single-use. The token endpoint allows 20 requests per minute per IP. A wrong secret returns 401 `invalid_client`, an unknown `client_id` or unregistered `redirect_uri` returns 401 `unauthorized_client`, and a code whose grant the user has since revoked returns 400 `access_denied`.
 
-The response is `{ access_token, id_token, token_type: "Bearer", expires_in, scope }`. There is **no refresh token** for third-party apps.
+The response is `{ access_token, id_token, token_type: "Bearer", expires_in, scope }`. If you requested the `offline_access` scope (and the user consented), it also includes a `refresh_token`; see "Refresh tokens" below.
 
 ### Verify the ID token
 
@@ -112,11 +112,35 @@ Its claims are `sub` (the stable B4M user id), `iss`, `aud`, `iat`, `exp` and `n
 
 Currently the access token lives 30 minutes and the ID token 1 hour; always trust `expires_in` and the token's `exp` rather than these numbers. Give the browser your own HttpOnly session cookie and keep every B4M token server-side.
 
-Because there is no refresh token, when the ID token expires you send the user through `authorization_endpoint` again. A user who is still signed in to B4M and has already consented is redirected straight back with a new code, without seeing a B4M page.
+Without a refresh token, when the ID token expires you send the user through `authorization_endpoint` again. A user who is still signed in to B4M and has already consented is redirected straight back with a new code, without seeing a B4M page.
 
 The B4M access token is only good for `GET {issuer}/api/oauth/userinfo`, which returns `sub`, `email` and `email_verified` (email scope), and `name` and `picture` (profile scope). Every other B4M API rejects it. To call AI or account APIs, use the exchange in section 5.
 
-The refresh-token endpoint and the device flow serve first-party B4M clients only (the B4M CLI and desktop app). They are not available to third-party apps.
+### Refresh tokens
+
+Add `offline_access` to the requested `scope` to get a refresh token. The user sees it on the consent screen as "Stay connected to your account when you are not using the app". Any registered third-party client may request it.
+
+To refresh, POST to `token_endpoint` from your server:
+
+| Parameter       | Value                                                                       |
+| --------------- | --------------------------------------------------------------------------- |
+| `grant_type`    | `refresh_token`                                                             |
+| `refresh_token` | the most recent refresh token you received                                  |
+| `client_id`     | your client id                                                              |
+| `client_secret` | your client secret (confidential clients only)                              |
+| `scope`         | optional; a subset of the original scopes, to narrow this response's tokens |
+
+The response is `{ access_token, id_token, refresh_token, token_type: "Bearer", expires_in, scope }`. The new ID token has no `nonce`.
+
+Refresh tokens **rotate on every use**:
+
+- Store the new `refresh_token` from every response and discard the old one. The old one stops working immediately.
+- **Serialize refreshes per token.** Presenting a refresh token that has already been used is treated as theft: B4M revokes the whole token family, including the newest token, and returns 400 `invalid_grant`. Two workers refreshing the same token at once will log the user out. If you lose a refresh response, send the user through `authorization_endpoint` again.
+- A refresh token expires after 30 days without use, and in any case 90 days after the original authorization. Then the user must authorize again.
+
+A refresh returns 400 `invalid_grant` when the token is unknown, expired, reused or revoked, when the user revoked your app, signed out everywhere or reset their password, or when the account is suspended. A wider `scope` than the original returns 400 `invalid_scope`. A bad or missing client secret returns 401 `invalid_client`.
+
+The `/api/oauth/refresh` endpoint and the device flow serve first-party B4M clients only (the B4M CLI and desktop app). They are not available to third-party apps.
 
 Users can review and revoke the apps they have granted access to from their B4M account.
 
@@ -267,18 +291,18 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-| Status | Meaning | `errorCode` |
-|--------|---------|-------------|
-| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
-| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
-| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
-| 405 | Wrong HTTP method; use `POST`. | - |
-| 413 | The body is over 25 MB. | - |
-| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
-| 422 | The body failed validation; `error` names the failing fields. | - |
-| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
-| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
+| Status | Meaning                                                                                                                           | `errorCode`                                  |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 400    | Malformed JSON, or a `model` B4M does not know or cannot serve you.                                                               | -                                            |
+| 401    | The key was rejected. Re-mint once (see "One re-mint" above).                                                                     | -                                            |
+| 403    | The key lacks a scope this endpoint needs; `required_scopes` names them.                                                          | -                                            |
+| 405    | Wrong HTTP method; use `POST`.                                                                                                    | -                                            |
+| 413    | The body is over 25 MB.                                                                                                           | -                                            |
+| 422    | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance.  | `insufficient_credits`                       |
+| 422    | The body failed validation; `error` names the failing fields.                                                                     | -                                            |
+| 429    | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | -                                            |
+| 500    | Internal error. Retry, and log `request_id` if it persists.                                                                       | -                                            |
+| 503    | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model.     | `provider_not_configured` for the model case |
 
 The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
 
@@ -559,7 +583,9 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     const err: { error?: string; errorCode?: string; request_id?: string } = await res.json().catch(() => ({}));
     if (err.errorCode === 'insufficient_credits') throw new OutOfCreditsError(err.error);
     if (res.status === 429) throw new RateLimitedError(Number(res.headers.get('Retry-After')) || 60);
-    throw new Error(`Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`);
+    throw new Error(
+      `Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`
+    );
   }
   if (!res.body) throw new Error('Completion response had no body');
 

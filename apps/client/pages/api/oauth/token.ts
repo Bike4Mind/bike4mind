@@ -3,19 +3,30 @@
  *
  * OAuth 2.0 token endpoint. Handles only:
  * - grant_type=authorization_code  (PKCE for public clients, client_secret_post for confidential)
+ * - grant_type=refresh_token       (relying-party clients only; rotated, grant-bound families)
  *
- * Refresh is a separate endpoint (POST /api/oauth/refresh); this one rejects any other grant_type.
+ * First-party/device refresh is a separate endpoint (POST /api/oauth/refresh); this one rejects any
+ * other grant_type.
  */
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { oauthAuthorizationCodeRepository, oauthGrantRepository, userRepository } from '@bike4mind/database';
+import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
+import {
+  oauthAuthorizationCodeRepository,
+  oauthClientRepository,
+  oauthGrantRepository,
+  oauthRefreshTokenRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { PKCE_CODE_VERIFIER_RE } from '@server/auth/pkce';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
+import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -32,6 +43,27 @@ const AuthCodeRequestSchema = z.object({
     .optional(),
   client_secret: z.string().optional(),
 });
+
+// RFC 6749 6. `scope` may narrow (never widen) the family's scopes for this response only.
+const RefreshRequestSchema = z.object({
+  grant_type: z.literal('refresh_token'),
+  refresh_token: z.string(),
+  client_id: z.string(),
+  client_secret: z.string().optional(),
+  scope: z.string().optional(),
+});
+
+function idTokenUserParams(user: { id: string; email?: string | null; username?: string; oauthCredentials?: unknown }) {
+  const email = user.email ?? '';
+  return {
+    userId: user.id,
+    email,
+    name: user.username || email.split('@')[0],
+    picture: (user.oauthCredentials as { picture?: string } | undefined)?.picture ?? null,
+  };
+}
+
+const invalidGrant = { error: 'invalid_grant', error_description: 'Invalid refresh token' };
 
 const handler = baseApi({ auth: false })
   .use(rateLimit({ limit: 20, windowMs: 60 * 1000 }))
@@ -119,12 +151,8 @@ const handler = baseApi({ auth: false })
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
 
-      const userEmail = user.email ?? '';
       const idToken = generateIdToken({
-        userId: user.id,
-        email: userEmail,
-        name: user.username || userEmail.split('@')[0],
-        picture: (user.oauthCredentials as any)?.picture ?? null,
+        ...idTokenUserParams(user),
         clientId: client_id,
         scopes: authCode.scopes,
         // Only a relying-party grant is scope-limited; a first-party client keeps the full claim
@@ -152,16 +180,25 @@ const handler = baseApi({ auth: false })
           aud: oauthAccessTokenAudience(),
         });
 
+        // A refresh token only with offline_access (OIDC Core 11); without it the relying party
+        // re-authorizes through the browser flow, which its remembered consent makes silent.
+        const refreshToken = authCode.scopes.includes('offline_access')
+          ? await mintRefreshFamily({
+              userId: user.id,
+              clientId: client_id,
+              scopes: authCode.scopes,
+              tokenVersion: user.tokenVersion ?? 0,
+            })
+          : undefined;
+
         return res.json({
           access_token: accessToken,
           id_token: idToken,
+          ...(refreshToken ? { refresh_token: refreshToken } : {}),
           token_type: 'Bearer',
           expires_in: ACCESS_TOKEN_TTL_SECONDS,
           // RFC 6749 3.3: echo the granted scope so the client sees what it actually got.
           scope: scopeStr,
-          // No refresh_token: a relying party re-authorizes through the browser flow, which its
-          // remembered consent makes silent. Rotated OAuth refresh tokens (RFC 9700 2.2.2) are the
-          // upgrade path if a headless relying party ever needs one.
         });
       }
 
@@ -177,6 +214,112 @@ const handler = baseApi({ auth: false })
         refresh_token: refreshToken,
         token_type: 'Bearer',
         expires_in: ACCESS_TOKEN_TTL_SECONDS,
+      });
+    }
+
+    if (grant_type === 'refresh_token') {
+      const parsed = RefreshRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
+      }
+      const { refresh_token, client_id, client_secret, scope } = parsed.data;
+
+      // findByClientId filters isActive, so a deactivated client can no longer refresh. Only relying
+      // parties hold these families: a first-party client never reaches a session through here.
+      const client = await oauthClientRepository.findByClientId(client_id);
+      if (!client) {
+        return res.status(401).json({ error: 'invalid_client', error_description: 'Unknown client' });
+      }
+      if (client.clientType !== 'relying-party') {
+        return res.status(400).json({ error: 'unauthorized_client' });
+      }
+      if (client.tokenEndpointAuthMethod === 'client_secret_post') {
+        const authed = client_secret ? await oauthClientRepository.verifyClientSecret(client_id, client_secret) : null;
+        if (!authed) {
+          return res.status(401).json({ error: 'invalid_client', error_description: 'Client authentication required' });
+        }
+      }
+
+      const presented = authSessionService.parseRefreshToken(refresh_token);
+      const family = presented ? await oauthRefreshTokenRepository.findByFamilyId(presented.sid) : null;
+      // A wrong client_id is rejected WITHOUT revoking, so another client cannot kill this family.
+      if (
+        !presented ||
+        !family ||
+        family.revokedAt ||
+        family.expiresAt <= new Date() ||
+        family.clientId !== client_id
+      ) {
+        return res.status(400).json(invalidGrant);
+      }
+
+      // Strict reuse detection (RFC 9700 2.2.2): a superseded secret on a live family means the chain
+      // leaked or was replayed, so the whole family dies, including the holder of the newest token.
+      const presentedHash = authSessionService.hashRefreshSecret(presented.secret);
+      if (presentedHash !== family.tokenHash) {
+        await oauthRefreshTokenRepository.revokeFamily(family.familyId);
+        console.warn('[oauth/token] refresh token reuse; family revoked', {
+          familyId: family.familyId,
+          clientId: client_id,
+          userId: family.userId,
+        });
+        return res.status(400).json(invalidGrant);
+      }
+
+      // Every precondition is checked before the rotate below, so a failure here does not consume the token.
+      const user = await userRepository.findById(family.userId);
+      if (!user || !isTokenVersionCurrent(family.tokenVersion, user.tokenVersion)) {
+        return res.status(400).json(invalidGrant);
+      }
+      try {
+        assertAccountStateUsable(user);
+      } catch {
+        return res.status(400).json(invalidGrant);
+      }
+      const grant = await oauthGrantRepository.findGrant(user.id, client_id);
+      if (!grant || !grantCovers(grant.scopes, family.scopes) || !grant.scopes.includes('offline_access')) {
+        return res.status(400).json(invalidGrant);
+      }
+
+      const scopes = scope ? scope.split(' ').filter(Boolean) : family.scopes;
+      if (!scopes.every(s => family.scopes.includes(s))) {
+        return res.status(400).json({ error: 'invalid_scope', error_description: 'scope exceeds the original grant' });
+      }
+
+      const nextSecret = authSessionService.generateRefreshSecret();
+      const rotated = await oauthRefreshTokenRepository.rotate(family.familyId, {
+        expectedHash: presentedHash,
+        nextHash: authSessionService.hashRefreshSecret(nextSecret),
+        newExpiresAt: refreshFamilyExpiresAt(family.createdAt),
+      });
+      if (!rotated) {
+        // A concurrent request rotated first: the same token was used twice, which is reuse.
+        await oauthRefreshTokenRepository.revokeFamily(family.familyId);
+        return res.status(400).json(invalidGrant);
+      }
+
+      const scopeStr = scopes.join(' ');
+      const accessToken = authTokenGenerator.signAccessToken(user.id, user.tokenVersion ?? 0, {
+        kind: 'oauth',
+        client_id,
+        scope: scopeStr,
+        aud: oauthAccessTokenAudience(),
+      });
+      // No nonce on a refreshed id_token (OIDC Core 12.2).
+      const idToken = generateIdToken({
+        ...idTokenUserParams(user),
+        clientId: client_id,
+        scopes,
+        scopeLimited: true,
+      });
+
+      return res.json({
+        access_token: accessToken,
+        id_token: idToken,
+        refresh_token: authSessionService.buildRefreshToken(family.familyId, nextSecret),
+        token_type: 'Bearer',
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
+        scope: scopeStr,
       });
     }
 

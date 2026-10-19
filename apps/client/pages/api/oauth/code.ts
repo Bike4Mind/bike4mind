@@ -76,7 +76,11 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   // dropping it, so a client that asks for more than it may have gets a clear error instead of a
   // narrower grant it never notices.
   const requestedScopes = scope.split(' ').filter(Boolean);
-  const disallowedScopes = requestedScopes.filter(s => !client.allowedScopes.includes(s));
+  // offline_access is admitted for every relying party without a client-registration backfill: the
+  // user's consent prompt is the control, and it only yields a refresh token at /api/oauth/token.
+  const disallowedScopes = requestedScopes.filter(
+    s => !client.allowedScopes.includes(s) && !(s === 'offline_access' && client.clientType === 'relying-party')
+  );
   if (disallowedScopes.length > 0) {
     return res
       .status(400)
