@@ -16,20 +16,17 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate } from '@tanstack/react-router';
 import { adminAuditLogPath } from '@bike4mind/common';
-import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
-import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { formatCredits, numberCell } from '../utils/format';
 import { useCreditAdjustmentsLog } from '../hooks/useCreditAdjustmentsLog';
 
 const DAY_OPTIONS = [7, 30, 90, 365] as const;
 
-/** Switches the in-app tab and mirrors the filter into the URL, which the Audit Log page reads. */
+/** Opens the Audit Log tab with the credits filter; the URL selects the tab, which the Audit Log page reads. */
 const useOpenCreditsAuditLog = () => {
   const navigate = useNavigate();
   return () => {
     const search = Object.fromEntries(new URL(adminAuditLogPath({ category: 'credits' }), 'http://local').searchParams);
-    useAdminModal.getState().setActiveTab(AdminTab.AuditLog);
     navigate({ to: '/admin', search: search as never });
   };
 };

@@ -2,15 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useNavigationExecutor } from './useNavigationExecutor';
 import { useOptiNavigation } from './useOptiNavigation';
+import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 
-const mockNavigate = vi.fn();
+const { mockNavigate, mockSetActiveTab } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+  mockSetActiveTab: vi.fn(),
+}));
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
 }));
 
 vi.mock('@client/app/components/admin/useAdminModal', () => ({
-  useAdminModal: (selector: (s: unknown) => unknown) => selector({ setActiveTab: vi.fn() }),
+  useAdminModal: (selector: (s: unknown) => unknown) => selector({ setActiveTab: mockSetActiveTab }),
 }));
 
 vi.mock('@client/app/components/Files/Browser', () => ({
@@ -85,5 +89,26 @@ describe('useNavigationExecutor', () => {
     >[0]);
 
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/new' });
+  });
+
+  it('selects the admin tab and names its slug in the URL', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'tab', target: String(AdminTab.LLMDashboard) } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockSetActiveTab).toHaveBeenCalledWith(AdminTab.LLMDashboard);
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
+  });
+
+  // A tab intent whose target is not an index still opens the console; it just has no tab to name.
+  it('navigates without a slug when the tab target is not an index', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'tab', target: 'not-a-number' } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockSetActiveTab).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: undefined } });
   });
 });
