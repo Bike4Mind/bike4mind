@@ -211,6 +211,24 @@ describe('handlePermissionResponse', () => {
     expect(noopLogger.warn).not.toHaveBeenCalled();
   });
 
+  it('builds the deny reply from the paused tool name, not the client-supplied one', async () => {
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: true, toolName: 'forged' }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
+    expect(mockDenyPendingPermission).toHaveBeenCalledWith('exec-1', {
+      toolCallId: 'call-1',
+      deniedTool: 'web_search',
+      errorMessage: 'Execution stopped: you denied "web_search".',
+    });
+    expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'denied');
+  });
+
   it('still persists the denial when the failed frame cannot be delivered', async () => {
     mockApiGwSend.mockRejectedValueOnce(new Error('GoneException'));
 
