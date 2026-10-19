@@ -291,18 +291,18 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 `POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
 
-| Status | Meaning                                                                                                                           | `errorCode`                                  |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 400    | Malformed JSON, or a `model` B4M does not know or cannot serve you.                                                               | -                                            |
-| 401    | The key was rejected. Re-mint once (see "One re-mint" above).                                                                     | -                                            |
-| 403    | The key lacks a scope this endpoint needs; `required_scopes` names them.                                                          | -                                            |
-| 405    | Wrong HTTP method; use `POST`.                                                                                                    | -                                            |
-| 413    | The body is over 25 MB.                                                                                                           | -                                            |
-| 422    | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance.  | `insufficient_credits`                       |
-| 422    | The body failed validation; `error` names the failing fields.                                                                     | -                                            |
-| 429    | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | -                                            |
-| 500    | Internal error. Retry, and log `request_id` if it persists.                                                                       | -                                            |
-| 503    | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model.     | `provider_not_configured` for the model case |
+| Status | Meaning | `errorCode` |
+|--------|---------|-------------|
+| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
+| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
+| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
+| 405 | Wrong HTTP method; use `POST`. | - |
+| 413 | The body is over 25 MB. | - |
+| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
+| 422 | The body failed validation; `error` names the failing fields. | - |
+| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
+| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
+| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
 
 The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
 
@@ -583,9 +583,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
     const err: { error?: string; errorCode?: string; request_id?: string } = await res.json().catch(() => ({}));
     if (err.errorCode === 'insufficient_credits') throw new OutOfCreditsError(err.error);
     if (res.status === 429) throw new RateLimitedError(Number(res.headers.get('Retry-After')) || 60);
-    throw new Error(
-      `Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`
-    );
+    throw new Error(`Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`);
   }
   if (!res.body) throw new Error('Completion response had no body');
 
