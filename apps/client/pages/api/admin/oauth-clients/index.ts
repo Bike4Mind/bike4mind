@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
-import { AdminConfigAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createOAuthClient, listOAuthClients } from '@bike4mind/database';
 import { ApiKeyScope, createOAuthClientSchema } from '@bike4mind/common';
 
@@ -14,25 +14,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const input = parseOrBadRequest(createOAuthClientSchema, req.body);
     const result = await createOAuthClient(input);
 
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminConfigAuditEvents.OAUTH_CLIENT_CREATED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        ip: req.ip,
-        configType: 'oauth-client',
-        metadata: {
-          oauthClientId: result.client.id,
-          clientId: result.client.clientId,
-          name: result.client.name,
-          clientType: result.client.clientType,
-          redirectUris: result.client.redirectUris,
-          federated: !!result.client.federatedIdp,
-        },
+    await recordAdminActionFromRequest(req, {
+      action: 'oauth_client.created',
+      target: { kind: 'oauthClient', id: result.client.id, displayName: result.client.name },
+      summary: 'created an OAuth client',
+      details: {
+        clientId: result.client.clientId,
+        clientType: result.client.clientType,
+        redirectUris: result.client.redirectUris,
+        federated: !!result.client.federatedIdp,
       },
-      req.logger
-    );
+    });
 
     // Carries the plaintext secret (as does rotate); it is never stored or logged.
     res.setHeader('Cache-Control', 'no-store');

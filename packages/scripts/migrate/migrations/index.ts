@@ -198,6 +198,10 @@ import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReconcileOrgStampedFileStorageOwners from './20260921235971_reconcile-org-stamped-file-storage-owners';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -346,6 +350,8 @@ const coreMigrations: MigrationFile[] = [
   SetIntegrationAuditLogRetention,
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
+  EnsureAdminAuditLogIndexes,
+  BackfillAdminAuditLog,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

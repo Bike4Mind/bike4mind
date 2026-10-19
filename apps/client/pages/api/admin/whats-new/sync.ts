@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { WhatsNewForkFetcher } from '@server/services/whatsNewForkFetcher';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';
 
@@ -78,16 +78,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const existingSync = await WhatsNewForkFetcher.syncExistingModals();
 
       // Log audit event
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.WHATS_NEW_SYNC_TRIGGERED,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-          metadata: { importResult, existingSync },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.synced',
+        target: { kind: 'settings', id: 'whats-new-sync', displayName: "What's New sync" },
+        summary: 'triggered a manual sync',
+        details: { importResult, existingSync },
+      });
 
       req.logger?.info("What's New sync triggered manually", { importResult, existingSync });
 

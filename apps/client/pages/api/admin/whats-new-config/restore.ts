@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { ForbiddenError } from '@server/utils/errors';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 // Rate limiting constants - stricter for restore operations
@@ -47,18 +47,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       );
 
       // Log audit event for config restore
-      await logAuditEvent({
-        userId: req.user.id,
-        action: AdminConfigAuditEvents.WHATS_NEW_CONFIG_UPDATED,
-        ip: req.ip,
-        userAgent: req.get('user-agent'),
-        configType: 'whats-new-config',
-        adminUserId: req.user.id,
-        adminUsername: req.user.username ?? req.user.email,
-        oldConfig,
-        newConfig: restoredConfig,
-        changedFields: ['restored_from_history'],
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.updated',
+        target: { kind: 'settings', id: 'whats-new-config', displayName: "What's New configuration" },
+        summary: 'restored the configuration from history',
         reason: `Restored from history (index ${index}, original timestamp: ${historyEntry.metadata.timestamp})`,
+        changes: [{ field: 'config', before: oldConfig, after: restoredConfig }],
       });
 
       return res.json({
