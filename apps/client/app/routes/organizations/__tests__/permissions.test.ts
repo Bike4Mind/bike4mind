@@ -393,6 +393,14 @@ describe('resolveAccessibleTab', () => {
     expect(resolveAccessibleTab(OrganizationTabs.Webhooks, managing)).toBe(OrganizationTabs.Overview);
   });
 
+  it.each([OrganizationTabs.Integrations, OrganizationTabs.GitHub, OrganizationTabs.Webhooks])(
+    'keeps %s reachable for the owner, keyed on canManageIntegrations alone',
+    tab => {
+      expect(resolveAccessibleTab(tab, all)).toBe(tab);
+      expect(resolveAccessibleTab(tab, { ...all, canManageOrg: false })).toBe(tab);
+    }
+  );
+
   it('keeps Settings reachable for that same caller', () => {
     const managing = { ...all, canViewBilling: false, canManageIntegrations: false };
     expect(resolveAccessibleTab(OrganizationTabs.Settings, managing)).toBe(OrganizationTabs.Settings);
