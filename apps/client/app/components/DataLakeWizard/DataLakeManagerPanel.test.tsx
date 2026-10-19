@@ -199,6 +199,8 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: toastError, success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 // Controllable per-test so a canRebuild-gating test can put a backlog on the lake, while the
 // default (below, in beforeEach) keeps every other test's Rebuild button/chip hidden as before.
 const useUnderChunkedCount = vi.fn(() => ({
@@ -351,7 +353,8 @@ beforeEach(() => {
   retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
-  useDataLakeWizardStore.setState({ managerTab: 'mine' });
+  useDataLakeWizardStore.setState({ managerTab: 'mine', gitHubConnectFailure: null });
+  toastError.mockClear();
 });
 
 describe('DataLakeManagerPanel - EnableDataLakes gating', () => {
@@ -1519,5 +1522,32 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
 
     await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'zzz');
     expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - failed GitHub connect', () => {
+  it("leaves a listed lake's failure to its banner", () => {
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'mine', message: 'Cancelled.' } });
+    renderPanel();
+
+    expect(toastError).not.toHaveBeenCalled();
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toEqual({ lakeId: 'mine', message: 'Cancelled.' });
+  });
+
+  it('toasts the reason for a lake that is no longer in the list', () => {
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'gone', message: 'The lake was archived.' } });
+    renderPanel();
+
+    expect(toastError).toHaveBeenCalledWith('The lake was archived.');
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toBeNull();
+  });
+
+  it('waits for the lake list before deciding', () => {
+    useGetDataLakes.mockReturnValue({ data: undefined as unknown as unknown[], isLoading: true });
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'mine', message: 'Cancelled.' } });
+    renderPanel();
+
+    expect(toastError).not.toHaveBeenCalled();
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).not.toBeNull();
   });
 });

@@ -1,9 +1,13 @@
-import { Alert, Button, Stack, Typography } from '@mui/joy';
+import { Alert, Button, IconButton, Stack, Typography } from '@mui/joy';
+import CloseIcon from '@mui/icons-material/Close';
+import { useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
 import { useLakeDriveCanManage, useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import {
   getLakeSource,
   resolveLakeSourceAvailability,
@@ -36,6 +40,10 @@ const PICKED_THING: Record<LakeSourceKind, string> = { github: 'repository', goo
  * `pendingConnector`, decide "no source", because clearing that field on bind is best-effort
  * server-side. With EnableDataLakeGitHub off the GitHub read is replaced by the list's
  * `hasGitHubConnection`, and an absent value hides the banner.
+ *
+ * A GitHub connect the callback page reported as failed or cancelled for this lake swaps the banner
+ * for the reason and a Try again. Where the banner would not show, the reason falls back to a toast
+ * once the reads settle, and is dropped silently if the lake stops qualifying after it was shown.
  */
 export default function FinishSourceConnectBanner({
   lake,
@@ -45,6 +53,10 @@ export default function FinishSourceConnectBanner({
   fileCount: number | undefined;
 }) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
+  const failure = useDataLakeWizardStore(s =>
+    s.gitHubConnectFailure?.lakeId === lake.id ? s.gitHubConnectFailure : null
+  );
+  const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const source = getLakeSource(lake.pendingConnector === 'googleDrive' ? 'googleDrive' : 'github');
   const eligible =
     !!lake.organizationId &&
@@ -61,7 +73,66 @@ export default function FinishSourceConnectBanner({
 
   const gitHubNone = gitHubFlag ? gitHub.isSuccess && gitHub.data === null : lake.hasGitHubConnection === false;
   const hasNoSource = gitHubNone && drive.isSuccess && drive.data === null;
-  if (!eligible || !canConnect || !hasNoSource || fileCount !== 0) return null;
+  const showBanner = eligible && canConnect && hasNoSource && fileCount === 0;
+  // Disabled queries stay pending, so an ineligible lake is settled without its reads.
+  const settled = !eligible || ((!gitHubFlag || !gitHub.isPending) && !drive.isPending && fileCount !== undefined);
+  const showFailure = !!failure && showBanner && source.kind === 'github';
+
+  const failureShown = useRef(false);
+  useEffect(() => {
+    if (!failure) return;
+    if (showFailure) {
+      failureShown.current = true;
+      return;
+    }
+    if (!settled) return;
+    if (!failureShown.current) toast.error(failure.message);
+    failureShown.current = false;
+    setGitHubConnectFailure(null);
+  }, [failure, showFailure, settled, setGitHubConnectFailure]);
+
+  if (failure && showFailure) {
+    const gitHubSource = getLakeSource('github');
+    return (
+      <Alert
+        color="warning"
+        variant="soft"
+        startDecorator={<gitHubSource.Icon />}
+        endDecorator={
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="warning"
+            aria-label="Dismiss"
+            data-testid={`github-finish-connect-dismiss-btn-${lake.id}`}
+            onClick={() => setGitHubConnectFailure(null)}
+          >
+            <CloseIcon />
+          </IconButton>
+        }
+        data-testid={`github-finish-connect-banner-${lake.id}`}
+        sx={{ mb: 1 }}
+      >
+        <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap" sx={{ flex: 1 }}>
+          <Typography
+            level="body-sm"
+            data-testid={`github-finish-connect-error-${lake.id}`}
+            sx={{ flex: 1, minWidth: 200 }}
+          >
+            {failure.message}
+          </Typography>
+          <FinishGitHubButton
+            lakeId={lake.id}
+            source={gitHubSource}
+            label="Try again"
+            onBegin={() => setGitHubConnectFailure(null)}
+          />
+        </Stack>
+      </Alert>
+    );
+  }
+
+  if (!showBanner) return null;
 
   const { kind, label, Icon } = source;
   return (
@@ -91,9 +162,30 @@ export default function FinishSourceConnectBanner({
 }
 
 // One component per source so a lake only mounts the connect hooks of the source it targets.
-function FinishGitHubButton({ lakeId, source }: { lakeId: string; source: LakeSource }) {
+function FinishGitHubButton({
+  lakeId,
+  source,
+  label,
+  onBegin,
+}: {
+  lakeId: string;
+  source: LakeSource;
+  label?: string;
+  onBegin?: () => void;
+}) {
   const { begin, isPending } = useBeginLakeGitHubConnect(lakeId);
-  return <FinishButton lakeId={lakeId} source={source} loading={isPending} onClick={() => begin()} />;
+  return (
+    <FinishButton
+      lakeId={lakeId}
+      source={source}
+      label={label}
+      loading={isPending}
+      onClick={() => {
+        onBegin?.();
+        void begin();
+      }}
+    />
+  );
 }
 
 function FinishDriveButton({ lakeId, source }: { lakeId: string; source: LakeSource }) {
@@ -105,12 +197,14 @@ function FinishDriveButton({ lakeId, source }: { lakeId: string; source: LakeSou
 
 function FinishButton({
   lakeId,
-  source: { kind, label, Icon },
+  source: { kind, label: sourceLabel, Icon },
+  label = `Finish connecting ${sourceLabel}`,
   loading,
   onClick,
 }: {
   lakeId: string;
   source: LakeSource;
+  label?: string;
   loading: boolean;
   onClick: () => void;
 }) {
@@ -122,7 +216,7 @@ function FinishButton({
       loading={loading}
       onClick={onClick}
     >
-      Finish connecting {label}
+      {label}
     </Button>
   );
 }
