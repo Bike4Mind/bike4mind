@@ -87,11 +87,11 @@ export default $config({
     // Fail fast when an ACM certificate cannot validate (today only the Router's; usually a DNS
     // validation record deleted outside SST, which scripts/check-acm-validation-records.mjs
     // catches before deploy). The provider default wait is 75 minutes of a stuck deploy before any
-    // error; DNS validation normally completes in minutes, so 15 surfaces the ACM error about an
+    // error; DNS validation normally completes in minutes, so 20 surfaces the ACM error almost an
     // hour sooner. Keep it below the deploy step's timeout. customTimeouts is a resource option,
     // not an input, so it causes no diff or replacement.
     $transform(aws.acm.CertificateValidation, (_args, opts) => {
-      opts.customTimeouts = { ...opts.customTimeouts, create: '15m' };
+      opts.customTimeouts = { ...opts.customTimeouts, create: '20m' };
     });
 
     // Watch for changes in the core packages and rebuild them.
