@@ -5,10 +5,7 @@ import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
-import {
-  ServerSubagentOrchestrator,
-  type ServerAgentExecutionResult,
-} from '../../agents/ServerSubagentOrchestrator';
+import { ServerSubagentOrchestrator, type ServerAgentExecutionResult } from '../../agents/ServerSubagentOrchestrator';
 import { createCoordinateTaskTool, type DagDispatcher } from './coordinateTask';
 
 function makeLogger(): Logger {
@@ -143,19 +140,43 @@ describe('createCoordinateTaskTool \u2014 coordinator spend billing', () => {
       totalCredits: 0,
     } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
     // The coordinator runs on its own configured model; the catalog row must match it.
-    const coordinatorModel = resolveDeprecatedModelId(
-      new ServerAgentStore({}).getAgent('coordinator')!.model!,
-      'test'
-    );
+    const coordinatorModel = resolveDeprecatedModelId(new ServerAgentStore({}).getAgent('coordinator')!.model!, 'test');
     const priced = { ...model, id: coordinatorModel };
     const { tool, onCredits } = makeTool({ availableModels: [priced] });
 
     const result = await tool.toolFn({ task: 'Decompose this' });
 
     expect(result).toMatch(/coordinator agent failed/);
+    expect(onCredits).toHaveBeenCalledTimes(1);
     expect(onCredits).toHaveBeenCalledWith(
       usdToCredits(getTextModelCost(priced, 12_000, 3_000)),
       expect.objectContaining({ model: coordinatorModel, inputTokens: 12_000, outputTokens: 3_000 })
+    );
+  });
+
+  it('returns the coordinator error even when reporting its spend rejects', async () => {
+    vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+    vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+      totalTokens: 15_000,
+      totalInputTokens: 12_000,
+      totalOutputTokens: 3_000,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      turnUsage: [],
+      totalCredits: 0,
+    } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+    const coordinatorModel = resolveDeprecatedModelId(new ServerAgentStore({}).getAgent('coordinator')!.model!, 'test');
+    const priced = { ...model, id: coordinatorModel };
+    const logger = makeLogger();
+    const onCredits = vi.fn().mockRejectedValue(new Error('ledger down'));
+    const { tool } = makeTool({ availableModels: [priced], logger, onCredits });
+
+    const result = await tool.toolFn({ task: 'Decompose this' });
+
+    expect(result).toMatch(/coordinator agent failed/);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[coordinate_task] failed to report the coordinator spend',
+      expect.objectContaining({ error: 'ledger down' })
     );
   });
 
