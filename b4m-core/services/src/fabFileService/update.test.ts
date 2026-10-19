@@ -401,6 +401,33 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
       expect(dbUpdate).not.toHaveBeenCalled();
       expect(mockAdapters.db.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
     });
+
+    it('grades a join against the rewritten size before the upload commits', async () => {
+      // A text file, so the content block runs; unstamped, so its current charged bytes are 0.
+      findUpdateAccessById.mockResolvedValue(
+        baseFile({ mimeType: 'text/plain', fileSize: 10, tags: [], createdAt: new Date('2026-10-10') })
+      );
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      // 1 MB pool with 12 bytes of headroom: the stored size fits, the rewritten body does not.
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 999_988,
+        storageLimit: 1,
+      });
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', currentStorageSize: 0 });
+
+      await expect(
+        updateFabFile(
+          mockUser,
+          { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+          mockAdapters as any
+        )
+      ).rejects.toBeInstanceOf(StorageLimitError);
+
+      expect(mockAdapters.storage.upload).not.toHaveBeenCalled();
+      expect(dbUpdate).not.toHaveBeenCalled();
+    });
   });
 });
 

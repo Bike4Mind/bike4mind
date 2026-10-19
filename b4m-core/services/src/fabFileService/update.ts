@@ -132,15 +132,59 @@ export const updateFabFile = async (
   ) as IFabFileDocument;
 
   const contentChanges: Partial<IFabFileDocument> = {};
-  if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
+  // Measured up front so a joining tag write can be quota-gated against the bytes this rewrite will
+  // charge, before anything is uploaded or persisted. Refreshed from storage metadata after upload.
+  const rewrite =
+    fileContent !== undefined && !fabFile.mimeType.startsWith('image/')
+      ? { content: fileContent, size: Buffer.byteLength(fileContent, 'utf8') }
+      : undefined;
+
+  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
+  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
+  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
+  // that were previously force-carried become droppable, and a manageable prefix-arm join now
+  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
+  // follow from the same fix and are wanted, but the activation is one-way.
+  const lakeTags =
+    params.tags === undefined
+      ? undefined
+      : await reconcileLakeTags(
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
+          id,
+          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
+          params.tags,
+          {
+            db,
+            logger,
+            fileOwnerUserId: fabFile.userId,
+            // Already in hand, so the admission contract grades this file on the target its chunks
+            // WERE built with instead of re-fetching it or predicting from policy.
+            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+            assertWriteScope,
+          }
+        );
+
+  // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
+  // quota-gated before ANY write - against the rewrite's new size when this request also replaces
+  // the content, so a refused join cannot land after the upload and charge are committed.
+  if (lakeTags) {
+    await assertStorageOwnerTransferFits(
+      rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,
+      lakeTags.tagsToPersist.map(t => t.name),
+      db
+    );
+  }
+
+  if (rewrite) {
+    const { content, size } = rewrite;
     const mimeType = params.mimeType ?? fabFile.mimeType;
     const ext = mime.extension(mimeType) || null;
     const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
 
-    let fileSize = Buffer.byteLength(fileContent, 'utf8');
+    let fileSize = size;
     await assertRewriteFits(fabFile, fileSize, db, user);
 
-    await storage.upload(filePath, fileContent, {
+    await storage.upload(filePath, content, {
       ContentType: mimeType,
     });
 
@@ -175,41 +219,6 @@ export const updateFabFile = async (
     // an earlier version of this comment claimed, and a guard test enumerates them all.
     Object.assign(contentChanges, FAB_FILE_CONTENT_REWRITE_PATCH);
     Object.assign(fabFile, contentChanges);
-  }
-
-  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
-  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
-  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
-  // that were previously force-carried become droppable, and a manageable prefix-arm join now
-  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
-  // follow from the same fix and are wanted, but the activation is one-way.
-  const lakeTags =
-    params.tags === undefined
-      ? undefined
-      : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
-          id,
-          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
-          params.tags,
-          {
-            db,
-            logger,
-            fileOwnerUserId: fabFile.userId,
-            // Already in hand, so the admission contract grades this file on the target its chunks
-            // WERE built with instead of re-fetching it or predicting from policy.
-            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
-            assertWriteScope,
-          }
-        );
-
-  // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
-  // quota-gated before the write like any other growth of that pool.
-  if (lakeTags) {
-    await assertStorageOwnerTransferFits(
-      fabFile,
-      lakeTags.tagsToPersist.map(t => t.name),
-      db
-    );
   }
 
   const changes: Partial<IFabFileDocument> = {
