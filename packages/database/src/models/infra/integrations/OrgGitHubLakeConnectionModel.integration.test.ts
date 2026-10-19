@@ -433,6 +433,16 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
     expect(after?.disconnectRequestedAt?.getTime()).toBeGreaterThan(staleStamp.getTime());
   });
 
+  it('touchDisconnect leaves the stamp alone for a different owner', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, ORG_1);
+    await ageDisconnect(id, 30);
+    const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
+    expect(await repo.touchDisconnect(id, ORG_2)).toBe(false);
+    expect(await repo.touchDisconnect(id, USER_1)).toBe(false);
+    expect((await repo.findById(id))?.disconnectRequestedAt?.getTime()).toBe(staleStamp.getTime());
+  });
+
   it('touchDisconnect reports false when no disconnect is pending', async () => {
     const { id } = await repo.create(base);
     expect(await repo.touchDisconnect(id, ORG_1)).toBe(false);
