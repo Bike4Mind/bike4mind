@@ -11,10 +11,17 @@
  * endpoint, so a concurrent end and a second sweep run are both no-ops. Every settlement writes
  * one voice_hold_settled line.
  *
+ * The hosted handler publishes each run's settled and failed counts, which the
+ * voiceStaleHoldsSettled and voiceHoldSweepFailures alarms in infra/alarms.ts watch. The
+ * self-host twin calls runVoiceHoldSweep directly, so it never waits on a CloudWatch it lacks.
+ *
  * Schedule: rate(5 minutes).
  */
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { connectDB, sessionRepository } from '@bike4mind/database';
+import { VOICE_METRICS, VOICE_NAMESPACE } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
+import { emitMetrics } from '@server/utils/cloudwatch';
 import { Config } from '@server/utils/config';
 import { lastSeenAt, settleVoiceHold } from '@server/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
@@ -73,6 +80,22 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 }
 
 export async function handler(): Promise<VoiceHoldSweepResult> {
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
-  return runVoiceHoldSweep();
+  const stage = Resource.App.stage;
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+  const result = await runVoiceHoldSweep();
+  await emitMetrics(VOICE_NAMESPACE, [
+    {
+      name: VOICE_METRICS.HoldSweepSettled,
+      value: result.settled,
+      dimensions: { Stage: stage },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: VOICE_METRICS.HoldSweepFailed,
+      value: result.failed,
+      dimensions: { Stage: stage },
+      unit: StandardUnit.Count,
+    },
+  ]);
+  return result;
 }

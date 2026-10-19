@@ -15,7 +15,13 @@ import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalen
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  QUESTS_NAMESPACE,
+  QUEST_METRICS,
+  VOICE_NAMESPACE,
+  VOICE_METRICS,
+} from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -1590,6 +1596,65 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice credit hold settled by the sweep
+   *
+   * A voice hold no client ever ended (closing the tab sends the end request, so this is a
+   * crash, a lost network, or a client that skips the end call) was settled by the stale-hold
+   * sweep. Steady state is 0: a non-zero count means the client hold leak is back. A single
+   * genuine browser crash can also trip it, hence Medium. The sweep has drained the historical
+   * backlog since it shipped, so deploying this alarm does not page.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('voiceStaleHoldsSettled', {
+    name: `${$app.name}-${$app.stage}-voice-stale-holds-settled`,
+    alarmDescription:
+      'The stale voice hold sweep settled a credit hold no client ended: the voice hold leak may be back',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: VOICE_METRICS.HoldSweepSettled,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes, one sweep run
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep cannot settle a hold
+   *
+   * The sweep found a stale hold and its settlement threw. The hold stays charged and the next
+   * run retries it, so a failure that repeats for three runs is a stuck settlement, not a blip.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepFailures', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-failures`,
+    alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: VOICE_METRICS.HoldSweepFailed,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
       Severity: 'High',
     },
   });
