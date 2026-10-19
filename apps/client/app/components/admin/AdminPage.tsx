@@ -27,9 +27,9 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useLocation, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
+import { useRouter, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -68,12 +68,15 @@ import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
-import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { adminTabFromSlug } from './adminTabSlugs';
+import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
 export { AdminTab } from './adminSidebarConfig';
+
+// Legacy AdminTab values with neither a panel nor a sidebar entry.
+const PANEL_LESS_TABS: ReadonlySet<AdminTab> = new Set([AdminTab.Accounts, AdminTab.Analysts, AdminTab.BulkImport]);
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -306,50 +309,33 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { currentUser } = useUser();
   const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
 
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
-  const isOnAdminRoute = pathname === '/admin';
+  // LiveOps Triage tab visibility - show everywhere except fork production environments
+  const { data: liveopsEnvData } = useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
+        '/api/admin/liveops-triage-env'
+      );
+      return data;
+    },
+    enabled: currentUser?.isAdmin,
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
+  });
+  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
-  // URL -> store: a `?tab=` slug chooses the tab. Keyed on the slug, NOT on activeTab, so it only
-  // fires when the URL itself changes (first load, a pasted link, back/forward).
-  useEffect(() => {
-    const requestedTab = adminTabFromSlug(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
-    }
-  }, [requestedTabSlug, setActiveTab]);
+  // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
+  // treats it as unknown and corrects the store instead.
+  const isAdminTabRenderable = useCallback(
+    (tab: AdminTab) => {
+      if (tab === AdminTab.Migrate) return !!enableUserMigration;
+      // Undefined until the visibility query answers; keep a deep link that arrived first.
+      if (tab === AdminTab.LiveOpsTriage) return liveopsEnvData?.showTab ?? true;
+      return !PANEL_LESS_TABS.has(tab);
+    },
+    [enableUserMigration, liveopsEnvData]
+  );
 
-  // Store -> URL: activeTab is also driven by the sidebar and by non-admin surfaces (the chat model
-  // picker's "manage models" shortcut), so the URL follows the store to keep reloads on the same
-  // tab. Writes happen only when activeTab actually changed, or when the URL names no valid tab, so
-  // a deep link that the effect above has not applied yet is never overwritten by the store's
-  // default - including on StrictMode's double-run of mount effects, which a first-run flag misses.
-  // `replace` keeps tab clicks out of the history stack.
-  const requestedTabSlugRef = useRef(requestedTabSlug);
-  useEffect(() => {
-    requestedTabSlugRef.current = requestedTabSlug;
-  }, [requestedTabSlug]);
-  const lastMirroredTabRef = useRef(activeTab);
-  useEffect(() => {
-    if (!isOnAdminRoute) return;
-    const tabChanged = lastMirroredTabRef.current !== activeTab;
-    lastMirroredTabRef.current = activeTab;
-    const currentSlug = requestedTabSlugRef.current;
-    if (!tabChanged && adminTabFromSlug(currentSlug) !== undefined) return;
-    const slug = adminTabToSlug(activeTab);
-    if (slug === undefined || slug === currentSlug) return;
-    navigate({
-      to: '/admin',
-      // Rebuilt rather than spread so stray params (e.g. a leftover login redirectTo) don't stick
-      search: previous => ({
-        emergency_access: previous.emergency_access,
-        tab: slug,
-        // feedbackId only means something on the Feedback tab
-        feedbackId: slug === ADMIN_FEEDBACK_TAB_SLUG ? previous.feedbackId : undefined,
-      }),
-      replace: true,
-    });
-  }, [activeTab, isOnAdminRoute, navigate]);
+  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -397,20 +383,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   // Global keyboard shortcut: Press '?' to toggle Help Center
   useHelpKeyboardShortcut();
-
-  // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData } = useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
-        '/api/admin/liveops-triage-env'
-      );
-      return data;
-    },
-    enabled: currentUser?.isAdmin,
-    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
-  });
-  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
