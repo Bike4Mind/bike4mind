@@ -18,8 +18,8 @@
     "add:metadata": "node scripts/add-metadata.js"
   },
   "dependencies": {
-    "@docusaurus/core": "3.10.1",
-    "@docusaurus/preset-classic": "3.10.1",
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
     "@easyops-cn/docusaurus-search-local": "^0.51.1",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
@@ -28,9 +28,9 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@docusaurus/module-type-aliases": "3.10.1",
-    "@docusaurus/tsconfig": "3.10.1",
-    "@docusaurus/types": "3.10.1",
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/tsconfig": "3.10.2",
+    "@docusaurus/types": "3.10.2",
     "@pulumi/aws": "^7.16.0",
     "@types/node": "^24.0.0",
     "@types/react": "^18.2.42",
