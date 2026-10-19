@@ -9,7 +9,8 @@ import { PermissionManager } from '../utils/PermissionManager.js';
 import { runShellCommand } from '../utils/shellRunner.js';
 import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
-import { generateCliTools, wrapTools } from '../utils/toolsAdapter.js';
+import { generateCliTools } from '../utils/toolsAdapter.js';
+import { ToolCatalog, wrapTools } from '../tools/gateway/index.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 
 // A denied hook must never reach the shell; mock it to observe (and to let the
@@ -38,8 +39,11 @@ vi.mock('../utils/toolsAdapter.js', async importOriginal => {
   return {
     ...actual,
     generateCliTools: vi.fn(async (...args: unknown[]) => ({ tools: [], agentContext: args[5] })),
-    wrapTools: vi.fn(actual.wrapTools),
   };
+});
+vi.mock('../tools/gateway/index.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../tools/gateway/index.js')>();
+  return { ...actual, wrapTools: vi.fn(actual.wrapTools) };
 });
 
 /**
@@ -360,7 +364,7 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
       userId: 'test-user',
       llm: createOneShotLlm('done'),
       logger: { debug() {}, info() {}, warn() {}, error() {} },
-      permissionManager: new PermissionManager(),
+      permissionManager: new PermissionManager(new ToolCatalog()),
       showPermissionPrompt,
       configStore: { get: async () => ({}) },
       apiClient: {},

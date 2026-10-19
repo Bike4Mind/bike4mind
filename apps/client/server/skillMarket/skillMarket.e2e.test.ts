@@ -347,6 +347,20 @@ describe('Skill Market (real mongod)', () => {
     expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(3);
   });
 
+  it('refuses a market update into an imported copy that has been made global', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(source, 'public');
+    const copyId = (await call(importHandler, 'POST', OTHER, { id: listing.id }))._getJSONData().skill.id;
+    await skillRepository.update({ id: copyId, isGlobalRead: true });
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+
+    await expect(
+      call(importHandler, 'POST', OTHER, { id: listing.id }, { targetSkillId: copyId })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect((await skillRepository.findById(copyId))!.body).toBe('Rewrite as bullets v1.');
+  });
+
   it('imports the approved snapshot, then reports stale / locally modified / delisted copies', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing } = await publish(source, 'public');

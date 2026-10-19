@@ -21,6 +21,7 @@ import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-
 import type { EvalContext } from './types.js';
 import { generateCliTools } from '../utils/toolsAdapter.js';
 import { PermissionManager } from '../utils/PermissionManager.js';
+import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { ApiClient } from '../auth/ApiClient.js';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend.js';
@@ -137,7 +138,7 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
   // throwing showPermissionPrompt below this is defense in depth: if any
   // tool somehow escapes the trust set, the prompt callback yells loudly
   // instead of silently auto-allowing.
-  const permissionManager = new PermissionManager();
+  const permissionManager = new PermissionManager(new ToolCatalog());
   const allTools = await listAllToolNames();
   for (const name of allTools) permissionManager.trustToolForSession(name);
 
