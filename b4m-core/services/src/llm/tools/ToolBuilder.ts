@@ -139,6 +139,11 @@ export interface ToolBuilderConfig {
   sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
+  /**
+   * The session's citation style. Tool sources join the turn's [N] sequence only when this is
+   * 'indexed'; a 'named'/unset session cites by document name and keeps legacy labels.
+   */
+  citationStyle?: 'named' | 'indexed';
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -873,7 +878,12 @@ export class ToolBuilder {
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     return buildSharedTools(
       {
-        registerCitables: citables => registerQuestCitables(quest, citables, this.deps.user.id),
+        // Only an indexed-citation session links [N] markers; a named-style turn cites documents
+        // by name, so its tool output keeps the legacy local labels.
+        registerCitables:
+          this.deps.citationStyle === 'indexed'
+            ? citables => registerQuestCitables(quest, citables, this.deps.user.id)
+            : undefined,
         userId: this.deps.user.id,
         user: this.deps.user,
         logger: this.deps.logger,

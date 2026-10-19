@@ -3081,6 +3081,7 @@ export class ChatCompletionProcess {
         sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionIncludeLibraryFiles: libraryFlagForScope(session),
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
+        citationStyle: session.citationStyle,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
