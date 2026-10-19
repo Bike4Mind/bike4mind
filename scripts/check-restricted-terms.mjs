@@ -13,9 +13,10 @@
 //
 // Modes, picked from GITHUB_EVENT_NAME:
 //   pull_request_target  title, body, head branch, every commit message, the
-//                        added lines of every changed file. Fails on any hit.
-//   push                 commit messages and added lines of the push. Main is
-//                        already updated by then, so this only reports.
+//                        added lines of the PR diff and of each commit's own
+//                        diff. Fails on any hit.
+//   push                 the same for the pushed commits. Main is already
+//                        updated by then, so this only reports.
 //
 // Fails closed: a missing or invalid list, or a PR too large to check
 // completely, is a failure rather than a silent pass.
@@ -111,12 +112,13 @@ function github(token, fetchImpl) {
   return {
     json: async url => (await request(url)).json(),
     raw: async url => Buffer.from(await (await request(url, 'application/vnd.github.raw')).arrayBuffer()),
-    async paginate(url) {
+    // `pick` extracts the page's items, for endpoints that wrap them in an object.
+    async paginate(url, pick = body => body) {
       const items = [];
       let next = `${url}${url.includes('?') ? '&' : '?'}per_page=100`;
       while (next) {
         const res = await request(next);
-        items.push(...(await res.json()));
+        items.push(...pick(await res.json()));
         next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get('link') ?? '')?.[1];
       }
       return items;
@@ -124,11 +126,11 @@ function github(token, fetchImpl) {
   };
 }
 
-async function scanFiles({ files, matcher, gh, repo, ref, hit, note }) {
+async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' }) {
   for (const [index, file] of files.entries()) {
     if (file.status === 'removed') continue;
     const pathHit = matcher.test(file.filename);
-    const where = pathHit ? `changed file #${index + 1} (path withheld)` : `file ${file.filename}`;
+    const where = `${label}${pathHit ? `changed file #${index + 1} (path withheld)` : `file ${file.filename}`}`;
     if (pathHit) hit(`${where}: the file path`);
 
     let lines;
@@ -162,6 +164,24 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note }) {
   }
 }
 
+// The net diff misses text one commit adds and a later one removes, yet merge
+// and rebase merges put every commit into the base branch's history. So with
+// more than one commit, each commit's own diff is checked too. Merge commits are
+// skipped: their diff against the first parent is the base branch's history, and
+// what they change in the result is already in the net diff.
+async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
+  if (commits.length < 2) return;
+  for (const c of commits) {
+    if ((c.parents?.length ?? 1) > 1) continue;
+    const sha = c.sha.slice(0, 12);
+    const files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
+    if (files.length >= MAX_PR_FILES) {
+      incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
+    }
+    await scanFiles({ files, matcher, gh, repo, ref: c.sha, hit, note: incomplete, label: `commit ${sha} ` });
+  }
+}
+
 async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   const pr = await gh.json(`/repos/${repo}/pulls/${event.pull_request.number}`);
   if (matcher.test(pr.title ?? '')) hit('PR title');
@@ -181,6 +201,7 @@ async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   }
   const files = await gh.paginate(`/repos/${repo}/pulls/${pr.number}/files`);
   await scanFiles({ files, matcher, gh, repo, ref: pr.head.sha, hit, note: incomplete });
+  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
   return `PR #${pr.number}: title, body, branch name, ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
@@ -203,12 +224,13 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     if (err.status !== 404) throw err;
     const head = await gh.json(`/repos/${repo}/commits/${event.after}`);
     commits = [head];
-    files = head.files ?? [];
+    files = await gh.paginate(`/repos/${repo}/commits/${event.after}`, body => body.files ?? []);
   }
   for (const c of commits) {
     if (matcher.test(c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
   await scanFiles({ files, matcher, gh, repo, ref: event.after, hit, note: incomplete });
+  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 

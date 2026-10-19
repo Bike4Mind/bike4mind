@@ -41,6 +41,8 @@ function pr(overrides = {}) {
 const commit = (message, sha = 'c'.repeat(40)) => ({ sha, commit: { message } });
 const file = (filename, patch, extra = {}) => ({ filename, status: 'modified', changes: 1, patch, ...extra });
 
+const commitRoute = (sha, files) => ({ [`/repos/acme/widgets/commits/${sha}`]: response({ sha, files }) });
+
 async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS }) {
   const lines = [];
   const code = await run({
@@ -62,11 +64,13 @@ function prRoutes({
   pull = pr(),
   commits = [commit('feat: widget')],
   files = [file('src/a.ts', '@@ -1,0 +1,1 @@\n+ok')],
+  extra = {},
 } = {}) {
   return {
     '/repos/acme/widgets/pulls/7': response(pull),
     '/repos/acme/widgets/pulls/7/commits': response(commits),
     '/repos/acme/widgets/pulls/7/files': response(files),
+    ...extra,
   };
 }
 
@@ -183,6 +187,7 @@ describe('run', () => {
           head: { ref: 'feat/zorblax', sha: 'h'.repeat(40) },
         }),
         commits: [commit('wire up glorp9', 'a'.repeat(40)), commit('clean', 'b'.repeat(40))],
+        extra: { ...commitRoute('a'.repeat(40), []), ...commitRoute('b'.repeat(40), []) },
         files: [
           file('src/a.ts', '@@ -1,2 +1,3 @@\n keep\n+const x = "zorblax";\n-zorblax was here\n keep'),
           file('src/zorblax.ts', '@@ -0,0 +1,1 @@\n+fine', { status: 'added' }),
@@ -207,6 +212,24 @@ describe('run', () => {
     expect(code).toBe(1);
     expect(output).toContain('file src/a%0A::stop-commands::x.ts line 1');
     expect(output.split('\n').some(line => line.startsWith('::stop-commands::'))).toBe(false);
+  });
+
+  it("checks each commit's own diff, so text added and later removed is caught", async () => {
+    const [a, b, m] = ['a'.repeat(40), 'b'.repeat(40), 'e'.repeat(40)];
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 3 }),
+        commits: [commit('add', a), commit('remove', b), { ...commit('merge main', m), parents: [{}, {}] }],
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
+        extra: {
+          ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1,2 @@\n+ok\n+zorblax')]),
+          ...commitRoute(b, [file('src/a.ts', '@@ -1,2 +1 @@\n ok\n-zorblax')]),
+        },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Restricted term found in commit ${'a'.repeat(12)} file src/a.ts line 2.`);
+    expect(output).not.toContain('e'.repeat(12));
   });
 
   it('ignores removed lines', async () => {
