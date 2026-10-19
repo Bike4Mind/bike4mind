@@ -123,3 +123,5 @@ export * from './AdminSupportAccessTypes';
 export * from './AuthSessionTypes';
 export * from './WorkItemTypes';
 export * from './QaTypes';
+export * from './AdminAuditLogTypes';
+export * from './adminAuditCatalogue';
