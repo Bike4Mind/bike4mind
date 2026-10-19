@@ -182,6 +182,15 @@ jobs:
       # MillionOnMars/subscriber-fanout. SUBSCRIBER_FANOUT_IMAGE is set
       # in the Deploy step's env.
 
+      # Fails fast, naming the domain and the fix, when a DNS validation record the Router
+      # certificate depends on was deleted outside SST; otherwise a certificate reissue stalls
+      # the deploy in PENDING_VALIDATION. Read-only ACM and Route53 calls.
+      - name: Check ACM validation records
+        env:
+          SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}
+          SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
+        run: node scripts/check-acm-validation-records.mjs
+
       - name: Deploy to AWS
         env:
           CI: 'true'
