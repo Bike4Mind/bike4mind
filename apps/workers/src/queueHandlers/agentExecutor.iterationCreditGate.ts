@@ -1,26 +1,56 @@
-/**
- * The per-iteration credit gate of `processExecution`'s loop.
- *
- * Extracted from the loop body so its stop condition and terminal side effects can be
- * unit-tested without a harness for the whole 3,500-line executor: the balance is re-read
- * from the live holder before every iteration, and a run the balance cannot carry is failed
- * with its partial answer instead of being allowed to settle below zero.
- */
 import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
-import { organizationRepository, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { uncoveredIterationCredits } from './agentExecutor.billing';
+
+/**
+ * The loop belongs to `processExecution`, whose balance read and side effects are injected so
+ * the policy below can be unit-tested without the executor's Mongo and AWS imports.
+ */
+
+/**
+ * The first loop iteration of an aggregation-only wake, which returns already-paid-for child
+ * results and is exempt from the per-iteration gate. -1 everywhere else.
+ */
+export function aggregationWakeStartIteration(isAggregationOnlyWake: boolean, iterationIndex: number): number {
+  return isAggregationOnlyWake ? iterationIndex : -1;
+}
+
+export interface IterationGatePolicy {
+  enforceCredits: boolean;
+  /** Without a resolved model the next iteration cannot be priced. */
+  hasModel: boolean;
+  iterationIndex: number;
+  wakeStartIteration: number;
+}
+
+/** Whether the loop re-checks the payer's balance before this iteration. */
+export function shouldGateIteration(policy: IterationGatePolicy): boolean {
+  return policy.enforceCredits && policy.hasModel && policy.iterationIndex !== policy.wakeStartIteration;
+}
+
+export interface UnrunnableModelPolicy {
+  hasModel: boolean;
+  isRunnable: boolean;
+  isAggregationOnlyWake: boolean;
+}
+
+/**
+ * Whether the run must be refused because its model is disabled or no longer entitled. An
+ * aggregation-only wake is exempt: its children have already been paid for.
+ */
+export function refusesUnrunnableModel(policy: UnrunnableModelPolicy): boolean {
+  return policy.hasModel && !policy.isRunnable && !policy.isAggregationOnlyWake;
+}
 
 export interface IterationCreditGateArgs {
   executionId: string;
   iterationIndex: number;
-  userId: string;
-  /** The run's billing organization, or null when the user pays. */
-  organization: { id: string } | null;
   modelInfo: ModelInfo;
   /** Input tokens the run's last request sent; the next iteration is priced at that size. */
   lastInputTokens: number;
+  /** Live balance of whoever pays for the run, re-read so a snapshot cannot go stale. */
+  readBalance: () => Promise<number>;
   /** Only read when the gate stops the run, so a live iteration never pays for a snapshot. */
   snapshot: () => { steps: AgentStep[]; partialAnswer: string | undefined };
 }
@@ -40,10 +70,7 @@ export async function stopUnfundedIteration(
   args: IterationCreditGateArgs,
   deps: IterationCreditGateDeps
 ): Promise<boolean> {
-  const holder = args.organization
-    ? await organizationRepository.findById(args.organization.id)
-    : await userRepository.findById(args.userId);
-  const balance = holder?.currentCredits ?? 0;
+  const balance = await args.readBalance();
   const uncoveredCredits = uncoveredIterationCredits(balance, args.modelInfo, args.lastInputTokens);
   if (uncoveredCredits === undefined) return false;
 

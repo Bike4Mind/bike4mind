@@ -131,6 +131,7 @@ import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/opt
 import {
   buildDagResumeReport,
   clampMaxIterationsForOverCapAggregationWake,
+  clampMaxIterationsForUnrunnableAggregationWake,
   isDagAggregationWake,
   makeDagDispatcher,
   onDagNodeTerminal,
@@ -181,7 +182,12 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
-import { stopUnfundedIteration } from './agentExecutor.iterationCreditGate';
+import {
+  aggregationWakeStartIteration as wakeStartIterationOf,
+  refusesUnrunnableModel,
+  shouldGateIteration,
+  stopUnfundedIteration,
+} from './agentExecutor.iterationCreditGate';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
@@ -713,6 +719,17 @@ export function buildInProcessCreditCapCheck(
 }
 
 /**
+ * Live balance of whoever pays for a run, re-read per call so a gate never decides on a
+ * snapshot. Shared by the iteration gate and in-process subagent admission.
+ */
+async function readPayerBalance(payer: { organizationId?: string | null; userId: string }): Promise<number> {
+  const holder = payer.organizationId
+    ? await organizationRepository.findById(payer.organizationId)
+    : await userRepository.findById(payer.userId);
+  return holder?.currentCredits ?? 0;
+}
+
+/**
  * Flat token allowance set aside for instructions before the attachment share is computed.
  * Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess so an agent turn and a chat turn size the
  * same attachment against the same window.
@@ -1063,11 +1080,12 @@ async function processExecution(
     const resolvedModelId = resolveDeprecatedModelId(execution.model, 'agentExecutor');
     const modelInfo = models.find((m: { id: string }) => m.id === resolvedModelId);
     const runnableModels = await loadRunnableModels(models, user as IUserDocument, logger);
+    const modelRunnable = modelInfo ? runnableModels.includes(modelInfo) : false;
     // An aggregation-only wake is exempt: its children have already been paid for and only the
     // wrap-up iteration that returns their results is left, so a transient settings read or a
     // model disabled mid-run must not strand that work. Same exemption as the credit floor and
     // the member cap below.
-    if (modelInfo && !runnableModels.includes(modelInfo) && !isAggregationOnlyWake) {
+    if (refusesUnrunnableModel({ hasModel: Boolean(modelInfo), isRunnable: modelRunnable, isAggregationOnlyWake })) {
       logger.warn('[AgentExecutor] Model is disabled or not accessible to this user; refusing execution', {
         model: resolvedModelId,
       });
@@ -1804,12 +1822,9 @@ async function processExecution(
       ),
       // In-process subagents skip `processSubagentDispatch`'s balance admission, and the loop's
       // per-iteration gate only runs between this run's own iterations.
-      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, async () => {
-        const holder = organization
-          ? await organizationRepository.findById(organization.id)
-          : await userRepository.findById((user as IUserDocument).id);
-        return holder?.currentCredits ?? 0;
-      }),
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, () =>
+        readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id })
+      ),
       // In-process children are classified against this run's own lists.
       toolPermissions: { approvedTools, deniedTools },
     };
@@ -2513,7 +2528,7 @@ async function processExecution(
     // An aggregation-only wake gets one ungated wrap-up iteration to return its children's
     // already-paid-for results. Anything past that is gated like any other iteration, so a parent
     // with a low balance cannot keep running on unconditional debits in the same Lambda.
-    const aggregationWakeStartIteration = isAggregationOnlyWake ? iterationIndex : -1;
+    const aggregationWakeStartIteration = wakeStartIterationOf(isAggregationOnlyWake, iterationIndex);
 
     // Captured once and reused below at `displayAnswer` - the truncation message needs to know
     // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
@@ -2524,6 +2539,14 @@ async function processExecution(
     maxIterations = clampMaxIterationsForOverCapAggregationWake({
       isAggregationOnlyWake,
       isOverCap: isOverCapForAggregationClamp,
+      maxIterations,
+      iterationIndex,
+    });
+    // A wake whose model stopped being runnable gets the same one-iteration bound: the exempt
+    // wrap-up returns the children's results, and nothing re-checks the model inside the loop.
+    maxIterations = clampMaxIterationsForUnrunnableAggregationWake({
+      isAggregationOnlyWake,
+      isRunnable: !modelInfo || modelRunnable,
       maxIterations,
       iterationIndex,
     });
@@ -2728,15 +2751,21 @@ async function processExecution(
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero. The one
       // aggregation-only wake extension is exempt for its first iteration only.
-      if (gateIterations && modelInfo && iterationIndex !== aggregationWakeStartIteration) {
+      const gateThisIteration = shouldGateIteration({
+        enforceCredits,
+        hasModel: Boolean(modelInfo),
+        iterationIndex,
+        wakeStartIteration: aggregationWakeStartIteration,
+      });
+      if (gateThisIteration && modelInfo) {
         const stopped = await stopUnfundedIteration(
           {
             executionId,
             iterationIndex,
-            userId: (user as IUserDocument).id,
-            organization,
             modelInfo,
             lastInputTokens,
+            readBalance: () =>
+              readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
@@ -3837,12 +3866,9 @@ async function processSubagentDispatch(
       // See `buildInProcessCreditCapCheck` for why this re-fetches rather than reusing
       // the `organization` snapshot captured above.
       checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
-      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, async () => {
-        const holder = child.organizationId
-          ? await organizationRepository.findById(child.organizationId)
-          : await userRepository.findById(child.userId);
-        return holder?.currentCredits ?? 0;
-      }),
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, () =>
+        readPayerBalance({ organizationId: child.organizationId, userId: child.userId })
+      ),
       toolPermissions: childToolPermissions,
     };
     const pendingMediaUsage: PendingToolUsage = {

@@ -3,19 +3,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
-
-const { findUserById, findOrganizationById } = vi.hoisted(() => ({
-  findUserById: vi.fn(),
-  findOrganizationById: vi.fn(),
-}));
-
-vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: (...args: unknown[]) => findUserById(...args) },
-  organizationRepository: { findById: (...args: unknown[]) => findOrganizationById(...args) },
-}));
-
 import { nextIterationCredits } from './agentExecutor.billing';
-import { stopUnfundedIteration } from './agentExecutor.iterationCreditGate';
+import {
+  aggregationWakeStartIteration,
+  refusesUnrunnableModel,
+  shouldGateIteration,
+  stopUnfundedIteration,
+} from './agentExecutor.iterationCreditGate';
 
 const model = {
   id: 'claude-sonnet-4-6',
@@ -41,29 +35,26 @@ function args(overrides: Record<string, unknown> = {}) {
   return {
     executionId: 'exec-1',
     iterationIndex: 2,
-    userId: 'user-1',
-    organization: null as { id: string } | null,
     modelInfo: model,
     lastInputTokens: 0,
+    readBalance: vi.fn().mockResolvedValue(required()),
     snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' as string | undefined }),
     ...overrides,
   };
 }
 
 beforeEach(() => {
-  findUserById.mockReset();
-  findOrganizationById.mockReset();
+  vi.clearAllMocks();
 });
 
 describe('stopUnfundedIteration', () => {
-  it('fails a user-billed run one credit short of the next iteration, keeping its partial answer', async () => {
-    findUserById.mockResolvedValue({ id: 'user-1', currentCredits: required() - 1 });
+  it('fails a run one credit short of the next iteration, keeping its partial answer', async () => {
     const deps = makeDeps();
 
-    await expect(stopUnfundedIteration(args(), deps)).resolves.toBe(true);
+    await expect(
+      stopUnfundedIteration(args({ readBalance: vi.fn().mockResolvedValue(required() - 1) }), deps)
+    ).resolves.toBe(true);
 
-    expect(findUserById).toHaveBeenCalledWith('user-1');
-    expect(findOrganizationById).not.toHaveBeenCalled();
     expect(deps.markFailed).toHaveBeenCalledWith('exec-1', {
       message: 'Insufficient credits to continue agent execution',
     });
@@ -78,19 +69,13 @@ describe('stopUnfundedIteration', () => {
     );
   });
 
-  it('reads the organization pool, not the user, when the run is organization-billed', async () => {
-    findOrganizationById.mockResolvedValue({ id: 'org-1', currentCredits: required() - 1 });
-    findUserById.mockResolvedValue({ id: 'user-1', currentCredits: 1_000_000 });
+  it('treats a missing holder as a zero balance', async () => {
     const deps = makeDeps();
 
-    await expect(stopUnfundedIteration(args({ organization: { id: 'org-1' } }), deps)).resolves.toBe(true);
-
-    expect(findOrganizationById).toHaveBeenCalledWith('org-1');
-    expect(findUserById).not.toHaveBeenCalled();
+    await expect(stopUnfundedIteration(args({ readBalance: vi.fn().mockResolvedValue(0) }), deps)).resolves.toBe(true);
   });
 
   it('lets the iteration run when the payer covers it, without snapshotting the agent', async () => {
-    findUserById.mockResolvedValue({ id: 'user-1', currentCredits: required() });
     const deps = makeDeps();
     const gateArgs = args();
     Object.assign(gateArgs, { snapshot: vi.fn().mockReturnValue({ steps, partialAnswer: 'partial answer' }) });
@@ -105,17 +90,16 @@ describe('stopUnfundedIteration', () => {
 
   it('prices the next iteration at the size the last one sent, so a grown context stops it', async () => {
     const balance = required(0);
-    findUserById.mockResolvedValue({ id: 'user-1', currentCredits: balance });
     const deps = makeDeps();
+    const readBalance = vi.fn().mockResolvedValue(balance);
 
-    await expect(stopUnfundedIteration(args({ lastInputTokens: 0 }), deps)).resolves.toBe(false);
-    await expect(stopUnfundedIteration(args({ lastInputTokens: 100_000 }), deps)).resolves.toBe(true);
+    await expect(stopUnfundedIteration(args({ lastInputTokens: 0, readBalance }), deps)).resolves.toBe(false);
+    await expect(stopUnfundedIteration(args({ lastInputTokens: 100_000, readBalance }), deps)).resolves.toBe(true);
   });
 
   it('stops with the plain message when the run produced no partial answer', async () => {
-    findUserById.mockResolvedValue({ id: 'user-1', currentCredits: 0 });
     const deps = makeDeps();
-    const gateArgs = args();
+    const gateArgs = args({ readBalance: vi.fn().mockResolvedValue(0) });
     Object.assign(gateArgs, { snapshot: vi.fn().mockReturnValue({ steps: [], partialAnswer: undefined }) });
 
     await expect(stopUnfundedIteration(gateArgs, deps)).resolves.toBe(true);
@@ -124,22 +108,87 @@ describe('stopUnfundedIteration', () => {
   });
 });
 
+describe('aggregationWakeStartIteration', () => {
+  it('exempts the resuming iteration of an aggregation wake and nothing else', () => {
+    expect(aggregationWakeStartIteration(true, 4)).toBe(4);
+    expect(aggregationWakeStartIteration(false, 4)).toBe(-1);
+  });
+});
+
+describe('shouldGateIteration', () => {
+  const policy = { enforceCredits: true, hasModel: true, iterationIndex: 0, wakeStartIteration: -1 };
+
+  it('gates the first iteration of a normal run', () => {
+    expect(shouldGateIteration(policy)).toBe(true);
+  });
+
+  it("leaves a wake's wrap-up iteration ungated and gates the one after it", () => {
+    const wake = { ...policy, iterationIndex: 3, wakeStartIteration: 3 };
+
+    expect(shouldGateIteration(wake)).toBe(false);
+    expect(shouldGateIteration({ ...wake, iterationIndex: 4 })).toBe(true);
+  });
+
+  it('does not gate with enforcement off or no resolved model', () => {
+    expect(shouldGateIteration({ ...policy, enforceCredits: false })).toBe(false);
+    expect(shouldGateIteration({ ...policy, hasModel: false })).toBe(false);
+  });
+});
+
+describe('refusesUnrunnableModel', () => {
+  it('refuses a disabled or unentitled model on a normal run', () => {
+    expect(refusesUnrunnableModel({ hasModel: true, isRunnable: false, isAggregationOnlyWake: false })).toBe(true);
+  });
+
+  it('does not refuse an aggregation wake, whose children already ran', () => {
+    expect(refusesUnrunnableModel({ hasModel: true, isRunnable: false, isAggregationOnlyWake: true })).toBe(false);
+  });
+
+  it('does not refuse a runnable or unresolved model', () => {
+    expect(refusesUnrunnableModel({ hasModel: true, isRunnable: true, isAggregationOnlyWake: false })).toBe(false);
+    expect(refusesUnrunnableModel({ hasModel: false, isRunnable: false, isAggregationOnlyWake: false })).toBe(false);
+  });
+});
+
 /**
- * The helper above decides correctly in isolation; these pin the loop's wiring to it, which a
+ * The helpers above decide correctly in isolation; these pin the loop's wiring to them, which a
  * deleted or re-pointed call site would otherwise leave green.
  */
 describe('processExecution iteration-gate wiring', () => {
   const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+  /**
+   * The body between the loop marker and the post-iteration permission check, which follows the
+   * checkpoint write and the next-iteration size refresh.
+   */
+  const loopSource = (() => {
+    const start = source.indexOf('// --- Iteration loop ---');
+    const end = source.indexOf('// Permission check.');
+    if (start < 0 || end <= start) throw new Error('iteration loop markers not found');
+    return source.slice(start, end);
+  })();
 
-  it('consults the gate before every iteration that is not an aggregation wake\'s wrap-up', () => {
-    expect(source).toMatch(/if \(gateIterations && modelInfo && iterationIndex !== aggregationWakeStartIteration\)/);
-    expect(source).toMatch(/const stopped = await stopUnfundedIteration\(/);
-    expect(source).toMatch(/if \(stopped\) return;/);
+  it('consults the gate before every iteration the policy allows', () => {
+    expect(loopSource).toContain('const gateThisIteration = shouldGateIteration({');
+    expect(loopSource).toContain('wakeStartIteration: aggregationWakeStartIteration,');
+    expect(loopSource).toMatch(/readBalance: \(\) =>\s+readPayerBalance\(\{/);
+    expect(loopSource).toMatch(/if \(gateThisIteration && modelInfo\) \{/);
+    expect(loopSource).toMatch(/const stopped = await stopUnfundedIteration\(/);
+    expect(loopSource).toMatch(/if \(stopped\) return;/);
   });
 
   it('grows the next estimate from the iteration that just ran', () => {
-    expect(source).toContain(
+    expect(loopSource).toContain(
       'lastInputTokens = lastRequestInputTokens(iterationResult.checkpoint.turnUsage) || lastInputTokens;'
     );
+  });
+
+  it('builds the wake, model and clamp decisions from the extracted helpers', () => {
+    expect(source).toContain(
+      'const aggregationWakeStartIteration = wakeStartIterationOf(isAggregationOnlyWake, iterationIndex);'
+    );
+    expect(source).toContain(
+      'if (refusesUnrunnableModel({ hasModel: Boolean(modelInfo), isRunnable: modelRunnable, isAggregationOnlyWake })) {'
+    );
+    expect(source).toContain('maxIterations = clampMaxIterationsForUnrunnableAggregationWake({');
   });
 });

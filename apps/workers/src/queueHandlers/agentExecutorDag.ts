@@ -429,3 +429,21 @@ export function clampMaxIterationsForOverCapAggregationWake(args: {
   }
   return args.maxIterations;
 }
+
+/**
+ * The same one-iteration bound for an aggregation-only wake whose model stopped being runnable
+ * (disabled, or the user lost the entitlement) while its children ran. The wrap-up iteration
+ * returns their already-paid-for results; without the bound the loop would keep iterating on a
+ * model the run is no longer entitled to.
+ */
+export function clampMaxIterationsForUnrunnableAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isRunnable: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && !args.isRunnable) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
+}
