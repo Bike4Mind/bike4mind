@@ -197,13 +197,14 @@ describe('the composer command menu', () => {
     expect(rows()).toHaveLength(0);
 
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(rows()[3].textContent).toContain('[path]');
   });
 
   it('leaves the Code-only commands out of a Chat conversation', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'chat' });
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir']);
   });
 
   it('filters as the name is typed', () => {

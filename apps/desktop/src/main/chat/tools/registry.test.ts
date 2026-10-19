@@ -65,6 +65,10 @@ describe('toolsForRequest', () => {
     // A spawned session keeps the gated start, so it has no card for these to revise.
     expect(names({ roots: [], media: false, host: true, ask: false })).not.toContain(revising[0]);
     expect(names({ roots: [], media: false, host: false, ask: true })).not.toContain(revising[0]);
+    // An attended spawned turn asks cards but still has no suggestion tray.
+    const attended = names({ roots: [], media: false, host: true, ask: true, suggestions: false });
+    expect(attended).toContain('request_directory');
+    expect(attended).not.toContain(revising[0]);
     expect(findTool('session_suggestion_update')).toBeDefined();
     expect(findTool('session_suggestion_dismiss')).toBeDefined();
   });

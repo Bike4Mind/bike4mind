@@ -595,6 +595,22 @@ export class SessionStore {
     });
   }
 
+  /**
+   * Change only where a Code session runs, inside the per-session lock. Unlike `setProject`, it
+   * keeps the context folders as stored now, so a folder shared while a worktree was being cut
+   * is not overwritten by the project snapshot the cut started from.
+   */
+  async updateProjectWorkspace(
+    id: string,
+    workspace: Pick<ChatProject, 'workingDirectory'> & Partial<Pick<ChatProject, 'workspaceBranch'>>
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (session.mode !== 'code' || !session.project) return null;
+      session.project = { ...session.project, ...workspace };
+      return true;
+    });
+  }
+
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
   async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
@@ -607,7 +623,7 @@ export class SessionStore {
 
   /**
    * Grant a folder to this conversation alone, for a session with no project to hold it as a
-   * context directory. Reached only from a `request_directory` card the user clicked.
+   * context directory. Reached only from a folder the user shared: a `request_directory` card they clicked, the picker, or `/add-dir`.
    */
   async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
