@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { dispatch } from './whatsNewHighlights';
-import { AdminSettings, ModalModel } from '@bike4mind/database';
+import { AdminSettings, ModalModel, connectDB } from '@bike4mind/database';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 
 vi.mock('@bike4mind/database', () => ({
+  connectDB: vi.fn().mockResolvedValue(undefined),
   ModalModel: { find: vi.fn() },
   AdminSettings: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
   slackDevWorkspaceRepository: {},
@@ -35,6 +36,7 @@ describe('whatsNewHighlights configured model validation', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    (connectDB as any).mockResolvedValue(undefined);
   });
 
   it.each([
