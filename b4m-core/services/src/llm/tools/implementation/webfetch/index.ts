@@ -168,7 +168,9 @@ type FirecrawlFetchOptions = {
  * 401/402/429 are our key, credits or rate limit and must keep surfacing as server errors.
  */
 export class UnsupportedScrapeTargetError extends UnprocessableEntityError {
-  constructor(url: string, cause: FirecrawlError) {
+  // `cause` is the FirecrawlError, typed as Error so the published .d.ts never references
+  // firecrawl-js: its types pull in DOM-only names a non-DOM consumer can't resolve.
+  constructor(url: string, cause: Error) {
     super(`This site can't be fetched: the web scraper does not support ${new URL(url).hostname}.`);
     this.name = 'UnsupportedScrapeTargetError';
     this.cause = cause;
