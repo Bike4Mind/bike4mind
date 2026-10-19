@@ -80,11 +80,23 @@ describe('recordLandedObject', () => {
   it('retries when another reconciliation changed the observed version during HEAD', async () => {
     h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
     h.updateOne.mockResolvedValue({ matchedCount: 0 });
+    h.findById
+      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-b' }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-c' }) }) });
     await expect(recordLandedObject('ff1', 'uploads/f.png')).rejects.toThrow('retry the landing');
     expect(h.updateOne).toHaveBeenCalledWith(
       { _id: 'ff1', moderationETag: 'etag-b', moderationRevision: null },
       expect.any(Array)
     );
+  });
+
+  it('resolves when the racing writer already recorded the same version', async () => {
+    h.getMetadata.mockResolvedValue({ etag: 'etag-a' });
+    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+    h.findById
+      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-b' }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: async () => ({ moderationETag: 'etag-a' }) }) });
+    await expect(recordLandedObject('ff1', 'uploads/f.png')).resolves.toBeUndefined();
   });
 });
 

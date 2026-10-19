@@ -64,7 +64,11 @@ export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: strin
       },
     },
   ]);
-  if (!result.matchedCount) throw new Error(`Moderation version changed for ${objectKey}; retry the landing`);
+  if (!result.matchedCount) {
+    const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
+    if (current?.moderationETag === eTag) return;
+    throw new Error(`Moderation version changed for ${objectKey}; retry the landing`);
+  }
 };
 
 /**

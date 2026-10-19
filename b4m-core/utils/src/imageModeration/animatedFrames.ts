@@ -59,6 +59,7 @@ export async function extractAnimationFrames(bytes: Buffer): Promise<Buffer[] | 
   } catch (err) {
     // A parser bounds error on malformed input is a terminal verdict, not a transient one to retry.
     if (err instanceof UnsupportedImageFormatError) throw err;
+    if (err instanceof RangeError && /allocation failed/i.test(err.message)) throw err;
     throw unsupported(`malformed image: ${(err as Error).message}`);
   }
 }

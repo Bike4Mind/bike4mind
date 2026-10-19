@@ -4010,7 +4010,7 @@ FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: -1 });
 FabFileSchema.index({ deletedAt: 1, createdAt: -1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, filePath: 1 });
-// Landing events also find rejected tombstones, without a deletedAt equality prefix.
+// Landing events also find rejected tombstones, without a deletedAt equality prefix. Pre-built by 20260921235981_ensure-fabfile-filepath-index.
 FabFileSchema.index({ filePath: 1 });
 
 // Optimize permission and sharing queries
