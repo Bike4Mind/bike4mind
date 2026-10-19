@@ -11,6 +11,7 @@ import {
 } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
+  isPreviewStage,
   PRODUCTION_STAGES,
   TEST_DECISION_PROVIDER_ENVIRONMENT,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
@@ -460,12 +461,13 @@ export const web = new sst.aws.Nextjs(
       // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
       API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
       // Grant-enforcement lever for the federated AI-token exchange (apps/client/pages/api/oauth/
-      // ai-token.ts). Defaults to 'true' on production and dev stages; empty (grace mode) elsewhere.
-      // The env var is checked first so an explicit value (e.g. 'false') acts as a kill switch even
-      // on production -- the handler enforces only on the exact string 'true'. Mirroring
+      // ai-token.ts). Defaults to 'true' on production, dev and preview stages; empty (grace mode)
+      // elsewhere. The env var is checked first so an explicit value (e.g. 'false') acts as a kill
+      // switch even on production -- the handler enforces only on the exact string 'true'. Mirroring
       // API_KEY_SCOPE_STAGING: greppable from infra and flippable per stage without a code change.
       OAUTH_AI_TOKEN_ENFORCE_GRANT:
-        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || (PRODUCTION_STAGES.includes($app.stage) ? 'true' : ''),
+        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT ||
+        (PRODUCTION_STAGES.includes($app.stage) || isPreviewStage ? 'true' : ''),
       // 'true' refuses the self-asserted 'identities' subject path (apps/client/server/auth/
       // verifyFederatedIdToken.ts). Off on every stage, production included: set it per stage only
       // once every live federated client uses subjectSource='sub'.
