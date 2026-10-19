@@ -22,7 +22,14 @@ const GENERIC_FAILURE_MESSAGE = 'Could not start the GitHub connection. Please t
  * handoff disappears while the dead Continue button stays. Once window.location.assign is called
  * the page is leaving, so there is no later failure for this component to report.
  */
-export default function GitHubCreatePanel({ organizationId, onBack }: { organizationId: string; onBack: () => void }) {
+export default function GitHubCreatePanel({
+  organizationId,
+  onBack,
+}: {
+  /** The org the new lake joins; undefined creates a personal lake. */
+  organizationId?: string;
+  onBack: () => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const begin = useBeginGitHubLakeCreate();
 

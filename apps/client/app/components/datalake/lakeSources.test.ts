@@ -5,7 +5,7 @@ vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () =>
 
 import { DRIVE_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/DataLakeWizard/steps/DriveConnectUnavailableButton';
 import {
-  GITHUB_ORG_ONLY_REASON,
+  GITHUB_PERSONAL_OWNER_ONLY_REASON,
   LAKE_MANAGER_ONLY_REASON,
   LAKE_SOURCES,
   getLakeSource,
@@ -38,24 +38,16 @@ describe('resolveLakeSourceAvailability', () => {
     expect(isEnabled).toHaveBeenCalledWith('EnableDataLakeGitHub');
   });
 
-  it('disables GitHub on a personal lake, even for its creator', () => {
-    expect(availability('github', { organizationId: null, isCreator: true })).toEqual({
-      status: 'disabled',
-      reason: GITHUB_ORG_ONLY_REASON,
-    });
-  });
-
-  it('gives an existing personal lake a reason with no switch-account hint', () => {
-    const result = availability('github', { organizationId: null, isCreator: true });
-    expect(result).toMatchObject({ status: 'disabled' });
-    expect('reason' in result && result.reason).not.toMatch(/switch/i);
-  });
-
-  it('keeps Drive on a personal lake for its creator only', () => {
+  it('keeps Drive and GitHub on a personal lake for its creator only', () => {
     expect(availability('googleDrive', { organizationId: null, isCreator: true })).toEqual({ status: 'available' });
     expect(availability('googleDrive', { organizationId: null, isCreator: false })).toEqual({
       status: 'disabled',
       reason: DRIVE_PERSONAL_OWNER_ONLY_REASON,
+    });
+    expect(availability('github', { organizationId: null, isCreator: true })).toEqual({ status: 'available' });
+    expect(availability('github', { organizationId: null, isCreator: false })).toEqual({
+      status: 'disabled',
+      reason: GITHUB_PERSONAL_OWNER_ONLY_REASON,
     });
   });
 
@@ -82,6 +74,6 @@ describe('resolveLakeSourceAvailability', () => {
       reason: LAKE_MANAGER_ONLY_REASON,
     });
     expect(availability('googleDrive', {})).toEqual({ status: 'disabled', reason: DRIVE_PERSONAL_OWNER_ONLY_REASON });
-    expect(availability('github', {})).toEqual({ status: 'disabled', reason: GITHUB_ORG_ONLY_REASON });
+    expect(availability('github', {})).toEqual({ status: 'disabled', reason: GITHUB_PERSONAL_OWNER_ONLY_REASON });
   });
 });

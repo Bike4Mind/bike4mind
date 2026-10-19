@@ -3,7 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
-import { authorizeLakeDriveAccess } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
+import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
 import { withConnectionId, withLakeConnectorClaim } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
@@ -178,7 +178,7 @@ async function parkConnectionIfFolderGone(
  * On an org lake, binding an org-wide credential and globally claiming a Drive folder is an
  * org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the lake's
  * creator. On a personal lake the creator is the only one who may connect, and the connection keeps
- * no credential copy (see authorizeLakeDriveAccess and readUserDriveCredential).
+ * no credential copy (see authorizeLakeConnectorAccess and readUserDriveCredential).
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -194,7 +194,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     }
     // Org lake: owner/manager (or platform admin) only - not the lake creator. Personal lake: its
     // creator only. See the handler note.
-    const owner = await authorizeLakeDriveAccess(req.user, lake);
+    const owner = await authorizeLakeConnectorAccess(req.user, lake);
 
     // Gated AFTER the authorization so the status is not readable by a non-member, and before the
     // credential capture so a refused connect costs no Drive calls. Without this the connect door

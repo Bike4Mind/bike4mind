@@ -12,7 +12,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { driveConnectionOwnerOf, type IDataLakeDocument } from '@bike4mind/common';
+import { lakeConnectionOwnerOf, type IDataLakeDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
@@ -62,7 +62,7 @@ export async function runDriveDisconnectPurge(
     logger.info('[driveDisconnectPurge] connection already released; nothing to do', { connectionId, dataLakeId });
     return 'dropped';
   }
-  const owner = driveConnectionOwnerOf(conn);
+  const owner = lakeConnectionOwnerOf(conn);
   if (!conn.disconnectRequestedAt) {
     logger.warn('[driveDisconnectPurge] no disconnect pending on this connection; dropping', { connectionId });
     return 'dropped';
