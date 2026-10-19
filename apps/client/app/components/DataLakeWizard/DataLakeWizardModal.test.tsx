@@ -393,13 +393,24 @@ describe('DataLakeWizardModal - streamlined step order', () => {
     expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
-  it('keeps Next disabled on the GitHub card, which leaves the wizard instead of advancing', () => {
+  it('hides the stepper and Next on the GitHub card, but keeps Cancel', () => {
     seedSource({});
     useDataLakeWizardStore.setState({ createSource: 'github' });
 
     renderModal();
 
-    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+    expect(screen.queryByTestId('wizard-step-indicator')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-next-btn')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('keeps the stepper on the source cards screen', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: null });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-step-indicator')).toBeInTheDocument();
   });
 
   it('shows only source, configure and upload when neither optional step is enabled', () => {

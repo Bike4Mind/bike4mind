@@ -101,6 +101,10 @@ export default function DataLakeWizardModal() {
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
 
+  // The GitHub card is a hand-off (Continue leaves the page), not a step: no stepper, no Next.
+  // Same predicate SourceSelectionStep uses to render GitHubCreatePanel.
+  const onGitHubCard = step === 'source' && !targetLake && createSource === 'github';
+
   const canGoNext = (() => {
     switch (step) {
       case 'source':
@@ -252,8 +256,7 @@ export default function DataLakeWizardModal() {
           </Typography>
         </Box>
 
-        {/* Step indicator */}
-        <WizardStepIndicator currentStep={step} stepKeys={STEP_ORDER} />
+        {!onGitHubCard && <WizardStepIndicator currentStep={step} stepKeys={STEP_ORDER} />}
 
         {(hasIncludedFiles || driveKnownBytes > 0) && step !== 'upload' && (
           <Box sx={{ px: 3, pt: 1 }}>
@@ -304,7 +307,7 @@ export default function DataLakeWizardModal() {
                   {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
                   {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
                 </Button>
-              ) : step !== 'upload' ? (
+              ) : step !== 'upload' && !onGitHubCard ? (
                 <Button
                   data-testid="wizard-next-btn"
                   variant="solid"
