@@ -50,7 +50,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { getOrganizationStorageUsage: mockRefs.getOrganizationStorageUsage },
 }));
 
-import { ORG_STORAGE_USAGE_MAX_TIME_MS } from '../storage-usage';
+import { ORG_STORAGE_USAGE_MAX_TIME_MS, ORG_STORAGE_USAGE_RATE_LIMIT } from '../storage-usage';
 
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
@@ -91,7 +91,11 @@ beforeEach(() => {
 describe('GET /api/organizations/[id]/storage-usage', () => {
   it('is session-only and rate limited', () => {
     expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
-    expect(mockRefs.rateLimitOptions).toMatchObject({ bucket: 'org-storage-usage' });
+    expect(mockRefs.rateLimitOptions).toMatchObject({
+      bucket: 'org-storage-usage',
+      limit: ORG_STORAGE_USAGE_RATE_LIMIT,
+      windowMs: 60 * 1000,
+    });
   });
 
   it.each([
@@ -135,5 +139,15 @@ describe('GET /api/organizations/[id]/storage-usage', () => {
       constructor: BadRequestError,
     });
     expect(mockRefs.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('propagates a service failure without a 200 body or cache header', async () => {
+    mockRefs.getOrganizationStorageUsage.mockRejectedValue(new Error('operation exceeded time limit'));
+    const { req, res } = createMocks({ method: 'GET', query: { id: ORG } });
+    Object.assign(req, { user: { id: OWNER, isAdmin: false } });
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('operation exceeded time limit');
+    expect(res._isEndCalled()).toBe(false);
+    expect(res.getHeader('Cache-Control')).toBeUndefined();
   });
 });
