@@ -280,7 +280,10 @@ describe('ChatService.shareDirectory', () => {
     streams[0].write(toolTurn('sh-1', 'bash_execute', { command: 'touch ran.txt' }));
     streams[0].write(frame('[DONE]'));
 
-    expect((await awaitSettled('sh-1')).status).toBe('denied');
+    const refused = await awaitSettled('sh-1');
+    expect(refused.status).toBe('denied');
+    expect(refused.error).toContain(`${outside} was the folder`);
+    expect(events.some(event => event.type === 'tool-start' && event.call.id === 'sh-1')).toBe(true);
     expect(existsSync(join(second, 'ran.txt'))).toBe(false);
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
@@ -352,7 +355,7 @@ describe('request_directory in a spawned session', () => {
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
 
-    await h.service.send(id, 'from elsewhere', [], queued(id, extra));
+    expect(await h.service.send(id, 'from elsewhere', [], queued(id, extra))).toMatchObject({ ok: true });
     await vi.waitUntil(() => streams.length >= 2, { timeout: 5000, interval: 5 });
 
     expect(h.toolNames(1)).not.toContain('request_directory');
