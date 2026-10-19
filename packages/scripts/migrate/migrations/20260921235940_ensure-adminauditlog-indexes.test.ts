@@ -6,7 +6,7 @@ vi.mock('@bike4mind/database', () => ({
   AdminAuditLogModel: { createIndexes: () => mockCreateIndexes() },
 }));
 
-import migration from './20261019000000_ensure-adminauditlog-indexes';
+import migration from './20260921235940_ensure-adminauditlog-indexes';
 
 beforeEach(() => {
   vi.clearAllMocks();

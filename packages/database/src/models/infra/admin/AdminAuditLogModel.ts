@@ -135,6 +135,11 @@ const toAuditEntry = (record: StoredRecord): AuditEntry => {
 const hasWriteErrors = (error: unknown): error is { writeErrors: unknown[] } =>
   typeof error === 'object' && error !== null && 'writeErrors' in error && Array.isArray(error.writeErrors);
 
+const hasValidationErrors = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'validationErrors' in error && Array.isArray(error.validationErrors)
+    ? error.validationErrors.length > 0
+    : false;
+
 /** Bulk write errors expose the code directly or under `err`, depending on the driver path. */
 const writeErrorCode = (writeError: unknown): unknown => {
   if (typeof writeError !== 'object' || writeError === null) return undefined;
@@ -165,10 +170,10 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
 
     const docs = entries.map(({ id, ...entry }) => ({ ...entry, _id: new Types.ObjectId(id) }));
     try {
-      await this.auditLogModel.insertMany(docs, { ordered: false });
+      await this.auditLogModel.insertMany(docs, { ordered: false, throwOnValidationError: true });
       return { inserted: docs.length, duplicates: 0 };
     } catch (error) {
-      if (!hasWriteErrors(error)) throw error;
+      if (!hasWriteErrors(error) || hasValidationErrors(error)) throw error;
       const duplicates = error.writeErrors.filter(
         writeError => writeErrorCode(writeError) === DUPLICATE_KEY_ERROR_CODE
       ).length;

@@ -32,15 +32,20 @@ describe('AdminAuditLogModel', () => {
     expect(entry.occurredAt).toEqual(new Date('2026-10-19T00:00:00Z'));
   });
 
-  it('rejects updates', async () => {
-    await adminAuditLogRepository.append(buildEntry());
-    await expect(AdminAuditLogModel.updateOne({}, { summary: 'x' })).rejects.toThrow(/immutable/);
-  });
+  const immutableOperations: Array<[string, () => Promise<unknown>]> = [
+    ['updateOne', () => AdminAuditLogModel.updateOne({}, { summary: 'x' })],
+    ['updateMany', () => AdminAuditLogModel.updateMany({}, { summary: 'x' })],
+    ['findOneAndUpdate', () => AdminAuditLogModel.findOneAndUpdate({}, { summary: 'x' })],
+    ['replaceOne', () => AdminAuditLogModel.replaceOne({}, buildEntry())],
+    ['findOneAndReplace', () => AdminAuditLogModel.findOneAndReplace({}, buildEntry())],
+    ['deleteOne', () => AdminAuditLogModel.deleteOne({})],
+    ['deleteMany', () => AdminAuditLogModel.deleteMany({})],
+    ['findOneAndDelete', () => AdminAuditLogModel.findOneAndDelete({})],
+  ];
 
-  it('rejects deletes', async () => {
+  it.each(immutableOperations)('rejects %s', async (_name, operation) => {
     await adminAuditLogRepository.append(buildEntry());
-    await expect(AdminAuditLogModel.deleteOne({})).rejects.toThrow(/immutable/);
-    await expect(AdminAuditLogModel.deleteMany({})).rejects.toThrow(/immutable/);
+    await expect(operation()).rejects.toThrow(/immutable/);
   });
 
   it('rejects re-saving a persisted document', async () => {
@@ -66,6 +71,13 @@ describe('AdminAuditLogModel', () => {
     await adminAuditLogRepository.appendBackfill([existing]);
 
     expect(await adminAuditLogRepository.appendBackfill([existing, fresh])).toEqual({ inserted: 1, duplicates: 1 });
+  });
+
+  it('appendBackfill rethrows a non-duplicate write error', async () => {
+    const invalid = { ...buildEntry(), id: new Types.ObjectId().toString(), action: undefined as unknown as string };
+
+    await expect(adminAuditLogRepository.appendBackfill([invalid])).rejects.toThrow();
+    expect(await AdminAuditLogModel.countDocuments({})).toBe(0);
   });
 
   it('declares the query indexes', async () => {

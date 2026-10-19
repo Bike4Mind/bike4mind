@@ -6,7 +6,7 @@ import { type MigrationFile } from './index';
  * schema declarations never build there. Idempotent: createIndexes is a no-op for a matching index.
  */
 const migration: MigrationFile = {
-  id: 20261019000000,
+  id: 20260921235940,
   name: 'ensure adminauditlog indexes',
 
   up: async () => {
