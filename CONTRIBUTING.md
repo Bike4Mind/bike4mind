@@ -281,6 +281,10 @@ Two notes specific to fork PRs:
 - CI for first-time contributors requires a maintainer to approve the workflow run — this is standard GitHub security, not a judgment on your PR. It happens quickly after triage.
 - Some internal automation (e.g. the AI review bot) doesn't run on fork PRs because it requires repository secrets. Maintainers will run those stages after initial review where relevant. Preview environments are unaffected by fork status — see below — since a maintainer triggers them out-of-band from an internal pipeline.
 
+### Restricted terms
+
+The **Restricted Terms** check blocks a maintainer-configured list of restricted terms from PR text and diffs: the PR title, body and branch name, every commit message, and the lines your PR adds. Maintainers keep the list in a repository secret, so it is not published. When the check fails, its log names only where the hit is (for example a commit or a file and line), never the matched text. Edit or reword that spot (rewrite the commit message if the hit is there) and push again. If you cannot tell what matched, ask a maintainer on the PR.
+
 ### Fixing a dependency advisory
 
 The **Dependency Audit Gate** check runs `pnpm audit` on your PR and on the commit it targets, and fails only on high/critical advisories that your PR's dependency changes introduce. Advisories already on `main` show as warnings and in the job summary; a scheduled audit of `main` tracks those in a single `Dependency audit: high/critical advisories on main` issue. The gate is not a required check, but please don't merge with it red.

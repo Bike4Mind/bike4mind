@@ -1,0 +1,65 @@
+name: Restricted Terms
+
+# Blocks a maintainer-configured list of restricted terms from PR text and diffs:
+# the PR title, body and branch name, every commit message, and the added lines of
+# every changed file. The list lives in the RESTRICTED_TERMS repository secret
+# (one case-insensitive regex fragment per line, matched on word boundaries); see
+# scripts/check-restricted-terms.mjs. A missing or empty secret fails the check
+# rather than passing it. Logs on this repo are public, so a hit names only the
+# location, never the term or the matched text.
+#
+# pull_request_target (not pull_request) so the secret is available on fork PRs.
+# This is the safe use of pull_request_target: the only checkout is the BASE
+# branch's copy of the script, and the PR's title, commits and diff are read as
+# data through the REST API. Never check out or run the PR head in this workflow.
+#
+# The push trigger is a backstop for commits that reach main without a PR. The
+# branch has already moved by then, so it can only report.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+  push:
+    branches: [main]
+  # Reports on the merge queue too, so this can become a required check (see
+  # semantic-pr-title.yml). A merge group was already checked as a PR, so the
+  # step is skipped there and the job passes.
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: restricted-terms-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Restricted terms
+    if: github.repository == (vars.CANONICAL_REPO || 'Bike4Mind/bike4mind')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
+    steps:
+      # Under pull_request_target the default ref is the base branch, never the
+      # PR head. Only the script is fetched.
+      - uses: actions/checkout@v6
+        if: github.event_name != 'merge_group'
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-restricted-terms.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v6
+        if: github.event_name != 'merge_group'
+        with:
+          node-version: '24'
+
+      - name: Check for restricted terms
+        if: github.event_name != 'merge_group'
+        env:
+          RESTRICTED_TERMS: ${{ secrets.RESTRICTED_TERMS }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-restricted-terms.mjs
