@@ -26,10 +26,10 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
-  // Drive connect needs an org manager on an org lake and the creator on a personal one server-side
+  // Drive and GitHub connect need an org manager on an org lake and the creator on a personal one server-side
   // (the status route 404s otherwise). Gating on the same condition keeps a permanently disabled
   // button off every header the caller cannot connect, rather than an action that can only fail.
-  const canConnectDrive = canConnectLakeConnector(lake);
+  const canConnectSource = canConnectLakeConnector(lake);
 
   return (
     <Box
@@ -86,10 +86,10 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
         </Tooltip>
       </Stack>
 
-      {/* The source row: for an org lake this is the whole connect/re-sync/disconnect control, so
+      {/* The source row: for a lake the caller can connect this is the whole connect/re-sync/disconnect control, so
           attaching a Drive folder or GitHub repository is one step from the chat instead of three. Its own controls
           wrap, which is what keeps it inside the tree card's width. */}
-      {canConnectDrive && (
+      {canConnectSource && (
         <Box data-testid="datalake-selected-lake-source">
           <LakeSourceConnectActions lake={lake} />
         </Box>

@@ -63,6 +63,7 @@ const LAKE = {
   canManage: true,
   isCreator: false,
 };
+const PERSONAL_LAKE = { ...LAKE, organizationId: null, canManage: true, isCreator: true };
 const DRIVE_LAKE = { ...LAKE, pendingConnector: 'googleDrive' as const };
 const BANNER = 'github-finish-connect-banner-lake1';
 const DRIVE_BANNER = 'googleDrive-finish-connect-banner-lake1';
@@ -91,8 +92,40 @@ describe('FinishSourceConnectBanner', () => {
     expect(h.begin).toHaveBeenCalledTimes(1);
   });
 
+  it('shows on an empty connector-fed personal lake for its creator, and restarts the GitHub connect on click', () => {
+    wrap(<FinishSourceConnectBanner lake={PERSONAL_LAKE} fileCount={0} />);
+
+    expect(screen.getByTestId(BANNER)).toBeInTheDocument();
+    expect(h.gitHubEnabledArg).toBe(true);
+    expect(h.driveEnabledArg).toBe(true);
+    fireEvent.click(screen.getByTestId('github-finish-connect-btn-lake1'));
+    expect(h.beginLakeId).toBe('lake1');
+    expect(h.begin).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the Drive banner on an empty connector-fed personal lake for its creator', () => {
+    wrap(<FinishSourceConnectBanner lake={{ ...PERSONAL_LAKE, pendingConnector: 'googleDrive' }} fileCount={0} />);
+
+    expect(screen.getByTestId(DRIVE_BANNER)).toBeInTheDocument();
+  });
+
+  it('hides on a personal lake for a non-creator, even one the server reports as manageable', () => {
+    wrap(<FinishSourceConnectBanner lake={{ ...PERSONAL_LAKE, isCreator: false }} fileCount={0} />);
+
+    expect(screen.queryByTestId(BANNER)).toBeNull();
+    expect(h.gitHubEnabledArg).toBe(false);
+    expect(h.driveEnabledArg).toBe(false);
+  });
+
+  it('hides on a personal lake for its creator when the status read reports no manage right', () => {
+    h.canManage = false;
+    wrap(<FinishSourceConnectBanner lake={PERSONAL_LAKE} fileCount={0} />);
+
+    expect(screen.queryByTestId(BANNER)).toBeNull();
+  });
+
   it.each([
-    ['a personal lake', { ...LAKE, organizationId: undefined }],
+    ['a personal lake the user did not create', { ...LAKE, organizationId: undefined, canManage: false }],
     ['a curated lake', { ...LAKE, origin: 'curated' as const }],
     ['a lake the user cannot manage', { ...LAKE, canManage: false }],
   ])('hides on %s and never reads its connections', (_label, lake) => {

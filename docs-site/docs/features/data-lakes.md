@@ -30,15 +30,15 @@ When an AI tool performs a knowledge base search, it automatically resolves whic
 
 Data Lakes follow a lifecycle with these statuses:
 
-| Status      | Description                      |
-| ----------- | -------------------------------- |
-| Draft       | Being configured, not yet active |
-| Active      | Available for AI retrieval       |
-| Archiving   | Being moved to cold storage      |
-| Archived    | In cold storage, not searchable  |
-| Unarchiving | Being brought back from archive  |
-| Restoring   | Being recovered from a delete    |
-| Deleting    | Removal in progress              |
+| Status | Description |
+|--------|-------------|
+| Draft | Being configured, not yet active |
+| Active | Available for AI retrieval |
+| Archiving | Being moved to cold storage |
+| Archived | In cold storage, not searchable |
+| Unarchiving | Being brought back from archive |
+| Restoring | Being recovered from a delete |
+| Deleting | Removal in progress |
 
 Archiving and deleting are two separate reversal paths, and each has its own in-progress status --
 `Unarchiving` comes back from `Archived`, `Restoring` comes back from `Deleted`. Only one lifecycle
@@ -70,7 +70,7 @@ Yes. The AI retrieval tools automatically search across all Data Lakes you have 
 Files are tagged with the lake's file tag prefix when uploaded. The lake tracks file count and total size automatically.
 
 **Can an API key ground a session on a lake its owner is not a member of?**
-Only if the key was _bound_ to that lake when it was minted. Creating a session can name
+Only if the key was *bound* to that lake when it was minted. Creating a session can name
 `preauthorizedLakeIds` to admit a lake the creator manages but is not a member of; for an API-key
 caller that admission additionally requires the key itself to carry the lake in its binding list.
 Bindings are set at mint time by an administrator (Admin -> Users -> Generate API Key), can only
@@ -83,7 +83,7 @@ permission change.
 Grounded answers scan the library under per-turn bounds -- a candidate-document cap and a chunk
 budget -- and they skip documents whose embeddings came from a different model than the one running
 the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
-specific reasons. The important consequence is what the answer does _not_ prove: a "nothing found"
+specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
 on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
 wait if the banner says documents are still being re-indexed.
 

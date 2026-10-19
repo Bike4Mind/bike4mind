@@ -1,5 +1,8 @@
 import {
   ConflictError,
+  isSameLakeConnectionOwner,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
@@ -137,13 +140,20 @@ export const setLakeVisibility = async (
     // A Drive or GitHub connection's owner is derived from its lake's scope (lakeConnectionOwnerForLake),
     // so moving the lake between personal and an org - or between orgs - leaves a bound row whose owner
     // no longer matches: every manage door 404s, ingest drops each run, and the folder or repository
-    // stays claimed. Any state counts (findByDataLakeIdAny): a disabled row still holds the claim.
-    if (await db.orgGoogleDriveConnections.findByDataLakeIdAny(existing.id)) {
+    // stays claimed. Any state counts (findByDataLakeIdAny): a disabled row still holds the claim. A move
+    // that lands the lake back on the row's own owner is allowed, so an already-stranded row can recover.
+    const targetOwner = lakeConnectionOwnerForLake({
+      organizationId: targetOrg,
+      createdByUserId: existing.createdByUserId,
+    });
+    const strandsConnection = (row: { organizationId?: string | null; connectedBy: string } | null) =>
+      !!row && !isSameLakeConnectionOwner(lakeConnectionOwnerOf(row), targetOwner);
+    if (strandsConnection(await db.orgGoogleDriveConnections.findByDataLakeIdAny(existing.id))) {
       throw new ConflictError(
         "Disconnect this data lake's Google Drive folder before changing whether it belongs to an organization, then reconnect it afterwards."
       );
     }
-    if (await db.orgGitHubLakeConnections.findByDataLakeIdAny(existing.id)) {
+    if (strandsConnection(await db.orgGitHubLakeConnections.findByDataLakeIdAny(existing.id))) {
       throw new ConflictError(
         "Disconnect this data lake's GitHub repository before changing whether it belongs to an organization, then reconnect it afterwards."
       );

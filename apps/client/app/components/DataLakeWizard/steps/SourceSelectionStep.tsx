@@ -63,7 +63,7 @@ export default function SourceSelectionStep() {
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  const canConnectDrive = !!targetLake && canConnectLakeConnector(targetLake);
+  const canConnectSource = !!targetLake && canConnectLakeConnector(targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const setOptionalStep = useDataLakeWizardStore(s => s.setOptionalStep);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -383,7 +383,7 @@ export default function SourceSelectionStep() {
             connect. (GitHub never reaches here: its card owns the whole screen above, because its
             connect creates the lake server-side and then leaves the page.) */}
         {targetLake ? (
-          canConnectDrive ? (
+          canConnectSource ? (
             <LakeSourceConnectActions lake={targetLake} />
           ) : (
             !targetLake.organizationId && (

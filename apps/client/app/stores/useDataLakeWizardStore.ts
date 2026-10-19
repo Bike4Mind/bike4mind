@@ -176,8 +176,8 @@ export interface WizardTargetLake {
   requiredUserTag?: string;
   requiredEntitlement?: string;
   /**
-   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does (canConnectLakeConnector): an org lake needs a
+   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive and
+   * GitHub connect controls the way `SelectedLakeHeader` does (canConnectLakeConnector): an org lake needs a
    * manager, a personal lake its creator, so offering it otherwise is a button that can only ever fail.
    *
    * REQUIRED-and-nullable rather than optional, matching `isCreator` on ManageableDataLakeConfig and

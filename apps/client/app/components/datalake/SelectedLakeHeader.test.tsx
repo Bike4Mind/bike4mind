@@ -21,7 +21,7 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's organizationId, so a
+// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's scope and creator, so a
 // header that forwards a trimmed lake silently drops the GitHub control. Only its data and leaves are stubbed.
 const h = vi.hoisted(() => ({ gitHubFlag: { current: true } }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -124,12 +124,12 @@ describe('SelectedLakeHeader', () => {
 
   it('offers the Drive control on a personal lake the caller created', () => {
     // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeConnectorAccess),
-    // so creation - not org management, and not effective ownership - is the gate here. GitHub stays
-    // org-only.
+    // so creation - not org management, and not effective ownership - is the gate here. GitHub uses
+    // the same gate.
     renderHeader({ organizationId: undefined, isCreator: true });
     expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
-    expect(screen.queryByTestId('github-connect-action')).not.toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
   });
 
   it('withholds the Drive control on a personal lake the caller owns but did not create', () => {

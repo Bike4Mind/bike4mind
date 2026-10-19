@@ -184,9 +184,17 @@ describe('DataLakeTreeEmptyState - GitHub first sync', () => {
     expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', true);
   });
 
-  it('does not watch the connection for a lake without an organization', () => {
+  it('watches the connection, and shows the syncing state, for the creator of a personal lake', () => {
     h.connection.current = gitHubConnection();
-    renderEmptyLake({ ...orgLake, organizationId: null });
+    renderEmptyLake({ ...orgLake, organizationId: null, canManage: true, isCreator: true });
+
+    expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', true);
+    expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'github-syncing');
+  });
+
+  it('does not watch the connection for a non-creator of a personal lake', () => {
+    h.connection.current = gitHubConnection();
+    renderEmptyLake({ ...orgLake, organizationId: null, canManage: true, isCreator: false });
 
     expect(h.useLakeGitHubConnection).toHaveBeenCalledWith('lake1', false);
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'lake-empty');
