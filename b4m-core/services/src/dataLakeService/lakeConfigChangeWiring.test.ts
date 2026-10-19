@@ -363,7 +363,6 @@ describe('setLakeVisibility', () => {
         dataLakeAccessGrants: noGrants,
         orgGoogleDriveConnections: noConnection,
         orgGitHubLakeConnections: noConnection,
-        orgGitHubLakeConnections: noConnection,
         ...audit.db,
       },
     });
@@ -392,7 +391,6 @@ describe('setLakeVisibility', () => {
         dataLakeAccessGrants: noGrants,
         orgGoogleDriveConnections: noConnection,
         orgGitHubLakeConnections: noConnection,
-        orgGitHubLakeConnections: noConnection,
         ...audit.db,
       },
     });
@@ -416,7 +414,6 @@ describe('setLakeVisibility', () => {
       },
       dataLakeAccessGrants: noGrants,
       orgGoogleDriveConnections: noConnection,
-      orgGitHubLakeConnections: noConnection,
       orgGitHubLakeConnections: noConnection,
       ...audit.db,
     });
@@ -442,7 +439,6 @@ describe('setLakeVisibility', () => {
         },
         dataLakeAccessGrants: noGrants,
         orgGoogleDriveConnections: noConnection,
-        orgGitHubLakeConnections: noConnection,
         orgGitHubLakeConnections: noConnection,
         ...audit.db,
       },

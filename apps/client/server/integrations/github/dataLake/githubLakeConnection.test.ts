@@ -201,6 +201,12 @@ const CONNECTION = {
   installationId: 42,
 } as unknown as IOrgGitHubLakeConnectionDocument;
 
+const PERSONAL_CONN = {
+  id: 'conn1',
+  connectedBy: USER.id,
+  installationId: 42,
+} as unknown as IOrgGitHubLakeConnectionDocument;
+
 describe('toGitHubLakeConnectionResponse', () => {
   const connectedAt = new Date('2026-01-01');
   const base = {
@@ -1030,6 +1036,12 @@ describe('releaseGitHubLakeConnection', () => {
     expect(result).toEqual({ installationRetained: false });
   });
 
+  it('releases a personal connection scoped to its user owner', async () => {
+    h.ghConnFindByInstallationId.mockResolvedValue([PERSONAL_CONN]);
+    await releaseGitHubLakeConnection(PERSONAL_CONN, CONFIG);
+    expect(h.ghConnRelease).toHaveBeenCalledWith(PERSONAL_CONN.id, PERSONAL_OWNER);
+  });
+
   it('keeps the installation and only releases the row when a sibling binding remains', async () => {
     h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION, { id: 'sibling', repositoryId: 999 }]);
     const result = await releaseGitHubLakeConnection(CONNECTION, CONFIG);
@@ -1134,6 +1146,18 @@ describe('requestGitHubLakeDisconnect', () => {
       connectionId: 'conn1',
       installationId: 42,
     });
+  });
+
+  it('marks a personal connection disconnecting under its user owner', async () => {
+    await expect(requestGitHubLakeDisconnect(PERSONAL_CONN, logger)).resolves.toEqual({ queued: true });
+    expect(h.ghConnMarkDisconnecting).toHaveBeenCalledWith('conn1', PERSONAL_OWNER);
+  });
+
+  it('rolls back a personal mark under its user owner when the enqueue fails', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    h.ghConnCancelDisconnect.mockResolvedValue(true);
+    await expect(requestGitHubLakeDisconnect(PERSONAL_CONN, logger)).rejects.toThrow('sqs down');
+    expect(h.ghConnCancelDisconnect).toHaveBeenCalledWith('conn1', PERSONAL_OWNER, STAMP, true);
   });
 
   it('declines a second enqueue while a prior disconnect is still fresh', async () => {
@@ -1256,7 +1280,7 @@ describe('revokeGitHubLakeConnection', () => {
   it('disconnects (disable, purge, release) when the connection and its lake both still exist', async () => {
     await revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger);
     expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', ORG_A_OWNER);
-    expect(h.ghConnTouchDisconnect).toHaveBeenCalledWith('conn1');
+    expect(h.ghConnTouchDisconnect).toHaveBeenCalledWith('conn1', ORG_A_OWNER);
     expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
       LAKE,
       expect.any(Function),
@@ -1265,6 +1289,16 @@ describe('revokeGitHubLakeConnection', () => {
     expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
     expect(h.deleteSkipsForSource).toHaveBeenCalledWith(LAKE.id, 'github');
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, ORG_A_OWNER);
+  });
+
+  it('disconnects a personal connection under its user owner', async () => {
+    h.ghConnFindById.mockResolvedValue(PERSONAL_CONN);
+    h.dlFindById.mockResolvedValue({ id: 'lake1', datalakeTag: 'datalake:lake1' });
+    h.ghConnFindByInstallationId.mockResolvedValue([PERSONAL_CONN]);
+    await revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger);
+    expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', PERSONAL_OWNER);
+    expect(h.ghConnTouchDisconnect).toHaveBeenCalledWith('conn1', PERSONAL_OWNER);
+    expect(h.ghConnRelease).toHaveBeenCalledWith('conn1', PERSONAL_OWNER);
   });
 
   it('re-enqueues itself and skips release when the purge reports files remaining', async () => {
