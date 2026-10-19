@@ -14,18 +14,26 @@ type BuildOptions = {
   questId?: string;
   usableModels?: MusicToolConfig['usableModels'];
   findJob?: MusicToolConfig['findJob'];
+  releaseDiscardedJob?: MusicToolConfig['releaseDiscardedJob'];
+  signal?: AbortSignal;
 };
 
 const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = {}) => {
-  const { usableModels = ['test-music'], findJob } = options;
+  const { usableModels = ['test-music'], findJob, releaseDiscardedJob, signal } = options;
   const questId = 'questId' in options ? options.questId : 'q1';
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
   const onFinish = vi.fn();
-  const config: MusicToolConfig = { usableModels, createJob, ...(findJob && { findJob }) };
+  const config: MusicToolConfig = {
+    usableModels,
+    createJob,
+    ...(findJob && { findJob }),
+    ...(releaseDiscardedJob && { releaseDiscardedJob }),
+  };
   const logger = { warn: vi.fn() };
   const context = {
     logger,
+    getAbortSignal: () => signal,
     userId: 'u1',
     organizationId: 'org1',
     sessionId: 's1',
@@ -267,9 +275,12 @@ describe('music_generation tool', () => {
 
     it('asks for a rephrase without a card when the provider blocks the prompt during the wait', async () => {
       const findJob = vi.fn().mockResolvedValueOnce(running).mockResolvedValue(blocked);
-      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      const releaseDiscardedJob = vi.fn().mockResolvedValue(undefined);
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob, releaseDiscardedJob });
       expect(await call(tool)).toBe(PROVIDER_BLOCK_REFUSAL);
       expect(findJob).toHaveBeenCalledTimes(2);
+      expect(findJob).toHaveBeenCalledWith('job1');
+      expect(releaseDiscardedJob).toHaveBeenCalledWith('job1');
       expect(statusUpdate).not.toHaveBeenCalled();
     });
 
@@ -305,18 +316,73 @@ describe('music_generation tool', () => {
       expect(statusUpdate).toHaveBeenCalledOnce();
     });
 
-    it('keeps the card for a billed block so the charge stays visible', async () => {
+    it('keeps the card for a billed block so the charge stays visible, and reports the failure', async () => {
       const findJob = vi.fn().mockResolvedValue({ ...blocked, payload: { billedBlock: true } });
+      const releaseDiscardedJob = vi.fn();
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob, releaseDiscardedJob });
+      expect(await call(tool)).toBe(
+        'Music generation failed (content_blocked): the job ended without a song; its card shows the outcome.'
+      );
+      expect(statusUpdate).toHaveBeenCalledOnce();
+      expect(releaseDiscardedJob).not.toHaveBeenCalled();
+    });
+
+    it('reports a block with another code as a failure with its card, not a rephrase', async () => {
+      const findJob = vi.fn().mockResolvedValue({ ...blocked, error: { code: 'provider_error', message: 'x' } });
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(await call(tool)).toMatch(/^Music generation failed \(provider_error\)/);
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('reports a song that finished during the wait as started, with its card', async () => {
+      const findJob = vi.fn().mockResolvedValue({ ...running, state: 'succeeded' });
       const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
       expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
       expect(statusUpdate).toHaveBeenCalledOnce();
     });
 
-    it('reports other terminal outcomes as a started job with its card', async () => {
-      const findJob = vi.fn().mockResolvedValue({ ...running, state: 'failed', error: { code: 'provider_error' } });
-      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+    it('offers the rephrase to only one of two parallel calls', async () => {
+      const createJob = vi
+        .fn()
+        .mockResolvedValueOnce(runningJob)
+        .mockResolvedValueOnce({ ok: true, created: true, job: { ...running, id: 'job2' } });
+      const findJob = vi.fn().mockResolvedValue(blocked);
+      const { tool } = build(createJob, { findJob });
+      const first = tool.toolFn({ model: 'test-music', prompt: 'one' });
+      const second = tool.toolFn({ model: 'test-music', prompt: 'two' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await first).toBe(PROVIDER_BLOCK_REFUSAL);
+      expect(JSON.parse(await second)).toEqual({ jobId: 'job2', estimatedSeconds: 2 });
+    });
+
+    it('gives the rephrase back when the wait ends without a block', async () => {
+      const findJob = vi
+        .fn()
+        .mockResolvedValueOnce({ ...running, state: 'succeeded' })
+        .mockResolvedValue(blocked);
+      const { tool } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      JSON.parse(await call(tool));
+      expect(await call(tool, 'another')).toBe(PROVIDER_BLOCK_REFUSAL);
+    });
+
+    it('stops waiting once the turn is aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const findJob = vi.fn();
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), {
+        findJob,
+        signal: controller.signal,
+      });
       expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(findJob).not.toHaveBeenCalled();
       expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('stops waiting when the job vanishes', async () => {
+      const findJob = vi.fn().mockResolvedValue(null);
+      const { tool } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(findJob).toHaveBeenCalledOnce();
     });
 
     it('stops waiting after six polls and reports the running job', async () => {
