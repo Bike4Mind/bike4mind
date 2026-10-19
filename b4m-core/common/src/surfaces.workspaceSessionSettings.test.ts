@@ -35,6 +35,18 @@ describe('applyWorkspaceSessionSettings', () => {
     expect(await applyWorkspaceSessionSettings(input, { user: null }, {})).toBe(input);
   });
 
+  it('keeps a live document virtuals by flattening it before applying owned fields', async () => {
+    const table: WorkspaceSessionSettingsTable = {
+      [WORKSPACE]: { ownedFields: ['temperature'], resolve: async () => ({ temperature: 0.2 }) },
+    };
+    const stored = session({ surface: WORKSPACE });
+    const live = { ...stored, toJSON: () => ({ ...stored, id: 'virtual-id' }) };
+
+    const effective = await applyWorkspaceSessionSettings(live, { user: null }, table);
+
+    expect(effective).toMatchObject({ id: 'virtual-id', temperature: 0.2 });
+  });
+
   // Fail closed: a missing table must not read as "nothing owned", which would skip the resolver.
   it.each([undefined, null])('throws when the table is %s, even off any workspace', async table => {
     const run = (surface: string | undefined) =>

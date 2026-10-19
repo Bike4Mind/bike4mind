@@ -270,15 +270,18 @@ function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSession
 
 /**
  * The session as its workspace sees it: each owned field takes the resolver's value, or is cleared when
- * the resolver yields none, user-set or not. Returns a shallow copy, so pass a plain object rather than a live document.
+ * the resolver yields none, user-set or not. Returns a copy; a live document is toJSON()'d first, since a
+ * spread would drop its virtuals (`id` among them).
  */
 export async function applyWorkspaceSessionSettings<TSession extends SurfaceSettingsSession>(
-  session: TSession,
+  input: TSession,
   ctx: Omit<WorkspaceSessionSettingsContext<TSession>, 'session'>,
   table: WorkspaceSessionSettingsTable
 ): Promise<TSession> {
-  const owned = ownedFieldsFor(session, table, false);
-  if (!owned || owned.fields.length === 0) return session;
+  const owned = ownedFieldsFor(input, table, false);
+  if (!owned || owned.fields.length === 0) return input;
+  const doc = input as TSession & { toJSON?: () => TSession };
+  const session = typeof doc.toJSON === 'function' ? doc.toJSON() : input;
   const surface = normalizeSurfaceId(session.surface);
   let resolved: Partial<SurfaceOwnableSessionSettings>;
   try {

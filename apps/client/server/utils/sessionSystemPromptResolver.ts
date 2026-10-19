@@ -59,8 +59,8 @@ export const sessionWillInjectAuthoredPrompt = async (
   session: SurfaceSettingsSession & { systemPromptId?: string; toJSON?: () => unknown },
   ctx: { user: unknown; logger?: { warn: (...args: unknown[]) => void } }
 ): Promise<boolean> => {
-  // The completion path resolves workspace settings over a toJSON()'d session; match it so a live
-  // document is not shallow-copied and the resolver sees the same shape on both paths.
+  // applyWorkspaceSessionSettings flattens a live document only on its owned-fields path; flatten here
+  // too so the identity path also hands back a plain object.
   const plain = (typeof session.toJSON === 'function' ? session.toJSON() : session) as typeof session;
   const effective = await applyWorkspaceSessionSettings(plain, ctx, premiumWorkspaceSessionSettings);
   if (effective.systemPromptText?.trim()) return true;
