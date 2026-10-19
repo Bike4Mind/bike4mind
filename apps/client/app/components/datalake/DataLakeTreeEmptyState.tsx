@@ -31,6 +31,8 @@ interface DataLakeTreeEmptyStateProps {
   onAddFiles?: () => void;
   /** The scoped lake, which decides the sources it can take. Offered only with `onAddFiles`. */
   sourceLake?: LakeSourcePanelLake;
+  /** Lets the embedding surface own lake-scoped session creation from a source panel. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
 }
 
 /**
@@ -54,6 +56,7 @@ export default function DataLakeTreeEmptyState({
   onRetryLakes,
   onAddFiles,
   sourceLake,
+  startChatForLake,
 }: DataLakeTreeEmptyStateProps) {
   const { copy } = useDataLakeSurface();
   const [connectingKind, setConnectingKind] = useState<LakeSourceKind | null>(null);
@@ -143,7 +146,12 @@ export default function DataLakeTreeEmptyState({
       {variant === 'lake-empty' && onAddFiles && sourceLake && (
         <>
           <ConnectSourceMenu lake={sourceLake} onConnect={connectSource} />
-          <LakeSourceConnectModal lake={sourceLake} kind={connectingKind} onClose={() => setConnectingKind(null)} />
+          <LakeSourceConnectModal
+            lake={sourceLake}
+            kind={connectingKind}
+            onClose={() => setConnectingKind(null)}
+            startChatForLake={startChatForLake}
+          />
         </>
       )}
     </Box>

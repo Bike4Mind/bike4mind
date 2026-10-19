@@ -25,7 +25,12 @@ const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</C
 const SESSION = { id: 'session-1' } as ISessionDocument;
 const ACTIVE_LAKE = { id: 'lake1', status: 'active' as const };
 
-const renderButton = (over: { onChatStarted?: (session: ISessionDocument) => void | Promise<void> } = {}) =>
+const renderButton = (
+  over: {
+    startChatForLake?: (dataLakeId: string) => Promise<void>;
+    onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
+  } = {}
+) =>
   wrap(
     <StartLakeChatButton lake={ACTIVE_LAKE} testId="start-chat-btn" {...over}>
       Ask about this repo
@@ -44,6 +49,15 @@ beforeEach(() => {
 });
 
 describe('StartLakeChatButton', () => {
+  it('uses caller-owned creation without invoking the generic lake chat hook', async () => {
+    const startChatForLake = vi.fn().mockResolvedValue(undefined);
+    renderButton({ startChatForLake });
+    await clickAndSettle();
+
+    expect(startChatForLake).toHaveBeenCalledWith('lake1');
+    expect(h.startChatWithLake).not.toHaveBeenCalled();
+  });
+
   it('hands a caller-supplied completion to the chat hook', async () => {
     const onChatStarted = vi.fn();
     renderButton({ onChatStarted });
