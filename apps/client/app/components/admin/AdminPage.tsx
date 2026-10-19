@@ -27,7 +27,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useRouter, useSearch } from '@tanstack/react-router';
+import { useLocation, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
@@ -68,7 +68,8 @@ import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
-import { adminTabFromSlug } from './adminTabSlugs';
+import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
@@ -305,17 +306,50 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { currentUser } = useUser();
   const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
 
-  // A `?tab=` deep link chooses the opening tab. Keyed on the slug, NOT on activeTab, so this is
-  // an entry point rather than a mirror: activeTab is also driven by the sidebar and by the chat
-  // model picker's "manage models" shortcut (see useAdminModal), and re-asserting the URL's value
-  // on every change would fight both. Leaving the param in place is deliberate - the link stays
-  // shareable and survives a reload.
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const isOnAdminRoute = pathname === '/admin';
+
+  // URL -> store: a `?tab=` slug chooses the tab. Keyed on the slug, NOT on activeTab, so it only
+  // fires when the URL itself changes (first load, a pasted link, back/forward).
   useEffect(() => {
     const requestedTab = adminTabFromSlug(requestedTabSlug);
     if (requestedTab !== undefined) {
       setActiveTab(requestedTab);
     }
   }, [requestedTabSlug, setActiveTab]);
+
+  // Store -> URL: activeTab is also driven by the sidebar and by non-admin surfaces (the chat model
+  // picker's "manage models" shortcut), so the URL follows the store to keep reloads on the same
+  // tab. Writes happen only when activeTab actually changed, or when the URL names no valid tab, so
+  // a deep link that the effect above has not applied yet is never overwritten by the store's
+  // default - including on StrictMode's double-run of mount effects, which a first-run flag misses.
+  // `replace` keeps tab clicks out of the history stack.
+  const requestedTabSlugRef = useRef(requestedTabSlug);
+  useEffect(() => {
+    requestedTabSlugRef.current = requestedTabSlug;
+  }, [requestedTabSlug]);
+  const lastMirroredTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (!isOnAdminRoute) return;
+    const tabChanged = lastMirroredTabRef.current !== activeTab;
+    lastMirroredTabRef.current = activeTab;
+    const currentSlug = requestedTabSlugRef.current;
+    if (!tabChanged && adminTabFromSlug(currentSlug) !== undefined) return;
+    const slug = adminTabToSlug(activeTab);
+    if (slug === undefined || slug === currentSlug) return;
+    navigate({
+      to: '/admin',
+      // Rebuilt rather than spread so stray params (e.g. a leftover login redirectTo) don't stick
+      search: previous => ({
+        emergency_access: previous.emergency_access,
+        tab: slug,
+        // feedbackId only means something on the Feedback tab
+        feedbackId: slug === ADMIN_FEEDBACK_TAB_SLUG ? previous.feedbackId : undefined,
+      }),
+      replace: true,
+    });
+  }, [activeTab, isOnAdminRoute, navigate]);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 

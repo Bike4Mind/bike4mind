@@ -236,7 +236,7 @@ describe('ModelSelection admin quick link', () => {
 
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.LLMDashboard);
     expect(onSelectionComplete).toHaveBeenCalledOnce();
-    expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin' });
+    expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
   });
 });
 
