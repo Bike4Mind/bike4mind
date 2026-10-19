@@ -72,8 +72,9 @@ export const skillTool: ToolDefinition = {
     if (!expanded.body.trim()) throw new Error(`The skill "${name}" has an empty body, so there is nothing to run.`);
     // A skill from the user's own folder, or from a project they agreed to load (ProjectTrustStore),
     // is their instruction text like a CLAUDE.md. An account skill is not: /api/skills also returns
-    // skills other people shared or published, so it still counts as untrusted content.
-    if (command.source !== 'remote') context.report?.ownContent();
+    // skills other people shared or published, so it still counts as untrusted content. Listed as
+    // an allowlist so a source added to CustomCommand later is not trusted by default.
+    if (command.source === 'global' || command.source === 'project') context.report?.ownContent();
 
     return [`Instructions for the skill "${name}", from ${command.filePath}. Follow them.`, '', expanded.body].join(
       '\n'
