@@ -402,3 +402,60 @@ describe('useGenerateAudio unmount', () => {
     });
   });
 });
+
+describe('useGenerateAudio credit balance refresh', () => {
+  it.each([
+    ['tts', true],
+    ['tts', false],
+    ['sound-effects', true],
+    ['sound-effects', false],
+  ] as const)('refreshes both balance caches after %s completes (saved: %s)', async (mode, saved) => {
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved } });
+
+    await generate('hello', mode);
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+
+  it.each(['tts', 'sound-effects'] as const)('refreshes balances after a charged oversized %s response', async mode => {
+    mocks.post.mockRejectedValue(axiosFailure(413, { error: 'too big' }));
+
+    await generate('hello', mode);
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+
+  it('does not refresh balances when empty text never starts a request', async () => {
+    await generate('   ');
+
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the billed team after switching accounts and leaving during generation', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    let settle: (value: unknown) => void = () => {};
+    mocks.post.mockReturnValue(
+      new Promise(resolve => {
+        settle = resolve;
+      })
+    );
+    const { result, unmount } = renderHook(() => useGenerateAudio('tts'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.generate('hello');
+    });
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', personal: true });
+    unmount();
+
+    await act(async () => {
+      settle({ data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false } });
+      await pending;
+    });
+
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+});

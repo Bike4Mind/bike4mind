@@ -4,10 +4,14 @@ import { toast } from 'sonner';
 import type { CreateMusicGenerationBody, MusicGeneration, PublicMusicModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { CREDITS_BALANCE_KEY } from './credits';
+import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
 import { fabFileKeys } from './fabFileKeys';
 import { switcherBillingTarget } from './generationBillingTarget';
-import { generationJobPollInterval, generationListRefreshInterval } from './generationJobPolling';
+import {
+  generationJobPollInterval,
+  generationListRefreshInterval,
+  isTerminalGenerationState,
+} from './generationJobPolling';
 import {
   prependMusicGeneration,
   reconcileFetchedMusicGeneration,
@@ -52,7 +56,17 @@ export function useMusicGenerations() {
       const response = await api.get<MusicGenerationPage>(MUSIC_GENERATIONS_URL, {
         params: { limit: MUSIC_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
       });
-      return reconcileFetchedMusicGenerationPage(queryClient, response.data);
+      const previousJobs = new Map(
+        response.data.data.map(job => [
+          job.id,
+          queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(job.id)),
+        ])
+      );
+      const page = reconcileFetchedMusicGenerationPage(queryClient, response.data);
+      if (page.data.some(job => hasGenerationCreditSettlementChanged(previousJobs.get(job.id), job))) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+      return page;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,
@@ -72,6 +86,9 @@ export function useMusicGeneration(jobId: string) {
         queryClient,
         (await api.get<MusicGeneration>(musicJobUrl(jobId))).data
       );
+      if (hasGenerationCreditSettlementChanged(previous, job)) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
       // The song's file is saved after the chat turn ended, past the one-shot session-files refresh that follows
       // it (useSubscribeChatCompletion), so refresh the file lists once the file first shows up.
       if (previous && !previous.output?.file_id && job.output?.file_id) {
@@ -98,7 +115,7 @@ export function useCreateMusicGeneration() {
       (await api.post<MusicGeneration>(MUSIC_GENERATIONS_URL, { ...body, ...switcherBillingTarget() })).data,
     onSuccess: job => {
       prependMusicGeneration(queryClient, job);
-      void queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
+      void invalidateGenerationCreditBalances(queryClient);
       toast.success('Song generation started');
     },
     onError: error => toast.error(describeMusicGenerationError(error, 'Could not start the song. Try again.')),
@@ -110,7 +127,13 @@ export function useCancelMusicGeneration() {
   return useMutation({
     mutationFn: async (jobId: string) => (await api.post<MusicGeneration>(`${musicJobUrl(jobId)}/cancel`)).data,
     // The job may come back still live with the cancel queued; the websocket then delivers `cancelled`.
-    onSuccess: job => upsertMusicGeneration(queryClient, job),
+    onSuccess: job => {
+      upsertMusicGeneration(queryClient, job);
+      const latest = queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(job.id));
+      if (latest && isTerminalGenerationState(latest.state) && latest.credits.settled !== null) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+    },
     onError: (error, jobId) => {
       toast.error(describeMusicCancelError(error));
       // The song started composing since the card last heard; refetch so it shows `running` and drops Cancel.
