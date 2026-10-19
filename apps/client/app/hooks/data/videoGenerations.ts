@@ -9,7 +9,7 @@ import { switcherBillingTarget } from './generationBillingTarget';
 import {
   prependVideoGeneration,
   reconcileFetchedVideoGeneration,
-  seedVideoGeneration,
+  reconcileFetchedVideoGenerationPage,
   upsertVideoGeneration,
   type VideoGenerationList,
   type VideoGenerationPage,
@@ -56,8 +56,7 @@ export function useVideoGenerations() {
       const response = await api.get<VideoGenerationPage>('/api/v1/video-generations', {
         params: { limit: VIDEO_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
       });
-      response.data.data.forEach(job => seedVideoGeneration(queryClient, job));
-      return response.data;
+      return reconcileFetchedVideoGenerationPage(queryClient, response.data);
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,

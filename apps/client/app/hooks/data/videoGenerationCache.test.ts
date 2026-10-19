@@ -8,6 +8,7 @@ import {
   patchVideoGeneration,
   prependVideoGeneration,
   reconcileFetchedVideoGeneration,
+  reconcileFetchedVideoGenerationPage,
   seedVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
@@ -194,5 +195,36 @@ describe('patchVideoGeneration', () => {
   it('reports a job it has never seen', () => {
     queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob()]));
     expect(patchVideoGeneration(queryClient, { id: 'elsewhere', state: 'pending' })).toBe(false);
+  });
+});
+
+describe('reconcileFetchedVideoGenerationPage', () => {
+  it('keeps a listed row a frame finished over a list refetch read before it', () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'succeeded' });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, {
+      data: [videoJob({ state: 'running' })],
+      next_cursor: null,
+    });
+    expect(page.data[0].state).toBe('succeeded');
+    expect(detail('job-1')?.state).toBe('succeeded');
+  });
+
+  it('keeps a detail entry a frame finished over a stale row', () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'running' }));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'succeeded' });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, {
+      data: [videoJob({ state: 'running' })],
+      next_cursor: null,
+    });
+    expect(page.data[0].state).toBe('succeeded');
+  });
+
+  it('takes newer rows, seeds them, and keeps the cursor', () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    const fresh = videoJob({ state: 'succeeded', updated_at: LATER });
+    const page = reconcileFetchedVideoGenerationPage(queryClient, { data: [fresh], next_cursor: 'cursor-1' });
+    expect(page).toEqual({ data: [fresh], next_cursor: 'cursor-1' });
+    expect(detail('job-1')).toEqual(fresh);
   });
 });

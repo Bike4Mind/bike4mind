@@ -6,6 +6,7 @@ import {
   patchMusicGeneration,
   prependMusicGeneration,
   reconcileFetchedMusicGeneration,
+  reconcileFetchedMusicGenerationPage,
   seedMusicGeneration,
   upsertMusicGeneration,
   type MusicGenerationList,
@@ -148,5 +149,55 @@ describe('music gallery list', () => {
     seedMusicGeneration(queryClient, musicJob({ state: 'succeeded', updated_at: LATER }));
     seedMusicGeneration(queryClient, musicJob({ state: 'running' }));
     expect(detail()?.state).toBe('succeeded');
+  });
+});
+
+// A list refetch read before a websocket frame landed must not revert the row the frame moved on; React Query writes
+// a queryFn's page as-is, and no later frame corrects it while the socket stays open.
+describe('reconcileFetchedMusicGenerationPage', () => {
+  const listOf = (...jobs: MusicGeneration[]): MusicGenerationList => ({
+    pages: [{ data: jobs, next_cursor: null }],
+    pageParams: [undefined],
+  });
+  const pageOf = (...jobs: MusicGeneration[]) => ({ data: jobs, next_cursor: 'cursor-1' });
+
+  it('keeps a listed row a frame finished, even with no detail entry', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'running' })));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    const page = reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' })));
+    expect(page.data[0].state).toBe('succeeded');
+    expect(detail()?.state).toBe('succeeded');
+  });
+
+  it('keeps a detail entry a frame finished over a stale row', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    const page = reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' })));
+    expect(page.data[0].state).toBe('succeeded');
+  });
+
+  it('compares the fetch with the newer of the detail entry and the list row', () => {
+    const finished = musicJob({ state: 'succeeded', updated_at: LATER });
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), finished);
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'succeeded' })));
+    expect(reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' }))).data[0]).toEqual(
+      finished
+    );
+
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(finished));
+    expect(reconcileFetchedMusicGenerationPage(queryClient, pageOf(musicJob({ state: 'running' }))).data[0]).toEqual(
+      finished
+    );
+  });
+
+  it('takes newer rows, seeds them, and keeps the cursor', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'running' })));
+    const fresh = musicJob({ state: 'succeeded', updated_at: LATER });
+    const page = reconcileFetchedMusicGenerationPage(queryClient, pageOf(fresh, musicJob({ id: 'music-2' })));
+    expect(page.data).toEqual([fresh, musicJob({ id: 'music-2' })]);
+    expect(page.next_cursor).toBe('cursor-1');
+    expect(detail()).toEqual(fresh);
+    expect(detail('music-2')?.id).toBe('music-2');
   });
 });
