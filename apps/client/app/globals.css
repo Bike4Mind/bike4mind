@@ -540,8 +540,6 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
 
 [class*='MuiRadio-input'] {
   appearance: none !important;
-  width: 20px !important;
-  height: 20px !important;
   border: 1px solid var(--joy-palette-border-input) !important;
   border-radius: 50% !important;
   background-color: transparent !important;
