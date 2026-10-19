@@ -67,6 +67,7 @@ import {
   currentBranch,
   defaultBaseBranch,
   isGitDirectory,
+  isGitRepository,
   listWorktrees,
   projectDisplayName,
   resolveBaseRef,
@@ -2916,8 +2917,10 @@ export class ChatService {
             ok: false,
             message:
               target.status === 'started'
-                ? `The user already started suggestion ${id} as session ${target.started?.sessionId ?? ''}, so it ` +
-                  'can no longer change. Use session_send to tell that session instead.'
+                ? target.started?.placement === 'here'
+                  ? `The user chose to run suggestion ${id} here, in this conversation, so it can no longer change.`
+                  : `The user already started suggestion ${id} as session ${target.started?.sessionId ?? ''}, so it ` +
+                    'can no longer change. Use session_send to tell that session instead.'
                 : `Suggestion ${id} was dismissed. Suggest it again only if the user still wants it.`,
           };
           return null;
@@ -2932,6 +2935,10 @@ export class ChatService {
 
     return {
       suggest: async task => {
+        const [base, repository] = await Promise.all([
+          spawnBaseFor(project),
+          isGitRepository(project.workingDirectory),
+        ]);
         const suggestion: ChatSpawnSuggestion = {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
@@ -2939,8 +2946,9 @@ export class ChatService {
           ...(task.title ? {} : { derivedTitle: true }),
           prompt: task.prompt,
           ...(task.summary ? { summary: task.summary } : {}),
-          base: await spawnBaseFor(project),
+          base,
           branch: suggestBranchName(task.title, task.prompt),
+          repository,
           status: 'pending',
           revision: 0,
           createdAt: new Date().toISOString(),
@@ -2976,6 +2984,9 @@ export class ChatService {
    * Allowed while this conversation is replying: the child is its own conversation, and holding
    * the start for the reply would make the card the blocking thing it replaced. The model hears
    * what happened through the note `reportSuggestionOutcomes` puts on the next turn.
+   *
+   * 'here' starts no session: the task goes out through `send` as the user's own message, so it
+   * queues behind a live reply exactly as typing it would. See runSuggestionHere.
    */
   async startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult> {
     const { sessionId, suggestionId } = request;
@@ -2993,6 +3004,7 @@ export class ChatService {
       const prompt = typeof request.prompt === 'string' ? request.prompt.trim() : '';
       if (!prompt) return { ok: false, error: 'The task needs a prompt.' };
       const title = (typeof request.title === 'string' ? request.title.trim() : '') || suggestion.title;
+      if (request.placement === 'here') return await this.runSuggestionHere(sessionId, suggestion, prompt, title);
       const branch = typeof request.branch === 'string' ? request.branch.trim() : '';
       if (request.placement === 'worktree' && !branch) return { ok: false, error: 'Name a branch for the worktree.' };
       const placement: SpawnPlacement =
@@ -3029,6 +3041,52 @@ export class ChatService {
     } finally {
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /**
+   * Marked started BEFORE the send, so the outcome note rides on this very message: marked after,
+   * a turn that starts at once could read the suggestion as still pending and the note would land
+   * a turn late. A refused send puts the suggestion back.
+   */
+  private async runSuggestionHere(
+    sessionId: string,
+    suggestion: ChatSpawnSuggestion,
+    prompt: string,
+    title: string
+  ): Promise<SpawnSuggestionResult> {
+    const started: ChatSpawnSuggestion = {
+      ...suggestion,
+      title,
+      prompt,
+      status: 'started',
+      unreported: true,
+      started: { placement: 'here', title, edited: prompt !== suggestion.prompt || title !== suggestion.title },
+    };
+    const replace = (still: (entry: ChatSpawnSuggestion) => boolean, next: ChatSpawnSuggestion) =>
+      this.deps.store.changeSpawnSuggestions(sessionId, current =>
+        current.some(entry => entry.id === suggestion.id && still(entry))
+          ? current.map(entry => (entry.id === suggestion.id ? next : entry))
+          : null
+      );
+    if (!(await replace(entry => entry.status === 'pending', started))) {
+      return { ok: false, error: 'That suggestion is no longer waiting to start.' };
+    }
+
+    const text = `${RUN_HERE_PREAMBLE}\n\n${prompt}`;
+    // Mid-reply, an ordinary send queues it as typing would. Idle, it goes out as a released
+    // entry so queue.sent draws it in the thread: a plain send from here would store the prompt
+    // where the renderer, which only draws what it typed itself, never shows it.
+    const sent = this.hasTurnInFlight(sessionId)
+      ? await this.send(sessionId, text)
+      : await this.send(sessionId, text, [], { id: randomUUID(), sessionId, text, queuedAt: new Date().toISOString() });
+    if (!sent.ok) {
+      // Only while the model has not been told; once a note says it ran here, it stays started.
+      const restored = await replace(entry => entry.status === 'started' && entry.unreported === true, suggestion);
+      if (restored) this.emitSuggestions(sessionId, restored);
+      return { ok: false, error: sent.error };
+    }
+    await this.announceSuggestions(sessionId);
+    return { ok: true, suggestion: started };
   }
 
   async dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult> {
@@ -4971,12 +5029,25 @@ function withNotes(message: ChatMessage, text: string): string {
 /** Longest edited prompt quoted back to the model; the child has the whole of it. */
 const EDITED_PROMPT_QUOTE_CHARS = 4000;
 
+/**
+ * Opens a suggestion the user ran here. Suggestion prompts are written as briefs for a new
+ * session, often "you are a worker delegated from...", and read alone they invite delegating again.
+ */
+export const RUN_HERE_PREAMBLE =
+  '[I chose to run this suggested task here, in this conversation. Do the work yourself; do not hand it to another session.]';
+
 /** The note the model gets about one suggestion the user acted on. See reportSuggestionOutcomes. */
 export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): string {
   const name = `suggestion ${suggestion.id} ("${suggestion.title}")`;
   const started = suggestion.started;
   if (suggestion.status !== 'started' || !started) {
     return `The user dismissed ${name}. Nothing was started; do not suggest it again unless they ask.`;
+  }
+  if (started.placement === 'here') {
+    return (
+      `The user chose to run ${name} here, in this conversation, instead of starting a session. ` +
+      'Their message carries the task; do the work in this conversation.'
+    );
   }
   const where =
     started.placement === 'worktree'

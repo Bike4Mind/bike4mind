@@ -3,9 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent } from '@shared/chat';
+import type {
+  ChatQueueEvent,
+  ChatSessionSummary,
+  ChatSpawnSuggestion,
+  ChatStreamEvent,
+  SpawnSuggestionResult,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -15,6 +22,12 @@ function frame(payload: unknown): string {
 }
 
 type WireMessage = { role: string; content: unknown };
+
+function childOf(result: SpawnSuggestionResult): string {
+  const started = result.ok ? result.suggestion.started : undefined;
+  if (started?.placement !== 'worktree' && started?.placement !== 'local') throw new Error('No child was started.');
+  return started.sessionId;
+}
 
 /**
  * session_spawn with a user present: it suggests and returns, the user starts or dismisses the
@@ -30,6 +43,9 @@ describe('ChatService spawn suggestions', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let queue: MessageQueue;
+  let queueEvents: ChatQueueEvent[];
+  let signedIn: boolean;
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-')));
@@ -44,17 +60,23 @@ describe('ChatService spawn suggestions', () => {
     });
     requested = vi.fn<(sessionId: string) => void>();
     approvals = new ApprovalGate({ requested, settled: vi.fn() });
+    queueEvents = [];
+    queue = new MessageQueue(event => queueEvents.push(event));
+    signedIn = true;
 
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
       approvals,
+      queue,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
-        ({
-          get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
-        }) as unknown as AuthenticatedApiClient,
+        signedIn
+          ? ({
+              get: vi.fn().mockResolvedValue({}),
+              getAxiosInstance: () => ({ post }),
+            } as unknown as AuthenticatedApiClient)
+          : null,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => events.push(event),
     });
@@ -223,12 +245,10 @@ describe('ChatService spawn suggestions', () => {
       title: suggestion.title,
     });
     if (!result.ok) throw new Error(result.error);
-    const childId = result.suggestion.started?.sessionId;
+    const childId = childOf(result);
     expect(childId).toBeTruthy();
     expect(result.suggestion.started).toMatchObject({ placement: 'local', edited: true });
-    expect((await store.get(childId as string))?.origin?.seedPrompt).toBe(
-      'remove the unused imports and run the linter'
-    );
+    expect((await store.get(childId))?.origin?.seedPrompt).toBe('remove the unused imports and run the linter');
 
     await service.send(parent.id, 'next');
     const first = await awaitRequestEndingWith('next');
@@ -307,7 +327,7 @@ describe('ChatService spawn suggestions', () => {
       title: suggestion.title,
     });
     if (!result.ok) throw new Error(result.error);
-    expect((await store.get(result.suggestion.started?.sessionId as string))?.titleLocked).toBeUndefined();
+    expect((await store.get(childOf(result)))?.titleLocked).toBeUndefined();
   });
 
   it('drops pending suggestions when the conversation is archived', async () => {
@@ -343,7 +363,132 @@ describe('ChatService spawn suggestions', () => {
           .find(call => call?.name === 'session_spawn' && call.status === 'awaiting-approval'),
       { timeout: 5000, interval: 5 }
     );
-    expect(card.approvalChoice?.options.map(option => option.id)).toEqual(['worktree', 'local']);
-    expect(latestSuggestions(result.suggestion.started?.sessionId as string)).toEqual([]);
+    expect(card.approvalChoice?.options.map(option => option.id)).toEqual(['worktree', 'local', 'here']);
+    expect(latestSuggestions(childOf(result))).toEqual([]);
+
+    // Run here, from the child's card: no grandchild, and the model is told to do it itself.
+    approvals.resolve(card.approvalId as string, { decision: 'redirect', optionId: 'here' });
+    const answered = await vi.waitUntil(() => settled('session_spawn').find(call => call?.id === card.id), {
+      timeout: 5000,
+      interval: 5,
+    });
+    expect(answered).toMatchObject({
+      status: 'done',
+      preview: expect.stringContaining('Do the work yourself now'),
+      label: 'Run here, in this conversation - no session was started',
+    });
+    expect((await store.list()).filter(session => session.origin)).toHaveLength(1);
+  });
+
+  describe('run here, in this conversation', () => {
+    const runHere = (sessionId: string, suggestion: ChatSpawnSuggestion, prompt = suggestion.prompt) =>
+      service.startSpawnSuggestion({
+        sessionId,
+        suggestionId: suggestion.id,
+        placement: 'here',
+        prompt,
+        title: suggestion.title,
+        branch: 'ignored/branch',
+      });
+
+    it('sends the prefixed prompt as the user turn, with the outcome note, and starts no session', async () => {
+      const { parent, suggestion } = await suggestedBy('remove the unused imports');
+
+      const result = await runHere(parent.id, suggestion);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.suggestion.status).toBe('started');
+      expect(result.suggestion.started).toEqual({ placement: 'here', title: suggestion.title, edited: false });
+      expect(result.suggestion.started).not.toHaveProperty('sessionId');
+      expect(result.suggestion.started).not.toHaveProperty('branch');
+
+      const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+      const carried = wire(index).at(-1)?.content as string;
+      expect(carried).toMatch(/^\[I chose to run this suggested task here/);
+      expect(carried).toContain('\n\nremove the unused imports\n\n<system-reminder>');
+      expect(carried).toContain(`The user chose to run suggestion ${suggestion.id}`);
+
+      // Drawn in the thread through the queue's 'sent' push, since the renderer did not type it.
+      expect(queueEvents.find(event => event.sent)?.sent?.message.content).toContain('remove the unused imports');
+      const sessions = await store.list();
+      expect(sessions.some(session => session.origin)).toBe(false);
+      expect(sessions).toHaveLength(1);
+      expect((await store.get(parent.id))?.project?.workspaceBranch).toBeUndefined();
+
+      // Attended, like typing: the turn's tool list keeps the tools only a present user can answer.
+      const tools = (post.mock.calls[index][1].options.tools as { toolSchema: { name: string } }[]).map(
+        entry => entry.toolSchema.name
+      );
+      expect(tools).toContain('session_suggestion_update');
+    });
+
+    it('queues behind a live reply exactly as a typed message would', async () => {
+      const parent = await codeSession();
+      await service.send(parent.id, 'delegate');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 's1', 'session_spawn', { prompt: 'do it here instead', title: 'Here' });
+      const suggestion = await awaitSuggestion(parent.id, entry => entry.status === 'pending');
+      await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+
+      const result = await runHere(parent.id, suggestion, 'do it here, edited');
+      if (!result.ok) throw new Error(result.error);
+      expect(result.suggestion.started).toMatchObject({ placement: 'here', edited: true });
+      expect(queue.list(parent.id)).toHaveLength(1);
+      expect(queue.list(parent.id)[0]?.text).toBe(`${RUN_HERE_PREAMBLE}\n\ndo it here, edited`);
+      expect(requestEndingWith(RUN_HERE_PREAMBLE)).toBe(-1);
+
+      reply(streams[1], 'Suggested.');
+      const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+      expect(wire(index).at(-1)?.content).toContain('do it here, edited');
+      expect(wire(index).at(-1)?.content).toContain(`The user chose to run suggestion ${suggestion.id}`);
+      expect((await store.list()).some(session => session.origin)).toBe(false);
+    });
+
+    it('refuses a suggestion already run here', async () => {
+      const { parent, suggestion } = await suggestedBy('remove the unused imports');
+      expect((await runHere(parent.id, suggestion)).ok).toBe(true);
+      expect(await runHere(parent.id, suggestion)).toMatchObject({ ok: false });
+    });
+
+    it('refuses a dismissed suggestion and sends nothing', async () => {
+      const { parent, suggestion } = await suggestedBy('remove the unused imports');
+      await service.dismissSpawnSuggestion(parent.id, suggestion.id);
+      expect(await runHere(parent.id, suggestion)).toMatchObject({ ok: false });
+      expect(requestEndingWith(RUN_HERE_PREAMBLE)).toBe(-1);
+    });
+
+    it('puts the suggestion back when the send is refused', async () => {
+      const { parent, suggestion } = await suggestedBy('remove the unused imports');
+      signedIn = false;
+      expect(await runHere(parent.id, suggestion)).toEqual({ ok: false, error: 'Sign in to send a message.' });
+      expect((await store.get(parent.id))?.spawnSuggestions?.[0]).toMatchObject({ status: 'pending' });
+      expect(latestSuggestions(parent.id)[0]).toMatchObject({ status: 'pending' });
+    });
+
+    it('tells the model a run-here suggestion can no longer change', async () => {
+      const { parent, suggestion } = await suggestedBy('remove the unused imports');
+      expect((await runHere(parent.id, suggestion)).ok).toBe(true);
+      const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+      callTool(streams[index], 'u1', 'session_suggestion_update', { id: suggestion.id, prompt: 'other' });
+      await vi.waitUntil(() => settled('session_suggestion_update').length === 1, { timeout: 5000, interval: 5 });
+      expect(settled('session_suggestion_update')[0]?.error).toMatch(/chose to run suggestion .* here/);
+    });
+  });
+
+  it('describes a run-here outcome without a session id', () => {
+    const note = describeSuggestionOutcome({
+      id: 'abc12345',
+      title: 'Tidy',
+      prompt: 'p',
+      base: 'main',
+      branch: 'b',
+      status: 'started',
+      revision: 0,
+      createdAt: '2026-10-19T00:00:00.000Z',
+      started: { placement: 'here', title: 'Tidy', edited: true },
+    });
+    expect(note).toBe(
+      'The user chose to run suggestion abc12345 ("Tidy") here, in this conversation, instead of starting a ' +
+        'session. Their message carries the task; do the work in this conversation.'
+    );
   });
 });
