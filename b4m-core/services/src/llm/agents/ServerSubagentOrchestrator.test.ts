@@ -341,6 +341,8 @@ describe('ServerSubagentOrchestrator', () => {
       });
       expect(result.summary).toContain('Dispatched');
       expect(result.summary).toContain('child-handoff-id');
+      // The handoff Lambda runs the child, so the delegating tool must not bill this placeholder.
+      expect(result.billedByTracker).toBe(true);
     });
 
     it('propagates abort: aborts child and throws when parent signal is aborted', async () => {
@@ -675,6 +677,45 @@ describe('ServerSubagentOrchestrator', () => {
       expect(spentResultOf(error)?.completionInfo.totalCredits).toBeCloseTo(
         usdToCredits(getTextModelCost(model, 12_000, 3_000, 0, 0)),
         10
+      );
+    });
+
+    it('hands the tracker the priced usage a failed run spent, so a tracked run is still billed', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+      const tracker = makeTracker();
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }), thoroughness: 'medium' })
+      ).rejects.toThrow('provider 500');
+
+      expect(tracker.onFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childExecutionId: 'child-exec-id',
+          isTimeout: false,
+          partialResult: expect.objectContaining({
+            completionInfo: expect.objectContaining({
+              totalCredits: expect.closeTo(usdToCredits(getTextModelCost(model, 12_000, 3_000, 0, 0)), 10),
+            }),
+          }),
+        })
       );
     });
 
