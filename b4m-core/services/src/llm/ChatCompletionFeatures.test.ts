@@ -592,7 +592,8 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect((content.match(/### \[1\] NCCN/g) ?? []).length).toBe(2);
     // The prompt fragment states the index-only rules with the right count.
     expect(content).toContain('cite ONLY by bracketed index');
-    expect(content).toContain('never cite an index above 2');
+    expect(content).toContain("Numbered tool sources continue this turn's sequence; cite their supplied indices.");
+    expect(content).not.toContain('never cite an index above');
     // Citables order IS the index order: [N] maps to citables[N-1].
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
