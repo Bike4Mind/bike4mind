@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
-import { IMcpServerDocument } from '@bike4mind/common';
+import { IMcpServerDocument, IMcpServerResponse } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useUser } from '@client/app/contexts/UserContext';
 
@@ -25,7 +25,7 @@ export const mcpServerKeys = {
 export const useMcpServers = () => {
   return useQuery({
     queryKey: mcpServerKeys.list(),
-    queryFn: async (): Promise<IMcpServerDocument[]> => {
+    queryFn: async (): Promise<IMcpServerResponse[]> => {
       const { data } = await api.get('/api/mcp-servers');
       return data;
     },

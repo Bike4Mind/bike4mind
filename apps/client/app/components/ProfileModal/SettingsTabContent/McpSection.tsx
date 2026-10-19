@@ -1,4 +1,4 @@
-import { McpServerName } from '@bike4mind/common';
+import { McpServerName, type IMcpServerResponse } from '@bike4mind/common';
 import { Checkbox, FormControl, Input, Stack, Typography, Button, FormLabel, Table, IconButton, Box } from '@mui/joy';
 import React, { useState } from 'react';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -59,8 +59,11 @@ const McpSection = () => {
   };
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Keys already stored on the server being edited: their values are never sent to the client,
+  // so a blank value for one of them means "keep the stored value".
+  const [storedKeys, setStoredKeys] = useState<ReadonlySet<string>>(new Set());
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [toolsModalServer, setToolsModalServer] = useState<McpServer | null>(null);
+  const [toolsModalServer, setToolsModalServer] = useState<IMcpServerResponse | null>(null);
 
   const { data: servers, isLoading } = useMcpServers();
 
@@ -92,12 +95,13 @@ const McpSection = () => {
     }
   };
 
-  const handleEdit = (server: McpServer) => {
+  const handleEdit = (server: IMcpServerResponse) => {
     setFormData({
       name: server.name,
-      envVariables: server.envVariables,
+      envVariables: server.envVariables.map(({ key }) => ({ key, value: '' })),
       enabled: server.enabled,
     });
+    setStoredKeys(new Set(server.envVariables.map(({ key }) => key)));
     setEditingId(server.id);
     setIsModalOpen(true);
   };
@@ -112,6 +116,7 @@ const McpSection = () => {
       enabled: true,
     });
     setEditingId(null);
+    setStoredKeys(new Set());
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -310,7 +315,8 @@ const McpSection = () => {
                     <Input
                       value={envVar.value}
                       onChange={e => handleEnvVariableChange(index, 'value', e.target.value)}
-                      required
+                      placeholder={storedKeys.has(envVar.key) ? 'Unchanged' : undefined}
+                      required={!storedKeys.has(envVar.key)}
                     />
                   </FormControl>
                   <Button color="danger" variant="soft" onClick={() => handleRemoveEnvVariable(index)} sx={{ mt: 2 }}>

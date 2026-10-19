@@ -41,7 +41,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
-import { B4MLLMTools, IMcpServerDocument } from '@bike4mind/common';
+import { B4MLLMTools, IMcpServerDocument, IMcpServerResponse } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -368,7 +368,7 @@ const ToolsSection = ({
   }, [modelInfo?.can_think]);
 
   const availableMcpServers = useMemo(
-    () => mcpServersData.filter((server: IMcpServerDocument) => server.enabled !== false),
+    () => mcpServersData.filter((server: IMcpServerResponse) => server.enabled !== false),
     [mcpServersData]
   );
 

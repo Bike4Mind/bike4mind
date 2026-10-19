@@ -36,6 +36,9 @@ const mcpServerFields = {
 export const mcpServerUpdateBodySchema = z.object({
   ...mcpServerFields,
   name: mcpServerFields.name.optional(),
+  // The client only ever sees keys (mcpServerResponseSchema withholds values), so an edit sends a
+  // stored key back blank; the handler keeps the stored value for it.
+  envVariables: z.array(z.object({ key: z.string(), value: z.string().optional() })),
 });
 
 /**

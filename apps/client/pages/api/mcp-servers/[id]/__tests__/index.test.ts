@@ -2,9 +2,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockFindOneAndUpdate } = vi.hoisted(() => ({
+const { mockFindById, mockFindOneAndUpdate, mockUpdateBodyParse } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
+  mockUpdateBodyParse: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -44,9 +45,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptEnvVariables: (v: unknown) => v,
 }));
 vi.mock('@server/validators/mcpServerValidators', () => ({
-  mcpServerUpdateBodySchema: {
-    safeParse: () => ({ success: true, data: { name: 'notion', envVariables: [], enabled: true } }),
-  },
+  mcpServerUpdateBodySchema: { safeParse: (...a: unknown[]) => mockUpdateBodyParse(...a) },
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: vi.fn() }));
 vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
@@ -54,6 +53,10 @@ vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
 import handler from '../index';
 
 const SERVER_ID = '507f1f77bcf86cd799439011';
+const STORED_TOKEN = 'enc:stored-token';
+
+const bodyWith = (envVariables: { key: string; value?: string }[]) =>
+  mockUpdateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables, enabled: true } });
 
 const runPut = async () => {
   const { req, res } = createMocks({ method: 'PUT', query: { id: SERVER_ID } });
@@ -62,10 +65,32 @@ const runPut = async () => {
   return res;
 };
 
+const setEnv = () => (mockFindOneAndUpdate.mock.calls[0][1] as { $set: { envVariables: unknown } }).$set.envVariables;
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFindById.mockResolvedValue({ id: SERVER_ID, userId: 'u1' });
-  mockFindOneAndUpdate.mockResolvedValue({ id: SERVER_ID });
+  bodyWith([]);
+  mockFindById.mockResolvedValue({
+    id: SERVER_ID,
+    userId: 'u1',
+    envVariables: [{ key: 'NOTION_ACCESS_TOKEN', value: STORED_TOKEN }],
+  });
+  // The route serializes the hydrated document with toJSON() before the response schema.
+  mockFindOneAndUpdate.mockImplementation(async (_filter: unknown, update: { $set: Record<string, unknown> }) => ({
+    toJSON: () => ({
+      id: SERVER_ID,
+      userId: 'u1',
+      name: 'notion',
+      enabled: true,
+      tools: [],
+      envVariables: update.$set.envVariables,
+      metadata: {
+        webhooks: {
+          github: { routingToken: 'route-token', secret: 'enc:webhook-secret', subscribedEvents: [], repos: [] },
+        },
+      },
+    }),
+  }));
 });
 
 describe('PUT /api/mcp-servers/[id]', () => {
@@ -77,5 +102,40 @@ describe('PUT /api/mcp-servers/[id]', () => {
       expect.objectContaining({ $unset: expect.objectContaining({ toolSchemasFetchedAt: '' }) }),
       { new: true, runValidators: true }
     );
+  });
+
+  it('withholds env variable values and the webhook secret from the response', async () => {
+    bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
+
+    const res = await runPut();
+
+    const body = res._getJSONData();
+    expect(body.envVariables).toEqual([{ key: 'NOTION_ACCESS_TOKEN' }]);
+    expect(body.metadata.webhooks.github).not.toHaveProperty('secret');
+    expect(body.metadata.webhooks.github.routingToken).toBe('route-token');
+    expect(JSON.stringify(body)).not.toMatch(/new-token|enc:/);
+  });
+
+  it('keeps the stored value for a stored key sent back blank', async () => {
+    bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: '' }]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: STORED_TOKEN }]);
+  });
+
+  it('replaces the stored value when a new one is sent', async () => {
+    bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
+  });
+
+  it('refuses a blank value for a key that is not stored yet', async () => {
+    bodyWith([{ key: 'NOTION_WORKSPACE_ID' }]);
+
+    await expect(runPut()).rejects.toThrow('A value is required for a new environment variable');
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 });
