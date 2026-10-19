@@ -446,12 +446,20 @@ describe('move-to-server-utils', () => {
     it('re-runs cleanly when the old path holds a re-export shim of the moved file', () => {
       write(
         'apps/client/server/memory/factCipher.ts',
-        "export * from '@bike4mind/server-utils/memory/factCipher';\nexport { default } from '@bike4mind/server-utils/memory/factCipher';\n"
+        "// The premium overlays still import this path.\nexport * from '@bike4mind/server-utils/memory/factCipher';\nexport { default } from '@bike4mind/server-utils/memory/factCipher';\n"
       );
       run(root, ['apps/client/server/memory/factCipher.ts']);
       expect(read('apps/workers/src/a.ts')).toBe("import { x } from '@bike4mind/server-utils/memory/factCipher';\n");
 
       write('apps/client/server/memory/factCipher.ts', "export * from '@bike4mind/server-utils/memory/other';\n");
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
+    });
+
+    it('does not take an empty or comment-only old path for a shim', () => {
+      write('apps/client/server/memory/factCipher.ts', '');
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
+
+      write('apps/client/server/memory/factCipher.ts', '// nothing here\n');
       expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
     });
 

@@ -67,7 +67,8 @@
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
     "@bike4mind/scripts#test": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
     // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.

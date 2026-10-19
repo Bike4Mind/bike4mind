@@ -22,9 +22,9 @@ import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@bike4mind/server-util
  * rather than good: a run that produced a partial answer, and a run that
  * finished naturally just as the sweep landed. Both must come out untouched.
  *
- * Lives in apps/client because that is where `settleStrandedQuests` lives, and
- * consumes the built dist of @bike4mind/database, so `pnpm turbo:core:build`
- * must be current.
+ * Stays in apps/client, which has the e2e lane that @bike4mind/server-utils
+ * lacks. It consumes the built dist of @bike4mind/database, so
+ * `pnpm turbo:core:build` must be current.
  */
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget
