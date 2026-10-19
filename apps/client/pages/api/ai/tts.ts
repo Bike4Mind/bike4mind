@@ -14,6 +14,7 @@ import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider'
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
@@ -35,8 +36,19 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    req.validated;
+  const {
+    text,
+    provider,
+    model,
+    voice,
+    format,
+    encoding,
+    stability,
+    similarityBoost,
+    languageCode,
+    preview,
+    organization_id,
+  } = req.validated;
 
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
@@ -60,7 +72,9 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     );
   }
 
-  // Pre-flight credit gate: reject before incurring provider cost.
+  // Pre-flight credit gate: reject before incurring provider cost. Omitted keeps the historical
+  // personal default; a key bills its own account (resolveAudioBillingOrgId 403s any other target).
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
   if (userId) {
     try {
@@ -68,6 +82,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         userId,
         estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
         featureLabel: 'text-to-speech',
+        billingOrganizationId,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {
@@ -120,6 +135,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         vendor: usedVendor,
         model: result.model,
         characters: result.characters,
+        billingOrganizationId,
         logger: req.logger,
       });
     }
