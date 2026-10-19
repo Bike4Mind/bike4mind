@@ -19,6 +19,7 @@
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -1142,6 +1143,69 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// Session fields a workspace owns, resolved at read time (b4mContributions.workspaceSessionSettingsExport,
+// `{ "<workspace id>": "<module specifier>" }`, each module exporting `workspaceSessionSettings:
+// WorkspaceSessionSettingsEntry`). Ids are declared in package.json rather than read off the module so
+// they can be validated here. Like the partner signup hooks it must exist in BOTH forms.
+function generateWorkspaceSessionSettings(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
+  const field = 'workspaceSessionSettingsExport';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> module specifier, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, specifier] of Object.entries(declared)) {
+      if (
+        !WORKSPACE_ID_RE.test(workspaceId) ||
+        workspaceId !== workspaceId.toLowerCase() ||
+        RESERVED_OBJECT_KEYS.has(workspaceId)
+      ) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase [a-z0-9_-], because surface ids are matched exactly`
+        );
+      }
+      if (merged.has(workspaceId)) {
+        throw new Error(
+          `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
+            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+        );
+      }
+      assertModuleSpecifier(specifier, pkg.name, field);
+      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+    }
+  }
+
+  if (merged.size === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};\n`
+    );
+    return;
+  }
+
+  const contributions = [...merged];
+  const imports = contributions
+    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .join('\n');
+  const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {\n${entries}\n};\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1403,6 +1467,7 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
