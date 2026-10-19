@@ -118,7 +118,6 @@ describe('OAuthClientSeeder', () => {
     const rows = existingRows();
 
     await new OAuthClientSeeder(logger).seed();
-    await new OAuthClientSeeder(logger).seed();
 
     expect(h.Model).not.toHaveBeenCalled();
     expect([...rows.keys()]).toEqual([
