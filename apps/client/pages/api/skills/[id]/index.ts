@@ -78,7 +78,7 @@ const handler = baseApi()
 
     try {
       const updated = isGlobal
-        ? await skillRepository.updateGuarded({ ...patch, __v: (skill as { __v?: number }).__v } as Partial<ISkill>, {
+        ? await skillRepository.updateGuarded({ __v: (skill as { __v?: number }).__v, ...patch } as Partial<ISkill>, {
             new: true,
           })
         : await skillRepository.update(patch, { new: true });
