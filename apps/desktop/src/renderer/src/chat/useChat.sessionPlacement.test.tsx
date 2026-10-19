@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { ChatSessionSummary, CreateCodeSessionResult, CreatedSession } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionSummary, CreateCodeSessionResult } from '@shared/chat';
+import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { groupSessions } from './grouping';
@@ -30,7 +31,7 @@ let host: HTMLElement | null = null;
 /** Where the new row sat on every render, so a single frame in the default list is caught. */
 type Placement = 'absent' | 'loose' | 'work';
 
-async function mount(chat: { createSession?: unknown; createCodeSession?: unknown }) {
+async function mount(chat: { createSession?: unknown; createCodeSession?: unknown }, mode: ChatSessionMode = 'chat') {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       listSessions: vi.fn(() => Promise.resolve([summary('old')])),
@@ -48,7 +49,7 @@ async function mount(chat: { createSession?: unknown; createCodeSession?: unknow
     const sidebar = useSidebarSections();
     controller = sessions;
     adopt = sidebar.adopt;
-    const groups = groupSessions(sessions.sessions, 'chat', sidebar.sections);
+    const groups = groupSessions(sessions.sessions, mode, sidebar.sections);
     const inWork = groups.custom.some(group => group.sessions.some(session => session.id === 'fresh'));
     const loose = groups.loose.some(session => session.id === 'fresh');
     seen.push(inWork ? 'work' : loose ? 'loose' : 'absent');
@@ -60,19 +61,25 @@ async function mount(chat: { createSession?: unknown; createCodeSession?: unknow
   root = createRoot(host);
   await act(async () => root?.render(<Harness />));
 
+  /** The failure channel every placement in these tests gets, so a silent one is caught. */
+  const failed = vi.fn();
   const start = async (
-    create: (sessions: SessionsController, placed: (state: SidebarSectionsState) => void) => unknown
+    create: (
+      sessions: SessionsController,
+      placed: (state: SidebarSectionsState) => void,
+      failed: () => void
+    ) => unknown
   ) => {
     if (!controller || !adopt) throw new Error('not mounted');
     const target = controller;
     const place = adopt;
     let id: unknown;
     await act(async () => {
-      id = await create(target, place);
+      id = await create(target, place, failed);
     });
     return id;
   };
-  return { seen, start };
+  return { seen, start, failed, controller: () => controller };
 }
 
 afterEach(() => {
@@ -87,25 +94,32 @@ describe('starting a session in a sidebar section', () => {
     const createSession = vi.fn((): Promise<CreatedSession> =>
       Promise.resolve({ session: summary('fresh'), sidebarSections: placed })
     );
-    const { seen, start } = await mount({ createSession });
+    const { seen, start, failed } = await mount({ createSession });
 
-    const id = await start((sessions, place) => sessions.create({ sectionId: 'work', placed: place }));
+    const id = await start((sessions, place, failure) =>
+      sessions.create({ sectionId: 'work', placed: place, failed: failure })
+    );
 
     expect(id).toBe('fresh');
     expect(createSession).toHaveBeenCalledWith({ sectionId: 'work' });
     expect(seen.at(-1)).toBe('work');
     expect(seen).not.toContain('loose');
+    expect(failed).not.toHaveBeenCalled();
   });
 
   it('draws a new Code session inside its section from its first render', async () => {
     const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
       Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }), sidebarSections: placed })
     );
-    const { start } = await mount({ createCodeSession });
+    const { seen, start } = await mount({ createCodeSession }, 'code');
 
-    await start((sessions, place) => sessions.createCode({}, { sectionId: 'work', placed: place }));
+    await start((sessions, place, failure) =>
+      sessions.createCode({}, { sectionId: 'work', placed: place, failed: failure })
+    );
 
     expect(createCodeSession).toHaveBeenCalledWith({ sectionId: 'work' });
+    expect(seen.at(-1)).toBe('work');
+    expect(seen).not.toContain('loose');
   });
 
   it('asks for no section and adds the row to the default list from plain New', async () => {
@@ -119,13 +133,36 @@ describe('starting a session in a sidebar section', () => {
   });
 
   it('falls back to the default list when main could not save the placement', async () => {
-    const createSession = vi.fn((): Promise<CreatedSession> => Promise.resolve({ session: summary('fresh') }));
+    const createSession = vi.fn((): Promise<CreatedSession> =>
+      Promise.resolve({ session: summary('fresh'), placementFailed: true })
+    );
     const placedSpy = vi.fn();
-    const { seen, start } = await mount({ createSession });
+    const { seen, start, failed } = await mount({ createSession });
 
-    await start(sessions => sessions.create({ sectionId: 'work', placed: placedSpy }));
+    await start((sessions, _place, failure) =>
+      sessions.create({ sectionId: 'work', placed: placedSpy, failed: failure })
+    );
 
     expect(placedSpy).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalled();
     expect(seen.at(-1)).toBe('loose');
+  });
+
+  it('reports a refused Code session and places nothing', async () => {
+    const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
+      Promise.resolve({ ok: false, error: 'no worktree' })
+    );
+    const placedSpy = vi.fn();
+    const { seen, start, failed, controller } = await mount({ createCodeSession });
+
+    const id = await start((sessions, _place, failure) =>
+      sessions.createCode({}, { sectionId: 'work', placed: placedSpy, failed: failure })
+    );
+
+    expect(id).toBeNull();
+    expect(controller()?.codeError).toBe('no worktree');
+    expect(placedSpy).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    expect(seen.at(-1)).toBe('absent');
   });
 });
