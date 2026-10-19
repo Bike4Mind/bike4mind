@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -64,5 +65,29 @@ describe('ReasoningDisclosure showFinalAnswer (focused panel)', () => {
     });
     expect(screen.queryByText('No reasoning steps recorded for this run.')).not.toBeInTheDocument();
     expect(screen.getByTestId('iteration-stream')).toBeInTheDocument();
+  });
+});
+
+describe('ReasoningDisclosure failed runs', () => {
+  const failedTrace = {
+    status: 'failed',
+    error: 'Execution stopped: you denied "video_generation".',
+    steps: [{ type: 'thought', content: 'try video' }],
+    children: [],
+    answer: null,
+  };
+
+  it('hydrates a failed run as failed with its message, not as completed', () => {
+    mocks.trace = { data: failedTrace, isLoading: false, isError: false };
+    render(<ReasoningDisclosure agentExecutionId="exec-denied" sessionId="s1" defaultExpanded />, { wrapper: Wrapper });
+    const replay = useAgentExecutionStore.getState().executions['replay-exec-denied'];
+    expect(replay.status).toBe('failed');
+    expect(replay.errorMessage).toBe(failedTrace.error);
+  });
+
+  it('hydrates a completed run as completed', () => {
+    mocks.trace = { data: { ...failedTrace, status: 'completed', error: null }, isLoading: false, isError: false };
+    render(<ReasoningDisclosure agentExecutionId="exec-ok" sessionId="s1" defaultExpanded />, { wrapper: Wrapper });
+    expect(useAgentExecutionStore.getState().executions['replay-exec-ok'].status).toBe('completed');
   });
 });

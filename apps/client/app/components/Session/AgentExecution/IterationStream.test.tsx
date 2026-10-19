@@ -203,6 +203,12 @@ describe('IterationStream — render', () => {
       const line = renderFailed({ failureReason: 'error', errorMessage: 'boom' });
       expect(line).toHaveTextContent('Failed: error \u2014 boom');
     });
+
+    it('shows just the message when a replayed failure carries no reason', () => {
+      const line = renderFailed({ errorMessage: 'Agent execution failed' });
+      expect(line).toHaveTextContent('Agent execution failed');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
   });
 });
 
