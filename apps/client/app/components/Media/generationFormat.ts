@@ -1,3 +1,5 @@
+import { LYRIC_LINE_TIMING_SOURCE } from '@bike4mind/common';
+
 /** Display formatting for generated media, shared by the Studio and chat job cards and the Files details panel. */
 
 /** `m:ss` from a length in seconds. */
@@ -8,10 +10,9 @@ export const formatSecondsClock = (totalSeconds: number): string => {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
-// Lyria returns each sung line prefixed with its `[start:end]` timing in seconds, e.g. `[3.4:6.9] windows down`.
-const STAMP = String.raw`\[\d+(?:\.\d+)?:\d+(?:\.\d+)?\]`;
-const STAMP_ONLY_LINE = new RegExp(String.raw`^[ \t]*${STAMP}[ \t]*(?:\r?\n|$)`, 'gm');
-const LEADING_STAMP = new RegExp(String.raw`^([ \t]*)${STAMP}[ \t]*`, 'gm');
+// Guards songs stored before the provider stripped filled-in timings (normalizeLyriaLyrics).
+const STAMP_ONLY_LINE = new RegExp(String.raw`^[ \t]*${LYRIC_LINE_TIMING_SOURCE}[ \t]*(?:\r?\n|$)`, 'gm');
+const LEADING_STAMP = new RegExp(String.raw`^([ \t]*)${LYRIC_LINE_TIMING_SOURCE}[ \t]*`, 'gm');
 
 /**
  * Lyrics for display: drops leading provider timestamps, and lines that hold nothing else (a blank line would read
