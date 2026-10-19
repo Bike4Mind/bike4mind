@@ -43,7 +43,7 @@ b4m --ollama-host http://localhost:11434
 b4m --ollama-host http://192.168.1.50:11434
 
 # Ollama with basic auth
-b4m --ollama-host http://user:password@ollama.internal:11434
+b4m --ollama-host http://user:password@ollama.example.com:11434
 ```
 
 ---

@@ -51,7 +51,7 @@ This guide provides step-by-step instructions for setting up AWS SES for email s
 
    **MX Record (for receiving emails):**
    ```
-   Name: app.bike4mind.com
+   Name: app.example.com
    Type: MX
    Priority: 10
    Value: inbound-smtp.[region].amazonaws.com
@@ -89,7 +89,7 @@ This guide provides step-by-step instructions for setting up AWS SES for email s
        We are implementing an email ingestion system that allows users to
        forward emails to the platform for AI analysis, knowledge management,
        and team collaboration. Users will have unique platform email addresses
-       (e.g., user.name@app.bike4mind.com) where they can send emails for:
+       (e.g., user.name@app.example.com) where they can send emails for:
 
        - Automatic AI summarization and entity extraction
        - Email thread tracking and conversation management
@@ -226,8 +226,8 @@ This guide provides step-by-step instructions for setting up AWS SES for email s
    - Rule name: `platform-email-ingestion`
 
    **Recipients:**
-   - Add recipient condition: `app.bike4mind.com`
-   - This matches all emails sent to `*@app.bike4mind.com`
+   - Add recipient condition: `app.example.com`
+   - This matches all emails sent to `*@app.example.com`
 
    **Actions (in order):**
 
@@ -266,7 +266,7 @@ Once DNS records are verified and SES rules are active:
 
 1. **Send Test Email**
    - From: Your personal email (add to user's `authorizedEmailAddresses`)
-   - To: `testuser@app.bike4mind.com`
+   - To: `testuser@app.example.com`
    - Subject: "Test Email Ingestion"
    - Body: "This is a test email to verify SES inbound email configuration."
    - Attachment: Add a small PDF or image
@@ -305,7 +305,7 @@ Add to your `.env` file:
 AWS_SES_REGION=us-east-1
 EMAIL_S3_BUCKET=bike4mind-email-ingestion-us-east-1
 EMAIL_SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/[account-id]/email-ingestion-queue
-PLATFORM_EMAIL_DOMAIN=app.bike4mind.com
+PLATFORM_EMAIL_DOMAIN=app.example.com
 ```
 
 ## Multi-Tenant Configuration
@@ -316,7 +316,7 @@ For enterprise customers using different domains:
 2. **Update MX records** for each customer subdomain
 3. **Update SES Receipt Rule** recipients:
    - Add multiple recipient conditions:
-     - `app.bike4mind.com`
+     - `app.example.com`
      - `app.yourcompany.com`
      - `app.customer1.com`
      - etc.
