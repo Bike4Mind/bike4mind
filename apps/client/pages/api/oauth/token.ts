@@ -14,6 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import {
+  cacheRepository,
   oauthAuthorizationCodeRepository,
   oauthClientRepository,
   oauthGrantRepository,
@@ -27,6 +28,7 @@ import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/token
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -65,8 +67,16 @@ function idTokenUserParams(user: { id: string; email?: string | null; username?:
 
 const invalidGrant = { error: 'invalid_grant', error_description: 'Invalid refresh token' };
 
+// A relying party's backend refreshes for all of its users from one egress IP, so the per-IP limit
+// would cap it at ~600 active users (30 min access tokens); refresh is counted per client instead.
+const REFRESH_PER_CLIENT_LIMIT = 600;
+const RATE_WINDOW_MS = 60 * 1000;
+
+const tokenRateLimit = (req: { body?: { grant_type?: unknown } }) =>
+  req.body?.grant_type === 'refresh_token' ? Infinity : 20;
+
 const handler = baseApi({ auth: false })
-  .use(rateLimit({ limit: 20, windowMs: 60 * 1000 }))
+  .use(rateLimit({ limit: tokenRateLimit, windowMs: RATE_WINDOW_MS }))
   .post(async (req, res) => {
     const { grant_type } = req.body;
 
@@ -240,6 +250,22 @@ const handler = baseApi({ auth: false })
         }
       }
 
+      // Counted after client auth so failed-secret probes cannot burn a confidential client's budget.
+      // A public client has no secret, so anyone can spend its budget; add a per-IP sub-limit if abused.
+      const rl = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+        `rate-limit:oauth-refresh:${client_id}`,
+        REFRESH_PER_CLIENT_LIMIT,
+        RATE_WINDOW_MS
+      );
+      if (!rl.success) {
+        const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
+        res.setHeader('Retry-After', retryAfter);
+        return res.status(429).json({
+          error: 'temporarily_unavailable',
+          error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
+        });
+      }
+
       const presented = authSessionService.parseRefreshToken(refresh_token);
       const family = presented ? await oauthRefreshTokenRepository.findByFamilyId(presented.sid) : null;
       // A wrong client_id is rejected WITHOUT revoking, so another client cannot kill this family.
@@ -258,10 +284,10 @@ const handler = baseApi({ auth: false })
       const presentedHash = authSessionService.hashRefreshSecret(presented.secret);
       if (presentedHash !== family.tokenHash) {
         await oauthRefreshTokenRepository.revokeFamily(family.familyId);
-        console.warn('[oauth/token] refresh token reuse; family revoked', {
-          familyId: family.familyId,
-          clientId: client_id,
+        await logAuthAudit(req, {
           userId: family.userId,
+          event: 'oauth_refresh_reuse_revoked',
+          metadata: { clientId: client_id, familyId: family.familyId },
         });
         return res.status(400).json(invalidGrant);
       }
@@ -296,6 +322,11 @@ const handler = baseApi({ auth: false })
       if (!rotated) {
         // A concurrent request rotated first: the same token was used twice, which is reuse.
         await oauthRefreshTokenRepository.revokeFamily(family.familyId);
+        await logAuthAudit(req, {
+          userId: family.userId,
+          event: 'oauth_refresh_reuse_revoked',
+          metadata: { clientId: client_id, familyId: family.familyId, concurrent: true },
+        });
         return res.status(400).json(invalidGrant);
       }
 

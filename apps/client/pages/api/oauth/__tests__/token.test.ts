@@ -31,6 +31,9 @@ const h = vi.hoisted(() => ({
   revokeFamily: vi.fn(),
   mintRefreshFamily: vi.fn(async () => 'fam1.secret0'),
   assertAccountStateUsable: vi.fn(),
+  tryIncrement: vi.fn(),
+  logAuthAudit: vi.fn(),
+  rateLimitOptions: null as null | { limit: (req: unknown) => number },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -42,7 +45,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (opts: { limit: (req: unknown) => number }) => {
+    h.rateLimitOptions = opts;
+    return () => undefined;
+  },
+}));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,
   validateClientSecret: h.validateClientSecret,
@@ -55,6 +64,7 @@ vi.mock('@bike4mind/database', () => ({
   oauthGrantRepository: { findGrant: h.findGrant },
   oauthClientRepository: { findByClientId: h.findByClientId, verifyClientSecret: h.verifyClientSecret },
   oauthRefreshTokenRepository: { findByFamilyId: h.findByFamilyId, rotate: h.rotate, revokeFamily: h.revokeFamily },
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrement },
 }));
 // Deterministic stand-ins for the pure token-format helpers (the real ones are pinned in
 // oauthRefreshToken.test.ts): hash(s) = 'h:' + s, and every new secret is 'secret1'.
@@ -97,11 +107,16 @@ type Res = {
     id_token?: string;
     scope?: string;
   };
+  headers: Record<string, unknown>;
   status: (c: number) => Res;
   json: (b: unknown) => Res;
+  setHeader: (k: string, v: unknown) => void;
 };
 function mockRes(): Res {
-  const res = { statusCode: 200 } as Res;
+  const res = { statusCode: 200, headers: {} } as Res;
+  res.setHeader = (k: string, v: unknown) => {
+    res.headers[k] = v;
+  };
   res.status = (c: number) => {
     res.statusCode = c;
     return res;
@@ -416,6 +431,7 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     (h.findGrant as Mock).mockResolvedValue({ scopes: SCOPES });
     (h.grantCovers as Mock).mockReturnValue(true);
     (h.signAccessToken as Mock).mockReturnValue('oauth.jwt');
+    (h.tryIncrement as Mock).mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
   });
 
   const expectRejected = (res: Res, error = 'invalid_grant') => {
@@ -459,6 +475,14 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     expectRejected(res);
     expect(h.revokeFamily).toHaveBeenCalledWith('fam1');
     expect(h.rotate).not.toHaveBeenCalled();
+    expect(h.logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        userId: 'u1',
+        event: 'oauth_refresh_reuse_revoked',
+        metadata: { clientId: 'client-1', familyId: 'fam1' },
+      })
+    );
   });
 
   it('rejects even the newest token once the family is revoked', async () => {
@@ -473,6 +497,10 @@ describe('POST /api/oauth/token refresh_token grant', () => {
 
     expectRejected(await call(refreshBody));
     expect(h.revokeFamily).toHaveBeenCalledWith('fam1');
+    expect(h.logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ event: 'oauth_refresh_reuse_revoked' })
+    );
   });
 
   it('rejects an expired family', async () => {
@@ -560,5 +588,73 @@ describe('POST /api/oauth/token refresh_token grant', () => {
   it('rejects a scope wider than the family with invalid_scope, without consuming the token', async () => {
     expectRejected(await call({ ...refreshBody, scope: 'openid files:write' }), 'invalid_scope');
     expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a body without a refresh_token as invalid_request', async () => {
+    const res = await call({ grant_type: 'refresh_token', client_id: 'client-1' });
+
+    expect(res.statusCode).toBe(400);
+    expectRejected(res, 'invalid_request');
+    expect(h.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed refresh token without a family lookup or revoke', async () => {
+    expectRejected(await call({ ...refreshBody, refresh_token: 'no-dot' }));
+    expect(h.findByFamilyId).not.toHaveBeenCalled();
+    expect(h.revokeFamily).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown family without revoking anything', async () => {
+    (h.findByFamilyId as Mock).mockResolvedValue(null);
+
+    expectRejected(await call(refreshBody));
+    expect(h.revokeFamily).not.toHaveBeenCalled();
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a family whose user no longer exists, without consuming the token', async () => {
+    (h.findById as Mock).mockResolvedValue(null);
+
+    expectRejected(await call(refreshBody));
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('refreshes for a confidential client that presents a valid client_secret', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.verifyClientSecret as Mock).mockResolvedValue({ clientId: 'client-1' });
+
+    const res = await call({ ...refreshBody, client_secret: 'right' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.refresh_token).toBe('fam1.secret1');
+    expect(h.verifyClientSecret).toHaveBeenCalledWith('client-1', 'right');
+  });
+
+  it('rate-limits refresh per client_id (429 + Retry-After) before touching the family', async () => {
+    (h.tryIncrement as Mock).mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+
+    const res = await call(refreshBody);
+
+    expect(res.statusCode).toBe(429);
+    expectRejected(res, 'temporarily_unavailable');
+    expect(res.headers['Retry-After']).toBeGreaterThan(0);
+    expect(h.tryIncrement).toHaveBeenCalledWith('rate-limit:oauth-refresh:client-1', 600, 60_000);
+    expect(h.findByFamilyId).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the per-client budget on a failed client authentication', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.verifyClientSecret as Mock).mockResolvedValue(null);
+
+    await call({ ...refreshBody, client_secret: 'wrong' });
+
+    expect(h.tryIncrement).not.toHaveBeenCalled();
+  });
+
+  it('exempts refresh from the per-IP limit but keeps it on the code exchange', () => {
+    const limit = h.rateLimitOptions!.limit;
+    expect(limit({ body: { grant_type: 'refresh_token' } })).toBe(Infinity);
+    expect(limit({ body: { grant_type: 'authorization_code' } })).toBe(20);
+    expect(limit({ body: {} })).toBe(20);
   });
 });

@@ -17,11 +17,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).delete(
     const userId = req.user.id;
     const clientId = req.query.clientId!;
 
+    // A later re-consent clears the grant's revokedAt, so kill the refresh families now rather than
+    // relying on the refresh-time grant check alone. Families go first: if this throws, the grant is
+    // still live and a retry repeats both, whereas after the grant revoke a retry would 404 and skip it.
+    await oauthRefreshTokenRepository.revokeAllForGrant(userId, clientId);
     const revoked = await oauthGrantRepository.revoke(userId, clientId);
     if (!revoked) throw new NotFoundError('OAuth grant not found');
-    // A later re-consent clears the grant's revokedAt, so kill the refresh families now rather than
-    // relying on the refresh-time grant check alone.
-    await oauthRefreshTokenRepository.revokeAllForGrant(userId, clientId);
 
     await logAuthAudit(req, { userId, event: 'oauth_grant_revoked', metadata: { clientId } });
     return res.status(200).json({ revoked: true, clientId });

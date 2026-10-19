@@ -140,6 +140,8 @@ Refresh tokens **rotate on every use**:
 
 A refresh returns 400 `invalid_grant` when the token is unknown, expired, reused or revoked, when the user revoked your app, signed out everywhere or reset their password, or when the account is suspended. A wider `scope` than the original returns 400 `invalid_scope`. A bad or missing client secret returns 401 `invalid_client`.
 
+Refreshes are rate-limited per client, not per IP, so one backend can refresh for all of your users: up to 600 refreshes per minute per `client_id`. Over that, B4M returns 429 `temporarily_unavailable` with a `Retry-After` header. Wait that many seconds and retry with the same refresh token; a 429 does not use the token up.
+
 The `/api/oauth/refresh` endpoint and the device flow serve first-party B4M clients only (the B4M CLI and desktop app). They are not available to third-party apps.
 
 Users can review and revoke the apps they have granted access to from their B4M account.

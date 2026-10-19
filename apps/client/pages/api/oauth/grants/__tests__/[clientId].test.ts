@@ -48,11 +48,20 @@ describe('DELETE /api/oauth/grants/[clientId]', () => {
     mockRevokeAllForGrant.mockClear();
   });
 
-  it('revokes the refresh-token families for the revoked grant', async () => {
+  it('revokes the refresh-token families before the grant itself', async () => {
     const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'client-a' } });
     req.user = { id: 'u1' };
     await mockRefs.deleteHandler!(req, res);
     expect(mockRevokeAllForGrant).toHaveBeenCalledWith('u1', 'client-a');
+    expect(mockRevokeAllForGrant.mock.invocationCallOrder[0]).toBeLessThan(mockRevoke.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves the grant live when the family revoke fails, so a retry repeats both', async () => {
+    mockRevokeAllForGrant.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'client-a' } });
+    req.user = { id: 'u1' };
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('db down');
+    expect(mockRevoke).not.toHaveBeenCalled();
   });
 
   it('returns 200 and revoked:true on a successful revoke', async () => {
@@ -86,7 +95,6 @@ describe('DELETE /api/oauth/grants/[clientId]', () => {
     req.user = { id: 'u1' };
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(NotFoundError);
     expect(mockLogAuthAudit).not.toHaveBeenCalled();
-    expect(mockRevokeAllForGrant).not.toHaveBeenCalled();
   });
 
   it('throws ForbiddenError and skips revoke when called from an impersonated session', async () => {
