@@ -13,8 +13,12 @@ export type AuditSummaryWindow = (typeof AUDIT_SUMMARY_WINDOWS)[number];
 
 export const AUDIT_EXPORT_MAX_ROWS = 50_000;
 
-// A plain string rather than a catalogue key: the impersonation action is added by a later change.
+/** The export route's JSON: the CSV is staged in storage and fetched from `url`, a short-lived signed GET. */
+export type AuditExportResult = { url: string; rowCount: number; truncated: boolean; fileName: string };
+
+// Plain strings rather than catalogue keys: the impersonation actions are added by a later change.
 export const IMPERSONATION_STARTED_ACTION = 'user.impersonation.started';
+export const IMPERSONATION_ENDED_ACTION = 'user.impersonation.ended';
 
 /** Both the API query (minus cursor/limit) and the page's URL search state. */
 export const AuditLogFiltersSchema = z.object({

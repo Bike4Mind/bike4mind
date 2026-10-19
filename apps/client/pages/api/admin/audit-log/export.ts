@@ -3,6 +3,7 @@ import {
   ApiKeyScope,
   AUDIT_EXPORT_MAX_ROWS,
   type AuditEntry,
+  type AuditExportResult,
   type AuditLogCursor,
   type AuditLogFilters,
 } from '@bike4mind/common';
@@ -10,7 +11,9 @@ import { Logger } from '@bike4mind/observability';
 import { toCsv } from '@client/app/utils/csv';
 import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { stageAdminAuditExport } from '@server/utils/adminAuditExportStorage';
 import { ensurePlatformAdmin, parseAuditExportQuery } from '@server/utils/adminAuditQuery';
+import { InternalServerError } from '@server/utils/errors';
 
 const EXPORT_PAGE_SIZE = 1000;
 
@@ -69,6 +72,15 @@ const collectEntries = async (filters: AuditLogFilters): Promise<{ entries: Audi
   return { entries, truncated: true };
 };
 
+const stageExportOrThrow = async (csv: string, fileName: string, rowCount: number): Promise<string> => {
+  try {
+    return await stageAdminAuditExport(csv, fileName);
+  } catch (error) {
+    Logger.error('[Admin] Failed to stage admin audit log export', { error, rowCount });
+    throw new InternalServerError('Failed to prepare the audit log export. Please retry.');
+  }
+};
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensurePlatformAdmin(req.user);
   const filters = parseAuditExportQuery(req.query);
@@ -77,6 +89,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const csv = toCsv([CSV_HEADER, ...entries.map(toCsvRow)]);
 
   const rowCount = entries.length;
+  const fileName = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+
+  const url = await stageExportOrThrow(csv, fileName, rowCount);
+
+  // Recorded only once the file exists, so the trail never claims an export nobody could download.
   await recordAdminActionFromRequest(req, {
     action: 'audit.exported',
     target: { kind: 'system', id: 'admin-audit-log', displayName: 'Audit Log' },
@@ -85,10 +102,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   });
   Logger.info('[Admin] Exported admin audit log', { rowCount, truncated });
 
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="audit-log-${new Date().toISOString().slice(0, 10)}.csv"`);
-  res.setHeader('X-Audit-Export-Truncated', String(truncated));
-  return res.status(200).send(csv);
+  // The signed URL is short-lived, so the response must never be cached.
+  res.setHeader('Cache-Control', 'no-store');
+  const body: AuditExportResult = { url, rowCount, truncated, fileName };
+  return res.status(200).json(body);
 });
 
 export const config = {

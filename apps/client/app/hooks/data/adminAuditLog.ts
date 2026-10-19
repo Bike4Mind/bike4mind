@@ -1,10 +1,16 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AuditEntry, AuditLogFilters, AuditLogPage, AuditSummary, AuditSummaryWindow } from '@bike4mind/common';
-import { downloadData } from '@client/app/utils/download';
+import type {
+  AuditEntry,
+  AuditExportResult,
+  AuditLogFilters,
+  AuditLogPage,
+  AuditSummary,
+  AuditSummaryWindow,
+} from '@bike4mind/common';
+import { downloadUrl } from '@client/app/utils/download';
 
 const DEFAULT_PAGE_SIZE = 50;
-const DEFAULT_EXPORT_FILENAME = 'audit-log.csv';
 
 /** JSON carries `occurredAt` as an ISO string; consumers expect the real `AuditEntry` Date. */
 type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
@@ -55,23 +61,15 @@ export const useAuditSummary = (windowDays: AuditSummaryWindow) =>
     staleTime: 1000 * 60 * 5,
   });
 
-const filenameFromContentDisposition = (header: unknown): string => {
-  if (typeof header !== 'string') return DEFAULT_EXPORT_FILENAME;
-  const match = /filename="?([^";]+)"?/i.exec(header);
-  return match?.[1] ?? DEFAULT_EXPORT_FILENAME;
-};
-
-/** Rejections propagate so the caller can toast; the server caps the export and flags it via header. */
+/**
+ * Rejections propagate so the caller can toast. The server stages the capped CSV in storage and returns a
+ * short-lived signed URL whose Content-Disposition names the file, so the browser downloads it directly.
+ */
 export const downloadAuditLogCsv = async (filters: AuditLogFilters): Promise<{ truncated: boolean }> => {
-  const response = await api.get<Blob>('/api/admin/audit-log/export', {
+  const response = await api.get<AuditExportResult>('/api/admin/audit-log/export', {
     params: definedFilterParams(filters),
-    responseType: 'blob',
   });
-  const truncated = String(response.headers['x-audit-export-truncated']).toLowerCase() === 'true';
-  downloadData(
-    response.data,
-    filenameFromContentDisposition(response.headers['content-disposition']),
-    'text/csv;charset=utf-8'
-  );
+  const { url, fileName, truncated } = response.data;
+  downloadUrl(url, fileName);
   return { truncated };
 };
