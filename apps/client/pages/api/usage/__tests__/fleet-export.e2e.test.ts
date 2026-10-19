@@ -217,11 +217,14 @@ describe('Fleet export route against real Mongo', () => {
     const firstWindow = new Date('2026-01-05T10:00:00.000Z');
     const secondWindow = new Date('2026-01-05T11:00:00.000Z');
     let lastRequestId = '';
+    const firstWindowIds: string[] = [];
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2026-01-05T10:15:00.000Z'));
       for (const authorization of ['', 'Bearer wrong']) {
-        expect((await call({ authorization })).status).toBe(401);
+        const denied = await call({ authorization });
+        expect(denied.status).toBe(401);
+        firstWindowIds.push(denied.body.request_id);
       }
       vi.setSystemTime(new Date('2026-01-05T11:59:59.999Z'));
       const last = await call({ authorization: 'Bearer ordinary-api-key' });
@@ -246,6 +249,7 @@ describe('Fleet export route against real Mongo', () => {
         counterValue: 1,
       },
     ]);
+    expect(denials[0].metadata).toMatchObject({ outcome: 'deny', lastRequestId: firstWindowIds[1] });
     expect(denials[1].metadata).toMatchObject({ outcome: 'deny', lastRequestId: lastRequestId });
   });
 
