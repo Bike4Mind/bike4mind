@@ -29,8 +29,9 @@ const handler = nextRouteForContract(listModelsContract, {
   const { limit, cursor } = req.validatedQuery;
   const { models } = await getCallerModelList(req.user.id, req.logger);
   // Filtered here, not in getCallerModelList: the picker shares that list and keeps a disabled model
-  // when it is the caller's active selection.
-  const callable = models.filter(model => !model.disabled);
+  // when it is the caller's active selection. Speech-to-text models (aws transcribe) are not servable
+  // by completions or image generation.
+  const callable = models.filter(model => !model.disabled && model.type !== 'speech-to-text');
   const page = paginateById(callable, { limit, cursor, scope: CURSOR_SCOPE });
 
   // Built from the caller's own provider keys - never cacheable by a shared cache.

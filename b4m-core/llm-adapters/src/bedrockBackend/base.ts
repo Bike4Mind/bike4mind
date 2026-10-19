@@ -50,6 +50,9 @@ interface BedrockOptions {
 // Adaptive mode adds AWS's token-bucket backoff + client-side rate limiting
 // (recommended for throttle/503-prone workloads). This absorbs brief blips; sustained
 // outages still need provider/model fallback (tracked separately).
+// Bedrock rewords context overflow per model family; Llama says "maximum context length".
+const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
+
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 
 // A failed tool-use turn rethrows through every enclosing catch. Logging each time would repeat the
@@ -1085,7 +1088,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   private handleBedrockError(err: unknown): never {
     const errName = (err as { name?: string })?.name;
     const errMsg = (err as { message?: string })?.message ?? '';
-    if (errName === 'ValidationException' && errMsg.includes('Input is too long')) {
+    if (errName === 'ValidationException' && CONTEXT_OVERFLOW_MESSAGES.some(m => errMsg.includes(m))) {
       Logger.globalInstance.warn(
         '[ContextOverflow] Bedrock ValidationException: input too long — surfacing user-friendly error'
       );

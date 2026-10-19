@@ -1087,11 +1087,6 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     Object.assign(body, capCacheControlMarkers(body));
 
-    // Log the actual body being sent (first 1000 chars)
-    const bodyStr = JSON.stringify(body);
-    console.log(
-      `[AnthropicBedrockBackend] Request body: ${bodyStr.substring(0, 1000)}${bodyStr.length > 1000 ? '...' : ''}`
-    );
     return {
       modelId: modelId,
       contentType: 'application/json',

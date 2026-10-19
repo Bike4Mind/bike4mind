@@ -13,6 +13,12 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     return true;
   }
 
+  // Only Llama 3 is listed with its real window; Llama 4 entries below are placeholders.
+  protected override getModelContextWindow(model: string): number {
+    const isLlama3 = model === ChatModels.LLAMA3_INSTRUCT_8B_V1 || model === ChatModels.LLAMA3_INSTRUCT_70B_V1;
+    return isLlama3 ? 8000 : 0;
+  }
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {

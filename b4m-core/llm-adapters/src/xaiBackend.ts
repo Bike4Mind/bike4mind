@@ -986,8 +986,6 @@ export class XAIBackend implements ICompletionBackend {
       content: JSON.stringify({ result }),
       tool_call_id: tool.id,
     } as unknown as IMessage);
-
-    this.logger.log('PUSHED TOOL MESSAGES:', messages);
   }
 
   /**
