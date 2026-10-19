@@ -1,4 +1,16 @@
-import { Box, Button, Chip, IconButton, Sheet, Stack, Table, Tooltip, Typography } from '@mui/joy';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  IconButton,
+  Sheet,
+  Stack,
+  Table,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import type { AuditEntry, AuditTarget } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -18,6 +30,8 @@ export type AuditEventTableProps = {
   /** Omitted = target is not clickable. */
   onFilterTarget?(target: { kind: AuditTarget['kind']; id: string }): void;
   emptyMessage?: string;
+  /** Set when the query behind `entries` failed; replaces the rows and the empty state. */
+  errorMessage?: string;
 };
 
 const COLUMN_COUNT = 6;
@@ -120,6 +134,54 @@ const AuditRow: React.FC<
   );
 };
 
+const FullWidthRow: React.FC<{ testId: string; children: React.ReactNode }> = ({ testId, children }) => (
+  <tr data-testid={testId}>
+    <td colSpan={COLUMN_COUNT}>{children}</td>
+  </tr>
+);
+
+type BodyProps = Pick<
+  AuditEventTableProps,
+  'entries' | 'isLoading' | 'onSelectEntry' | 'onFilterActor' | 'onFilterTarget' | 'errorMessage'
+> & { emptyMessage: string };
+
+const AuditTableBody: React.FC<BodyProps> = ({ entries, isLoading, errorMessage, emptyMessage, ...rowProps }) => {
+  if (errorMessage) {
+    return (
+      <FullWidthRow testId="audit-table-error-row">
+        <Alert color="danger" variant="soft" data-testid="audit-table-error" sx={{ my: 1 }}>
+          {errorMessage}
+        </Alert>
+      </FullWidthRow>
+    );
+  }
+  if (isLoading && entries.length === 0) {
+    return (
+      <FullWidthRow testId="audit-table-loading">
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+          <CircularProgress size="sm" aria-label="Loading audit events" />
+        </Box>
+      </FullWidthRow>
+    );
+  }
+  if (entries.length === 0) {
+    return (
+      <FullWidthRow testId="audit-table-empty">
+        <Typography level="body-sm" textAlign="center" sx={{ py: 3 }}>
+          {emptyMessage}
+        </Typography>
+      </FullWidthRow>
+    );
+  }
+  return (
+    <>
+      {entries.map(entry => (
+        <AuditRow key={entry.id} entry={entry} {...rowProps} />
+      ))}
+    </>
+  );
+};
+
 export const AuditEventTable: React.FC<AuditEventTableProps> = ({
   entries,
   isLoading,
@@ -130,6 +192,7 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
   onFilterActor,
   onFilterTarget,
   emptyMessage = 'No audit events found',
+  errorMessage,
 }) => (
   <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
     <Table
@@ -149,27 +212,18 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
         </tr>
       </thead>
       <tbody>
-        {entries.map(entry => (
-          <AuditRow
-            key={entry.id}
-            entry={entry}
-            onSelectEntry={onSelectEntry}
-            onFilterActor={onFilterActor}
-            onFilterTarget={onFilterTarget}
-          />
-        ))}
-        {!isLoading && entries.length === 0 && (
-          <tr data-testid="audit-table-empty">
-            <td colSpan={COLUMN_COUNT}>
-              <Typography level="body-sm" textAlign="center" sx={{ py: 3 }}>
-                {emptyMessage}
-              </Typography>
-            </td>
-          </tr>
-        )}
+        <AuditTableBody
+          entries={entries}
+          isLoading={isLoading}
+          errorMessage={errorMessage}
+          emptyMessage={emptyMessage}
+          onSelectEntry={onSelectEntry}
+          onFilterActor={onFilterActor}
+          onFilterTarget={onFilterTarget}
+        />
       </tbody>
     </Table>
-    {hasMore && (
+    {hasMore && !errorMessage && (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 1.5 }}>
         <Button
           variant="outlined"

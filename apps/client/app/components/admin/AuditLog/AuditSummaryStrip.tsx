@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, ButtonGroup, Card, Stack, Typography } from '@mui/joy';
+import { Alert, Button, ButtonGroup, Card, Stack, Typography } from '@mui/joy';
 import { AUDIT_SUMMARY_WINDOWS, type AuditLogFilters, type AuditSummaryWindow } from '@bike4mind/common';
 import { useAuditSummary } from '@client/app/hooks/data/adminAuditLog';
 import { AUDIT_SAVED_VIEWS, DENIED_FILTERS } from './auditSavedViews';
@@ -16,7 +16,7 @@ type Tile = { key: string; label: string; value: string; detail?: string; filter
 
 export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ onApply }) => {
   const [windowDays, setWindowDays] = useState<AuditSummaryWindow>(DEFAULT_WINDOW);
-  const { data: summary } = useAuditSummary(windowDays);
+  const { data: summary, isError } = useAuditSummary(windowDays);
 
   const tiles: Tile[] = summary
     ? [
@@ -66,6 +66,11 @@ export const AuditSummaryStrip: React.FC<AuditSummaryStripProps> = ({ onApply })
           </Button>
         ))}
       </ButtonGroup>
+      {isError && (
+        <Alert color="danger" variant="soft" size="sm" data-testid="audit-summary-error">
+          Could not load the audit summary.
+        </Alert>
+      )}
       <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap">
         {tiles.map(tile => (
           <Card

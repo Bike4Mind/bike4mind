@@ -17,27 +17,37 @@ const mocks = vi.hoisted(() => ({
   filters: {} as Record<string, string>,
   entryId: null as string | null,
   entries: [] as unknown[],
+  listError: false,
+  entryError: false,
+  summaryError: false,
 }));
 
 vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
   useAuditLog: () => ({
     data: { pages: [{ entries: mocks.entries, nextCursor: null }] },
     isLoading: false,
+    isError: mocks.listError,
     hasNextPage: false,
     isFetchingNextPage: false,
     fetchNextPage: vi.fn(),
   }),
-  useAuditEntry: (id: string | null, initial: unknown) => ({ data: id ? initial : undefined }),
+  useAuditEntry: (id: string | null, initial: unknown) => ({
+    data: id && !mocks.entryError ? initial : undefined,
+    isError: id !== null && mocks.entryError,
+  }),
   useAuditSummary: () => ({
-    data: {
-      windowDays: 30,
-      since: SINCE,
-      creditGrants: { count: 3, topGranters: [{ userId: 'u1', name: 'Alice', count: 2 }] },
-      permissionChanges: 1,
-      impersonations: 0,
-      deletions: 2,
-      deniedAttempts: 4,
-    },
+    isError: mocks.summaryError,
+    data: mocks.summaryError
+      ? undefined
+      : {
+          windowDays: 30,
+          since: SINCE,
+          creditGrants: { count: 3, topGranters: [{ userId: 'u1', name: 'Alice', count: 2 }] },
+          permissionChanges: 1,
+          impersonations: 0,
+          deletions: 2,
+          deniedAttempts: 4,
+        },
   }),
   downloadAuditLogCsv: mocks.downloadAuditLogCsv,
 }));
@@ -69,6 +79,9 @@ describe('AuditLogPage', () => {
     mocks.filters = {};
     mocks.entryId = null;
     mocks.entries = [makeAuditEntry({ id: 'e1' })];
+    mocks.listError = false;
+    mocks.entryError = false;
+    mocks.summaryError = false;
   });
 
   it('clicking a saved view sets its filters', () => {
@@ -116,5 +129,27 @@ describe('AuditLogPage', () => {
     mocks.entries = [];
     render(<AuditLogPage />, { wrapper: TestWrapper });
     expect(screen.getByTestId('audit-table-empty')).toBeTruthy();
+  });
+
+  it('shows the list error instead of the empty state when the list query fails', () => {
+    mocks.listError = true;
+    mocks.entries = [];
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-table-error')).toBeTruthy();
+    expect(screen.queryByTestId('audit-table-empty')).toBeNull();
+  });
+
+  it('shows an inline error when the summary query fails', () => {
+    mocks.summaryError = true;
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-summary-error')).toBeTruthy();
+  });
+
+  it('clears entryId and warns when the linked entry cannot be loaded', () => {
+    mocks.entryId = 'missing';
+    mocks.entryError = true;
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(mocks.openEntry).toHaveBeenCalledWith(null);
+    expect(mocks.showSnackbar).toHaveBeenCalledWith(expect.any(String), { variant: 'soft', color: 'warning' });
   });
 });

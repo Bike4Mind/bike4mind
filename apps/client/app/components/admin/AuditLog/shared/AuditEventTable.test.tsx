@@ -94,6 +94,20 @@ describe('AuditEventTable', () => {
     expect(screen.getByTestId('audit-table-empty').textContent).toContain('Nothing here');
   });
 
+  it('shows a danger alert instead of rows, empty state and load more when errorMessage is set', () => {
+    render(<AuditEventTable {...baseProps} errorMessage="Could not load" />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-table-error').textContent).toContain('Could not load');
+    expect(screen.queryByTestId('audit-table-row-entry-1')).toBeNull();
+    expect(screen.queryByTestId('audit-table-empty')).toBeNull();
+    expect(screen.queryByTestId('audit-table-load-more-btn')).toBeNull();
+  });
+
+  it('shows a loading indicator instead of the empty state while the first page loads', () => {
+    render(<AuditEventTable {...baseProps} entries={[]} hasMore={false} isLoading />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-table-loading')).toBeTruthy();
+    expect(screen.queryByTestId('audit-table-empty')).toBeNull();
+  });
+
   it('opens an entry with Enter or Space on a focused row, but not from a nested filter button', () => {
     const onSelectEntry = vi.fn();
     render(<AuditEventTable {...baseProps} onSelectEntry={onSelectEntry} onFilterActor={vi.fn()} />, {

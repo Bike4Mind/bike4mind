@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
   AuditEntry,
@@ -11,6 +12,9 @@ import type {
 import { downloadUrl } from '@client/app/utils/download';
 
 const DEFAULT_PAGE_SIZE = 50;
+const MAX_ENTRY_RETRIES = 3;
+
+const isNotFound = (error: unknown): boolean => isAxiosError(error) && error.response?.status === 404;
 
 /** JSON carries `occurredAt` as an ISO string; consumers expect the real `AuditEntry` Date. */
 type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
@@ -47,6 +51,8 @@ export const useAuditEntry = (id: string | null, initialEntry?: AuditEntry) =>
       return reviveAuditEntry(response.data);
     },
     enabled: id !== null,
+    // A missing entry will not appear on retry, and the page clears the URL as soon as this errors.
+    retry: (failureCount, error) => !isNotFound(error) && failureCount < MAX_ENTRY_RETRIES,
     // Only seed from the entry the caller resolved for this id; a stale one would flash the wrong drawer.
     initialData: initialEntry && initialEntry.id === id ? reviveAuditEntry(initialEntry) : undefined,
   });

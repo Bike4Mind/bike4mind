@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Stack, Typography } from '@mui/joy';
 import type { AuditEntry, AuditLogFilters } from '@bike4mind/common';
+import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
 import { AuditEntryDrawer, AuditEventTable } from './shared';
 import { AuditFilterBar } from './AuditFilterBar';
@@ -9,6 +10,8 @@ import { AuditSummaryStrip } from './AuditSummaryStrip';
 import { useAuditLogSearchParams } from './useAuditLogSearchParams';
 
 const RELATED_EVENTS_LIMIT = 20;
+const LIST_ERROR_MESSAGE = 'Could not load audit events. Refresh to try again.';
+const ENTRY_UNAVAILABLE_MESSAGE = 'That audit entry could not be loaded.';
 const NO_FILTERS: AuditLogFilters = {};
 
 const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilters | null => {
@@ -21,14 +24,22 @@ const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilter
 
 const AuditLogPage: React.FC = () => {
   const { filters, entryId, setFilters, patchFilters, openEntry } = useAuditLogSearchParams();
-  const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useAuditLog(filters);
+  const { showSnackbar } = useSnackbar();
+  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = useAuditLog(filters);
 
   const entries = useMemo(() => data?.pages.flatMap(page => page.entries) ?? [], [data]);
   const loadedEntry = useMemo(
     () => (entryId ? entries.find(entry => entry.id === entryId) : undefined),
     [entries, entryId]
   );
-  const { data: drawerEntry } = useAuditEntry(entryId, loadedEntry);
+  const { data: drawerEntry, isError: isEntryError } = useAuditEntry(entryId, loadedEntry);
+
+  // A deep link to a missing or unreadable entry would otherwise leave a drawer that never opens.
+  useEffect(() => {
+    if (!entryId || !isEntryError) return;
+    showSnackbar(ENTRY_UNAVAILABLE_MESSAGE, { variant: 'soft', color: 'warning' });
+    openEntry(null);
+  }, [entryId, isEntryError, openEntry, showSnackbar]);
 
   const relatedFilters = relatedFiltersFor(drawerEntry);
   const { data: relatedData } = useAuditLog(relatedFilters ?? NO_FILTERS, {
@@ -52,6 +63,7 @@ const AuditLogPage: React.FC = () => {
       <AuditEventTable
         entries={entries}
         isLoading={isLoading}
+        errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
         hasMore={Boolean(hasNextPage)}
         isFetchingMore={isFetchingNextPage}
         onLoadMore={() => void fetchNextPage()}
