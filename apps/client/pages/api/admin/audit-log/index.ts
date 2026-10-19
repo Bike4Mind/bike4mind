@@ -1,8 +1,8 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
-import { ApiKeyScope, encodeAuditCursor, type AuditLogPage } from '@bike4mind/common';
+import { ApiKeyScope, type AuditLogPage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { parseAuditListQuery } from '@server/utils/adminAuditQuery';
+import { encodeAuditCursor, parseAuditListQuery } from '@server/utils/adminAuditQuery';
 import { ensureAdmin } from '@server/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {

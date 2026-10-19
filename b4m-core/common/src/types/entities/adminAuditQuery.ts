@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AdminAuditAction } from './adminAuditCatalogue';
 import {
   AdminAuditCategorySchema,
   AdminAuditSeveritySchema,
@@ -16,9 +17,9 @@ export const AUDIT_EXPORT_MAX_ROWS = 50_000;
 /** The export route's JSON: the CSV is staged in storage and fetched from `url`, a short-lived signed GET. */
 export type AuditExportResult = { url: string; rowCount: number; truncated: boolean; fileName: string };
 
-// Plain strings rather than catalogue keys: the impersonation actions are added by a later change.
-export const IMPERSONATION_STARTED_ACTION = 'user.impersonation.started';
-export const IMPERSONATION_ENDED_ACTION = 'user.impersonation.ended';
+// Catalogue keys so the summary facets and the filter schema stay type-checked against the actions.
+export const IMPERSONATION_STARTED_ACTION: AdminAuditAction = 'user.impersonation.started';
+export const IMPERSONATION_ENDED_ACTION: AdminAuditAction = 'user.impersonation.ended';
 
 /** Both the API query (minus cursor/limit) and the page's URL search state. */
 export const AuditLogFiltersSchema = z.object({
@@ -57,21 +58,4 @@ export type AuditSummary = {
   impersonations: number;
   deletions: number;
   deniedAttempts: number;
-};
-
-const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
-
-export const encodeAuditCursor = (cursor: AuditLogCursor): string =>
-  Buffer.from(`${cursor.occurredAt.toISOString()}|${cursor.id}`, 'utf8').toString('base64url');
-
-export const decodeAuditCursor = (encoded: string): AuditLogCursor | null => {
-  const raw = Buffer.from(encoded, 'base64url').toString('utf8');
-  const separatorIndex = raw.indexOf('|');
-  if (separatorIndex === -1) return null;
-
-  const occurredAt = new Date(raw.slice(0, separatorIndex));
-  const id = raw.slice(separatorIndex + 1);
-  if (Number.isNaN(occurredAt.getTime()) || !OBJECT_ID_PATTERN.test(id)) return null;
-
-  return { occurredAt, id };
 };

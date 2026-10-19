@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
-import { encodeAuditCursor } from '@bike4mind/common';
+import { encodeAuditCursor } from '@server/utils/adminAuditQuery';
 
 const { mockList } = vi.hoisted(() => ({ mockList: vi.fn() }));
 
