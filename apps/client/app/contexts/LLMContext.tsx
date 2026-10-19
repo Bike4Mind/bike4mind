@@ -301,7 +301,7 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 6,
+      version: 7,
       migrate: (persistedState: any, version: number) => {
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
@@ -347,6 +347,13 @@ export const useLLM = create(
         // browsers with no persisted state.
         if (version < 6) {
           if (persistedState.output_format === 'jpeg') persistedState.output_format = 'png';
+        }
+        // Migration v6->v7: a store that started empty and had its first model applied by session
+        // hydration kept the DEFAULTS placeholder as the ceiling (see the refit effect below). Clear
+        // that exact value once so it is re-derived for the current model. A deliberate choice of
+        // exactly the placeholder is indistinguishable and resets too; it is one slider move back.
+        if (version < 7) {
+          if (persistedState.max_tokens === DEFAULTS.max_tokens) persistedState.max_tokens = 0;
         }
         return persistedState;
       },
@@ -621,7 +628,16 @@ export const LLMProvider: React.FC = () => {
     // not happened yet: the catalog is still loading, or the active model is an image model this effect
     // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
     // change with allowRaise on - the reset this fix exists to prevent.
-    if (!activeModel || !modelInfoRepo) return;
+    // An empty model is the fresh store (DEFAULTS, or after resetSettings), whose max_tokens is the
+    // placeholder rather than a choice. Recorded so the first model to land - very often the session
+    // pin applied by useHydrateModelFromSession, before the default-model effect above can run - counts
+    // as a switch and raises the placeholder. Without it that first fit saw no previous model, kept
+    // allowRaise off, and pinned 8192 for good on a model whose default is many times larger.
+    if (!activeModel) {
+      refitModelRef.current = '';
+      return;
+    }
+    if (!modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) {
