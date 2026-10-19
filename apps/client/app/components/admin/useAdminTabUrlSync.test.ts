@@ -115,6 +115,20 @@ describe('useAdminTabUrlSync', () => {
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
+  // The mount guard must not swallow a tab picked after the URL already named one.
+  it('writes a newly selected tab while the URL names a different one', () => {
+    routerMock.search = { tab: 'users' };
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+
+    act(() => result.current.setActiveTab(AdminTab.Analytics));
+
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { replace, search } = lastNavigation();
+    expect(replace).toBe(true);
+    expect(search({ tab: 'users' }).tab).toBe('analytics');
+  });
+
   // The admin page is embedded in a session surface, whose navigation buttons navigate to a
   // bare /admin; without this the param disappears from under an unchanged store.
   it('restores the tab when the URL loses it after mount', () => {
