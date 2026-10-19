@@ -433,7 +433,9 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       return `gh ${sub} ${action}`;
     }
     if (sub === 'release' && action === 'create') return 'gh release create';
-    const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
+    // gh's flag parser accepts the short form with its value attached (`-ftitle=x`), and any
+    // field turns the call into a POST.
+    const fields = args.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
     if (sub !== 'api') return null;
     if (sendsBody(optionValue(args, ['-X', '--method']))) return 'gh api';
     return fields && !(action === 'graphql' && graphqlReadOnly(args)) ? 'gh api' : null;
@@ -542,28 +544,35 @@ const LOCAL_PROGRAMS = new Set([
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
   rg: /^--pre(-glob)?(=|$)/,
-  sort: /^--compress-program(=|$)/,
 };
 
-/** git subcommands that read the repository and reach no remote. */
-const GIT_READS = new Set([
-  'blame',
-  'cat-file',
-  'describe',
-  'diff',
-  'grep',
-  'log',
-  'ls-files',
-  'ls-tree',
-  'merge-base',
-  'name-rev',
-  'rev-list',
-  'rev-parse',
-  'shortlog',
-  'show',
-  'show-ref',
-  'status',
-]);
+/**
+ * Whether `sort` would write a file (`-o`, `--output`) or run one (`--compress-program`).
+ * getopt_long accepts any unambiguous prefix, so `--o` and `--co` name those options too.
+ * The short cluster is read properly: `-t o` and `-k o` are values, not an output flag.
+ */
+function sortRunsOrWrites(args: readonly string[]): boolean {
+  const valueLetters = 'kStT';
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2).split('=')[0];
+      if (name !== '' && ('output'.startsWith(name) || 'compress-program'.startsWith(name))) return true;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') continue;
+    const cluster = arg.slice(1);
+    for (let at = 0; at < cluster.length; at++) {
+      if (cluster[at] === 'o') return true;
+      if (valueLetters.includes(cluster[at])) {
+        if (at === cluster.length - 1) i++;
+        break;
+      }
+    }
+  }
+  return false;
+}
 
 /** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
 const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -575,21 +584,6 @@ const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
   workflow: new Set(['list', 'view']),
   search: new Set(['code', 'commits', 'issues', 'prs', 'repos']),
 };
-
-function readOnlyGit(args: readonly string[]): boolean {
-  const words: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    // `-c` and `--config-env` can set core.pager, diff.external and the like to any program.
-    if (args[i] === '-c' || /^--(config-env|exec-path)(=|$)/.test(args[i])) return false;
-    if (args[i] === '-C') i++;
-    else if (GIT_OPTION_VALUES.test(args[i])) {
-      if (!args[i].includes('=')) i++;
-    } else if (!args[i].startsWith('-')) words.push(args[i]);
-  }
-  const sub = words[0];
-  if (!sub || !GIT_READS.has(sub)) return false;
-  return sub !== 'grep' || !args.some(arg => /^(-O|--open-files-in-pager)/.test(arg));
-}
 
 /**
  * Whether a gh call only reads from github.com. Any other host is refused, whichever way it is
@@ -610,7 +604,9 @@ function readOnlyGh(args: readonly string[]): boolean {
 /**
  * Whether one simple command provably keeps to this computer, or only reads from GitHub as the
  * user. Deliberately an allowlist: anything it does not recognise - an interpreter, a build tool,
- * a wrapper that runs another program - is not contained.
+ * a wrapper that runs another program - is not contained. `git` is not on it: a repository's own
+ * config can name a program for `status`, `diff` and the rest to run (`core.fsmonitor`,
+ * `filter.*.clean`, `diff.external`), and no scan of the argv can rule that out.
  */
 export function containedCommand(raw: readonly string[]): boolean {
   if (raw.length === 0) return false;
@@ -618,10 +614,10 @@ export function containedCommand(raw: readonly string[]): boolean {
   const [program, ...args] = tokens;
   if (isDynamic(raw[0])) return false;
   if (LOCAL_PROGRAMS.has(program)) {
+    if (program === 'sort') return !sortRunsOrWrites(args);
     const runs = RUNS_A_PROGRAM[program];
     return !runs || !args.some(arg => runs.test(arg));
   }
-  if (program === 'git') return readOnlyGit(args);
   // A computed argument can carry what it read into the request path itself.
   if (program === 'gh') return !raw.slice(1).some(isDynamic) && readOnlyGh(args);
   return false;
