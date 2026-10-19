@@ -317,8 +317,7 @@ export enum ChatModels {
 // it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
 export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
-export const CHAT_MODELS = supportedChatModels.options;
-export const SERVABLE_CHAT_MODELS: string[] = [...supportedChatModels.options];
+export const CHAT_MODELS: string[] = [...supportedChatModels.options];
 
 /**
  * Every `ChatModels` Gemini entry is named `gemini...` (see the GEMINI block above) - a prefix

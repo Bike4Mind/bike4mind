@@ -13,7 +13,7 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, SERVABLE_CHAT_MODELS } from '@bike4mind/common';
+import { ChatModels, CHAT_MODELS } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -181,7 +181,7 @@ async function processHighlightsGeneration(
   let llmModel = config?.llmModel || DEFAULT_LLM_MODEL;
 
   // Validate model is a servable ChatModels value, fallback to default if not
-  if (!SERVABLE_CHAT_MODELS.includes(llmModel)) {
+  if (!CHAT_MODELS.includes(llmModel)) {
     logger.warn('Invalid LLM model configured, falling back to default', {
       configuredModel: llmModel,
       defaultModel: DEFAULT_LLM_MODEL,

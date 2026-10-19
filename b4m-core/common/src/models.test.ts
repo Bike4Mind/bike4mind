@@ -4,7 +4,6 @@ import {
   ChatModels,
   REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   REASONING_SUPPORTED_MODELS,
-  SERVABLE_CHAT_MODELS,
   supportedChatModels,
 } from './models';
 import { settingsMap } from './schemas/settings';
@@ -27,16 +26,12 @@ describe('gpt-5.4-mini dated snapshot', () => {
     expect(supportedChatModels.safeParse(ChatModels.GPT5_4_MINI).success).toBe(true);
   });
 
-  it('is absent from SERVABLE_CHAT_MODELS, which integration-status checks the configured model against', () => {
+  it('is in the same reasoning sets as the alias', () => {
     expect(ChatModels.GPT5_4_MINI_2026_03_17).toBe('gpt-5.4-mini-2026-03-17');
-    expect(SERVABLE_CHAT_MODELS).not.toContain(ChatModels.GPT5_4_MINI_2026_03_17);
-    expect(SERVABLE_CHAT_MODELS).toContain(ChatModels.GPT5_4_MINI);
-  });
-
-  it('matches the alias in the reasoning sets', () => {
-    expect(ChatModels.GPT5_4_MINI_2026_03_17).toBe('gpt-5.4-mini-2026-03-17');
-    expect(REASONING_SUPPORTED_MODELS.has(ChatModels.GPT5_4_MINI_2026_03_17)).toBe(true);
-    expect(REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(ChatModels.GPT5_4_MINI_2026_03_17)).toBe(true);
+    for (const set of [REASONING_SUPPORTED_MODELS, REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS]) {
+      expect(set.has(ChatModels.GPT5_4_MINI_2026_03_17)).toBe(true);
+      expect(set.has(ChatModels.GPT5_4_MINI)).toBe(true);
+    }
   });
 
   it.each(['DefaultAPIModel', 'EmailAnalysisModel'] as const)(

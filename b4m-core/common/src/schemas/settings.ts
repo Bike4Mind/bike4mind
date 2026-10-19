@@ -32,7 +32,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
-import { SERVABLE_CHAT_MODELS, ChatModels } from '../models';
+import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
@@ -2021,7 +2021,7 @@ export const settingsMap = {
     defaultValue:
       process.env.B4M_SELF_HOST === 'true' ? ChatModels.CLAUDE_5_SONNET : ChatModels.CLAUDE_5_SONNET_BEDROCK,
     description: 'The default AI model to use for API requests when no model is specified.',
-    options: SERVABLE_CHAT_MODELS,
+    options: CHAT_MODELS,
     category: 'AI',
     order: 1,
     // publicSafe: read by LLMContext at startup; a model name is not sensitive (M2.5).
@@ -4255,7 +4255,7 @@ export const settingsMap = {
     name: 'Email Analysis Model',
     defaultValue: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
     description: 'The AI model to use for email analysis. Defaults to Claude 4.5 Haiku via Bedrock.',
-    options: SERVABLE_CHAT_MODELS,
+    options: CHAT_MODELS,
     category: 'AI',
     order: 201,
   }),
