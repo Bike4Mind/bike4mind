@@ -1130,6 +1130,9 @@ export class ToolBuilder {
         getAbortSignal,
         externalTools,
         toolAvailability,
+        // Subagents get the same wrapper the returned array does, so a failed inner call drops
+        // its gate estimate instead of leaving this turn looking over-committed.
+        wrapChildTools: childTools => this.trackGatedCalls(childTools) ?? childTools,
       }
     );
     return this.trackGatedCalls(tools);

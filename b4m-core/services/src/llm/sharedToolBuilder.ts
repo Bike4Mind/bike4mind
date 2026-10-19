@@ -308,6 +308,13 @@ export interface BuildSharedToolsOptions {
    * from the schema sent to the model instead of reaching it and then throwing or refusing.
    */
   toolAvailability?: ToolAvailability;
+  /**
+   * Wraps the tools handed to in-process subagents (`parentTools`), the same way the caller
+   * wraps the array this function returns for the parent. Without it, a subagent call that
+   * fails before settling leaves the parent turn's committed gate estimate inflated, because
+   * it ran the unwrapped originals and only the parent's own copies drop one on return.
+   */
+  wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }
 
 /** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
@@ -581,7 +588,10 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
-  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
+  const childTools = [...tools, ...agentOnlyMcpTools];
+  const parentTools = (options.wrapChildTools ? options.wrapChildTools(childTools) : childTools).filter(
+    tool => !deniedToolNames.has(tool.toolSchema.name)
+  );
 
   const subagentModels = deps.subagentModels ?? deps.precomputed?.models;
   const subagentModelInfo = subagentModels?.find(m => m.id === model);
