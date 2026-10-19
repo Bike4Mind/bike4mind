@@ -105,9 +105,9 @@ describe('sessionWillInjectAuthoredPrompt', () => {
     );
   });
 
-  it('keeps a prompt the user set on a workspace that owns the field', async () => {
+  it('lets the workspace decide a prompt the user set while the session is on it', async () => {
     const session = { surface: 'silent-workspace', systemPromptText: 'mine', userSetFields: ['systemPromptText'] };
-    expect(await sessionWillInjectAuthoredPrompt(session, ctx)).toBe(true);
+    expect(await sessionWillInjectAuthoredPrompt(session, ctx)).toBe(false);
   });
 
   it('reads a live document through toJSON', async () => {

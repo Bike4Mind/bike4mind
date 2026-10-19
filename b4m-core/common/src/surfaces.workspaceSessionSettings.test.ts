@@ -77,17 +77,35 @@ describe('applyWorkspaceSessionSettings', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('leaves fields the user set explicitly alone', async () => {
+  it('decides owned fields the user set explicitly while the session is on the workspace', async () => {
     const { table } = makeTable({ systemPromptText: 'workspace prompt', temperature: 0.1 });
 
     const effective = await applyWorkspaceSessionSettings(
-      session({ userSetFields: ['temperature'] }),
+      session({ userSetFields: ['temperature', 'enabledTools'] }),
       { user: null },
       table
     );
 
-    expect(effective.temperature).toBe(0.9);
+    expect(effective.temperature).toBe(0.1);
     expect(effective.systemPromptText).toBe('workspace prompt');
+    expect('enabledTools' in effective).toBe(false);
+  });
+
+  it('restores the user value once a session moved onto the workspace moves back off', async () => {
+    const { table } = makeTable({ temperature: 0.1, enabledTools: ['tool_narrow'] });
+    const mine = { id: 's1', temperature: 0.9, enabledTools: ['tool_a', 'tool_b'] };
+    const userSetFields = userSetSessionFields(mine, table);
+    const onWorkspace = { ...mine, surface: WORKSPACE, userSetFields };
+
+    const there = await applyWorkspaceSessionSettings(onWorkspace, { user: null }, table);
+    expect(there.temperature).toBe(0.1);
+    expect(there.enabledTools).toEqual(['tool_narrow']);
+
+    expect(surfaceOwnedFields(onWorkspace, table)).toEqual(['systemPromptText']);
+    const back = { ...onWorkspace, surface: undefined };
+    expect(await applyWorkspaceSessionSettings(back, { user: null }, table)).toBe(back);
+    expect(back.temperature).toBe(0.9);
+    expect(back.enabledTools).toEqual(['tool_a', 'tool_b']);
   });
 
   it('ignores an owned field outside the ownable set', async () => {

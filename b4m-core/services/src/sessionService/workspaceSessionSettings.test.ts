@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';
+import { applyWorkspaceSessionSettings, type WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import { cloneSession } from './clone';
 import { createSession } from './create';
 import { forkSession } from './fork';
@@ -152,10 +152,13 @@ describe('createSession records the owned fields the user set', () => {
     return db.sessions.update.mock.calls.flatMap(call => (call[1] as { unset?: string[] } | undefined)?.unset ?? []);
   };
 
-  it('keeps a restriction set off any workspace through a round trip onto the owning workspace', async () => {
+  it('lets the owning workspace decide a user-set value while on it, and keeps the stored value for after', async () => {
     const created = await create({ disableUserIntegrations: true, enabledTools: ['tool_a'] }, table);
 
     expect(created.userSetFields).toEqual(['enabledTools', 'disableUserIntegrations']);
+    const onWorkspace = await applyWorkspaceSessionSettings({ ...created, surface: WORKSPACE }, { user: null }, table);
+    expect(onWorkspace.enabledTools).toBeUndefined();
+    expect(onWorkspace.disableUserIntegrations).toBeUndefined();
     const unset = await roundTrip({ ...created, id: 'session-1', userId: 'caller-1' });
     expect(unset).not.toContain('enabledTools');
     expect(unset).not.toContain('disableUserIntegrations');

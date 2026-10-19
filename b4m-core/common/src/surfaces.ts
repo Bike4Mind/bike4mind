@@ -229,7 +229,10 @@ export interface SurfaceOwnableSessionSettings {
 /** The slice of a session the workspace-settings helpers read. */
 export type SurfaceSettingsSession = SurfaceOwnableSessionSettings & {
   surface?: string | null;
-  /** Owned fields the user set explicitly; the workspace neither overrides nor strips them. */
+  /**
+   * Owned fields the user set explicitly. The workspace still decides them while the session is on it,
+   * but leaving or copying off it keeps the stored value, which applies again once off the workspace.
+   */
   userSetFields?: readonly string[] | null;
 };
 
@@ -253,28 +256,28 @@ export type WorkspaceSessionSettingsTable = Readonly<Record<string, WorkspaceSes
 
 const OWNABLE_FIELD_SET: ReadonlySet<string> = new Set(SURFACE_OWNABLE_SESSION_FIELDS);
 
-function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable) {
+function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable, keepUserSet: boolean) {
   // An absent table would read as "the workspace owns nothing" and skip both resolve and strip; the open-core
   // value is the generated empty table, so a missing one is a wiring bug.
   if (!table) throw new Error('Workspace session settings table is required');
   const id = normalizeSurfaceId(session.surface);
   if (id === null || !Object.prototype.hasOwnProperty.call(table, id)) return null;
   const entry = table[id];
-  const userSet = new Set(session.userSetFields ?? []);
+  const userSet = new Set(keepUserSet ? (session.userSetFields ?? []) : []);
   const fields = entry.ownedFields.filter(field => OWNABLE_FIELD_SET.has(field) && !userSet.has(field));
   return { entry, fields };
 }
 
 /**
  * The session as its workspace sees it: each owned field takes the resolver's value, or is cleared when
- * the resolver yields none. Returns a shallow copy, so pass a plain object rather than a live document.
+ * the resolver yields none, user-set or not. Returns a shallow copy, so pass a plain object rather than a live document.
  */
 export async function applyWorkspaceSessionSettings<TSession extends SurfaceSettingsSession>(
   session: TSession,
   ctx: Omit<WorkspaceSessionSettingsContext<TSession>, 'session'>,
   table: WorkspaceSessionSettingsTable
 ): Promise<TSession> {
-  const owned = ownedFieldsFor(session, table);
+  const owned = ownedFieldsFor(session, table, false);
   if (!owned || owned.fields.length === 0) return session;
   const surface = normalizeSurfaceId(session.surface);
   let resolved: Partial<SurfaceOwnableSessionSettings>;
@@ -315,7 +318,7 @@ export function surfaceOwnedFields(
   session: SurfaceSettingsSession,
   table: WorkspaceSessionSettingsTable
 ): SurfaceOwnableSessionField[] {
-  return ownedFieldsFor(session, table)?.fields ?? [];
+  return ownedFieldsFor(session, table, true)?.fields ?? [];
 }
 
 /**
