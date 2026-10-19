@@ -17,11 +17,10 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    # Always run on PRs to check for docs changes (required before deploy)
+    # Docs reach production on merge, so the build is checked on the PR and again in the merge queue.
     if: |
       github.repository == (vars.CANONICAL_REPO || 'bike4mind/bike4mind') &&
-      github.event_name == 'pull_request' &&
-      github.actor != 'dependabot[bot]'
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     outputs:
       has_changes: ${{ steps.docs-changes.outputs.has_changes }}
     
@@ -40,7 +39,10 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          DOCS_CHANGED=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null | grep '^docs-site/' || true)
+          DOCS_CHANGED=""
+          if [ -n "$PR" ]; then
+            DOCS_CHANGED=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null | grep '^docs-site/' || true)
+          fi
           TOTAL=$(printf '%s' "$DOCS_CHANGED" | grep -c . || true)
           DISPLAY=$(printf '%s\n' "$DOCS_CHANGED" | head -5)
           if [ "$TOTAL" -gt 5 ]; then
@@ -116,7 +118,7 @@ jobs:
           du -sh build/
 
       - name: Comment PR with build success
-        if: success() && steps.docs-changes.outputs.has_changes == 'true'
+        if: success() && github.event_name == 'pull_request' && steps.docs-changes.outputs.has_changes == 'true'
         # Fork PRs get a read-only GITHUB_TOKEN, so createComment 403s. Non-fatal:
         # never let a cosmetic PR comment fail the required Deploy check on forks.
         continue-on-error: true
@@ -173,7 +175,7 @@ jobs:
           CHANGED_FILES: ${{ steps.docs-changes.outputs.changed_files }}
 
       - name: Comment PR with build failure
-        if: failure() && steps.docs-changes.outputs.has_changes == 'true'
+        if: failure() && github.event_name == 'pull_request' && steps.docs-changes.outputs.has_changes == 'true'
         # Fork PRs get a read-only GITHUB_TOKEN, so createComment 403s. Non-fatal:
         # never let a cosmetic PR comment fail the required Deploy check on forks.
         continue-on-error: true
