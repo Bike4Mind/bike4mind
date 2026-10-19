@@ -45,6 +45,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
 
+  // Reserved for the impersonation writers; recorded here so the summary facets can type their keys.
+  'user.impersonation.started': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.impersonation.ended': { category: 'access', severity: 'notice', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
