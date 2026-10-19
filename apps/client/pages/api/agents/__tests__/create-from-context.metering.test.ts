@@ -5,7 +5,7 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -16,6 +16,7 @@ const m = vi.hoisted(() => ({
   record: vi.fn(async () => undefined),
   complete: vi.fn(),
   agentCreate: vi.fn(),
+  admissionAssert: vi.fn(),
 }));
 
 vi.mock('@client/server/middlewares/baseApi', () => ({
@@ -59,7 +60,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
-  createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
+  createModelAdmission: () => ({ admits: async () => true, assert: m.admissionAssert }),
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
@@ -92,6 +93,7 @@ async function call() {
 beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
+  m.admissionAssert.mockResolvedValue(undefined);
   m.hold.mockResolvedValue({ ownerId: 'user-1', ownerType: 'user', reservedCredits: 50 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.agentCreate.mockImplementation(async (data: Record<string, unknown>) => ({ id: 'agent-1', ...data }));
@@ -108,6 +110,14 @@ describe('POST /api/agents/create-from-context metering', () => {
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
     expect(m.agentCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the 403 when the model is not admitted, without reserving or calling the provider', async () => {
+    m.admissionAssert.mockRejectedValue(new ForbiddenError('Model "gpt-4-test" is not accessible'));
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
   });
 
   it('charges a funded caller the priced usage once', async () => {

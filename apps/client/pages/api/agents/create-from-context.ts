@@ -525,7 +525,13 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     });
   } catch (error: any) {
     // The credit reservation and model admission keep their own statuses rather than collapsing into the generic 500.
-    if (error instanceof UnprocessableEntityError) throw error;
+    if (
+      error instanceof UnprocessableEntityError ||
+      error instanceof ForbiddenError ||
+      error instanceof BadRequestError
+    ) {
+      throw error;
+    }
     req.logger.error(`Error creating agent from context:`, error);
 
     return res.status(500).json({
