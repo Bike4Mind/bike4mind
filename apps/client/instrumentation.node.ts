@@ -1,8 +1,12 @@
 /**
  * Node.js-only Instrumentation
  *
- * This file is loaded exclusively in the Node.js runtime (not edge or client).
- * Next.js automatically picks up instrumentation.node.ts for server-only setup.
+ * Imported by instrumentation.ts only when NEXT_RUNTIME is 'nodejs' (not edge or client).
+ * Next.js does not load this file by itself.
+ *
+ * Next's own server already installs log-only uncaughtException/unhandledRejection
+ * listeners, so the handlers registered here add structured logging without changing
+ * whether the process exits.
  */
 import { registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { logExpiringModels, getAvailableModels } from '@bike4mind/llm-adapters';
