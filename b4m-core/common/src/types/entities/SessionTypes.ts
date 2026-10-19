@@ -793,6 +793,11 @@ export interface ISession {
    */
   maxToolCalls?: number;
   /**
+   * Fields the user set explicitly that a contributed workspace would otherwise own; the workspace
+   * neither overrides nor strips them (see `WorkspaceSessionSettingsTable` in surfaces.ts).
+   */
+  userSetFields?: string[];
+  /**
    * The placeholder name a product surface stamped on this session at create
    * time. Generic capability - auto-naming treats a session still bearing its
    * placeholder as rename-eligible (bypassing the recent-update duplicate
