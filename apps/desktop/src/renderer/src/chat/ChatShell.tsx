@@ -806,7 +806,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
-            notReady={unbound ? 'No folder' : null}
+            // Blocked rather than refused: a refused send has already cleared the box.
+            notReady={auth?.reauthRequired ? 'Sign in' : unbound ? 'No folder' : null}
             usage={composerUsage}
             placeholder={
               conversation.session?.mode === 'code' ? 'Describe a task or ask a question' : 'Send a message...'

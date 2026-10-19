@@ -323,6 +323,19 @@ describe('the suggested next prompt', () => {
   });
 });
 
+describe('a composer that cannot send yet', () => {
+  it('keeps the draft on Enter instead of clearing it into a refused send', () => {
+    const send = vi.fn();
+    mount({ notReady: 'Sign in', onSend: send });
+
+    type('written while signed out');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('written while signed out');
+  });
+});
+
 describe('the attach shortcut', () => {
   const withPick = (overrides: Partial<AttachmentDraft> = {}) => {
     const pick = vi.fn(async () => {});
