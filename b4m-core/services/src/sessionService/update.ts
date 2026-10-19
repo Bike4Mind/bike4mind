@@ -6,7 +6,6 @@ import {
   IFabFileRepository,
   IProjectRepository,
   isImageServeable,
-  mergeUserSetFields,
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
@@ -195,8 +194,6 @@ export const updateSession = async (
       if (forced !== undefined) update.forceKnowledgeRetrieval = forced;
     }
   }
-  const userSetFields = mergeUserSetFields(session.userSetFields, Object.keys(update));
-  if (userSetFields) update.userSetFields = userSetFields;
   update.lastUpdated = new Date();
 
   // The read above authorizes; the write re-checks, since a share revocation or soft-delete can land

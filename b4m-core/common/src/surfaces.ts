@@ -307,14 +307,3 @@ export function surfaceOwnedFields(
 ): SurfaceOwnableSessionField[] {
   return ownedFieldsFor(session, table)?.fields ?? [];
 }
-
-/** `existing` plus every ownable field in `changedFields`, or undefined when nothing new was set. */
-export function mergeUserSetFields(
-  existing: readonly string[] | null | undefined,
-  changedFields: Iterable<string>
-): string[] | undefined {
-  const merged = new Set(existing ?? []);
-  const before = merged.size;
-  for (const field of changedFields) if (OWNABLE_FIELD_SET.has(field)) merged.add(field);
-  return merged.size === before ? undefined : [...merged];
-}

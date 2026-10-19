@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   applyWorkspaceSessionSettings,
-  mergeUserSetFields,
   stripSurfaceOwnedFields,
   surfaceOwnedFields,
   type WorkspaceSessionSettingsTable,
@@ -138,19 +137,5 @@ describe('surfaceOwnedFields', () => {
       'temperature',
     ]);
     expect(surfaceOwnedFields(session({ surface: undefined }), table)).toEqual([]);
-  });
-});
-
-describe('mergeUserSetFields', () => {
-  it('adds ownable fields from the change and ignores the rest', () => {
-    expect(mergeUserSetFields(['temperature'], ['id', 'name', 'maxToolCalls', 'temperature'])).toEqual([
-      'temperature',
-      'maxToolCalls',
-    ]);
-  });
-
-  it('returns undefined when no new ownable field was changed', () => {
-    expect(mergeUserSetFields(undefined, ['id', 'name'])).toBeUndefined();
-    expect(mergeUserSetFields(['temperature'], ['temperature'])).toBeUndefined();
   });
 });
