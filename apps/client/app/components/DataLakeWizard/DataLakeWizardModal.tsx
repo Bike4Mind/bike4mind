@@ -102,7 +102,8 @@ export default function DataLakeWizardModal() {
   const canGoBack = currentIndex > 0 && step !== 'upload';
 
   // The GitHub card is a hand-off (Continue leaves the page), not a step: no stepper, no Next.
-  // Same predicate SourceSelectionStep uses to render GitHubCreatePanel.
+  // Mirrors SourceSelectionStep's GitHubCreatePanel branch minus its availability check: if
+  // availability flips mid-wizard the cards show without a Next, which was already disabled there.
   const onGitHubCard = step === 'source' && !targetLake && createSource === 'github';
 
   const canGoNext = (() => {
@@ -284,7 +285,7 @@ export default function DataLakeWizardModal() {
               borderColor: 'divider',
             }}
           >
-            <Button variant="plain" color="neutral" onClick={handleClose}>
+            <Button variant="plain" color="neutral" onClick={handleClose} data-testid="wizard-cancel-btn">
               Cancel
             </Button>
             <Stack direction="row" gap={1}>

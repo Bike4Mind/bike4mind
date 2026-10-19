@@ -399,9 +399,21 @@ describe('DataLakeWizardModal - streamlined step order', () => {
 
     renderModal();
 
+    expect(screen.getByTestId('github-create-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('wizard-step-indicator')).not.toBeInTheDocument();
     expect(screen.queryByTestId('wizard-next-btn')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByTestId('wizard-cancel-btn')).toBeInTheDocument();
+  });
+
+  it('keeps the stepper in append mode even with a stale GitHub create source', () => {
+    seedSource({
+      targetLake: { id: 'lake-1', name: 'Legal Contracts', fileTagPrefix: 'legal:', organizationId: 'org-1' },
+    });
+    useDataLakeWizardStore.setState({ createSource: 'github' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-step-indicator')).toBeInTheDocument();
   });
 
   it('keeps the stepper on the source cards screen', () => {
