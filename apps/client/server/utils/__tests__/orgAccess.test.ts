@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
+import {
+  EditImageRequestBodySchema,
+  ForbiddenError,
+  GenerateImageIvokeParamsSchema,
+  editImageContract,
+  generateImageContract,
+} from '@bike4mind/common';
 import type { IUserDocument } from '@bike4mind/common';
 
 const mockFindById = vi.fn();
@@ -21,6 +27,8 @@ vi.mock('../resolveActiveOrg', () => ({
 }));
 
 import {
+  assertNoStrayBillingOrgKeys,
+  resolveBillingOrgInput,
   verifyOrgAccess,
   verifyOrgAdminRead,
   verifyOrgOwner,
@@ -389,5 +397,83 @@ describe('resolveBillingOrgId', () => {
   it('rethrows a non-authorization error from the fallback path (transient DB failure -> 5xx)', async () => {
     mockResolveActiveOrg.mockRejectedValue(new Error('db down'));
     await expect(resolveBillingOrgId(asReq({ id: OWNER, organizationId: ORG }), undefined)).rejects.toThrow('db down');
+  });
+});
+
+describe('resolveBillingOrgInput', () => {
+  it.each([
+    [{ organizationId: 'orgA' }, 'orgA'],
+    [{ organization_id: 'orgA' }, 'orgA'],
+    [{ organizationId: null }, null],
+    [{ organization_id: null }, null],
+    [{}, undefined],
+    [{ organizationId: 'orgA', organization_id: 'orgA' }, 'orgA'],
+    [{ organizationId: null, organization_id: null }, null],
+  ])('maps %j to %j', (body, expected) => {
+    expect(resolveBillingOrgInput(body)).toBe(expected);
+  });
+
+  it.each([
+    { organizationId: 'orgA', organization_id: 'orgB' },
+    { organizationId: 'orgA', organization_id: null },
+    { organizationId: null, organization_id: 'orgA' },
+  ])('rejects a disagreement (422) for %j', body => {
+    expect(() => resolveBillingOrgInput(body)).toThrow(UnprocessableEntityError);
+    expect(() => resolveBillingOrgInput(body)).toThrow(/disagree/);
+  });
+});
+
+describe('assertNoStrayBillingOrgKeys', () => {
+  it.each([
+    'organizationID',
+    'billing_org_id',
+    'orgId',
+    'billingOrganizationId',
+    'billingAccountId',
+    'billing_account_id',
+    'billedOrganizationId',
+    'billed_organization_id',
+    'billedTo',
+    'payerOrgId',
+    'payer_org_id',
+    'payerAccountId',
+    'payer_id',
+    'targetOrganizationId',
+    'ownerOrganizationId',
+    'organizationIds',
+    'org_id_v2',
+  ])('rejects %s (422)', key => {
+    expect(() => assertNoStrayBillingOrgKeys({ prompt: 'x', [key]: 'orgA' })).toThrow(UnprocessableEntityError);
+  });
+
+  it.each(['organizationId', 'organization_id'])('accepts %s', key => {
+    expect(() => assertNoStrayBillingOrgKeys({ [key]: 'orgA' })).not.toThrow();
+  });
+
+  it.each([null, undefined, 'str', 5])('ignores non-object body %s', body => {
+    expect(() => assertNoStrayBillingOrgKeys(body)).not.toThrow();
+  });
+
+  it('flags no ordinary field of either image request body (substring match must not over-reject)', () => {
+    const shapeOf = (s: unknown) => {
+      const z = s as { shape?: object; _def?: { schema?: { shape?: object } } };
+      return Object.keys(z.shape ?? z._def?.schema?.shape ?? {});
+    };
+    const sources = {
+      GenerateImageIvokeParamsSchema: shapeOf(GenerateImageIvokeParamsSchema),
+      EditImageRequestBodySchema: shapeOf(EditImageRequestBodySchema),
+      generateImageContract: shapeOf(generateImageContract.request),
+      editImageContract: shapeOf(editImageContract.request),
+    };
+    // An unreadable wrapper yields [] and would otherwise drop out of the scan silently.
+    for (const [name, keys] of Object.entries(sources)) {
+      expect(keys.length, `${name} shape unreadable`).toBeGreaterThan(0);
+    }
+    const body = Object.fromEntries(
+      Object.values(sources)
+        .flat()
+        .map(k => [k, 1])
+    );
+    expect(() => assertNoStrayBillingOrgKeys(body)).not.toThrow();
   });
 });
