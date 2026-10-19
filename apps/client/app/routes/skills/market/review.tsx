@@ -74,9 +74,9 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
   const [delistOpen, setDelistOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { version, listing, previous } = item;
-  const isPublic = listing.visibility === 'public';
-  const needsHighAck = isPublic && version.riskTier === 'high';
-  const needsMismatchAck = isPublic && version.honestSummary?.descriptionMatches === false;
+  // Must stay in sync with the acknowledgement checks in server/skillMarket/submitVersion.ts decideVersion.
+  const needsHighAck = version.riskTier === 'high';
+  const needsMismatchAck = version.honestSummary?.descriptionMatches === false;
 
   const act = async (body: Parameters<ReturnType<typeof useReviewVersion>['mutateAsync']>[0], done: string) => {
     setError(null);

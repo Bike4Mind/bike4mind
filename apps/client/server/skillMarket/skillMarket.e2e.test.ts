@@ -275,7 +275,10 @@ describe('Skill Market (real mongod)', () => {
     await expect(
       decideVersion(version.id, { id: OTHER }, [], { action: 'approve', ackHighRisk: true })
     ).rejects.toMatchObject({ statusCode: 403 });
-    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve' });
+    await expect(decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackHighRisk: true });
 
     expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
     expect((await browse([])).data).toEqual([]);
@@ -291,7 +294,11 @@ describe('Skill Market (real mongod)', () => {
       'organization',
       ORG
     );
-    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' });
+    // Self-approval still has to acknowledge the high-risk findings.
+    await expect(decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve', ackHighRisk: true });
     expect(approved).toMatchObject({ reviewStatus: 'approved', auditSample: true, auditedAt: null });
 
     // The audit is recorded on its own field: the original approver is kept.
