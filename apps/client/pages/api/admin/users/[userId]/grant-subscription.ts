@@ -18,7 +18,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -106,21 +106,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         durationMonths,
       });
 
-      await logAuditEvent(
-        {
-          userId,
-          action: AdminOrgAuditEvents.ORG_GRANTED,
-          adminUserId: req.user.id,
-          adminUsername: req.user.username,
-          metadata: {
-            subscriptionType: 'individual',
-            priceId,
-            credits: grant.credits,
-            durationMonths,
-          },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'user.subscription.granted',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        summary: `granted individual subscription for ${durationMonths} month(s)`,
+        details: { subscriptionType: 'individual', priceId, credits: grant.credits, durationMonths },
+      });
 
       // Notify user
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
@@ -254,22 +245,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         });
       });
 
-      await logAuditEvent(
-        {
-          userId: targetOrganization.userId,
-          action: AdminOrgAuditEvents.ORG_GRANTED,
-          adminUserId: req.user.id,
-          adminUsername: req.user.username,
-          metadata: {
-            subscriptionType: 'team',
-            organizationId: targetOrganization.id,
-            seats,
-            credits: seats * teamPlan.creditsPerSeat * durationMonths,
-            durationMonths,
-          },
+      await recordAdminActionFromRequest(req, {
+        action: 'user.subscription.granted',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        organizationId: targetOrganization.id,
+        summary: `granted team subscription with ${seats} seats for ${durationMonths} month(s)`,
+        details: {
+          subscriptionType: 'team',
+          seats,
+          credits: seats * teamPlan.creditsPerSeat * durationMonths,
+          durationMonths,
+          organizationOwnerId: targetOrganization.userId,
         },
-        req.logger
-      );
+      });
 
       // Notify relevant users. (No ['entitlements'] push here: entitlement
       // resolution is User-owned only - when the org-seat fast-follow lands

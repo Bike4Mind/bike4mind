@@ -53,12 +53,10 @@ vi.mock('@server/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_GRANTED: 'org_granted' },
-  logAuditEvent: vi.fn(),
-}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../grant';
 
 const BODY = { name: 'Acme Corp', ownerEmail: 'owner@example.com', seats: 5, initialCredits: 1000, reason: 'sales' };
@@ -102,5 +100,19 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockSubCreate).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
+  });
+
+  it('records org.credits.granted against the new organization', async () => {
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.granted',
+        target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme Corp' }),
+        reason: 'sales',
+      })
+    );
   });
 });

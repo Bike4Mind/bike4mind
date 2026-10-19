@@ -42,12 +42,10 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_TOPPED_UP: 'org_topped_up' },
-  logAuditEvent: vi.fn(),
-}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../top-up';
 
 function call(options: { isAdmin?: boolean; body?: object; id?: string }) {
@@ -91,5 +89,24 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     await run();
     expect(mockAddCredits).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+
+  it('records org.credits.topped_up against the organization', async () => {
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.topped_up',
+        target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
+      })
+    );
+  });
+
+  it('fails the request when the strict audit write fails, so the transaction rolls back', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { res, run } = call({});
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
   });
 });

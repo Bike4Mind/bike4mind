@@ -5,7 +5,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
@@ -53,20 +53,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       canceledAt: new Date(),
     });
 
-    await logAuditEvent(
-      {
-        userId: organization.userId,
-        action: AdminOrgAuditEvents.ORG_REVOKED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        reason,
-        metadata: {
-          organizationId: organization.id,
-          subscriptionId: adminGrant.id,
-        },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.revoked',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: 'revoked admin grant',
+      reason,
+      changes: [{ field: 'subscription.status', before: adminGrant.status, after: 'canceled' }],
+      details: { subscriptionId: adminGrant.id, ownerId: organization.userId },
+    });
 
     await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',
