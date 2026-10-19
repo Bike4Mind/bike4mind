@@ -24,6 +24,8 @@ import {
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   STORAGE_CHARGED_FILTER,
+  PERSONAL_STORAGE_FILTER,
+  type FabFileChargeState,
   LAKE_INGEST_SOURCE_TYPES,
   type StorageUsageGroup,
   UNCATEGORIZED_TAG_SUFFIX,
@@ -798,6 +800,42 @@ const CITABLE_PROJECTION =
   '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
 
 /** Row cap for unbounded metadata listings. */
+const CHARGE_STATE_PROJECTION = {
+  userId: 1,
+  organizationId: 1,
+  fileSize: 1,
+  storageChargedAt: 1,
+  status: 1,
+  createdAt: 1,
+} as const;
+
+type ChargeStateRow = {
+  _id: unknown;
+  userId: unknown;
+  organizationId?: string | null;
+  fileSize?: number | null;
+  storageChargedAt?: Date | null;
+  status?: string | null;
+  createdAt?: Date | null;
+};
+
+const toChargeState = (row: ChargeStateRow): FabFileChargeState => ({
+  userId: String(row.userId),
+  organizationId: row.organizationId ?? undefined,
+  fileSize: row.fileSize ?? undefined,
+  storageChargedAt: row.storageChargedAt ?? undefined,
+  status: row.status ?? undefined,
+  createdAt: row.createdAt ?? undefined,
+});
+
+/** A sweep's per-row result: the owner fields plus the bytes it was charged (chargedBytes). */
+const toSweptFile = (row: ChargeStateRow): DataLakeSweptFile => ({
+  id: String(row._id),
+  userId: String(row.userId),
+  ...(row.organizationId ? { organizationId: row.organizationId } : {}),
+  fileSize: chargedBytes(row),
+});
+
 const METADATA_PAGE_CAP = 500;
 
 /** In-flight per-document resets in resetChunkStateByIds. Kept near the connection pool size
@@ -1222,8 +1260,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * aggregate shape in computeDataLakeStats.
    */
   async sumFileSizeByUserId(userId: string): Promise<number> {
+    return this.sumChargedFileSize({ userId, ...PERSONAL_STORAGE_FILTER });
+  }
+
+  async sumFileSizeByOrganizationId(organizationId: string): Promise<number> {
+    // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+    return this.sumChargedFileSize({ organizationId: { $eq: organizationId, $type: 'string' } });
+  }
+
+  private async sumChargedFileSize(owner: Record<string, unknown>): Promise<number> {
     const [row] = await this.fabFileModel.aggregate<{ total: number }>([
-      { $match: { userId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      { $match: { ...owner, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, total: 1 } },
     ]);
@@ -1241,7 +1288,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     options: { maxTimeMS?: number } = {}
   ): Promise<StorageUsageGroup[]> {
     const aggregate = this.fabFileModel.aggregate<StorageUsageGroup>([
-      { $match: { userId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      { $match: { userId, ...PERSONAL_STORAGE_FILTER, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
       {
         $group: {
           _id: {
@@ -1278,45 +1325,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return aggregate.exec();
   }
 
-  async findChargeState(
-    id: string
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
-    const row = await this.fabFileModel
-      .findOne({ _id: id, deletedAt: null }, { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 })
-      .lean();
-    return row
-      ? {
-          userId: String(row.userId),
-          fileSize: row.fileSize,
-          storageChargedAt: row.storageChargedAt,
-          status: row.status,
-          createdAt: row.createdAt,
-        }
-      : null;
+  async findChargeState(id: string): Promise<FabFileChargeState | null> {
+    const row = await this.fabFileModel.findOne({ _id: id, deletedAt: null }, CHARGE_STATE_PROJECTION).lean();
+    return row ? toChargeState(row) : null;
   }
 
   async commitContentRewrite(
     id: string,
     set: Record<string, unknown>,
     filter: Record<string, unknown> = {}
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+  ): Promise<FabFileChargeState | null> {
     // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
     const pre = await this.fabFileModel
       .findOneAndUpdate(
         { ...filter, _id: id, deletedAt: null },
         { $set: { ...set, storageChargedAt: new Date() } },
-        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 } }
+        { new: false, projection: CHARGE_STATE_PROJECTION }
       )
       .lean();
-    return pre
-      ? {
-          userId: String(pre.userId),
-          fileSize: pre.fileSize,
-          storageChargedAt: pre.storageChargedAt,
-          status: pre.status,
-          createdAt: pre.createdAt,
-        }
-      : null;
+    return pre ? toChargeState(pre) : null;
   }
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
@@ -2862,10 +2889,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
       // excludes. The completion stamp writes the real label and this timestamp in one transaction,
       // and re-chunking rewrites the label to the requested model and clears the stamp.
-      $or: [
-        { chunkEmbeddingModelStampedAt: { $ne: null } },
-        { chunkEmbeddingModelStampedAt: { $exists: false } },
-      ],
+      $or: [{ chunkEmbeddingModelStampedAt: { $ne: null } }, { chunkEmbeddingModelStampedAt: { $exists: false } }],
       deletedAt: null,
     });
     return hit !== null;
@@ -3334,7 +3358,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // userId and charged bytes are carried through so the caller can re-charge each file's own owner.
     const candidates = await this.fabFileModel
       .find(base, null, { includeDeleted: true })
-      .select('_id userId fileSize storageChargedAt status createdAt');
+      .select('_id userId organizationId fileSize storageChargedAt status createdAt');
     const restored: DataLakeSweptFile[] = [];
     for (const candidate of candidates) {
       // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
@@ -3352,11 +3376,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
       ]);
       if (result.modifiedCount === 1) {
-        restored.push({
-          id: candidate._id.toString(),
-          userId: String(candidate.userId),
-          fileSize: chargedBytes(candidate),
-        });
+        restored.push(toSweptFile(candidate));
       }
     }
     return restored;
@@ -3365,7 +3385,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
-      { _id: 1, userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
+      { _id: 1, userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
     // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
@@ -3382,7 +3402,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     for (const doc of docs) {
       const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
       if (result.modifiedCount === 1) {
-        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: chargedBytes(doc) });
+        flipped.push(toSweptFile(doc));
       }
     }
     return flipped;
@@ -4074,6 +4094,13 @@ FabFileSchema.index(
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
+
+// Org storage truth (sumFileSizeByOrganizationId). Partial so personal files, the large majority,
+// carry no entry. Pre-built by 20260921235970_ensure-fabfile-owner-organization-index.
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1 },
+  { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.

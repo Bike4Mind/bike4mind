@@ -977,9 +977,21 @@ export type DataLakeMembershipScope =
  * conjunct on the meta-tag arm (a contributor's file is a full member of someone else's lake), so
  * a sweep spanning several owners' files cannot be billed to one user.
  */
+/** A row's owner and charge fields: what findChargeState and commitContentRewrite's pre-image return. */
+export type FabFileChargeState = {
+  userId: string;
+  organizationId?: string;
+  fileSize?: number;
+  storageChargedAt?: Date;
+  status?: string;
+  createdAt?: Date;
+};
+
 export interface DataLakeSweptFile {
   id: string;
   userId: string;
+  /** The owning org (FabFile.organizationId); absent = personal. Routes the delta via storageOwnerOf. */
+  organizationId?: string;
   /** Charged bytes (`chargedBytes`), not the raw `fileSize`: 0 for a row that was never charged. */
   fileSize: number;
 }
@@ -1135,12 +1147,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
 
   /**
-   * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
-   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
+   * Sum the charged `fileSize` of a user's non-deleted PERSONAL files (no `organizationId`; org-owned
+   * rows count toward the org, see storageOwner.ts), via an aggregate so no documents are hydrated.
+   * A missing or null `fileSize` counts as 0.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the total size in bytes.
    */
   sumFileSizeByUserId(userId: string): Promise<number>;
+
+  /** The org counter's truth: charged `fileSize` of the non-deleted rows stamped with `organizationId`. */
+  sumFileSizeByOrganizationId(organizationId: string): Promise<number>;
 
   /**
    * The same charged rows `sumFileSizeByUserId` sums, grouped by provenance (see StorageUsageGroup).
@@ -1151,9 +1167,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
    */
-  findChargeState(
-    id: string
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+  findChargeState(id: string): Promise<FabFileChargeState | null>;
 
   /**
    * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
@@ -1164,7 +1178,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     id: string,
     set: Record<string, unknown>,
     filter?: Record<string, unknown>
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+  ): Promise<FabFileChargeState | null>;
 
   /**
    * Find a file by its ID and the user's ID.

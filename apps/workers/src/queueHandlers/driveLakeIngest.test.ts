@@ -36,6 +36,10 @@ const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
   deleteFabFile: vi.fn(),
   changeStorageSize: vi.fn(),
+  incrementCurrentStorage: vi.fn(),
+  orgFindById: vi.fn(),
+  // The real owner-aware quota gate, for the tests that pin which counter it reads.
+  actualCheckForOwner: undefined as unknown as (...args: unknown[]) => Promise<void>,
   userSave: vi.fn(),
   removeFileFromLake: vi.fn(),
   recordLakeMembershipChange: vi.fn(),
@@ -82,11 +86,22 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: { findById: h.userFindById },
+  organizationRepository: {
+    findById: (id: string) => h.orgFindById(id),
+    incrementCurrentStorage: h.incrementCurrentStorage,
+  },
+  // Awaitable directly (the handler's own load) or via .session() (the refund inside a transaction).
+  User: {
+    findById: (id: string) => ({
+      then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+        h.userFindById(id).then(resolve, reject),
+      session: () => h.userFindById(id),
+    }),
+  },
   changeStorageSize: h.changeStorageSize,
   // The real one gives the quota read-modify-write conflict-checked isolation; here it just runs the
   // body, so the assertions are about WHICH document gets read and when.
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => fn('session'),
   // Backing stores the admission contract's enforcement lever (#1680) resolves from.
   adminSettingsRepository: { findAll: vi.fn(), findBySettingNames: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
@@ -130,10 +145,11 @@ vi.mock('@bike4mind/database', () => ({
 // real class so the door's own `instanceof` check still matches what these tests throw.
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
+  h.actualCheckForOwner = actual.checkStorageLimitForOwner as typeof h.actualCheckForOwner;
   return {
     ...actual,
     getSettingsMap: h.getSettingsMap,
-    checkStorageLimit: h.checkStorageLimit,
+    checkStorageLimitForOwner: h.checkStorageLimit,
   };
 });
 vi.mock('@bike4mind/services', () => ({
@@ -223,6 +239,8 @@ import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
+let deletedRowStamp: { organizationId?: string } = { organizationId: 'org1' };
+
 const run = (body: Record<string, unknown> = { connectionId: 'conn1' }, context: unknown = {}) =>
   dispatch(makeEvent(body), context as never, logger);
 
@@ -306,10 +324,14 @@ describe('driveLakeIngest consumer', () => {
     h.pushTagsByFabFileId.mockImplementation(async () => void h.timeline.push('push-tags'));
     h.userSave.mockResolvedValue(undefined);
     h.changeStorageSize.mockResolvedValue(undefined);
+    h.incrementCurrentStorage.mockResolvedValue(undefined);
+    h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+    deletedRowStamp = { organizationId: 'org1' };
     // The default retire outcome: a full delete that reclaims the stale copy's bytes.
     h.deleteFabFile.mockImplementation(async (_userId, params, adapter) => {
       h.timeline.push(`delete:${params.id}`);
-      await adapter.onDeleteComplete?.({ id: params.id }, 100);
+      // An org lake's rows are stamped with, and refunded to, the lake's org.
+      await adapter.onDeleteComplete?.({ id: params.id, userId: _userId, ...deletedRowStamp }, 100);
       return { action: 'deleted' };
     });
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
@@ -547,8 +569,12 @@ describe('driveLakeIngest consumer', () => {
 
     await run();
 
-    // Checked against the USER, not an org id/lookup - pins the user-scoped gate from change 1.
-    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 10);
+    // Checked against the lake's org (the file's owner-to-be), with the connecting user as the fallback.
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org1', user: expect.objectContaining({ id: 'user1' }) }),
+      10,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
     // The refused file is never uploaded or persisted as a FabFile - only the accepted one is.
     expect(h.upload).toHaveBeenCalledTimes(1);
@@ -570,10 +596,20 @@ describe('driveLakeIngest consumer', () => {
 
     await run();
 
-    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'user1' }), 600);
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ organizationId: 'org1' }),
+      600,
+      expect.any(Function)
+    );
     // 600 already accepted plus this file's 500 - refused only because of the accumulator, since
     // 500 alone is well under the 1000 quota used by the mock above.
-    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'user1' }), 1100);
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ organizationId: 'org1' }),
+      1100,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-2');
     expect(h.upload).toHaveBeenCalledTimes(1);
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
@@ -589,13 +625,29 @@ describe('driveLakeIngest consumer', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
-  it('rethrows a plain BadRequestError from the quota check rather than recording a quota skip', async () => {
+  it('rethrows a non-quota error from the org quota check rather than recording a quota skip', async () => {
     h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
-    h.checkStorageLimit.mockRejectedValueOnce(new BadRequestError('Organization not found'));
+    h.checkStorageLimit.mockRejectedValueOnce(new Error('connection reset'));
 
-    await expect(run()).rejects.toThrow('Organization not found');
+    await expect(run()).rejects.toThrow('connection reset');
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file at the lake's ORG limit, reading the org counter and not the user's", async () => {
+    h.checkStorageLimit.mockImplementation(h.actualCheckForOwner);
+    // A zero-byte org limit refuses everything; the user's own limit is the roomy default, so only an
+    // org-aware gate can refuse.
+    h.orgFindById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 0 });
+    h.userFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0, save: h.userSave }));
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes(10));
+
+    await run();
+
+    expect(h.orgFindById).toHaveBeenCalledWith('org1');
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
     expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
@@ -631,7 +683,11 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     // Without the 100-byte credit this would be called with 300, which the mock above refuses.
-    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 200);
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org1' }),
+      200,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalledWith('batch1', 'd2');
     expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
   });
@@ -699,8 +755,8 @@ describe('driveLakeIngest consumer', () => {
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
     expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-old' }, expect.anything());
     // Reclaimed bytes come off the retired row's own owner.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
-    expect(h.userSave).toHaveBeenCalledTimes(1);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
   });
@@ -772,6 +828,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
     // Nothing is carried over either: the copy survives holding its own links and tags, so attaching
     // the replacement alongside it would put the same document in a notebook twice.
     expect(h.sessionUpdate).not.toHaveBeenCalled();
@@ -809,6 +866,7 @@ describe('driveLakeIngest consumer', () => {
 
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -846,6 +904,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
     // Same as the other-lake branch: the copy survives holding its own links and tags, so carrying
     // them onto the replacement would put the same document in a notebook twice.
     expect(h.sessionUpdate).not.toHaveBeenCalled();
@@ -916,7 +975,7 @@ describe('driveLakeIngest consumer', () => {
     // Nothing was edited, so no re-ingest - and the "nothing to ingest" exit still settles what the
     // duplicate retire changed: the reclaimed bytes and the lake's stats.
     expect(h.batchCreate).not.toHaveBeenCalled();
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 
@@ -1045,7 +1104,7 @@ describe('driveLakeIngest consumer', () => {
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
     expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d2' }, expect.anything());
     // Reclaimed bytes come off the removed row's own owner.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
@@ -1071,6 +1130,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('only unpicks a removed file that another lake still holds', async () => {
@@ -2101,6 +2161,22 @@ describe('driveLakeIngest consumer', () => {
       expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
     });
 
+    it("gates a personal lake's files on the connecting user's quota, never an org's", async () => {
+      h.connFindById.mockResolvedValue(personalConnection('creator1'));
+      h.lakeFindById.mockResolvedValue(personalLake('creator1'));
+      h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.checkStorageLimit).toHaveBeenCalledWith(
+        { user: expect.objectContaining({ id: 'creator1' }), organizationId: undefined },
+        10,
+        expect.any(Function)
+      );
+      expect(h.orgFindById).not.toHaveBeenCalled();
+    });
+
     it("drops user A's personal connection bound to user B's personal lake", async () => {
       h.connFindById.mockResolvedValue(personalConnection('alice'));
       h.lakeFindById.mockResolvedValue(personalLake('bob'));
@@ -2196,17 +2272,56 @@ describe('driveLakeIngest consumer', () => {
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', 's3 blip');
     // The `finally` still deducts what d1's committed delete gave back: the SQS retry re-walks and
     // never sees that copy again, so an un-flushed deduction would bill those bytes forever.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     // ...and still recomputes: the retry sees a folder whose retires are already applied, finds
     // nothing to do, and would skip the recompute too, leaving fileCount overstated indefinitely.
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 
-  it('deducts reclaimed storage from a user re-read AFTER the uploads, not the one loaded up front (B2)', async () => {
+  it("refunds an org lake's reclaimed bytes to the org counter atomically, never through a user document", async () => {
+    // The org counter moves by $inc, so unlike a user's absolute save() it cannot clobber the run's
+    // own upload increments, and the refund needs no user load beyond the up-front ability check.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        userId: 'user1',
+        organizationId: 'org1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'lake-tag' }],
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.timeline).toEqual(['user-load:user1', 'upload', 'push-tags', 'delete:ff-old']);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('deducts a personal lake reclaim from a user re-read AFTER the uploads, not the one loaded up front (B2)', async () => {
     // changeStorageSize mutates in memory and save() writes an ABSOLUTE currentStorageSize. Every
     // storage.upload in the loop fires objectCreated, which loads and saves its OWN copy of the same
     // user, so deducting against the document read at the top of the handler would overwrite the whole
     // run's upload increments with a value computed before any of them happened.
+    deletedRowStamp = {};
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'user1',
+      driveFolderId: 'FOLDER',
+    });
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      status: 'active',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'user1',
+    });
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
     ]);
@@ -2223,9 +2338,10 @@ describe('driveLakeIngest consumer', () => {
     // ...and it is genuinely the LATER document that gets mutated, not the one from the first load.
     const deducted = h.changeStorageSize.mock.calls[0][0];
     expect(deducted.loadedAt).toBe(5);
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
-  it('deletes as the retired row OWN owner and refunds that user, not whoever reconnected (B3)', async () => {
+  it('refunds the retired row OWN owner, not whoever reconnected (B3)', async () => {
     // A reconnect re-stamps connectedBy (drive-sync.ts), after which that user owns none of the rows
     // already ingested. Running the delete as them would either deny - leaving an orphan FabFile plus
     // its chunks and S3 object per edit, with pre-edit content still retrievable - or take
@@ -2249,9 +2365,34 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     expect(h.deleteFabFile).toHaveBeenCalledWith('alice', { id: 'ff-old' }, expect.anything());
-    // The bytes go back to the owner they were counted against, not to the reconnector.
+    // The bytes go back to the pool they were counted against (the lake's org), not to the reconnector
+    // or the uploader.
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it("refunds a personal-owned retired row to its uploader even when the lake is the reconnector's", async () => {
+    deletedRowStamp = {};
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'bob',
+      organizationId: 'org1',
+      driveFolderId: 'FOLDER',
+    });
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      { id: 'ff-old', driveFileId: 'd1', userId: 'alice', driveMd5Checksum: 'OLD', tags: [{ name: 'lake-tag' }] },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'alice' }), -100);
     expect(h.changeStorageSize).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'bob' }), expect.anything());
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('leaves a copy unpicked rather than failing the run when its owner no longer exists', async () => {
@@ -2392,7 +2533,7 @@ describe('driveLakeIngest consumer', () => {
     await expect(run()).rejects.toThrow('mongo blip');
 
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 

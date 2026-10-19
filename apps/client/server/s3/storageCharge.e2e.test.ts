@@ -9,6 +9,7 @@ import {
 import { isStorageCharged, STORAGE_CHARGE_STAMP_CUTOFF, STORAGE_CHARGED_FILTER } from '@bike4mind/common';
 import {
   FabFile,
+  Organization,
   fabFileChunkRepository,
   fabFileRepository,
   Session,
@@ -62,6 +63,7 @@ afterEach(async () => {
     FabFile.deleteMany({}, { hardDelete: true }),
     Session.deleteMany({}, { hardDelete: true }),
     User.collection.deleteMany({}),
+    Organization.collection.deleteMany({}),
   ]);
 });
 
@@ -147,7 +149,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 2));
 const s3Event = async (fabFileId: unknown, eventTime: Date, size: number) => {
   const before = await FabFile.collection.findOne({ _id: new mongoose.Types.ObjectId(String(fabFileId)) });
   await FabFile.collection.updateOne({ _id: before?._id }, { $set: { status: 'complete' } });
-  const charged = await claimStorageCharge(fabFileId as string, eventTime, size, before?.status);
+  const charged = (await claimStorageCharge(fabFileId as string, eventTime, size, before?.status))?.delta ?? null;
   if (charged) await userRepository.incrementCurrentStorage(USER, charged);
   return charged;
 };
@@ -387,7 +389,7 @@ describe('notebook import storage charge', () => {
     ]);
     const uploadedAt = new Date();
 
-    expect(await claimStorageCharge(row._id, uploadedAt, 5, 'pending')).toBe(5);
+    expect((await claimStorageCharge(row._id, uploadedAt, 5, 'pending'))?.delta).toBe(5);
     expect(await claimStorageCharge(row._id, uploadedAt, 5, 'pending')).toBeNull();
   });
 
@@ -503,5 +505,50 @@ describe('chargeUploadedObject', () => {
     await deliver(row._id, -BASELINE_BYTES * 2, new Date());
 
     expect(await storedSize()).toBe(0);
+  });
+
+  describe('an org-stamped row', () => {
+    const ORG_ID = new mongoose.Types.ObjectId();
+    const ORG_BASELINE_BYTES = 50_000;
+    const orgStoredSize = async () => (await Organization.collection.findOne({ _id: ORG_ID }))?.currentStorageSize;
+
+    const createOrgRow = async () =>
+      (
+        await FabFile.create([
+          {
+            userId: USER,
+            organizationId: ORG_ID.toString(),
+            fileName: 'o',
+            mimeType: 'text/plain',
+            fileSize: 1,
+            filePath: 'uploads/o',
+            type: 'FILE',
+          },
+        ])
+      )[0];
+
+    it("charges the org's counter and leaves the uploader's untouched", async () => {
+      await seedUser();
+      await Organization.collection.insertOne({ _id: ORG_ID, currentStorageSize: ORG_BASELINE_BYTES });
+      const row = await createOrgRow();
+
+      await deliver(row._id, 5_000, new Date());
+
+      expect(await orgStoredSize()).toBe(ORG_BASELINE_BYTES + 5_000);
+      expect(await storedSize()).toBe(BASELINE_BYTES);
+    });
+
+    it('charges a redelivered event to the org once', async () => {
+      await seedUser();
+      await Organization.collection.insertOne({ _id: ORG_ID, currentStorageSize: ORG_BASELINE_BYTES });
+      const row = await createOrgRow();
+      const uploadedAt = new Date();
+
+      await deliver(row._id, 5_000, uploadedAt);
+      await deliver(row._id, 5_000, uploadedAt);
+
+      expect(await orgStoredSize()).toBe(ORG_BASELINE_BYTES + 5_000);
+      expect(await storedSize()).toBe(BASELINE_BYTES);
+    });
   });
 });

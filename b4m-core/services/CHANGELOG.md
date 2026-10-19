@@ -1,5 +1,45 @@
 # @bike4mind/services
 
+## 18.0.0
+
+### Major Changes
+
+- [#4937](https://github.com/Bike4Mind/bike4mind/pull/4937) [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c) Thanks [@onoya](https://github.com/onoya)! - bill org-owned file storage to the organization
+
+### Minor Changes
+
+- [#4654](https://github.com/Bike4Mind/bike4mind/pull/4654) [`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498) Thanks [@jebie](https://github.com/jebie)! - native tool search on direct Anthropic
+
+- [#4970](https://github.com/Bike4Mind/bike4mind/pull/4970) [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5) Thanks [@erikbethke](https://github.com/erikbethke)! - let users hide workspace surfaces they don't use
+
+### Patch Changes
+
+- [#4764](https://github.com/Bike4Mind/bike4mind/pull/4764) [`5ea1b6b`](https://github.com/Bike4Mind/bike4mind/commit/5ea1b6b9dfa604c2f869860febdfd83f7c6bf837) Thanks [@onoya](https://github.com/onoya)! - list only the caller's own speech and sound-effect generations
+
+- [#4973](https://github.com/Bike4Mind/bike4mind/pull/4973) [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661) Thanks [@erikbethke](https://github.com/erikbethke)! - keep the storage code on a share editor's quota refusal, without the owner's counts
+
+- [#4975](https://github.com/Bike4Mind/bike4mind/pull/4975) [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d) Thanks [@erikbethke](https://github.com/erikbethke)! - narrated tool-call strip on cut-off replies and notice count
+
+- [#4978](https://github.com/Bike4Mind/bike4mind/pull/4978) [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41) Thanks [@erikbethke](https://github.com/erikbethke)! - persist and show a warning when a re-crawl keeps its previous copy for storage quota
+
+- [#4988](https://github.com/Bike4Mind/bike4mind/pull/4988) [`e3663a6`](https://github.com/Bike4Mind/bike4mind/commit/e3663a6252e51a7ef27e90be92e28d785d85964e) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - count tool schemas in the credit reservation
+
+- [#4989](https://github.com/Bike4Mind/bike4mind/pull/4989) [`6a2291f`](https://github.com/Bike4Mind/bike4mind/commit/6a2291f29592aff2a57f1d48b88d105b90d10a7b) Thanks [@onoya](https://github.com/onoya)! - derive tool policy from per-tool descriptors in a tool gateway
+
+- [#4991](https://github.com/Bike4Mind/bike4mind/pull/4991) [`06f2578`](https://github.com/Bike4Mind/bike4mind/commit/06f2578e3753ee70ad8df59b3b3ed16fd6c754a1) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - extract the CLI tool search into b4m-core/agents
+
+- [#5005](https://github.com/Bike4Mind/bike4mind/pull/5005) [`b5d867e`](https://github.com/Bike4Mind/bike4mind/commit/b5d867e9db4783f5100564f60f122e1fdc252d69) Thanks [@onoya](https://github.com/onoya)! - hide personal prompts from API keys on the by-id read
+
+- Updated dependencies [[`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498), [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c), [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f), [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5), [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661), [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d), [`e774b4a`](https://github.com/Bike4Mind/bike4mind/commit/e774b4ab69877762a15cb7ac59edd082fdc93320), [`d42b0c6`](https://github.com/Bike4Mind/bike4mind/commit/d42b0c62ef7e22ea0c63cffb66ed05402a7d9178), [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41), [`f33b246`](https://github.com/Bike4Mind/bike4mind/commit/f33b246c31f172ec274d965e4950856490f5c45b), [`d83ce3a`](https://github.com/Bike4Mind/bike4mind/commit/d83ce3a92238e271112af4a0546886ccdcfa27a6), [`06f2578`](https://github.com/Bike4Mind/bike4mind/commit/06f2578e3753ee70ad8df59b3b3ed16fd6c754a1), [`9921022`](https://github.com/Bike4Mind/bike4mind/commit/9921022be285f866f81fe6c4a5b552595880ec50)]:
+  - @bike4mind/common@16.0.0
+  - @bike4mind/llm-adapters@1.2.0
+  - @bike4mind/utils@8.0.0
+  - @bike4mind/fab-pipeline@2.1.3
+  - @bike4mind/agents@1.2.3
+  - @bike4mind/auth@1.1.3
+  - @bike4mind/db-core@0.8.3
+  - @bike4mind/mcp@2.1.3
+
 ## 17.1.1
 
 ### Patch Changes

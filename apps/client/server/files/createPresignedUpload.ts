@@ -14,9 +14,15 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import {
+  checkStorageLimitForOwner,
+  getSettingsMap,
+  getSettingsValue,
+  resolveSupportedMimeType,
+} from '@bike4mind/utils';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -82,8 +88,6 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
     });
   }
 
-  await checkStorageLimit(req.user, data.fileSize);
-
   // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
   // presign door can't be used to inject files into a lake the caller only reads. Full actor
   // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
@@ -111,6 +115,13 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // fabFileService.createFabFile door that gates the static-registry namespace centrally -
   // so it needs its own check, same as the meta-tag one above.
   dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames);
+
+  // Same owner rule as fabFileService.createFabFile, which this direct create bypasses. Resolved
+  // before the quota gate so the bytes are checked against the pool they will be billed to.
+  const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+  await checkStorageLimitForOwner({ user: req.user, organizationId: ownerOrganizationId }, data.fileSize, id =>
+    organizationRepository.findById(id)
+  );
 
   // A file joining a lake must also land under that lake's content prefix, or it is
   // invisible to tag-counts and to the Explorer's tag tree.
@@ -151,9 +162,6 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       IfNoneMatch: '*',
     }),
   });
-
-  // Same owner rule as fabFileService.createFabFile, which this direct create bypasses.
-  const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
 
   // Create File metadata, status will be set to `pending` by default
   const file = await createFabFile(

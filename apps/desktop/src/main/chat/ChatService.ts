@@ -43,7 +43,11 @@ import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
-import { REQUEST_DIRECTORY_TOOL_NAME, type DirectoryRequestOutcome } from '@shared/directoryRequest';
+import {
+  REQUEST_DIRECTORY_TOOL_NAME,
+  type DirectoryRequestOutcome,
+  type ShareDirectoryResult,
+} from '@shared/directoryRequest';
 import {
   isMcpConfigToolName,
   MCP_ADD_SERVER_TOOL_NAME,
@@ -121,7 +125,7 @@ import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
-import { inspectDirectoryRequest } from './tools/requestDirectoryTool';
+import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
@@ -504,6 +508,18 @@ export class ChatService {
 
   /** Sessions whose running turn auto-fix started; their tool calls go through autoFixToolRefusal. */
   private readonly autoFixTurns = new Set<string>();
+
+  /**
+   * Spawned sessions whose running turn the user typed, so someone is there to answer a card.
+   * A main session always has one; see `runReply`.
+   */
+  private readonly attendedTurns = new Set<string>();
+
+  /**
+   * Bumped whenever a session's own folders change, so a running turn re-resolves its roots
+   * before its next tool call instead of holding the set it started with. See `refreshScope`.
+   */
+  private readonly scopeVersions = new Map<string, number>();
 
   /**
    * Sends being accepted, per session. A send awaits the store and the model catalog before its
@@ -941,13 +957,10 @@ export class ChatService {
         name,
         onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
       });
-      const moved: ChatProject = {
-        ...project,
-        workspaceBranch: resolved.branch,
-        workingDirectory: resolved.workingDirectory,
-      };
-      await this.deps.store.setProject(session.id, moved);
-      session.project = moved;
+      const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
+      await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      // Re-read: a folder shared while the worktree was being cut lives in the store, not in `project`.
+      session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, ...workspace };
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
       return null;
     } catch (err) {
@@ -1024,10 +1037,9 @@ export class ChatService {
         );
       }
     }
-    const repaired = { ...project, workingDirectory };
-    await this.deps.store.setProject(session.id, repaired);
-    session.project = repaired;
-    return repaired;
+    await this.deps.store.updateProjectWorkspace(session.id, { workingDirectory });
+    session.project = (await this.deps.store.get(session.id))?.project ?? { ...project, workingDirectory };
+    return session.project;
   }
 
   /**
@@ -1068,12 +1080,52 @@ export class ChatService {
     return this.deps.store.setApprovalMode(sessionId, mode);
   }
 
-  addContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.deps.store.addContextDirectory(sessionId, resolve(directory));
+  /**
+   * Share a folder the user named - from the chip's picker or `/add-dir` - with this conversation.
+   *
+   * Any time, a running turn included: only the folder, branch and worktree decide where commands
+   * run, and those stay locked once the session has run (see describeChipRow). A context folder is
+   * one more root, which the turn in flight picks up before its next tool call (`refreshScope`).
+   * The checks are the card's, and the grant is the card's (`grantSessionDirectory`), so no way in
+   * can share what another would refuse.
+   */
+  async shareDirectory(sessionId: string, requested: string): Promise<ShareDirectoryResult> {
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { status: 'refused', error: 'That conversation no longer exists.' };
+    const scope = await this.resolveToolScope(session);
+    const inspection = await inspectDirectory(requested.trim(), {
+      roots: scope.roots,
+      ...(scope.workingDirectory ? { workingDirectory: scope.workingDirectory } : {}),
+      ...(this.deps.protectedPaths ? { protectedPaths: this.deps.protectedPaths } : {}),
+      declined: [],
+    });
+    if (inspection.kind === 'refused') return { status: 'refused', error: inspection.message };
+    if (inspection.kind === 'inside') return { status: 'already', path: inspection.path };
+    const granted = await this.grantSessionDirectory(sessionId, inspection.path);
+    if (!granted.ok) {
+      return { status: 'refused', error: `${inspection.path} changed or disappeared before it could be added.` };
+    }
+    return {
+      status: 'added',
+      path: inspection.path,
+      session: granted.session,
+      ...(inspection.warning ? { warning: inspection.warning } : {}),
+    };
   }
 
-  removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.deps.store.removeContextDirectory(sessionId, directory);
+  /** Also any time: the running turn drops the folder before its next tool call. */
+  async removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.removeContextDirectory(sessionId, directory);
+    if (updated) this.bumpScope(sessionId);
+    return updated;
+  }
+
+  private scopeVersion(sessionId: string): number {
+    return this.scopeVersions.get(sessionId) ?? 0;
+  }
+
+  private bumpScope(sessionId: string): void {
+    this.scopeVersions.set(sessionId, this.scopeVersion(sessionId) + 1);
   }
 
   /**
@@ -1174,6 +1226,7 @@ export class ChatService {
     this.deps.approvals?.forgetSession(sessionId);
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
+    this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
@@ -1460,6 +1513,9 @@ export class ChatService {
 
     if (released?.automatic) this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
+    // A relay, an auto-fix and a spawn's seed prompt all start a turn nobody typed here.
+    if (!released?.relay && !released?.automatic && seedHops === undefined) this.attendedTurns.add(sessionId);
+    else this.attendedTurns.delete(sessionId);
     const replyId = this.startReply(session, api, undefined, released?.relay?.hops ?? seedHops ?? 0);
 
     // After the reply is in flight, and never awaited: a first answer that waited on a title
@@ -1504,6 +1560,8 @@ export class ChatService {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
+    // Reached only from the Continue button, so whoever clicked it is there to answer a card.
+    this.attendedTurns.add(sessionId);
     const replyId = this.startReply(session, api, {
       id: last.id,
       content: last.content,
@@ -1721,6 +1779,7 @@ export class ChatService {
         if (this.active.get(sessionId) !== controller) return;
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
+        this.attendedTurns.delete(sessionId);
         this.deps.activity?.replyEnded(sessionId);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
@@ -1872,8 +1931,11 @@ export class ChatService {
     const produced: RawRound[] = [];
 
     try {
+      // Read before any await: a folder changed while the config loads must still reach the first refresh.
+      let scopeVersion = this.scopeVersion(sessionId);
       const serverConfig = await this.resolveServerConfig(api);
-      // Re-resolved after a round in which the user added a folder; see DirectoryTurn.
+      // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
+      const ask = !session.origin || this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -1949,8 +2011,9 @@ export class ChatService {
           memory: !!memory,
           skills: !!skills,
           web: true,
-          // A spawned session has no one watching it to answer; see ToolDefinition.interactive.
-          ask: !session.origin,
+          // See ToolDefinition.interactive.
+          ask,
+          suggestions: !session.origin,
           mcp: mcpTools.map(binding => binding.definition.schema),
           mcpServers: !!this.deps.mcp,
         });
@@ -1960,7 +2023,7 @@ export class ChatService {
       // it carries on.
       const directoryTurn: DirectoryTurn = {
         declined: [],
-        granted: false,
+        granted: [],
         ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
       };
       const project = session.mode === 'code' ? session.project : undefined;
@@ -1989,7 +2052,7 @@ export class ChatService {
           patchEdits,
           !!memory,
           skillsSection,
-          !session.origin,
+          ask,
           session.model,
           true
         );
@@ -2130,40 +2193,72 @@ export class ChatService {
         }
 
         thinking = turnThinking;
-        const settled = await this.runTools(
-          requested,
-          {
-            roots,
-            workingDirectory,
-            media,
-            host,
-            explore,
-            browser,
-            memory,
-            skills,
-            web,
-            patchEdits,
-            ask: !session.origin,
-            title: session.title,
-            directories: directoryTurn,
-          },
-          sessionId,
-          replyId,
-          controller.signal
-        );
+        // Twice a round: a folder shared or removed while the model was writing applies to the
+        // calls it just asked for, and one changed while they ran applies to the next round's.
+        const refreshScope = async (): Promise<RootChange[]> => {
+          const version = this.scopeVersion(sessionId);
+          if (version === scopeVersion) return [];
+          const current = await this.deps.store.get(sessionId);
+          if (!current) return [];
+          scopeVersion = version;
+          const before = roots;
+          ({ roots, workingDirectory } = await this.resolveToolScope(current));
+          explore = exploreFor(roots);
+          tools = toolsFor(roots);
+          return describeRootChange(before, roots);
+        };
+        const baseBefore = roots[0];
+        const changedBefore = await refreshScope();
+        // With no working directory a command defaults to the first root, so a call the model wrote
+        // for the old first root must not run in whichever folder is now first.
+        const baseMoved = !workingDirectory && baseBefore !== undefined && roots[0] !== baseBefore;
+        const settled = baseMoved
+          ? requested.map((request): ChatToolCall => {
+              const call: ChatToolCall = {
+                id: request.id ?? randomUUID(),
+                name: request.name,
+                input: parseArguments(request.arguments),
+                status: 'running',
+              };
+              const refused: ChatToolCall = {
+                ...call,
+                status: 'denied',
+                error: `Not run: the shared folders changed while this call was being written, and ${baseBefore} was the folder it would have run in. Ask again.`,
+              };
+              this.emit({ type: 'tool-start', sessionId, messageId: replyId, call });
+              this.emit({ type: 'tool-end', sessionId, messageId: replyId, call: refused });
+              return refused;
+            })
+          : await this.runTools(
+              requested,
+              {
+                roots,
+                workingDirectory,
+                media,
+                host,
+                explore,
+                browser,
+                memory,
+                skills,
+                web,
+                patchEdits,
+                ask,
+                title: session.title,
+                directories: directoryTurn,
+              },
+              sessionId,
+              replyId,
+              controller.signal
+            );
         toolCalls.push(...settled);
 
-        // The system message is left as it was, so the cached prefix survives: the tool result
-        // already told the model the folder is shared, and the next turn's prompt lists it.
-        if (directoryTurn.granted) {
-          directoryTurn.granted = false;
-          const current = await this.deps.store.get(sessionId);
-          if (current) {
-            ({ roots, workingDirectory } = await this.resolveToolScope(current));
-            explore = exploreFor(roots);
-            tools = toolsFor(roots);
-          }
-        }
+        // The system message is left as it was, so the cached prefix survives: a card's own result
+        // tells the model about its grant, the note below covers the rest, and the next turn's
+        // prompt lists the folders as they are.
+        const explained = directoryTurn.granted.splice(0);
+        const rootNote = [...changedBefore, ...(await refreshScope())]
+          .filter(change => !(change.shared && explained.includes(change.path)))
+          .map(change => `  ${change.shared ? 'now shared' : 'no longer shared'}: ${change.path}`);
         // A server added, reconnected or switched on in this round is offered on the next one,
         // so the agent can install, connect and use it in one turn. The system message is
         // rebuilt at the same moment: the tool list sits ahead of it in the cached prefix, so
@@ -2207,6 +2302,9 @@ export class ChatService {
         );
         const lastResult = results[results.length - 1];
         if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
+        if (rootNote.length > 0 && lastResult) {
+          lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
+        }
         wire.push({ role: 'user', content: results });
         const shots = settled.flatMap(call => this.takeImages(call.id));
         if (shots.length > 0 && vision) {
@@ -2784,7 +2882,7 @@ export class ChatService {
 
       sendTo: async (targetId, message) => this.relayMessage(session, await addressable(targetId), targetId, message),
 
-      // A spawned session has nobody to click a card, so it keeps the approval-gated start.
+      // A spawned session has no suggestion tray, so it keeps the approval-gated start.
       ...(session.origin ? {} : { suggestions: this.suggestionHost(session.id, project) }),
     };
   }
@@ -3394,7 +3492,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal,
     looping: boolean,
-    directories: DirectoryTurn = { declined: [], granted: false }
+    directories: DirectoryTurn = { declined: [], granted: [] }
   ): Promise<ApprovalOutcome> {
     // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
     // full access included - can answer a folder request on the user's behalf.
@@ -3617,10 +3715,10 @@ export class ChatService {
       turn.declined.push(inspection.path);
       return { input: withOutcome({ status: 'declined' }) };
     }
-    if (!(await this.grantSessionDirectory(sessionId, inspection.path))) {
+    if (!(await this.grantSessionDirectory(sessionId, inspection.path)).ok) {
       return settle('error', `${inspection.path} changed or disappeared before it could be added; it was not shared.`);
     }
-    turn.granted = true;
+    turn.granted.push(inspection.path);
     return { input: withOutcome({ status: 'granted' }) };
   }
 
@@ -3728,17 +3826,22 @@ export class ChatService {
    * session's own grants otherwise. Re-checked first, so a folder swapped for a symlink between
    * the card and the click is not granted under the name the user saw.
    */
-  private async grantSessionDirectory(sessionId: string, directory: string): Promise<boolean> {
+  private async grantSessionDirectory(
+    sessionId: string,
+    directory: string
+  ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;
-    if (real !== directory || !kind?.isDirectory()) return false;
+    if (real !== directory || !kind?.isDirectory()) return { ok: false };
     const session = await this.deps.store.get(sessionId);
-    if (!session) return false;
+    if (!session) return { ok: false };
     const updated =
       session.mode === 'code' && session.project
         ? await this.deps.store.addContextDirectory(sessionId, directory)
         : await this.deps.store.addGrantedDirectory(sessionId, directory);
-    return updated !== null;
+    if (!updated) return { ok: false };
+    this.bumpScope(sessionId);
+    return { ok: true, session: updated };
   }
 
   /**
@@ -4109,9 +4212,9 @@ export function buildSystemMessage(
               'tell the user you have no filesystem access, and do not ask them to share it themselves.',
             ]
           : [
-              'If asked about local files, say plainly that you have no access and ask the user to give',
-              'this conversation a folder: a Code session takes one from the folder chip above the',
-              'message box, and the sidebar card shares one with every conversation.',
+              // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+              'If asked about local files, say plainly that you have no access and ask the user to share',
+              'the folder by typing /add-dir followed by its path in this conversation.',
             ]),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
@@ -4148,8 +4251,9 @@ export function buildSystemMessage(
             'never ask them to share it themselves.',
           ]
         : [
-            'if you need one, ask the user to share it - from the chip row above the message box in a',
-            'Code session, or the sidebar card in any conversation.',
+            // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+            'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
+            'path in this conversation. No typed message grants access on its own.',
           ]),
       'Bash commands run as the user with their full environment, not inside those folders: git,',
       'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
@@ -4510,6 +4614,18 @@ function roundSignature(requested: readonly RequestedTool[]): string {
   return requested.map(tool => `${tool.name}(${tool.arguments ?? ''})`).join('\n');
 }
 
+interface RootChange {
+  path: string;
+  shared: boolean;
+}
+
+function describeRootChange(before: readonly string[], after: readonly string[]): RootChange[] {
+  return [
+    ...after.filter(root => !before.includes(root)).map(path => ({ path, shared: true })),
+    ...before.filter(root => !after.includes(root)).map(path => ({ path, shared: false })),
+  ];
+}
+
 /**
  * Hang a line on the newest user turn, in place.
  *
@@ -4691,12 +4807,12 @@ interface ApprovalOutcome {
 
 /**
  * One reply's folder requests. `declined` keeps a "Not now" from being asked again in the same
- * turn; `granted` tells the loop to re-resolve roots before its next round, so the calls that
- * follow a grant can use it.
+ * turn. Roots follow any grant through `scopeVersions`, not through this.
  */
 interface DirectoryTurn {
   declined: string[];
-  granted: boolean;
+  /** Folders this round's cards granted; their own results already told the model. */
+  granted: string[];
   /**
    * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
    * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.

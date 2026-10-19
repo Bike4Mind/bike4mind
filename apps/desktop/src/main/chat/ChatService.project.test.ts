@@ -504,7 +504,7 @@ describe('ChatService.updateProject', () => {
     const first = await repository('epsilon');
     const second = await repository('zeta');
     const id = await codeSession(first.main);
-    await service.addContextDirectory(id, first.container);
+    await service.shareDirectory(id, first.container);
 
     const result = await service.updateProject({ sessionId: id, directory: second.main });
 

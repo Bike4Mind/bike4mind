@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { KnowledgeType, StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
+  findOrganization: vi.fn(),
   assertCanWriteDataLakeTags: vi.fn(),
   reconcileDataLakeFallbackTags: vi.fn(),
 }));
@@ -14,6 +15,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/put') }));
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: h.findOrganization },
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   dataLakeBatchRepository: {},
   dataLakeRepository: {},
@@ -59,6 +61,7 @@ describe('createPresignedUpload - owning organization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.createFabFile.mockResolvedValue({ id: 'f1' });
+    h.findOrganization.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
     h.reconcileDataLakeFallbackTags.mockImplementation(async (tags: unknown) => tags);
   });
 
@@ -76,5 +79,35 @@ describe('createPresignedUpload - owning organization', () => {
     await createPresignedUpload(req, upload() as never);
 
     expect(created()).not.toHaveProperty('organizationId');
+  });
+});
+
+describe('createPresignedUpload - quota owner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockResolvedValue({ id: 'f1' });
+    h.reconcileDataLakeFallbackTags.mockImplementation(async (tags: unknown) => tags);
+  });
+
+  it('checks an org-lake upload against the lake org and refuses it at the org limit', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([
+      { id: 'lake-1', datalakeTag: 'datalake:team', organizationId: 'org-1', createdAt: new Date() },
+    ]);
+    // 1 MB limit, already full: only the org pool can refuse this 10-byte upload (the user is empty).
+    h.findOrganization.mockResolvedValue({ id: 'org-1', storageLimit: 1, currentStorageSize: 1024 * 1024 });
+
+    await expect(
+      createPresignedUpload(req, upload([{ name: 'datalake:team', strength: 1 }]) as never)
+    ).rejects.toBeInstanceOf(StorageLimitError);
+
+    expect(h.findOrganization).toHaveBeenCalledWith('org-1');
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('never reads an org for an upload outside any org lake', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    await createPresignedUpload(req, upload() as never);
+
+    expect(h.findOrganization).not.toHaveBeenCalled();
   });
 });

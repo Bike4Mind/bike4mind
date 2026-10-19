@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes, settingsMap } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  type IOrganizationDocument,
+  isStorageLimitError,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+  settingsMap,
+} from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
@@ -656,6 +663,7 @@ describe('createFabFile - owning organization', () => {
       db: {
         // any: only the fields prepareFabFile reads are stubbed.
         users: { findById: vi.fn().mockResolvedValue({ id: 'u1' } as any) },
+        organizations: { findById: vi.fn().mockResolvedValue({ id: 'org-1', currentStorageSize: 0 } as any) },
         fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
         adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
         dataLakes: {
@@ -685,6 +693,22 @@ describe('createFabFile - owning organization', () => {
     expect(created).not.toHaveProperty('organizationId');
   });
 
+  it('gates an upload into an org lake on the org quota, not the uploader', async () => {
+    const adapters = ownerAdapters();
+    // Only the quota fields checkOrganizationStorageLimit reads are stubbed.
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 1_000_000,
+    } as unknown as IOrganizationDocument);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] }, adapters)
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', owner: 'org' } });
+    expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
+  });
+
   it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
     const created = await createFabFile(
       'u1',
@@ -708,43 +732,47 @@ describe('createFabFile - organization storage limit lookup', () => {
     }
   }
 
-  const MB = 1024 * 1024;
-  const orgFile = (organizationId?: string) => ({
+  // The org is the one the file is stamped with: the org of the org lake it joins.
+  const lakeFile = (organizationId: string) => ({
     fileName: 'report.md',
     mimeType: 'text/markdown',
     fileSize: 10,
     type: KnowledgeType.TEXT,
-    ...(organizationId && { organizationId }),
+    tags: [{ name: `datalake:${organizationId}`, strength: 1 }],
   });
-  const deps = (opts: { organizations?: OrganizationsAdapter; user?: Record<string, unknown> } = {}) =>
+  const deps = () =>
     ({
       db: {
         fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
         adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
         users: {
-          findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0, ...opts.user }),
+          findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 }),
         },
-        ...(opts.organizations && { organizations: opts.organizations }),
+        organizations: new OrganizationsAdapter(),
+        dataLakes: {
+          findByDatalakeTag: vi.fn(async (tag: string) => ({
+            id: `lake-${tag}`,
+            datalakeTag: tag,
+            createdByUserId: 'u1',
+            organizationId: tag.slice('datalake:'.length),
+            createdAt: new Date('2026-01-01'),
+          })),
+          find: vi.fn().mockResolvedValue([]),
+        },
       },
       storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/x'), upload: vi.fn() },
     }) as unknown as CreateFabFileAdapters;
 
   it('looks the organization up through the adapter it was given', async () => {
-    await expect(
-      createFabFile('u1', orgFile('org-1'), deps({ organizations: new OrganizationsAdapter() }))
-    ).resolves.toMatchObject({ id: 'fab-1' });
+    await expect(createFabFile('u1', lakeFile('org-1'), deps())).resolves.toMatchObject({
+      id: 'fab-1',
+      organizationId: 'org-1',
+    });
   });
 
-  it('refuses an organization id the adapter does not find', async () => {
-    await expect(
-      createFabFile('u1', orgFile('org-missing'), deps({ organizations: new OrganizationsAdapter() }))
-    ).rejects.toThrow('Organization not found');
-  });
-
-  it('falls back to the per-user limit when no organizations adapter is wired', async () => {
-    await expect(createFabFile('u1', orgFile('org-1'), deps())).resolves.toMatchObject({ id: 'fab-1' });
-    await expect(
-      createFabFile('u1', orgFile('org-1'), deps({ user: { storageLimit: 1, currentStorageSize: 1 * MB } }))
-    ).rejects.toThrow('File size exceeds storage limit');
+  it('refuses a file whose owning organization the adapter does not find', async () => {
+    await expect(createFabFile('u1', lakeFile('org-missing'), deps())).rejects.toSatisfy(
+      error => isStorageLimitError(error) && error.info.errorCode === 'org_storage_limit_exceeded'
+    );
   });
 });

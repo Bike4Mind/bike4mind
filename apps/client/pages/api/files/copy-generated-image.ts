@@ -9,6 +9,7 @@ import {
 import {
   FabFile,
   User,
+  organizationRepository,
   withTransaction,
   adminSettingsRepository,
   dataLakeRepository,
@@ -91,6 +92,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               scopedSettings: scopedSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },
             storage: {

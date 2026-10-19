@@ -16,6 +16,8 @@ type StartLakeChatButtonProps = {
   ariaLabel?: string;
   testId: string;
   sx?: SxProps;
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. Takes precedence over onChatStarted, which is not called when this is set. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding this button handle the created session instead of navigating to the notebook. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 };
@@ -31,6 +33,7 @@ export default function StartLakeChatButton({
   ariaLabel,
   testId,
   sx,
+  startChatForLake,
   onChatStarted,
 }: StartLakeChatButtonProps) {
   const startChatWithLake = useStartChatWithLake();
@@ -42,7 +45,9 @@ export default function StartLakeChatButton({
     setDraftChatOpen(false);
     setStartingChat(true);
     try {
-      await (onChatStarted ? startChatWithLake(lake.id, { onCreated: onChatStarted }) : startChatWithLake(lake.id));
+      if (startChatForLake) await startChatForLake(lake.id);
+      else
+        await (onChatStarted ? startChatWithLake(lake.id, { onCreated: onChatStarted }) : startChatWithLake(lake.id));
     } catch (error) {
       console.error('Start chat failed for lake', lake.id, error);
       toast.error(failureMessage);

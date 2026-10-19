@@ -91,6 +91,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (!target || target.userId !== userId || target.importedFrom?.listingId !== String(listing.id)) {
         throw new NotFoundError('Imported copy not found');
       }
+      // A global copy reaches everyone, and the listing's bar can be lower than Public (an org or
+      // unlisted version auto-approves at the `review` tier). Content changes to a global skill go
+      // through `scanGlobalSkillUpdate` on PUT instead; see `globalSkillScanFor` in skillAccess.ts.
+      if ((target.isGlobalRead || target.isGlobalWrite) && !req.user!.isAdmin) {
+        throw new BadRequestError(
+          'This copy is shared with everyone, so it cannot be updated from the market. Edit it directly instead.'
+        );
+      }
       if (skillContentHash(target) !== target.importedFrom.contentHash && !body.overwrite) {
         throw new ConflictError('You edited this copy since importing it; updating will overwrite your changes', {
           code: 'local_changes',

@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
 import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
+import type { RequestHandler } from 'express';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
@@ -80,6 +81,21 @@ export async function loadMarketSettings(): Promise<MarketSettings> {
     publicMinAccountAgeDays: numericSetting(minAge, 3),
     reportAutoHideThreshold: numericSetting(hide, 3, { positive: true }),
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether an account is old enough to put content in front of everyone: publishing a Public listing
+ * (publish.ts) and saving a global skill (globalSkillUpdate.ts). Super-admins always pass.
+ */
+export function meetsPublicAccountAge(
+  user: { isAdmin?: boolean; createdAt?: Date | string },
+  settings: Pick<MarketSettings, 'publicMinAccountAgeDays'>
+): boolean {
+  if (user.isAdmin) return true;
+  const ageDays = (Date.now() - new Date(user.createdAt ?? Number.NaN).getTime()) / DAY_MS;
+  return ageDays >= settings.publicMinAccountAgeDays;
 }
 
 /** Orgs whose Organization listings the user may see: any membership, plus orgs they run. */
@@ -165,25 +181,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   disableModelInvocation: Boolean(skill.disableModelInvocation),
 });
 
-/**
- * Content identity of a skill, EXCLUDING its name: the name is the importer's slash-command handle
- * and may be changed on import to avoid a collision, which must not read as "locally modified".
- */
-export function skillContentHash(
-  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation'>
-): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        skill.description,
-        skill.body,
-        skill.argumentHint ?? '',
-        skill.allowedTools ?? [],
-        Boolean(skill.disableModelInvocation),
-      ])
-    )
-    .digest('hex');
-}
+export { skillContentHash } from './contentHash';
 
 const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const MAX_TAGS = 5;
@@ -309,3 +307,20 @@ export const submitRateLimits = () => [
     bucket: 'skill-market-submit-daily',
   }),
 ];
+
+/**
+ * Applies `submitRateLimits` from inside a handler, for a route that scans only on some requests (a
+ * global-skill save that changes content). Shares the publish buckets, so saves and submissions
+ * draw on one allowance. Throws the limiter's TooManyRequestsError when a cap is hit.
+ */
+export async function enforceSubmitRateLimits(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1]
+): Promise<void> {
+  for (const limiter of submitRateLimits()) {
+    const error = await new Promise<unknown>((resolve, reject) => {
+      Promise.resolve(limiter(req, res, resolve)).catch(reject);
+    });
+    if (error) throw error;
+  }
+}

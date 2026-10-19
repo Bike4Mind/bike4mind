@@ -10,6 +10,7 @@ import {
   lakeMembershipChangeEventRepository,
   lakeSkippedFileRepository,
   orgGoogleDriveConnectionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -17,14 +18,15 @@ import {
   KnowledgeType,
   FabFileSourceType,
   type IUserDocument,
-  driveConnectionOwnerForLake,
-  driveConnectionOwnerOf,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   isLakeIngestable,
-  isSameDriveConnectionOwner,
+  isSameLakeConnectionOwner,
   isStorageLimitError,
+  storageOwnerOf,
   type LakeSkippedFileReason,
 } from '@bike4mind/common';
-import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
 import {
@@ -578,7 +580,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // is gone for good. Tear the connection down the way the lake purge does
       // (releaseDriveConnectionForLake): releasing the claim back to 'connected' would re-poll it
       // forever and keep its globally unique driveFolderId claimed by a lake nobody can reach.
-      const retired = await releaseDriveConnection(connectionId, driveConnectionOwnerOf(connection)).catch(
+      const retired = await releaseDriveConnection(connectionId, lakeConnectionOwnerOf(connection)).catch(
         (e: unknown) => {
           logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
             connectionId,
@@ -616,11 +618,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
-    // The connect door (authorizeLakeDriveAccess) only binds a connection to a lake of the same owner -
+    // The connect door (authorizeLakeConnectorAccess) only binds a connection to a lake of the same owner -
     // the lake's org, or for a personal lake its creator. Re-checked here because the admin-actor
     // membership writes below are justified by exactly that, and a mismatched row must not ride it.
-    const connectionOwner = driveConnectionOwnerOf(connection);
-    if (!isSameDriveConnectionOwner(connectionOwner, driveConnectionOwnerForLake(lake))) {
+    const connectionOwner = lakeConnectionOwnerOf(connection);
+    if (!isSameLakeConnectionOwner(connectionOwner, lakeConnectionOwnerForLake(lake))) {
       logger.warn('[driveLakeIngest] connection owner does not match the target lake; dropping', { connectionId });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim('This Drive connection no longer matches its data lake owner. Reconnect the folder.');
@@ -1008,7 +1010,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
     // was authorized at connect time by an org owner/manager, or for a personal lake by its creator
-    // (authorizeLakeDriveAccess; the owner match above re-asserts it). Pass the resolved lake
+    // (authorizeLakeConnectorAccess; the owner match above re-asserts it). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
     // Every membership write in this handler is the Drive connector sync itself, not a person at
@@ -1249,6 +1251,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // currentStorageSize is a snapshot read once per run, so several files that each pass the
       // storage check individually would otherwise overshoot the quota together.
       let acceptedBytes = 0;
+      // An org lake's files are stamped with, and billed to, the lake's org (ingestLakeFile), so the
+      // quota gate measures that org's pool; a personal lake's measure the connecting user's.
+      const quotaOwner = { user, organizationId: lake.organizationId || undefined };
+      const reclaimOwner = storageOwnerOf({ userId: user.id, organizationId: quotaOwner.organizationId });
+      let quotaOrganizationOnce: ReturnType<typeof organizationRepository.findById> | undefined;
+      const loadQuotaOrganization = (id: string) => (quotaOrganizationOnce ??= organizationRepository.findById(id));
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -1306,14 +1314,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           continue;
         }
 
-        // Checked against the user, not the connection's org: objectCreated debits the
-        // uploading user, and this handler's own reclaim path deducts from that same counter,
-        // so an org-scoped check here could never fire.
-        // Retires so far this run are already deleted, but their bytes are only staged in the
-        // retirer until flushReclaimedStorage after the loop - credit them now.
-        const stagedReclaim = stagedReclaimFor(user.id);
+        // Checked against the file's owner-to-be (quotaOwner), the same counter objectCreated will
+        // charge and this handler's reclaim path refunds. Retires so far this run are already
+        // deleted, but their bytes are only staged in the retirer until flushReclaimedStorage after
+        // the loop - credit the ones that return to this same owner now.
+        const stagedReclaim = stagedReclaimFor(reclaimOwner);
         try {
-          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
+          await checkStorageLimitForOwner(
+            quotaOwner,
+            Math.max(0, acceptedBytes + bytes.length - stagedReclaim),
+            loadQuotaOrganization
+          );
         } catch (error) {
           if (!isStorageLimitError(error)) throw error;
           await skip(file, 'storage_limit', bytes.length);

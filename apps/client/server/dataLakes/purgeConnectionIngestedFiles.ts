@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  organizationRepository,
   sessionRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -79,6 +80,7 @@ async function sweep(
       fabFiles: fabFileRepository,
       fabFileChunks: fabFileChunkRepository,
       users: userRepository,
+      organizations: organizationRepository,
       dataLakeFindings: dataLakeFindingRepository,
       sessions: sessionRepository,
     },

@@ -4,7 +4,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { reconcileOrgSeatsFromSubscription } from '@server/services/organizationService';
 import { Resource } from 'sst';
 
@@ -35,23 +35,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     }
 
     // Only audit + notify on an actual change so a no-op reconcile does not emit a
-    // misleading ORG_SEATS_CHANGED entry or a spurious client invalidation.
+    // misleading audit entry or a spurious client invalidation.
     if (result.before !== result.after) {
-      await logAuditEvent(
-        {
-          userId: result.organization.userId,
-          action: AdminOrgAuditEvents.ORG_SEATS_CHANGED,
-          adminUserId: req.user!.id,
-          adminUsername: req.user!.username,
-          metadata: {
-            organizationId: result.organization.id,
-            seats: result.after,
-            previousSeats: result.before,
-            reconciledFrom: 'subscription',
-          },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'org.seats.changed',
+        target: { kind: 'organization', id: result.organization.id, displayName: result.organization.name },
+        summary: `reconciled seats from ${result.before} to ${result.after}`,
+        changes: [{ field: 'seats', before: result.before, after: result.after }],
+        details: { reconciledFrom: 'subscription', ownerId: result.organization.userId },
+      });
 
       await sendToClient(result.organization.userId, Resource.websocket.managementEndpoint, {
         action: 'invalidate_query',

@@ -123,6 +123,21 @@ describe('normalizeLyriaLyrics', () => {
     expect(normalizeLyriaLyrics('[[A0]]\n[:] One\n[:]\n[:] Two')).toBe('One\nTwo');
   });
 
+  it('drops filled-in line timings, and lines that hold only a timing', () => {
+    expect(normalizeLyriaLyrics('[[A0]]\n[3.4:6.9] windows down\n[7:12.25]\n[12.25:15] summer air')).toBe(
+      'windows down\nsummer air'
+    );
+  });
+
+  it('keeps bracketed text that is not a timing', () => {
+    expect(normalizeLyriaLyrics('[:] [Chorus] hold on')).toBe('[Chorus] hold on');
+  });
+
+  it('keeps a timing that is not at the start of the line', () => {
+    expect(normalizeLyriaLyrics('[:] hold on [3:4] and [:]')).toBe('hold on [3:4] and [:]');
+    expect(normalizeLyriaLyrics('hold on [3:4]')).toBe('hold on [3:4]');
+  });
+
   it('returns undefined for an instrumental or a structure with no lines', () => {
     expect(normalizeLyriaLyrics('<instrumental>')).toBeUndefined();
     expect(normalizeLyriaLyrics('[[A0]]\n[[B1]]\n[[C2]]')).toBeUndefined();

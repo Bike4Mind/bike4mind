@@ -103,6 +103,7 @@ const makeRes = () => {
 };
 const makeReq = (method: string, extra: Record<string, unknown> = {}) =>
   ({ method, query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false }, ...extra }) as never;
+const PERSONAL_LAKE = { id: 'lake1', organizationId: undefined, createdByUserId: 'u1' };
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 describe('/api/data-lakes/[id]/github-connection', () => {
@@ -122,13 +123,40 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   });
 
   describe('GET', () => {
-    it('resolves null with canManage false for a personal (org-less) lake without checking org access', async () => {
-      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    it('gives the creator of a personal (org-less) lake their connection with canManage true, without org checks', async () => {
+      h.dlFindById.mockResolvedValue({ ...PERSONAL_LAKE, datalakeTag: 'datalake:mine' });
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', connectedBy: 'u1' });
+      h.countByGitHubConnectionIdInDataLake.mockResolvedValue(3);
+      h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1', fileCount: 3 });
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      expect(json).toHaveBeenCalledWith({ connection: null, canManage: false });
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 3 }, canManage: true });
       expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
       expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    });
+
+    it('resolves null with canManage true when the creator has no connection on a personal lake', async () => {
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      h.connFindByDataLakeIdAny.mockResolvedValue(null);
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      expect(json).toHaveBeenCalledWith({ connection: null, canManage: true });
+    });
+
+    it('404s a personal lake for a non-creator, even a platform admin, before reading the connection', async () => {
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      const { res } = makeRes();
+      await expect(run(makeReq('GET', { user: { id: 'u2', isAdmin: true } }), res)).rejects.toBeInstanceOf(
+        NotFoundError
+      );
+      expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+    });
+
+    it('404s a personal lake whose connection belongs to another user (defence in depth)', async () => {
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', connectedBy: 'u2' });
+      const { res } = makeRes();
+      await expect(run(makeReq('GET'), res)).rejects.toBeInstanceOf(NotFoundError);
     });
 
     it('404s when the lake does not exist', async () => {
@@ -178,7 +206,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   describe('POST', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
-      h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: false });
+      h.resolveConnectableLake.mockResolvedValue({
+        lakeId: 'lake1',
+        owner: { kind: 'organization', organizationId: 'orgA' },
+        curated: false,
+      });
       // Records whether the re-gate ran inside the transaction, so the test can pin it there.
       h.assertLakeAccess.mockImplementation(async () => {
         h.accessInTxn = h.inTransaction;
@@ -273,7 +305,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       });
 
       it('switches a curated lake to connector-fed after the start checks pass, then returns the authorizeUrl', async () => {
-        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.resolveConnectableLake.mockResolvedValue({
+          lakeId: 'lake1',
+          owner: { kind: 'organization', organizationId: 'orgA' },
+          curated: true,
+        });
         const { res, json } = makeRes();
         await run(switchReq(), res);
         expect(h.resolveConnectableLake).toHaveBeenCalledWith(expect.anything(), 'lake1', { allowCurated: true });
@@ -320,7 +356,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       });
 
       it('does not return an authorizeUrl when the switch itself is refused', async () => {
-        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.resolveConnectableLake.mockResolvedValue({
+          lakeId: 'lake1',
+          owner: { kind: 'organization', organizationId: 'orgA' },
+          curated: true,
+        });
         h.updateDataLake.mockRejectedValue(new Error('You do not have permission to update this data lake'));
         const { res, json } = makeRes();
         await expect(run(switchReq(), res)).rejects.toThrow(/permission/);
@@ -328,7 +368,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       });
 
       it('writes nothing and returns no authorizeUrl when the in-transaction access re-check refuses', async () => {
-        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.resolveConnectableLake.mockResolvedValue({
+          lakeId: 'lake1',
+          owner: { kind: 'organization', organizationId: 'orgA' },
+          curated: true,
+        });
         h.assertLakeAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
         const { res, json } = makeRes();
         await expect(run(switchReq(), res)).rejects.toThrow(/not found/i);
@@ -337,7 +381,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       });
 
       it('writes nothing when the lake was archived between the resolve and the switch', async () => {
-        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.resolveConnectableLake.mockResolvedValue({
+          lakeId: 'lake1',
+          owner: { kind: 'organization', organizationId: 'orgA' },
+          curated: true,
+        });
         h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'archived' });
         const { res, json } = makeRes();
         await expect(run(switchReq(), res)).rejects.toThrow(/'archived' status/i);
@@ -346,7 +394,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       });
 
       it('writes nothing when the authorize URL cannot be minted for a curated switch', async () => {
-        h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA', curated: true });
+        h.resolveConnectableLake.mockResolvedValue({
+          lakeId: 'lake1',
+          owner: { kind: 'organization', organizationId: 'orgA' },
+          curated: true,
+        });
         h.buildGitHubLakeAuthorizeUrl.mockImplementation(() => {
           throw new Error('Missing JWT_SECRET configuration for OAuth state signing');
         });
@@ -404,10 +456,27 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(json).not.toHaveBeenCalled();
     });
 
-    it('404s a personal (org-less) lake', async () => {
-      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    it('lets the creator of a personal lake disconnect their connection, without org checks', async () => {
+      const conn = { id: 'conn1', connectedBy: 'u1' };
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn);
+      h.requestGitHubLakeDisconnect.mockResolvedValue({ queued: true });
+      const { res, status, json } = makeRes();
+      await run(makeReq('DELETE'), res);
+      expect(h.requestGitHubLakeDisconnect).toHaveBeenCalledWith(conn, undefined);
+      expect(status).toHaveBeenCalledWith(202);
+      expect(json).toHaveBeenCalledWith({ success: true, queued: true });
+      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    });
+
+    it('404s a personal lake for a non-creator, even a platform admin, disconnecting nothing', async () => {
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', connectedBy: 'u1' });
       const { res } = makeRes();
-      await expect(run(makeReq('DELETE'), res)).rejects.toThrow(/not found/i);
+      await expect(run(makeReq('DELETE', { user: { id: 'u2', isAdmin: true } }), res)).rejects.toBeInstanceOf(
+        NotFoundError
+      );
+      expect(h.requestGitHubLakeDisconnect).not.toHaveBeenCalled();
       expect(h.verifyOrgAccess).not.toHaveBeenCalled();
     });
   });

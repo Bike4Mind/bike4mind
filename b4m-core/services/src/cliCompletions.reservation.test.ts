@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ModelBackend, getTextModelCost, usdToCredits, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  ModelBackend,
+  getTextModelCost,
+  usdToCredits,
+  type CompletionTool,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
@@ -101,6 +108,10 @@ const TIERED_MODEL_INFO = {
   },
 } as unknown as ModelInfo;
 
+// A direct Anthropic id that serves native tool search, so a deferred tool stays deferred.
+const TOOL_SEARCH_MODEL_ID = ChatModels.CLAUDE_5_5_OPUS;
+const TOOL_SEARCH_MODEL_INFO = { ...MODEL_INFO, id: TOOL_SEARCH_MODEL_ID } as unknown as ModelInfo;
+
 // Same pricing, but reasoning tokens bill inside the output budget, so this one must
 // hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
 // keys off - it is deliberately NOT mocked here.
@@ -131,6 +142,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     XAI_MODEL_INFO,
     MIXED_LADDER_MODEL_INFO,
     TIERED_MODEL_INFO,
+    TOOL_SEARCH_MODEL_INFO,
   ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
@@ -235,6 +247,110 @@ describe('executeCompletion - pre-flight reservation size', () => {
     expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expectedReasoningHold);
   });
 
+  describe('tool definitions', () => {
+    const tool = (name: string, descriptionChars: number, deferLoading = false): CompletionTool => ({
+      toolSchema: {
+        name,
+        description: 'x'.repeat(descriptionChars),
+        parameters: { type: 'object' },
+        ...(deferLoading ? { defer_loading: true } : {}),
+      },
+    });
+    // What the provider is sent: the schema as given, minus nothing when defer_loading is absent.
+    const toolTokens = (...tools: CompletionTool[]) =>
+      Math.ceil(
+        tools.reduce((sum, t) => sum + JSON.stringify((t as { toolSchema: unknown }).toolSchema).length, 0) / 2.5
+      );
+    const holdFor = (model: ModelInfo, inputTokens: number) =>
+      usdToCredits(getTextModelCost(model, inputTokens, reservationOutputTokens(MAX_TOKENS)));
+
+    it('grows the hold with the size of the tool schemas', async () => {
+      const small = tool('small', 1_000);
+      const large = tool('large', 100_000);
+
+      const smallRun = buildDb();
+      await executeCompletion({ ...baseParams, db: smallRun.db, options: { ...baseParams.options, tools: [small] } });
+      const largeRun = buildDb();
+      await executeCompletion({ ...baseParams, db: largeRun.db, options: { ...baseParams.options, tools: [large] } });
+
+      const smallHold = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(small));
+      const largeHold = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(large));
+      expect(largeHold).toBeGreaterThan(smallHold);
+      expect(smallHold).toBeGreaterThan(expectedHold);
+      expect(smallRun.users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -smallHold);
+      expect(largeRun.users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -largeHold);
+    });
+
+    it('leaves a deferred tool out of the hold on a model that serves tool search', async () => {
+      const kept = tool('kept', 1_000);
+      const deferred = tool('deferred', 100_000, true);
+      const { db, users } = buildDb();
+
+      await executeCompletion({
+        ...baseParams,
+        model: TOOL_SEARCH_MODEL_ID,
+        db,
+        options: { ...baseParams.options, tools: [kept, deferred] },
+      });
+
+      const expected = holdFor(TOOL_SEARCH_MODEL_INFO, INPUT_TOKENS + toolTokens(kept));
+      const withDeferred = holdFor(TOOL_SEARCH_MODEL_INFO, INPUT_TOKENS + toolTokens(kept, deferred));
+      expect(withDeferred).toBeGreaterThan(expected);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts a deferred tool where defer_loading is not honoured, since it is sent as a plain tool', async () => {
+      const kept = tool('kept', 1_000);
+      const deferred = tool('deferred', 100_000, true);
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, options: { ...baseParams.options, tools: [kept, deferred] } });
+
+      // defer_loading is dropped before the tool is sent, so it is no longer part of the estimate's input.
+      const sent = (schema: CompletionTool) => {
+        const { defer_loading: _deferLoading, ...rest } = (schema as { toolSchema: Record<string, unknown> })
+          .toolSchema;
+        return { toolSchema: rest } as unknown as CompletionTool;
+      };
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(kept, sent(deferred)));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts server-executed tools, which arrive as serverTools instead of options.tools', async () => {
+      const serverTool = {
+        toolSchema: { name: 'search', description: 'x'.repeat(100_000), parameters: { type: 'object' } },
+        toolFn: async () => '',
+      } as unknown as NonNullable<Parameters<typeof executeCompletion>[0]['serverTools']>[number];
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, serverTools: [serverTool] });
+
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(serverTool as unknown as CompletionTool));
+      expect(expected).toBeGreaterThan(expectedHold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts a server-executed tool flagged defer_loading on a model that does not serve tool search', async () => {
+      const serverTool = {
+        toolSchema: {
+          name: 'search',
+          description: 'x'.repeat(100_000),
+          parameters: { type: 'object' },
+          defer_loading: true,
+        },
+        toolFn: async () => '',
+      } as unknown as NonNullable<Parameters<typeof executeCompletion>[0]['serverTools']>[number];
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, serverTools: [serverTool] });
+
+      // serverTools skip prepareWireTools, so the flag reaches the provider and the tool is sent in full.
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(serverTool as unknown as CompletionTool));
+      expect(expected).toBeGreaterThan(expectedHold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+  });
+
   describe('cached conversation context', () => {
     // A small explicit budget keeps the output hold from drowning the input side under test.
     const ROUND_MAX_TOKENS = 1_024;
@@ -317,6 +433,25 @@ describe('executeCompletion - pre-flight reservation size', () => {
       // 68k total is in the 200k tier ($10/M in, $20/M out); read 0.1x, write 1.25x. The 8k plain tail alone would pick the 50k tier.
       const usd = 10e-6 * 8_000 + 20e-6 * OUTPUT + 10e-6 * 0.1 * 30_000 + 10e-6 * 1.25 * 30_000;
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -usdToCredits(usd));
+    });
+
+    it('prices tool schemas as plain input alongside the cached conversation split', async () => {
+      const { db, users } = buildDb();
+      const tools: CompletionTool[] = [
+        { toolSchema: { name: 'big', description: 'x'.repeat(25_000), parameters: { type: 'object' } } },
+      ];
+      await executeCompletion({
+        ...roundParams,
+        db,
+        messages: toolLoop(true),
+        options: { ...roundParams.options, tools },
+      });
+
+      const toolTokens = Math.ceil(JSON.stringify((tools[0] as { toolSchema: unknown }).toolSchema).length / 2.5);
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000 + toolTokens, OUTPUT, 30_000, 30_000));
+      const withoutTools = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 30_000, 30_000));
+      expect(expected).toBeGreaterThan(withoutTools);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
     it('prices the first round (no assistant message) fully uncached', async () => {

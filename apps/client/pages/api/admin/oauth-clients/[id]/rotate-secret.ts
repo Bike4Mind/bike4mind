@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
-import { AdminConfigAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { rotateOAuthClientSecret } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 
@@ -11,18 +11,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const result = await rotateOAuthClientSecret(id);
 
-  await logAuditEvent(
-    {
-      userId: req.user!.id,
-      action: AdminConfigAuditEvents.OAUTH_CLIENT_SECRET_ROTATED,
-      adminUserId: req.user!.id,
-      adminUsername: req.user!.username,
-      ip: req.ip,
-      configType: 'oauth-client',
-      metadata: { oauthClientId: result.client.id, clientId: result.client.clientId, name: result.client.name },
-    },
-    req.logger
-  );
+  await recordAdminActionFromRequest(req, {
+    action: 'oauth_client.secret_rotated',
+    target: { kind: 'oauthClient', id: result.client.id, displayName: result.client.name },
+    summary: 'rotated the client secret',
+    details: { clientId: result.client.clientId },
+  });
 
   res.setHeader('Cache-Control', 'no-store');
   res.status(200).json(result);

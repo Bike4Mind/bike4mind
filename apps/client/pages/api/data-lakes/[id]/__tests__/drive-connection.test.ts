@@ -83,9 +83,9 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '../drive-connection';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 const makeRes = () => {
   const json = vi.fn();
@@ -508,7 +508,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res, status, json } = makeRes();
     await run(makeReq('DELETE'), res);
 
-    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'u1' };
+    const userOwner: LakeConnectionOwner = { kind: 'user', userId: 'u1' };
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/drive-disconnect-purge', {
       connectionId: 'conn1',

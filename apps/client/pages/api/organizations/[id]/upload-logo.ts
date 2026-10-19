@@ -6,7 +6,8 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
@@ -19,15 +20,11 @@ const handler = baseApi().post(
     const orgId = req.query.id!;
     const { user } = req;
 
+    // Owner or manager only: the upload replaces (and deletes) the current logo for every member.
+    await verifyOrgAccess(user, orgId);
+
     const organization = await Organization.findById(orgId).populate('logo');
     if (!organization) throw new NotFoundError('Organization not found');
-
-    const userInOrganization = organization.users.find(member => member.userId === user.id);
-
-    // TODO: Restrict to only organization admins, managers or whatever role is appropriate
-    if (!userInOrganization && !user.isAdmin) {
-      throw new ForbiddenError('You do not have permission to upload logo for this organization');
-    }
 
     const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
 

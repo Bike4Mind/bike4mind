@@ -75,6 +75,17 @@ describe('fab-file bucket notebook export lifecycle', () => {
     );
   });
 
+  it('expires noncurrent versions bucket-wide, so deletes free bytes on a versioned stage', () => {
+    const rule =
+      LIFECYCLE_BLOCK.split(/(?=\bid:\s*')/).find(r => r.startsWith("id: 'expire-noncurrent-versions'")) ?? '';
+
+    expect(rule).toMatch(/status:\s*'Enabled'/);
+    // An empty filter is what makes it bucket-wide; a prefix here would leave files/ uncovered.
+    expect(rule).toMatch(/filter:\s*\{\s*\}/);
+    expect(Number(rule.match(/noncurrentDays:\s*(\d+)/)?.[1])).toBe(30);
+    expect(rule).toMatch(/expiredObjectDeleteMarker:\s*true/);
+  });
+
   it('expires exports after 1 day, never before the signed URL handed out for them', () => {
     const signedUrlSeconds = Number(STORE_EXPORT_FILE_BODY.match(/getSignedUrl\(path,\s*(\d+)\)/)?.[1]);
 

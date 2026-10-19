@@ -7,8 +7,8 @@ import {
   isDriveSyncClaimLive,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import { driveConnectionOwnerOf, isDriveDisconnectStalled, isSameDriveConnectionOwner } from '@bike4mind/common';
-import type { DriveConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
+import { lakeConnectionOwnerOf, isDriveDisconnectStalled, isSameLakeConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@server/dataLakes/driveDisconnectPurgePayload';
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import {
@@ -16,9 +16,9 @@ import {
   isDriveLakePollScheduled,
 } from '@server/integrations/google/drive/drivePollSchedule';
 import {
-  authorizeLakeDriveAccess,
-  authorizeLakeDriveRead,
-} from '@server/integrations/google/drive/authorizeLakeDriveAccess';
+  authorizeLakeConnectorAccess,
+  authorizeLakeConnectorRead,
+} from '@server/dataLakes/authorizeLakeConnectorAccess';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
 import { NotFoundError } from '@server/utils/errors';
@@ -81,18 +81,18 @@ async function findLake(req: Request): Promise<IDataLakeDocument> {
  * Resolve the lake and assert the caller may manage its Drive connection - an org owner/manager on an
  * org lake, the creator on a personal one (the same gate as drive-sync).
  */
-async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner }> {
+async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: LakeConnectionOwner }> {
   const lake = await findLake(req);
-  const owner = await authorizeLakeDriveAccess(req.user, lake);
+  const owner = await authorizeLakeConnectorAccess(req.user, lake);
   return { lake, owner };
 }
 
-/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeDriveRead). */
+/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeConnectorRead). */
 async function resolveLakeForRead(
   req: Request
-): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner; canManage: boolean }> {
+): Promise<{ lake: IDataLakeDocument; owner: LakeConnectionOwner; canManage: boolean }> {
   const lake = await findLake(req);
-  const { owner, canManage } = await authorizeLakeDriveRead(req.user, lake);
+  const { owner, canManage } = await authorizeLakeConnectorRead(req.user, lake);
   return { lake, owner, canManage };
 }
 
@@ -106,13 +106,13 @@ async function resolveLakeForRead(
  * revoking anything, and the folder would stay unclaimable by anyone.
  *
  * findByDataLakeIdAny is deliberately global (server-side only). The tenant boundary is
- * the authorizeLakeDrive* gate resolveLake/resolveLakeForRead ran; the comparison below is defence in
+ * the authorizeLakeConnector* gate resolveLake/resolveLakeForRead ran; the comparison below is defence in
  * depth against inconsistent data - both sides derive from the same lake - and is NOT what scopes the
  * caller. A route that copies this finder needs the authorization, not just the comparison.
  */
-async function findLakeConnection(lakeId: string, owner: DriveConnectionOwner) {
+async function findLakeConnection(lakeId: string, owner: LakeConnectionOwner) {
   const conn = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(lakeId);
-  if (conn && !isSameDriveConnectionOwner(driveConnectionOwnerOf(conn), owner)) {
+  if (conn && !isSameLakeConnectionOwner(lakeConnectionOwnerOf(conn), owner)) {
     throw new NotFoundError('Drive connection not found');
   }
   return conn;

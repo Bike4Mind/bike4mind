@@ -6,6 +6,7 @@ import {
   withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
@@ -68,6 +69,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             orgGoogleDriveConnections: orgGoogleDriveConnectionRepository,
+            orgGitHubLakeConnections: orgGitHubLakeConnectionRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

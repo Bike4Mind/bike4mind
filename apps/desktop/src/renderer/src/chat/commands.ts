@@ -8,8 +8,8 @@
  * one to the other, so a tool cannot reach these and a command cannot be offered as a tool
  * without someone moving a file across a process boundary and noticing why they are doing it.
  *
- * Adding a third command is one entry here plus the branch that runs it. Everything else - the
- * menu, the filtering, the keyboard, the argument - reads this list.
+ * Adding a command is one entry here plus the branch that runs it (useChat's runCommand).
+ * Everything else - the menu, the filtering, the keyboard, the argument - reads this list.
  */
 
 import type { ChatSessionMode } from '@shared/chat';
@@ -43,6 +43,11 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
     argumentHint: '<GitHub PR URL>',
     requiresArgument: true,
     codeOnly: true,
+  },
+  {
+    name: 'add-dir',
+    description: 'Share another folder with this conversation. Bare, it opens the folder picker.',
+    argumentHint: '[path]',
   },
 ];
 
@@ -89,4 +94,14 @@ export function parseCommandInvocation(text: string, mode: ChatSessionMode): Com
   if (!match) return null;
   const command = findCommand(match[1], mode);
   return command ? { command, args: (match[2] ?? '').trim() } : null;
+}
+
+/**
+ * The folder `/add-dir` names, or undefined for the picker. One pair of surrounding quotes is
+ * dropped, so a path pasted quoted from a terminal still works; spaces need no quoting.
+ */
+export function addDirPath(args: string): string | undefined {
+  const trimmed = args.trim();
+  const unquoted = /^(["'])(.*)\1$/.exec(trimmed)?.[2] ?? trimmed;
+  return unquoted.trim() || undefined;
 }

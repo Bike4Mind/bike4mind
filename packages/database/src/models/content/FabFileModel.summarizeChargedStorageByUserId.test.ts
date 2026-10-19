@@ -34,6 +34,15 @@ const makeFile = (fileName: string, fileSize: number, fields: Record<string, unk
   });
 
 describe('FabFileRepository.summarizeChargedStorageByUserId', () => {
+  it('leaves out org-stamped rows, which the org is billed for', async () => {
+    await makeFile('personal.pdf', 110);
+    await makeFile('org.pdf', 40, { organizationId: 'o1' });
+
+    const groups = await fabFileRepository.summarizeChargedStorageByUserId(userId);
+    expect(groups.reduce((sum, g) => sum + g.bytes, 0)).toBe(110);
+    expect(groups.reduce((sum, g) => sum + g.fileCount, 0)).toBe(1);
+  });
+
   it('groups by source, lake and generated mime type, and sums to sumFileSizeByUserId', async () => {
     await makeFile('upload.pdf', 110);
     await makeFile('legacy.txt', 5); // no sourceType

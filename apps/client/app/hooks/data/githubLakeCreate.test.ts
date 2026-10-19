@@ -16,6 +16,15 @@ describe('beginGitHubLakeCreate', () => {
     expect(api.post).toHaveBeenCalledWith(GITHUB_LAKE_CREATE_PATH, { organizationId: 'org-1' });
   });
 
+  it('posts no organization for a personal lake', async () => {
+    const payload = { dataLakeId: 'lake-p', authorizeUrl: 'https://github.test/authorize' };
+    vi.mocked(api.post).mockResolvedValue({ data: payload });
+
+    await expect(beginGitHubLakeCreate()).resolves.toEqual(payload);
+    const body = vi.mocked(api.post).mock.calls[0][1] as Record<string, unknown>;
+    expect(body.organizationId).toBeUndefined();
+  });
+
   it('propagates transport failures', async () => {
     vi.mocked(api.post).mockRejectedValue(new Error('Network error'));
 

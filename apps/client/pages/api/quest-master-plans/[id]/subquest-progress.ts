@@ -1,9 +1,15 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError, SUBQUEST_STATUS_VALUES } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  SUBQUEST_STATUS_VALUES,
+  questMasterPlanProgressResponseSchema,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { respond } from '@server/utils/respond';
 import { verifyQuestPlanWriteAccess, QUEST_ID_PATTERN } from '@server/utils/questMasterPlanAccess';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
@@ -42,7 +48,11 @@ const handler = baseApi()
     );
     if (!updatedPlan) throw new NotFoundError('Quest plan not found');
 
-    res.json({ success: true, plan: updatedPlan, metrics: updatedPlan.metrics });
+    respond(res, questMasterPlanProgressResponseSchema, {
+      success: true,
+      plan: updatedPlan,
+      metrics: updatedPlan.metrics,
+    });
   });
 
 export default handler;

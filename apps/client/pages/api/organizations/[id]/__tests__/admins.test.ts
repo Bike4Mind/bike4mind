@@ -36,11 +36,9 @@ const findById = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById, update } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_ADMINS_UPDATED: 'ORG_ADMINS_UPDATED' },
-  logAuditEvent: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import '@pages/api/organizations/[id]/admins';
 
 /** An org owned by `owner1`, whose `users[]` roster is supplied per test. */
@@ -70,6 +68,23 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
 
     expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'] });
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('records org.admins.updated as an organization-scope action', async () => {
+    findById.mockResolvedValue(org([{ userId: 'member1', permissions: ['read'] }]));
+
+    const { run } = put(['member1']);
+    await run();
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.admins.updated',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'organization', id: 'org1' }),
+        changes: [{ field: 'adminUserIds', before: [], after: ['member1'] }],
+      })
+    );
   });
 
   // The #2005 write-time gap. The appointment route is the only way to reach `adminUserIds`, so

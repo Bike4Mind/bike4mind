@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IAdminSettingsRepository,
   IUserRepository,
+  IOrganizationRepository,
   IDataLakeRepository,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
@@ -43,6 +44,7 @@ function mapToFabFileAdapters(
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
     users: IUserRepository;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
     // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
   }
@@ -54,6 +56,7 @@ function mapToFabFileAdapters(
       },
       adminSettings: db.adminSettings,
       users: db.users,
+      organizations: db.organizations,
       dataLakes: db.dataLakes,
     },
     storage: {
@@ -84,7 +87,6 @@ function mapToFabFileAdapters(
  * @param userId - User ID for fabFile ownership
  * @param emailSubject - Email subject for fabFile notes
  * @param adapters - Storage and database adapters
- * @param organizationId - Optional organization ID for fabFile ownership
  * @returns Array of processed attachment data with fabFileIds
  */
 export async function processAttachments(
@@ -97,11 +99,11 @@ export async function processAttachments(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
+      organizations: Pick<IOrganizationRepository, 'findById'>;
       // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     };
-  },
-  organizationId?: string
+  }
 ): Promise<ProcessedAttachment[]> {
   const attachmentCount = parsedEmail.attachments?.length || 0;
   Logger.info(`Processing ${attachmentCount} attachments`);
@@ -169,7 +171,6 @@ export async function processAttachments(
         type: knowledgeType,
         public: false,
         notes: `Attachment from email: ${emailSubject}`,
-        organizationId,
       };
 
       const newFabFile = await createFabFile(userId, fabFileData, mapToFabFileAdapters(adapters.storage, adapters.db));

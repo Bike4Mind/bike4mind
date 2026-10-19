@@ -11,7 +11,7 @@ import { generationJobPollInterval, generationListRefreshInterval } from './gene
 import {
   prependMusicGeneration,
   reconcileFetchedMusicGeneration,
-  seedMusicGeneration,
+  reconcileFetchedMusicGenerationPage,
   upsertMusicGeneration,
   type MusicGenerationPage,
 } from './musicGenerationCache';
@@ -52,8 +52,7 @@ export function useMusicGenerations() {
       const response = await api.get<MusicGenerationPage>(MUSIC_GENERATIONS_URL, {
         params: { limit: MUSIC_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
       });
-      response.data.data.forEach(job => seedMusicGeneration(queryClient, job));
-      return response.data;
+      return reconcileFetchedMusicGenerationPage(queryClient, response.data);
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,

@@ -136,6 +136,44 @@ describe('POST /api/quests/[id]/check-timeout', () => {
     expect(res._getJSONData()).toEqual(liveQuest);
   });
 
+  describe('response boundary', () => {
+    const withheld = { embedding: [0.1, 0.2], slackNotification: { channel: 'C1' }, __v: 3 };
+
+    it('strips withheld and undeclared fields from a quest that needs no recovery', async () => {
+      questRepository.findById.mockResolvedValue(quest(withheld));
+      sessionRepository.findById.mockResolvedValue(session());
+      resolveQuestTimeoutRecovery.mockReturnValue(null);
+      const { req, res } = post('quest-1');
+
+      await mockRefs.handler!(req, res);
+
+      const body = res._getJSONData();
+      expect(body).toMatchObject({ id: 'quest-1', status: 'running' });
+      expect(body.updatedAt).toBeDefined();
+      expect(body).not.toHaveProperty('embedding');
+      expect(body).not.toHaveProperty('slackNotification');
+      expect(body).not.toHaveProperty('__v');
+    });
+
+    it('strips withheld and undeclared fields from the re-read quest after a recovery', async () => {
+      questRepository.findById
+        .mockResolvedValueOnce(quest())
+        .mockResolvedValueOnce(quest({ status: 'done', ...withheld }));
+      sessionRepository.findById.mockResolvedValue(session());
+      resolveQuestTimeoutRecovery.mockReturnValue({ status: 'done', finishReason: 'run_timed_out' });
+      const { req, res } = post('quest-1');
+
+      await mockRefs.handler!(req, res);
+
+      const body = res._getJSONData();
+      expect(body).toMatchObject({ id: 'quest-1', status: 'done' });
+      expect(body.updatedAt).toBeDefined();
+      expect(body).not.toHaveProperty('embedding');
+      expect(body).not.toHaveProperty('slackNotification');
+      expect(body).not.toHaveProperty('__v');
+    });
+  });
+
   it('does not dispatch when the settle race is lost, but still returns the re-read quest', async () => {
     const staleQuest = quest();
     const wonByAnotherSite = quest({ status: 'done' });

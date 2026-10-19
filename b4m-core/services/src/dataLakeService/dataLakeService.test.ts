@@ -5674,14 +5674,15 @@ describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1
 });
 
 describe('setLakeVisibility - personal ↔ org promotion', () => {
-  const noDriveConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
+  const noConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
   const makeDb = (existing: Partial<IDataLakeDocument> = {}, clashes: IDataLakeDocument[] = []) => ({
     dataLakes: {
       findById: vi.fn().mockResolvedValue(lake(existing)),
       find: vi.fn().mockResolvedValue(clashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   // A connection's owner follows its lake's scope, so a move would strand a bound row: every manage
@@ -5698,6 +5699,78 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       } as any)
     ).rejects.toThrow(/Disconnect this data lake's Google Drive folder/);
     expect(db.orgGoogleDriveConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['promoting a personal lake to an org', {}, 'organization'],
+    ['demoting an org lake to private', { organizationId: 'orgA' }, 'private'],
+  ] as const)('refuses %s while a GitHub repository is bound', async (_label, existing, visibility) => {
+    const db = makeDb(existing);
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', enabled: false });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', visibility, {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's GitHub repository/);
+    expect(db.orgGitHubLakeConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  // A move that lands the lake on the row's own owner strands nothing, so an already-stranded row can
+  // recover by moving the lake back to where the row lives.
+  it('allows promoting a personal lake whose GitHub row already belongs to the target org', async () => {
+    const db = makeDb({ createdByUserId: 'owner' });
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      connectedBy: 'owner',
+    });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: 'orgA' }));
+  });
+
+  it("allows making an org lake private whose Drive row is the lake creator's personal row", async () => {
+    const db = makeDb({ createdByUserId: 'owner', organizationId: 'orgA' });
+    db.orgGoogleDriveConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: null,
+      connectedBy: 'owner',
+    });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: null }));
+  });
+
+  it.each([
+    ['a row owned by another org', { organizationId: 'orgB', connectedBy: 'owner' }],
+    ['a personal row connected by someone other than the creator', { organizationId: null, connectedBy: 'stranger' }],
+  ])('still refuses a promotion to orgA over %s', async (_label, row) => {
+    const db = makeDb({ createdByUserId: 'owner' });
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', ...row });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's GitHub repository/);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('still refuses making an org lake private over a row owned by the org', async () => {
+    const db = makeDb({ createdByUserId: 'owner', organizationId: 'orgA' });
+    db.orgGoogleDriveConnections.findByDataLakeIdAny.mockResolvedValue({
+      id: 'conn1',
+      organizationId: 'orgA',
+      connectedBy: 'owner',
+    });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's Google Drive folder/);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
@@ -5727,7 +5800,8 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {

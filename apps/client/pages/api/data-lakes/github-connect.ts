@@ -27,7 +27,8 @@ import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFr
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { serializeError } from '@server/utils/serializeError';
 
-const Body = z.object({ organizationId: z.string().trim().min(1) });
+// No organizationId creates a personal lake, owned by the caller alone.
+const Body = z.object({ organizationId: z.string().trim().min(1).optional() });
 
 export const newPlaceholderSuffix = (): string => randomBytes(4).toString('hex');
 
@@ -38,7 +39,7 @@ function isSuffixCollision(error: unknown): boolean {
   return e?.code === 11000 && !!e.keyPattern && ('slug' in e.keyPattern || 'datalakeTag' in e.keyPattern);
 }
 
-async function createPendingGitHubLake(req: Request, organizationId: string, suffix: () => string) {
+async function createPendingGitHubLake(req: Request, organizationId: string | undefined, suffix: () => string) {
   const create = () => {
     const hex = suffix();
     return dataLakeService.createDataLake(
@@ -71,10 +72,13 @@ async function createPendingGitHubLake(req: Request, organizationId: string, suf
 }
 
 /**
- * The caller's earlier, still-unbound placeholder lake in this org, so a retried or abandoned connect
+ * The caller's earlier, still-unbound placeholder lake in this org (or personal scope), so a retried or abandoned connect
  * does not pile up another one. Null when there is none or it can no longer take a connection.
  */
-async function findReusablePendingLake(req: Request, organizationId: string): Promise<IDataLakeDocument | null> {
+async function findReusablePendingLake(
+  req: Request,
+  organizationId: string | undefined
+): Promise<IDataLakeDocument | null> {
   const lake = await dataLakeRepository.findPendingPlaceholderLake(
     req.user.id,
     organizationId,
@@ -154,13 +158,14 @@ async function rollBackPendingLake(req: Request, lake: IDataLakeDocument): Promi
 }
 
 /**
- * POST /api/data-lakes/github-connect { organizationId } -> { dataLakeId, authorizeUrl }
+ * POST /api/data-lakes/github-connect { organizationId? } -> { dataLakeId, authorizeUrl }
  *
- * Connector-first GitHub connect: creates an org lake (draft, connector-fed, placeholder name,
- * pendingConnector github), or reuses the caller's own unbound one in that org, and starts the same
- * connect as POST /api/data-lakes/:id/github-connection. Every refusal (API key, personal scope,
- * non-manager, flag, missing App config) lands before the insert so a refused request leaves nothing
- * behind. Session-only and not an /api/v1 contract route: the flow is bound to a browser nonce cookie.
+ * Connector-first GitHub connect: creates a lake in the org, or a personal one when organizationId is
+ * omitted (draft, connector-fed, placeholder name, pendingConnector github), or reuses the caller's
+ * own unbound one in that scope, and starts the same connect as POST
+ * /api/data-lakes/:id/github-connection. Every refusal (API key, non-manager, flag, missing App
+ * config) lands before the insert so a refused request leaves nothing behind. Session-only and not an
+ * /api/v1 contract route: the flow is bound to a browser nonce cookie.
  */
 export function createGitHubConnectHandler(suffix: () => string = newPlaceholderSuffix) {
   return baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
@@ -174,10 +179,11 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       }
       const body = Body.safeParse(req.body);
       if (!body.success) {
-        throw new BadRequestError('organizationId is required: a GitHub data lake must belong to an organization');
+        throw new BadRequestError('organizationId must be a non-empty string when given');
       }
       const { organizationId } = body.data;
-      await verifyOrgAccess(req.user, organizationId);
+      // A personal lake needs no gate here: the caller becomes its creator, whom every later step admits.
+      if (organizationId) await verifyOrgAccess(req.user, organizationId);
       const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
 
       let reused = await findReusablePendingLake(req, organizationId);

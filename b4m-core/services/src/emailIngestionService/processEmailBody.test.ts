@@ -34,6 +34,7 @@ describe('emailIngestionService - processEmailBody', () => {
           delete: vi.fn(),
           count: vi.fn(),
         },
+        organizations: { findById: vi.fn() },
         ingestedEmails: {
           findByMessageId: vi.fn(),
           findByThreadId: vi.fn(),
@@ -275,26 +276,12 @@ describe('emailIngestionService - processEmailBody', () => {
     );
   });
 
-  it('should pass organizationId to createFabFile when provided', async () => {
-    await processEmailBody(mockParsedEmail, 'user123', 'email123', false, mockAdapters, 'org456');
+  it('should never put an organizationId on fabFileData (ownership derives from the lake)', async () => {
+    await processEmailBody(mockParsedEmail, 'user123', 'email123', false, mockAdapters);
 
     expect(createFabFile).toHaveBeenCalledWith(
       'user123',
-      expect.objectContaining({
-        organizationId: 'org456',
-      }),
-      expect.anything()
-    );
-  });
-
-  it('should not include organizationId in fabFileData when not provided', async () => {
-    await processEmailBody(mockParsedEmail, 'user123', 'email123', false, mockAdapters, undefined);
-
-    expect(createFabFile).toHaveBeenCalledWith(
-      'user123',
-      expect.objectContaining({
-        organizationId: undefined,
-      }),
+      expect.not.objectContaining({ organizationId: expect.anything() }),
       expect.anything()
     );
   });
