@@ -1,12 +1,12 @@
 /**
  * Refunds request credit holds that were never settled or refunded: the process serving the request died
  * between reserve and settle (Lambda timeout, OOM, crash), so the reserved credits would stay locked forever.
- * Holds are recorded by apps/client/server/billing/reserveRequestCredits.ts with an expiry far past the
- * longest request, so only abandoned holds are swept.
+ * Request and platform-key completion billing record these holds with a one-hour expiry. A request
+ * still running after its deadline can also be refunded; completed settlement receipts are excluded.
  *
- * Each hold is claimed (its pending row deleted) in the same transaction as its refund, the same claim settle
- * and refund take, so a late settle, a concurrent refund and an overlapping sweep run never return the same
- * credits twice, and a refund that fails rolls the claim back for the next run to retry.
+ * Each hold is claimed (its pending row deleted) in the same transaction as its refund. Settlement marks
+ * the same pending row atomically with its billing writes, so only one terminal outcome can commit.
+ * A refund that fails rolls the claim back for the next run to retry.
  *
  * Schedule: rate(15 minutes) (infra/cron.ts creditHoldSweep).
  * Self-host: apps/workers/src/selfhost/creditHoldSweep.ts.

@@ -14,6 +14,7 @@ const {
   orgIncrement,
   recordUsage,
   saveGeneratedAssetToFiles,
+  pendingHolds,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
@@ -26,6 +27,7 @@ const {
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
   saveGeneratedAssetToFiles: vi.fn(),
+  pendingHolds: new Map<string, { settledCredits?: number }>(),
 }));
 
 // Contract-adapter mock: stands in for the nextRouteForContract prelude, running
@@ -76,10 +78,34 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: (...a: unknown[]) => orgIncrement(...a),
   },
   pendingCreditHoldRepository: {
-    record: async (hold: object) => ({ ...hold, id: 'hold-1' }),
-    claim: async (id: string) => ({ id }),
+    record: async (hold: object) => {
+      pendingHolds.set('hold-1', { ...hold });
+      return { ...hold, id: 'hold-1' };
+    },
+    claim: async (id: string) => {
+      const hold = pendingHolds.get(id);
+      if (!hold || hold.settledCredits !== undefined) return null;
+      pendingHolds.delete(id);
+      return { ...hold, id };
+    },
+    markSettled: async (id: string, settledCredits: number) => {
+      const hold = pendingHolds.get(id);
+      if (!hold || hold.settledCredits !== undefined) return false;
+      pendingHolds.set(id, { ...hold, settledCredits });
+      return true;
+    },
+    findSettlement: async (id: string) => pendingHolds.get(id)?.settledCredits ?? null,
   },
-  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => {
+    const snapshot = new Map(pendingHolds);
+    try {
+      return await fn();
+    } catch (error) {
+      pendingHolds.clear();
+      for (const [id, hold] of snapshot) pendingHolds.set(id, hold);
+      throw error;
+    }
+  },
   usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
   userRepository: {
     findById: (...a: unknown[]) => findById(...a),
@@ -139,6 +165,7 @@ const run = (
 };
 
 beforeEach(() => {
+  pendingHolds.clear();
   [
     getEffectiveApiKey,
     deductCredits,
@@ -466,10 +493,10 @@ describe('POST /api/ai/music', () => {
     expect(deductCredits).not.toHaveBeenCalled();
   });
 
-  it('still reports the charge (creditsCharged) when the settlement ledger write fails', async () => {
+  it('returns the audio and keeps the hold refundable when the settlement ledger write fails', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
-    // Balance already moved at reservation; a settlement failure must NOT free the audio.
+    // A failed settlement must preserve the provider output and leave its hold refundable.
     deductCredits.mockRejectedValue(new Error('mongo down'));
 
     const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000 });
@@ -477,10 +504,12 @@ describe('POST /api/ai/music', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData().toString()).toBe('song');
-    // No refund: the customer was charged at reservation; only the ledger row is missing.
+    // The transaction rolled back: the sweep can refund the unresolved reservation.
     expect(userIncrement).toHaveBeenCalledTimes(1);
+    expect(pendingHolds.has('hold-1')).toBe(true);
+    expect(pendingHolds.get('hold-1')).not.toHaveProperty('settledCredits');
     expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'music_generation', status: 'ok', creditsCharged: 150 })
+      expect.objectContaining({ feature: 'music_generation', status: 'ok', creditsCharged: 0 })
     );
   });
 

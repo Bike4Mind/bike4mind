@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
@@ -267,6 +268,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       timing?.phase('completionStarted');
       await executeCompletion({
+        creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
         messages: body.messages,

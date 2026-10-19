@@ -4,7 +4,6 @@ import {
   organizationRepository,
   pendingCreditHoldRepository,
   userRepository,
-  type PendingCreditHold,
   withTransaction,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
@@ -17,11 +16,11 @@ export type { CreditLedgerEntry };
 
 /**
  * How long a reservation may stay unsettled before apps/workers/src/cron/creditHoldSweep.ts refunds it.
- * Far past the longest request these routes serve, so a live request is never swept.
+ * Requests still running after this deadline may be refunded by the sweep.
  */
 export const CREDIT_HOLD_TTL_MS = 60 * 60_000;
 
-const SETTLE_CLAIM_ATTEMPTS = 3;
+const SETTLEMENT_ATTEMPTS = 3;
 
 export type CreditReservation = {
   ownerId: string;
@@ -30,14 +29,14 @@ export type CreditReservation = {
   reservedCredits: number;
   /**
    * Return the whole reservation - the provider call failed and incurred no cost. Never throws: the route
-   * is already answering with the provider failure, so a failed refund is logged (with the owner, for a
-   * manual credit) rather than replacing that answer with a 500.
+   * is already answering with the provider failure, so a failed refund is logged and left for the sweep
+   * rather than replacing that answer with a 500.
    */
   refund(): Promise<void>;
   /**
    * Keep `chargedCredits` (at most the reservation), refund the rest, and write the ledger row.
-   * Returns the credits actually charged. A ledger-write failure is logged, not thrown: the balance
-   * already moved at reservation, so the customer was charged and only the audit row is missing.
+   * Returns the credits actually charged when confirmed. All writes commit together; an aborted
+   * settlement leaves the reservation available for the sweep. Unconfirmed outcomes are logged.
    */
   settle(chargedCredits: number, entry: CreditLedgerEntry): Promise<number>;
 };
@@ -149,31 +148,43 @@ export async function reserveRequestCredits({
       }
     },
     settle: async (chargedCredits, entry) => {
-      // Not one transaction with the settlement: its ledger write runs outside any caller session. Only
-      // the claimant may settle, so a settle that cannot claim leaves the row for the sweep to refund.
-      let claimed: PendingCreditHold | null = null;
+      const charged = Number.isFinite(chargedCredits)
+        ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
+        : hold.reservedCredits;
       for (let attempt = 1; ; attempt++) {
         try {
-          claimed = await pendingCreditHoldRepository.claim(pending.id);
-          break;
+          // The receipt, partial refund, member usage and ledger commit together. A process death or
+          // failed write leaves either the original refundable hold or the completed settlement.
+          return await withTransaction(async () => {
+            if (!(await pendingCreditHoldRepository.markSettled(pending.id, charged))) {
+              const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
+              if (settled !== null) return settled;
+              logHoldError('settle found its credit hold already swept - request not charged');
+              return 0;
+            }
+            return creditService.settleCreditHold(
+              hold,
+              chargedCredits,
+              entry,
+              { featureLabel, logger: req.logger, throwOnWriteFailure: true },
+              holdAdapters
+            );
+          });
         } catch (err) {
-          if (attempt >= SETTLE_CLAIM_ATTEMPTS) {
-            logHoldError('settle could not claim its credit hold - request not charged, left for the sweep', err);
+          // A commit can succeed while its acknowledgement is lost. Never infer a refund from a
+          // missing claim: the durable receipt tells us whether this settlement already committed.
+          try {
+            const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
+            if (settled !== null) return settled;
+          } catch (reconcileError) {
+            logHoldError('settle could not read its settlement receipt', reconcileError);
+          }
+          if (attempt >= SETTLEMENT_ATTEMPTS) {
+            logHoldError('settle could not confirm outcome - any pending hold remains refundable', err);
             return 0;
           }
         }
       }
-      if (!claimed) {
-        logHoldError('settle found its credit hold already swept - request not charged');
-        return 0;
-      }
-      return creditService.settleCreditHold(
-        hold,
-        chargedCredits,
-        entry,
-        { featureLabel, logger: req.logger },
-        holdAdapters
-      );
     },
   };
 }

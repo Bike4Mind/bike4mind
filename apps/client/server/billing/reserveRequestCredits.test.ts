@@ -10,6 +10,8 @@ const {
   pendingHolds,
   recordHold,
   claimHold,
+  markSettled,
+  findSettlement,
   withTransaction,
 } = vi.hoisted(() => ({
   deductCredits: vi.fn(),
@@ -20,6 +22,8 @@ const {
   pendingHolds: new Map<string, unknown>(),
   recordHold: vi.fn(),
   claimHold: vi.fn(),
+  markSettled: vi.fn(),
+  findSettlement: vi.fn(),
   withTransaction: vi.fn(async <T>(fn: () => Promise<T>): Promise<T> => fn()),
 }));
 
@@ -32,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: { findById: orgFindById, incrementCredits: orgIncrement },
   userRepository: { findById: userFindById, incrementCredits: userIncrement },
-  pendingCreditHoldRepository: { record: recordHold, claim: claimHold },
+  pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
   withTransaction,
 }));
 vi.mock('@bike4mind/services', async () => {
@@ -58,7 +62,27 @@ const ledger: CreditLedgerEntry = { type: 'sound_effects_usage', sessionId: 's1'
 
 describe('reserveRequestCredits', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    withTransaction.mockImplementation(async callback => {
+      const snapshot = new Map(pendingHolds);
+      try {
+        return await callback();
+      } catch (error) {
+        pendingHolds.clear();
+        for (const [id, hold] of snapshot) pendingHolds.set(id, hold);
+        throw error;
+      }
+    });
+    markSettled.mockImplementation(async (id: string, credits: number) => {
+      const pending = pendingHolds.get(id);
+      if (!pending || (typeof pending === 'object' && 'settledCredits' in pending)) return false;
+      pendingHolds.set(id, { ...(pending as object), settledCredits: credits });
+      return true;
+    });
+    findSettlement.mockImplementation(async (id: string) => {
+      const pending = pendingHolds.get(id);
+      return pending && typeof pending === 'object' && 'settledCredits' in pending ? pending.settledCredits : null;
+    });
     userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
     let balance = 100;
     userIncrement.mockImplementation(async (_id: string, delta: number) => ({ currentCredits: (balance += delta) }));
@@ -72,6 +96,7 @@ describe('reserveRequestCredits', () => {
     });
     claimHold.mockImplementation(async (id: string) => {
       const pending = pendingHolds.get(id) ?? null;
+      if (pending && typeof pending === 'object' && 'settledCredits' in pending) return null;
       pendingHolds.delete(id);
       return pending;
     });
@@ -112,7 +137,7 @@ describe('reserveRequestCredits', () => {
     );
   });
 
-  it('still settles and writes the ledger row when the partial refund fails', async () => {
+  it('retries the whole settlement when the partial refund fails', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
       requiredCredits: 3,
@@ -122,17 +147,11 @@ describe('reserveRequestCredits', () => {
     userIncrement.mockRejectedValueOnce(new Error('db down'));
 
     expect(await reservation.settle(1, ledger)).toBe(1);
-
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('over-reserved credit refund failed'),
-      expect.objectContaining({ overReserved: 2 })
-    );
-    expect(deductCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ credits: 1 }),
-      expect.anything(),
-      // No refund landed, so the ledger row carries the reservation's balance.
-      { skipBalanceUpdate: true, currentCreditHolder: { currentCredits: 97 } }
-    );
+    expect(markSettled).toHaveBeenCalledTimes(2);
+    expect(deductCredits).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ credits: 1 }), expect.anything(), {
+      skipBalanceUpdate: true,
+      currentCreditHolder: { currentCredits: 99 },
+    });
   });
 
   it('writes no ledger row when the settled charge rounds to zero, and refunds it all', async () => {
@@ -249,7 +268,7 @@ describe('reserveRequestCredits', () => {
     expect(recordHold.mock.invocationCallOrder[0]).toBeGreaterThan(userIncrement.mock.invocationCallOrder[0]);
   });
 
-  it('claims the hold on settle so the sweep can no longer refund it', async () => {
+  it('records the settlement receipt so the sweep can no longer refund it', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
       requiredCredits: 3,
@@ -259,8 +278,9 @@ describe('reserveRequestCredits', () => {
 
     await reservation.settle(1, ledger);
 
-    expect(claimHold).toHaveBeenCalledExactlyOnceWith('hold-1');
-    expect(pendingHolds.size).toBe(0);
+    expect(markSettled).toHaveBeenCalledExactlyOnceWith('hold-1', 1);
+    expect(await findSettlement('hold-1')).toBe(1);
+    expect(await claimHold('hold-1')).toBeNull();
   });
 
   it('moves no credits when the sweep already refunded the hold', async () => {
@@ -327,21 +347,21 @@ describe('reserveRequestCredits', () => {
     );
   });
 
-  it('retries a settle claim that fails transiently, then settles', async () => {
+  it('retries a settlement transition that fails transiently, then settles', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
       requiredCredits: 3,
       enforceCredits: true,
       featureLabel: 'embeddings',
     });
-    claimHold.mockRejectedValueOnce(new Error('blip')).mockRejectedValueOnce(new Error('blip'));
+    markSettled.mockRejectedValueOnce(new Error('blip')).mockRejectedValueOnce(new Error('blip'));
 
     expect(await reservation.settle(1, ledger)).toBe(1);
-    expect(claimHold).toHaveBeenCalledTimes(3);
+    expect(markSettled).toHaveBeenCalledTimes(3);
     expect(deductCredits).toHaveBeenCalledTimes(1);
   });
 
-  it('charges nothing and leaves the hold for the sweep when every settle claim fails', async () => {
+  it('charges nothing and leaves the hold for the sweep when every settlement fails', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
       requiredCredits: 3,
@@ -349,7 +369,7 @@ describe('reserveRequestCredits', () => {
       featureLabel: 'embeddings',
     });
     userIncrement.mockClear();
-    claimHold.mockRejectedValue(new Error('db down'));
+    markSettled.mockRejectedValue(new Error('db down'));
 
     expect(await reservation.settle(1, ledger)).toBe(0);
 
@@ -357,8 +377,42 @@ describe('reserveRequestCredits', () => {
     expect(deductCredits).not.toHaveBeenCalled();
     expect(pendingHolds.has('hold-1')).toBe(true);
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('settle could not claim its credit hold'),
+      expect.stringContaining('settle could not confirm outcome - any pending hold remains refundable'),
       expect.objectContaining({ holdId: 'hold-1', error: 'db down' })
     );
+  });
+  it('recovers a zero-charge settlement after its commit acknowledgement is lost', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 1,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    withTransaction.mockImplementationOnce(async callback => {
+      await callback();
+      throw new Error('commit reply lost');
+    });
+
+    expect(await reservation.settle(0, ledger)).toBe(0);
+    expect(userIncrement).toHaveBeenLastCalledWith('u1', 1);
+    expect(await findSettlement('hold-1')).toBe(0);
+    expect(markSettled).toHaveBeenCalledTimes(1);
+    await reservation.settle(0, ledger);
+    expect(userIncrement).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the hold refundable when all ledger writes fail', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    deductCredits.mockRejectedValue(new Error('ledger unavailable'));
+
+    expect(await reservation.settle(3, ledger)).toBe(0);
+    expect(await findSettlement('hold-1')).toBeNull();
+    await reservation.refund();
+    expect(userIncrement).toHaveBeenLastCalledWith('u1', 3);
   });
 });

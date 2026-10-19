@@ -114,12 +114,15 @@ describe('runCreditHoldSweep against a replica set', () => {
     expect(await balance(hold.ownerId)).toBe(STARTING_CREDITS);
   });
 
-  it('does not refund a hold a late settle claimed first', async () => {
+  it('does not refund a completed settlement receipt after its original expiry', async () => {
     const hold = await abandonedHold(new Date(NOW.getTime() - 60_000));
-    expect(await pendingCreditHoldRepository.claim(hold.id)).not.toBeNull();
+    expect(await pendingCreditHoldRepository.markSettled(hold.id, HELD)).toBe(true);
 
     expect(await runCreditHoldSweep({ now: NOW, emitMetrics: false })).toMatchObject({ candidates: 0 });
     expect(await balance(hold.ownerId)).toBe(STARTING_CREDITS - HELD);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(1);
+    expect(await pendingCreditHoldRepository.findSettlement(hold.id)).toBe(HELD);
+    expect(await pendingCreditHoldRepository.claimExpired(hold.id, NOW)).toBeNull();
   });
 
   it('refunds once when two sweeps overlap', async () => {
