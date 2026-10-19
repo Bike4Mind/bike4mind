@@ -134,8 +134,9 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note }) {
     let lines;
     if (file.patch !== undefined) {
       lines = addedLines(file.patch);
-    } else if (file.changes === 0 || file.status === 'renamed') {
-      // A pure rename or mode change has no content diff to check.
+    } else if (file.changes === 0) {
+      // A pure rename or mode change has no content diff to check. A rename with
+      // edits whose patch was omitted falls through and is fetched in full.
       continue;
     } else {
       // GitHub omits the patch for binary files and for diffs it considers too
@@ -191,6 +192,9 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     const cmp = await gh.json(`/repos/${repo}/compare/${event.before}...${event.after}`);
     commits = cmp.commits;
     files = cmp.files ?? [];
+    if ((cmp.total_commits ?? commits.length) > commits.length) {
+      incomplete(`The push has ${cmp.total_commits} commits; only the first ${commits.length} were listed.`);
+    }
     if (files.length >= MAX_COMPARE_FILES) {
       incomplete(`The push changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`);
     }
@@ -264,7 +268,7 @@ export async function run({
 
   log(`Checked ${summary}.`);
   const isPush = eventName === 'push';
-  for (const why of gaps) annotate(isPush ? 'warning' : 'error', `Incomplete check: ${why}`);
+  for (const why of gaps) annotate('error', `Incomplete check: ${why}`);
   for (const where of hits) annotate('error', `Restricted term found in ${where}.`);
 
   if (hits.length > 0) {
@@ -276,7 +280,9 @@ export async function run({
     );
     return 1;
   }
-  if (gaps.length > 0 && !isPush) return 1;
+  // A push already landed, but a partial check must still go red, or a large
+  // push would pass the backstop green without being read.
+  if (gaps.length > 0) return 1;
   log('No restricted terms found.');
   return 0;
 }

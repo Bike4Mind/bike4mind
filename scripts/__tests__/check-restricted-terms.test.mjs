@@ -260,6 +260,35 @@ describe('run', () => {
     expect(output).toContain('Incomplete check');
   });
 
+  it('fetches a renamed and edited file in full when its patch is omitted', async () => {
+    const routes = prRoutes({ files: [file('big.txt', undefined, { status: 'renamed', changes: 5000 })] });
+    routes['/repos/acme/widgets/contents/big.txt'] = response('zorblax');
+    const { code, output } = await check({ routes });
+    expect(code).toBe(1);
+    expect(output).toContain('file big.txt line 1');
+  });
+
+  it('skips a pure rename', async () => {
+    const { code } = await check({
+      routes: prRoutes({ files: [file('moved.txt', undefined, { status: 'renamed', changes: 0 })] }),
+    });
+    expect(code).toBe(0);
+  });
+
+  it('fails a push whose commits the compare API could not all list', async () => {
+    const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
+    const routes = {
+      [`/repos/acme/widgets/compare/${event.before}...${event.after}`]: response({
+        total_commits: 251,
+        commits: [commit('chore: ok', 'd'.repeat(40))],
+        files: [],
+      }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(1);
+    expect(output).toContain('::error::Incomplete check: The push has 251 commits');
+  });
+
   it('checks commit messages and added lines of a push', async () => {
     const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
     const routes = {
