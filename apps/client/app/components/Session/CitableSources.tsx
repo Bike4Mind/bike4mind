@@ -114,9 +114,10 @@ export const conflictPlacementOf = (
 const identityOf = (source: CitableSource): string | undefined => source.id || source.url || source.title;
 
 /**
- * Identities of the sources `prose` cites (replyProse: what the reader sees, no code or artifacts). On a turn whose `[N]` markers resolve to `citables[N-1]`
- * (citationMarkersLinkable) a marker is the citation; on any other turn a source counts when the
- * reply names it the way the lake RAG eval grades a named citation (sourceNamedIn), or links its URL.
+ * Identities of the sources `prose` cites (replyProse: what the reader sees, no code or artifacts).
+ * On a turn whose `[N]` markers resolve to `citables[N-1]` (citationMarkersLinkable) a marker is the
+ * citation; on any other turn a source counts when the reply names it the way the lake RAG eval
+ * grades a named citation (sourceNamedIn), or links its URL.
  */
 const citedIdentities = (citables: readonly CitableSource[], prose: string): Set<string> => {
   const sources = citationMarkersLinkable(citables)

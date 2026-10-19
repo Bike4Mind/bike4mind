@@ -240,6 +240,12 @@ describe('replyProse', () => {
     expect(prose).toContain('https://other.dev/x');
   });
 
+  it('keeps the URL of a reference-style link, which lives on its definition', () => {
+    const prose = replyProse('See [the post][post].\n\n[post]: https://other.dev/ref');
+    expect(prose).toContain('the post');
+    expect(prose).toContain('https://other.dev/ref');
+  });
+
   it('leaves out code spans, code blocks and raw HTML', () => {
     const prose = replyProse('Plain.\n\nUse `sample.yaml`.\n\n```\nload("notes.md") [2]\n```\n\n<div>hidden.md</div>');
     expect(prose).toContain('Plain.');

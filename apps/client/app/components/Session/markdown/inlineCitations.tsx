@@ -74,7 +74,8 @@ const NON_PROSE = new Set(['code', 'inlineCode', 'html']);
 
 /**
  * The text a reader sees in reply markdown: every text node, including link text, plus each link's
- * URL, with code spans, code blocks and raw HTML left out. What the Sources list scans to decide
+ * URL (a reference-style link's URL lives on its definition), with code spans, code blocks and raw
+ * HTML left out. What the Sources list scans to decide
  * which sources a reply cites (CitableSources), so a file name or `[1]` inside code is not a citation.
  */
 export const replyProse = (markdown: string): string => {
@@ -82,7 +83,7 @@ export const replyProse = (markdown: string): string => {
   const visit = (node: Root | RootContent): void => {
     if (NON_PROSE.has(node.type)) return;
     if (node.type === 'text') parts.push(node.value);
-    if (node.type === 'link') parts.push(node.url);
+    if (node.type === 'link' || node.type === 'definition') parts.push(node.url);
     if ('children' in node) node.children.forEach(visit);
   };
   visit(unified().use(remarkParse).parse(markdown));
