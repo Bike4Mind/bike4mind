@@ -24,5 +24,6 @@ export async function buildMusicToolConfig(
   return {
     usableModels,
     createJob: input => createMusicJob(input, deps.createDeps),
+    findJob: jobId => deps.createDeps.repository.findById(jobId),
   };
 }

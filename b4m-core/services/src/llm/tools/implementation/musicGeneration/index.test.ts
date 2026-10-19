@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ARTIST_REFERENCE_REFUSAL,
+  PROVIDER_BLOCK_REFUSAL,
   isMusicToolConfig,
   musicGenerationTool,
   namesArtistReference,
@@ -9,16 +10,22 @@ import {
 
 const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 
-type BuildOptions = { questId?: string; usableModels?: MusicToolConfig['usableModels'] };
+type BuildOptions = {
+  questId?: string;
+  usableModels?: MusicToolConfig['usableModels'];
+  findJob?: MusicToolConfig['findJob'];
+};
 
 const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = {}) => {
-  const { usableModels = ['test-music'] } = options;
+  const { usableModels = ['test-music'], findJob } = options;
   const questId = 'questId' in options ? options.questId : 'q1';
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
   const onFinish = vi.fn();
-  const config: MusicToolConfig = { usableModels, createJob };
+  const config: MusicToolConfig = { usableModels, createJob, ...(findJob && { findJob }) };
+  const logger = { warn: vi.fn() };
   const context = {
+    logger,
     userId: 'u1',
     organizationId: 'org1',
     sessionId: 's1',
@@ -27,7 +34,7 @@ const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = 
     onStart,
     onFinish,
   } as never;
-  return { tool: musicGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish };
+  return { tool: musicGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish, logger };
 };
 
 describe('music_generation tool', () => {
@@ -235,5 +242,97 @@ describe('music_generation tool', () => {
     expect(isMusicToolConfig({ usableModels: ['test-music'] })).toBe(false);
     expect(isMusicToolConfig(null)).toBe(false);
     expect(isMusicToolConfig({ usableModels: ['test-music'], createJob: vi.fn() })).toBe(true);
+  });
+
+  describe('early provider block', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    const running = { id: 'job1', kind: 'music', state: 'running', payload: {} };
+    const blocked = {
+      id: 'job1',
+      kind: 'music',
+      state: 'blocked',
+      error: { code: 'content_blocked', message: 'blocked' },
+      payload: {},
+    };
+    const runningJob = { ok: true as const, created: true, job: running };
+
+    // Advances through the whole wait so a call that polls to the end still resolves.
+    const call = async (tool: ReturnType<typeof build>['tool'], prompt = 'a sea shanty') => {
+      const pending = tool.toolFn({ model: 'test-music', prompt });
+      await vi.advanceTimersByTimeAsync(10_000);
+      return pending;
+    };
+
+    it('asks for a rephrase without a card when the provider blocks the prompt during the wait', async () => {
+      const findJob = vi.fn().mockResolvedValueOnce(running).mockResolvedValue(blocked);
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(await call(tool)).toBe(PROVIDER_BLOCK_REFUSAL);
+      expect(findJob).toHaveBeenCalledTimes(2);
+      expect(statusUpdate).not.toHaveBeenCalled();
+    });
+
+    it('asks for a rephrase when the job is already blocked at creation, without polling', async () => {
+      const findJob = vi.fn();
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue({ ok: true, created: true, job: blocked }), {
+        findJob,
+      });
+      expect(await call(tool)).toBe(PROVIDER_BLOCK_REFUSAL);
+      expect(findJob).not.toHaveBeenCalled();
+      expect(statusUpdate).not.toHaveBeenCalled();
+    });
+
+    it('asks for a rephrase only once, so a second block shows the card', async () => {
+      const createJob = vi
+        .fn()
+        .mockResolvedValueOnce(runningJob)
+        .mockResolvedValueOnce({ ok: true, created: true, job: { ...running, id: 'job2' } });
+      const findJob = vi.fn().mockResolvedValue(blocked);
+      const { tool, statusUpdate } = build(createJob, { findJob });
+      expect(await call(tool)).toBe(PROVIDER_BLOCK_REFUSAL);
+      expect(JSON.parse(await call(tool, 'a calmer sea shanty'))).toEqual({ jobId: 'job2', estimatedSeconds: 2 });
+      expect(findJob).toHaveBeenCalledTimes(1);
+      expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job2', kind: 'music' }] });
+    });
+
+    it('shares the one rephrase with the artist guard', async () => {
+      const findJob = vi.fn().mockResolvedValue(blocked);
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(await call(tool, 'a song in the style of Example Band')).toBe(ARTIST_REFERENCE_REFUSAL);
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(findJob).not.toHaveBeenCalled();
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the card for a billed block so the charge stays visible', async () => {
+      const findJob = vi.fn().mockResolvedValue({ ...blocked, payload: { billedBlock: true } });
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('reports other terminal outcomes as a started job with its card', async () => {
+      const findJob = vi.fn().mockResolvedValue({ ...running, state: 'failed', error: { code: 'provider_error' } });
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('stops waiting after six polls and reports the running job', async () => {
+      const findJob = vi.fn().mockResolvedValue(running);
+      const { tool, statusUpdate } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(findJob).toHaveBeenCalledTimes(6);
+      expect(statusUpdate).toHaveBeenCalledOnce();
+    });
+
+    it('still shows the card when reading the job back fails', async () => {
+      const findJob = vi.fn().mockRejectedValue(new Error('db down'));
+      const { tool, statusUpdate, logger } = build(vi.fn().mockResolvedValue(runningJob), { findJob });
+      expect(JSON.parse(await call(tool))).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+      expect(statusUpdate).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledOnce();
+    });
   });
 });
