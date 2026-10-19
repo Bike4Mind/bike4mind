@@ -106,7 +106,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // RESOLVES the id rather than testing membership: an allowlisted id an admin has disabled (or a
     // lake bound to a since-delisted id) would otherwise suppress the identity here while the
     // completion path injects nothing, leaving the session with no system prompt at all.
-    // Prepended ahead of any client-sent context.
+    // Prepended ahead of any client-sent context. The quest runs in another process that reloads and
+    // re-resolves the session, so this resolve is not threaded through; a mismatch only moves the identity.
     if (!(await sessionWillInjectAuthoredPrompt(session, { user: req.user, logger: req.logger }))) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
