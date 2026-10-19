@@ -3,9 +3,11 @@
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
-from desktop_affected import affected, commit_affected
+from functools import lru_cache
+from desktop_affected import affected, commit_affected, read
 
 
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
@@ -30,6 +32,66 @@ def bump_level(message):
     return 1
 
 
+@lru_cache(maxsize=128)
+def shared_note_inputs(ref):
+    paths = set(git('ls-tree', '-r', '--name-only', ref).splitlines())
+    manifests = {}
+    for path in paths:
+        if path.endswith('/package.json') and path.count('/') == 2 and path.startswith(('apps/', 'packages/', 'b4m-core/')):
+            manifest = json.loads(read(ref, path) or '{}')
+            manifests[manifest.get('name', path)] = posixpath.dirname(path)
+    pending = []
+    for path in paths:
+        if path.startswith('apps/desktop/src/') and path.endswith(('.ts', '.tsx')) and not path.endswith(('.test.ts', '.test.tsx')):
+            source = read(ref, path) or ''
+            for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](@bike4mind/[^'"]+)['"]''', source):
+                parts = specifier.split('/')
+                folder = manifests.get('/'.join(parts[:2]))
+                if not folder:
+                    continue
+                if len(parts) == 2:
+                    # Bare imports expose a package barrel; retain its source conservatively.
+                    pending.extend(p for p in paths if p.startswith(folder + '/src/'))
+                else:
+                    target = folder + '/src/' + '/'.join(parts[2:])
+                    pending.extend(p for p in (target + '.ts', target + '.tsx', target + '/index.ts') if p in paths)
+    reachable = set()
+    while pending:
+        path = pending.pop()
+        if path in reachable or path not in paths:
+            continue
+        reachable.add(path)
+        source = read(ref, path) or ''
+        for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](\.[^'"]+)['"]''', source):
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(path), specifier))
+            if target.endswith('.js'):
+                target = target[:-3]
+            for candidate in (target, target + '.ts', target + '.tsx', target + '/index.ts'):
+                if candidate in paths:
+                    pending.append(candidate)
+                    break
+    return reachable
+
+
+def note_relevant(sha):
+    parents = git('rev-list', '--parents', '-n', '1', sha).split()
+    paths = git('diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '--no-renames',
+                *([parents[1], sha] if len(parents) > 1 else [sha])).splitlines()
+    shared = shared_note_inputs(sha)
+    if len(parents) > 1:
+        shared = shared | shared_note_inputs(parents[1])
+    for path in paths:
+        if (path.endswith(('.md', '.mdx', '.test.ts', '.test.tsx', '.spec.ts', '.spec.tsx'))
+                or '/__tests__/' in path or '/__fixtures__/' in path
+                or posixpath.basename(path) == 'package.json'):
+            continue
+        if path.startswith(('apps/desktop/src/', 'apps/desktop/resources/')) or path in shared:
+            return True
+        if path.startswith('apps/desktop/') and not posixpath.basename(path).startswith(('test_', 'test.', 'vitest.')):
+            return True
+    return False
+
+
 def release_notes(version, previous, repository, destination):
     changes = []
     revisions = git('rev-list', '--first-parent', f'{previous}..HEAD') if previous else git('rev-list', '-n', '1', 'HEAD')
@@ -43,8 +105,13 @@ def release_notes(version, previous, repository, destination):
     if not previous:
         reason = 'initial package baseline'
     lines = [f'# Desktop {version}', '', f'Version selection: {reason}.', '', '## Changes', '']
+    visible = [(sha, subject) for sha, subject, _ in changes
+               if not re.match(r'(?:docs|test|ci|style|chore\(release\))(?:\(|:|!)', subject)
+               and note_relevant(sha)]
     lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
-                 for sha, subject, _ in changes)
+                 for sha, subject in visible)
+    if not visible:
+        lines.append('- Maintenance release; no desktop-facing changes.')
     lines.extend(['', '## Installation', '',
                   'Run this in a terminal on macOS (Apple Silicon) or Linux (x64); rerun it to update:', '',
                   f'    curl -fsSL https://github.com/{destination}/releases/latest/download/install.sh | sh', '',

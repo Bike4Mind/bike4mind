@@ -222,6 +222,61 @@ class DesktopVersionTest(unittest.TestCase):
         self.assertNotIn('feat(web): unrelated', notes)
         self.assertIn('https://github.com/example/repo/commit/', notes)
 
+    def test_notes_exclude_server_code_and_release_bookkeeping(self):
+        self.commit('fix(retrieval): server-only change', 'b4m-core/services/src/llm/retrieval.ts')
+        self.commit('fix(api): backend-only change', 'apps/client/pages/api/chat.ts')
+        Path('apps/desktop/package.json').write_text('{"name":"@bike4mind/desktop","version":"0.1.1"}')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'chore(release): version packages')
+        self.commit('test(desktop): expand coverage', 'apps/desktop/src/app.test.ts')
+        self.commit('fix(desktop): repair window')
+        notes = release_notes('0.1.1', 'desktop-v0.1.0', 'example/repo', 'example/dist')
+        self.assertIn('fix(desktop): repair window', notes)
+        for subject in ('fix(retrieval)', 'fix(api)', 'chore(release)', 'test(desktop)'):
+            self.assertNotIn(subject, notes)
+
+    def test_notes_keep_shared_desktop_modules_not_whole_packages(self):
+        sources = {
+            'apps/desktop/src/imports.ts': """import '@unused';
+import { parse } from '@bike4mind/cli/skills';
+import { scan } from '@bike4mind/utils/artifactParser';
+import { model } from '@bike4mind/common';
+import { client } from '@bike4mind/mcp';""",
+            'b4m-core/utils/package.json': '{"name":"@bike4mind/utils"}',
+            'packages/cli/package.json': '{"name":"@bike4mind/cli"}',
+            'b4m-core/common/package.json': '{"name":"@bike4mind/common"}',
+            'b4m-core/mcp/package.json': '{"name":"@bike4mind/mcp"}',
+            'b4m-core/utils/src/artifactParser.ts': "export { scan } from './scanner';",
+            'b4m-core/utils/src/scanner.ts': 'export const scan = 1;',
+            'packages/cli/src/skills/index.ts': "export { parse } from '../utils/commandParser.js';",
+            'packages/cli/src/utils/commandParser.ts': 'export const parse = 1;',
+        }
+        for path, source in sources.items():
+            file = Path(path)
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(source)
+        self.commit('chore: shared baseline')
+        self.git('tag', 'desktop-v0.1.1')
+        for subject, path in (
+            ('fix(utils): artifact scan', 'b4m-core/utils/src/scanner.ts'),
+            ('fix(cli): skill parsing', 'packages/cli/src/utils/commandParser.ts'),
+            ('fix(cli): unrelated command', 'packages/cli/src/core/agent.ts'),
+            ('fix(utils): server extraction', 'b4m-core/utils/src/server.ts'),
+            ('fix(common): shared model', 'b4m-core/common/src/models.ts'),
+            ('fix(mcp): shared transport', 'b4m-core/mcp/src/client.ts'),
+        ):
+            self.commit(subject, path)
+        from desktop_release_version import note_relevant
+        for sha in self.git('rev-list', 'desktop-v0.1.1..HEAD').splitlines():
+            subject = self.git('show', '-s', '--format=%s', sha)
+            self.assertEqual(note_relevant(sha), 'unrelated' not in subject and 'server extraction' not in subject)
+
+    def test_notes_explain_empty_maintenance_release(self):
+        self.commit('test(desktop): expand coverage', 'apps/desktop/src/app.test.ts')
+        notes = release_notes('0.1.1', 'desktop-v0.1.0', 'example/repo', 'example/dist')
+        self.assertIn('Maintenance release; no desktop-facing changes.', notes)
+        self.assertNotIn('test(desktop): expand coverage', notes)
+
 
 if __name__ == '__main__':
     unittest.main()
