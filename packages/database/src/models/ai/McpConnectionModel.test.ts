@@ -545,6 +545,34 @@ describe('McpConnectionModel', () => {
       expect(updated?.tools[0]).toMatchObject({ name: 'create_issue', state: 'pending_review', enabled: false });
     });
 
+    it('updateDiscovery drops a result that ran on a rotated API key and keeps one on the current key', async () => {
+      const created = await mcpConnectionRepository.create(apiKeyConnection());
+      await mcpConnectionRepository.setApiKey(created.id, OWNER, {
+        headerName: 'Authorization',
+        scheme: 'Bearer',
+        valueEnc: 'enc:rotated',
+        last4: 'wxyz',
+      });
+      const base = { tools: [tool('a')], fingerprint: 'fp-1', expectedFingerprint: null, expectedRevision: 0 };
+      expect(
+        await mcpConnectionRepository.updateDiscovery(created.id, {
+          ...base,
+          markConnected: true,
+          expectedApiKeyValueEnc: 'enc:key',
+        })
+      ).toBeNull();
+      const untouched = await McpConnection.findById(created.id);
+      expect(untouched?.toolsFingerprint ?? null).toBeNull();
+      expect(untouched?.tools ?? []).toHaveLength(0);
+
+      const stored = await mcpConnectionRepository.updateDiscovery(created.id, {
+        ...base,
+        markConnected: true,
+        expectedApiKeyValueEnc: 'enc:rotated',
+      });
+      expect(stored?.status).toBe('connected');
+    });
+
     it('updateDiscovery with markConnected connects and clears lastError and authChallenge in one write', async () => {
       const created = await mcpConnectionRepository.create(
         apiKeyConnection({ status: 'error', lastError: { code: 'timeout', message: 'slow', at: new Date() } })

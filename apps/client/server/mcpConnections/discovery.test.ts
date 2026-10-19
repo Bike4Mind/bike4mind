@@ -12,7 +12,7 @@ interface StoredConnection {
   tools: IMcpConnectionTool[];
   toolsFingerprint?: string;
   toolsRevision?: number;
-  auth?: { kind: string; oauth?: { hasAccessToken?: boolean } };
+  auth?: { kind: string; oauth?: { hasAccessToken?: boolean }; apiKey?: { valueEnc: string } };
   lastError?: unknown;
   authChallenge?: unknown;
 }
@@ -33,6 +33,9 @@ const repo = vi.hoisted(() => ({
   updateDiscovery: vi.fn(async (_id: string, update: McpDiscoveryUpdate) => {
     state.beforeWrite.shift()?.();
     const doc = state.doc!;
+    if (update.expectedApiKeyValueEnc !== undefined && doc.auth?.apiKey?.valueEnc !== update.expectedApiKeyValueEnc) {
+      return null;
+    }
     if (
       (doc.toolsFingerprint ?? null) !== update.expectedFingerprint ||
       (doc.toolsRevision ?? 0) !== update.expectedRevision
@@ -51,6 +54,9 @@ const repo = vi.hoisted(() => ({
     }
     return structuredClone(doc);
   }),
+  findByIdWithCredentials: vi.fn(async (_id: string, owner: { ownerKey: string }) =>
+    state.doc && state.doc.ownerKey === owner.ownerKey ? structuredClone(state.doc) : null
+  ),
   setStatus: vi.fn(async (_id: string, status: string) => {
     state.doc!.status = status;
     return structuredClone(state.doc!);
@@ -71,7 +77,8 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
     }),
   },
 }));
-vi.mock('./invokeRemoteMcp', () => ({ invokeRemoteMcp: vi.fn(async () => state.listed) }));
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock('./invokeRemoteMcp', () => ({ invokeRemoteMcp: invokeMock }));
 
 const { discoverConnectionTools, DISCOVERY_MAX_ATTEMPTS } = await import('./discovery');
 
@@ -92,6 +99,7 @@ function saveReview(name: string, settings: Partial<IMcpConnectionTool>): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  invokeMock.mockImplementation(async () => state.listed);
   state.audits.length = 0;
   state.beforeWrite.length = 0;
   state.toolBytes = undefined;
@@ -244,5 +252,27 @@ describe('discoverConnectionTools', () => {
     expect(repo.updateDiscovery).toHaveBeenCalledWith('c1', expect.objectContaining({ markConnected: false }));
     expect(outcome.connection.status).toBe('pending_auth');
     expect(state.doc!.tools.map(t => t.name)).toEqual(['search']);
+  });
+  it('abandons without retrying when the API key was rotated after the tools were listed', async () => {
+    state.doc!.auth = { kind: 'api_key', apiKey: { valueEnc: 'enc:old' } };
+    state.listed = listed([{ name: 'search', description: 'Search', inputSchema: { type: 'object' } }]);
+    invokeMock.mockImplementation(
+      async (_request: unknown, options: { onApiKeyLoaded?: (v: string | null) => void }) => {
+        options.onApiKeyLoaded?.('enc:old');
+        state.doc!.auth = { kind: 'api_key', apiKey: { valueEnc: 'enc:new' } };
+        return state.listed;
+      }
+    );
+
+    await expect(discoverConnectionTools('c1', 'user-1')).rejects.toMatchObject({
+      additionalInfo: { code: 'api_key_rotated' },
+    });
+    expect(repo.updateDiscovery).toHaveBeenCalledTimes(1);
+    expect(repo.updateDiscovery).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ expectedApiKeyValueEnc: 'enc:old' })
+    );
+    expect(state.doc!.status).toBe('pending_auth');
+    expect(state.doc!.tools).toEqual([]);
   });
 });

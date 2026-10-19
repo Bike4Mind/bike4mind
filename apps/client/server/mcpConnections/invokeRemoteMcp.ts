@@ -174,6 +174,8 @@ export interface InvokeRemoteMcpOptions {
   runner?: RemoteMcpRunner;
   /** Reuse a context the caller already resolved for this request. */
   context?: CustomMcpContext;
+  /** Called with the stored API key the run will use, so a caller can guard its own write against rotation. */
+  onApiKeyLoaded?: (valueEnc: string | null) => void;
 }
 
 function sha256(value: string): string {
@@ -395,6 +397,7 @@ export async function invokeRemoteMcp(
   const owner = { ownerType: 'user' as const, ownerKey: request.userId };
   const connection = await mcpConnectionRepository.findByIdWithCredentials(request.connectionId, owner);
   if (!connection) throw new NotFoundError('Connection not found');
+  if (connection.auth.kind === 'api_key') options.onApiKeyLoaded?.(connection.auth.apiKey?.valueEnc ?? null);
 
   const args = request.action === 'callTool' ? (request.args ?? {}) : undefined;
   const serializedArgs = args ? JSON.stringify(args) : undefined;

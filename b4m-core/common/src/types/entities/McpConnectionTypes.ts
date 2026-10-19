@@ -580,6 +580,11 @@ export interface McpDiscoveryUpdate {
    * token does not match, so the write resolves null like a lost compare-and-set.
    */
   markConnected?: boolean;
+  /**
+   * API-key connections: the stored `auth.apiKey.valueEnc` the discovery ran with. A rotated key
+   * does not match, so the write resolves null and must be abandoned, not retried.
+   */
+  expectedApiKeyValueEnc?: string | null;
 }
 
 /** A rotated API key; the caller encrypts the value and derives `last4`. */

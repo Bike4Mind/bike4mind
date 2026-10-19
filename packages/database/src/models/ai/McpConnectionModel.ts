@@ -616,6 +616,9 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
         toolsFingerprint: update.expectedFingerprint,
         toolsRevision: revisionFilter,
         ...(update.markConnected ? CONNECTABLE_FILTER : {}),
+        ...(update.expectedApiKeyValueEnc !== undefined
+          ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': update.expectedApiKeyValueEnc }
+          : {}),
       },
       {
         $set: set,

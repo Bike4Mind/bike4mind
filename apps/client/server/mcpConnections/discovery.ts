@@ -71,6 +71,15 @@ function cleanServerInfo(listed: RemoteMcpListToolsResult): IMcpConnectionServer
   };
 }
 
+async function apiKeyRotated(
+  connectionId: string,
+  owner: { ownerType: 'user'; ownerKey: string },
+  usedValueEnc: string | null
+): Promise<boolean> {
+  const latest = await mcpConnectionRepository.findByIdWithCredentials(connectionId, owner);
+  return !latest || (latest.auth.apiKey?.valueEnc ?? null) !== usedValueEnc;
+}
+
 const nameSha256 = (name: string) => createHash('sha256').update(name, 'utf8').digest('hex');
 
 /**
@@ -85,7 +94,17 @@ export async function discoverConnectionTools(
   userId: string,
   options: InvokeRemoteMcpOptions = {}
 ): Promise<DiscoveryOutcome> {
-  const listed = await invokeRemoteMcp({ action: 'listTools', connectionId, userId }, options);
+  let apiKeyValueEnc: string | null | undefined;
+  const listed = await invokeRemoteMcp(
+    { action: 'listTools', connectionId, userId },
+    {
+      ...options,
+      onApiKeyLoaded: valueEnc => {
+        apiKeyValueEnc = valueEnc;
+        options.onApiKeyLoaded?.(valueEnc);
+      },
+    }
+  );
   const { tools: cleaned, dropped: refused } = cleanDiscoveredTools(listed.tools);
   const serverInfo = cleanServerInfo(listed);
   const owner = { ownerType: 'user' as const, ownerKey: userId };
@@ -113,8 +132,17 @@ export async function discoverConnectionTools(
       dropped,
       // An OAuth connection whose token was cleared stays as it is; the tools are still stored.
       markConnected: current.auth?.kind !== 'oauth' || current.auth.oauth?.hasAccessToken === true,
+      ...(apiKeyValueEnc !== undefined ? { expectedApiKeyValueEnc: apiKeyValueEnc } : {}),
     });
-    if (!stored) continue;
+    if (!stored) {
+      // A rotated key makes every retry fail the same way, and the result came from the old key.
+      if (apiKeyValueEnc !== undefined && (await apiKeyRotated(connectionId, owner, apiKeyValueEnc))) {
+        throw new ConflictError('The API key changed while the tools were being refreshed; try again', {
+          code: 'api_key_rotated',
+        });
+      }
+      continue;
+    }
 
     const refusedHere = [...refused, ...overflow];
     if (refusedHere.length > 0) {
