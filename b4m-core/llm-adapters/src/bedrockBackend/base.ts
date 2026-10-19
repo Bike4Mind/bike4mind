@@ -52,6 +52,11 @@ interface BedrockOptions {
 // outages still need provider/model fallback (tracked separately).
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 
+// A failed tool-use turn rethrows through every enclosing catch. Logging each time would repeat the
+// error once per recursion depth, and the outer entries would describe a request that never failed.
+// The innermost catch sees the failing payload, so it logs and the rest stay quiet.
+const loggedErrors = new WeakSet<Error>();
+
 /**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
  * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
@@ -986,13 +991,20 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
         // One entry, so the alert carries the real error. The request is described by shape only:
         // error logs reach a shared alert channel and must never include prompt text.
-        const { $fault, $metadata } = error as Error & { $fault?: unknown; $metadata?: unknown };
+        if (loggedErrors.has(error)) throw error;
+        loggedErrors.add(error);
+        const { $fault, $metadata, $retryable } = error as Error & {
+          $fault?: unknown;
+          $metadata?: unknown;
+          $retryable?: unknown;
+        };
         Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${error.name}`, {
           name: error.name,
           message: error.message,
           stack: error.stack,
           $fault,
           $metadata,
+          $retryable,
           request: {
             modelId: input.modelId,
             contentType: input.contentType,
