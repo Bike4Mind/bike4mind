@@ -113,6 +113,9 @@ vi.mock('@bike4mind/services/llm', async () => {
       getAllAgents() {
         return [];
       }
+      getExclusiveMcpServers() {
+        return [];
+      }
       getAgent() {
         return { name: 'researcher', allowedTools: [], deniedTools: [] };
       }
@@ -130,6 +133,13 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
+
+const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
+vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+  premiumWorkspaceSessionSettings: {
+    'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
+  },
+}));
 
 const execDoc = {
   id: 'exec-1',
@@ -303,5 +313,33 @@ describe('processExecution tool deps', () => {
     const deps = await runWithSession({ ...baseSession, includeLibraryFiles: false, forceKnowledgeRetrieval: false });
 
     expect(deps.sessionIncludeLibraryFiles).toBe(true);
+  });
+
+  describe('contributed workspace session settings', () => {
+    it('withholds delegation when the workspace resolves integrations off', async () => {
+      resolveWorkspaceSettings.mockResolvedValue({ disableUserIntegrations: true });
+      const deps = await runWithSession({
+        ...baseSession,
+        surface: 'settings-workspace',
+        disableUserIntegrations: false,
+      });
+
+      expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
+      expect(deps.agentStore).toBeUndefined();
+    });
+
+    it('drops a baked integrations opt-out the workspace no longer resolves', async () => {
+      resolveWorkspaceSettings.mockResolvedValue({});
+      const deps = await runWithSession({ ...baseSession, surface: 'settings-workspace' });
+
+      expect(deps.agentStore).toBeDefined();
+    });
+
+    it('keeps the stored flag on a session outside any contributed workspace', async () => {
+      const deps = await runWithSession(baseSession);
+
+      expect(resolveWorkspaceSettings).not.toHaveBeenCalled();
+      expect(deps.agentStore).toBeUndefined();
+    });
   });
 });

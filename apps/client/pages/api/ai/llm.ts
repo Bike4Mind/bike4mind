@@ -107,7 +107,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // lake bound to a since-delisted id) would otherwise suppress the identity here while the
     // completion path injects nothing, leaving the session with no system prompt at all.
     // Prepended ahead of any client-sent context.
-    if (!(await sessionWillInjectAuthoredPrompt(session))) {
+    if (!(await sessionWillInjectAuthoredPrompt(session, { user: req.user, logger: req.logger }))) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
         invokeParams.extraContextMessages = [...identityPrompts, ...(invokeParams.extraContextMessages ?? [])];

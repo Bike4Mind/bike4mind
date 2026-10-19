@@ -14,6 +14,7 @@ import { redactSessionForClient } from '@bike4mind/common';
 import { stampGear } from '@bike4mind/server-utils/services/gears/stampGear';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, { targetSurface?: unknown } | undefined, { id?: string; messageId?: string }>(
@@ -51,6 +52,7 @@ const handler = baseApi().post(
             resolveLakeAccess: async () =>
               (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
             resolveSurfaceAccess: copySurfaceAccessForRequest(req),
+            workspaceSessionSettings: premiumWorkspaceSessionSettings,
           }
         )
       );
