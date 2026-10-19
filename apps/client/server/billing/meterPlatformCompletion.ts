@@ -26,7 +26,11 @@ import {
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
-import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+  type CreditReservation,
+} from '@server/billing/reserveRequestCredits';
 
 /**
  * Metering for routes that run a text completion outside ChatCompletionInvoke (so nothing else
@@ -34,7 +38,7 @@ import { reserveRequestCredits, type CreditReservation } from '@server/billing/r
  * settleCompletion on success or reservation.refund() on a throw.
  */
 
-type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
+export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
   apiKeyInfo?: { keyId?: string };
   headers: IncomingHttpHeaders;
 };
@@ -233,8 +237,21 @@ export function createRequestCompletionMeter(
  * no credits or the member is at their org cap. A no-op when enforceCredits is off.
  */
 export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
+  await assertCanAfford(user, user.organizationId ? String(user.organizationId) : undefined);
+}
+
+/**
+ * assertOwnerCanAfford for work a route runs inline through createRequestCompletionMeter: gates the owner
+ * the request bills (resolveRequestBillingOrgId), so an API key's billing owner is checked, not the
+ * key holder's org seat.
+ */
+export async function assertRequestCanAfford(req: MeteredRequest & { user: IUserDocument }): Promise<void> {
+  await assertCanAfford(req.user, resolveRequestBillingOrgId(req));
+}
+
+async function assertCanAfford(user: IUserDocument, organizationId: string | undefined): Promise<void> {
   if (!(await isCreditsEnforced())) return;
-  const org = user.organizationId ? await organizationRepository.findById(String(user.organizationId)) : null;
+  const org = organizationId ? await organizationRepository.findById(organizationId) : null;
   if (org && creditService.isMemberAtOrOverCap(org, user.id)) {
     throw insufficientCreditsError(creditService.MEMBER_CREDIT_CAP_MESSAGE);
   }

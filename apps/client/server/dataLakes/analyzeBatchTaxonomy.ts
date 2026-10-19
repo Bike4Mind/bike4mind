@@ -23,7 +23,11 @@ import {
 } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
 import { runTaxonomyInference, sampleFabFilesForTaxonomy } from '@server/dataLakes/runTaxonomyInference';
-import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import {
+  createCompletionMeter,
+  createRequestCompletionMeter,
+  type MeteredRequest,
+} from '@server/billing/meterPlatformCompletion';
 import { Resource } from 'sst';
 
 export interface AnalyzeBatchTaxonomyResult {
@@ -76,7 +80,8 @@ export async function analyzeBatchTaxonomy(
   dataLakeId: string,
   userId: string,
   logger: Logger,
-  options: ({ from: TaxonomyStatus[] } | { claimHeldByCaller: true }) & { context?: string }
+  // `req`: the inline re-analyze route's request, so an API-key caller bills the key's billing owner.
+  options: ({ from: TaxonomyStatus[] } | { claimHeldByCaller: true }) & { context?: string; req?: MeteredRequest }
 ): Promise<AnalyzeBatchTaxonomyResult> {
   if ('from' in options && !(await claimBatchForAnalysis(batchId, options.from))) return { claimed: false };
 
@@ -114,13 +119,15 @@ export async function analyzeBatchTaxonomy(
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) return fail('Data lake not found');
 
-  // The inference call is billed to the user who uploaded (or re-analyzes) the batch.
+  // Billed to the uploader, or on a re-analyze to the owner the request bills (an API key may bill its org).
   const user = (await userRepository.findById(userId)) as IUserDocument | null;
   if (!user) return fail('User not found');
   const models = await getAvailableModels({ openai: openaiApiKey });
   const modelInfo = models.find(m => m.id === ChatModels.GPT4o_MINI);
   if (!modelInfo) return fail('Taxonomy model is not available');
-  const meter = createCompletionMeter(user, logger, 'data lake taxonomy', { systemModel: true });
+  const meter = options.req
+    ? createRequestCompletionMeter(options.req, 'data lake taxonomy', { systemModel: true })
+    : createCompletionMeter(user, logger, 'data lake taxonomy', { systemModel: true });
 
   const folderTree = sampleFabFilesForTaxonomy(files);
   let response: InferTaxonomyResponse;

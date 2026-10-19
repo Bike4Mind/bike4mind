@@ -43,6 +43,7 @@ import {
   completionCeilingUsd,
   completionUsd,
   assertOwnerCanAfford,
+  assertRequestCanAfford,
   createModelAdmission,
   createRequestCompletionMeter,
   reserveCompletionCredits,
@@ -291,5 +292,39 @@ describe('assertOwnerCanAfford', () => {
   it('admits anyone when credits are not enforced', async () => {
     m.enforceCredits = false;
     await expect(assertOwnerCanAfford({ id: 'u1', currentCredits: 0 } as never)).resolves.toBeUndefined();
+  });
+});
+
+describe('assertRequestCanAfford', () => {
+  const seatHolder = { id: 'u1', organizationId: 'seat', currentCredits: 500 };
+  const keyReq = (apiKeyInfo: unknown) => ({ user: seatHolder, apiKeyInfo, logger, headers: {} }) as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.enforceCredits = true;
+    m.orgFindById.mockImplementation(async (id: string) =>
+      id === 'seat'
+        ? { id, currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] }
+        : { id, currentCredits: 0, userDetails: [], users: [{ userId: 'u1' }] }
+    );
+  });
+
+  it("gates an org-billed key's org, not the holder's funded seat", async () => {
+    await expect(
+      assertRequestCanAfford(keyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }))
+    ).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.orgFindById).toHaveBeenCalledWith('key-org');
+  });
+
+  it("gates a user-billed key's user, not the holder's org seat", async () => {
+    await expect(
+      assertRequestCanAfford({
+        user: { ...seatHolder, currentCredits: 0 },
+        apiKeyInfo: { billingOwnerType: CreditHolderType.User },
+        logger,
+        headers: {},
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.orgFindById).not.toHaveBeenCalled();
   });
 });

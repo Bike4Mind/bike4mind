@@ -21,7 +21,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
+import { assertRequestCanAfford } from '@server/billing/meterPlatformCompletion';
 
 // Shared with the automatic post-upload trigger (see taxonomyRateLimit.ts) - a manual
 // re-analyze is still a real OpenAI spend per click, same as the automatic path.
@@ -49,7 +49,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const userId = req.user.id;
 
     // Refuse before claiming the batch: a 422 here leaves it in its prior ready/failed state.
-    await assertOwnerCanAfford(req.user);
+    await assertRequestCanAfford(req);
     const ctx = await toAccessContext(req);
     // The gate and the claim serialize against a concurrent revoke; the inference call runs after
     // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
@@ -79,6 +79,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       result = await analyzeBatchTaxonomy(batchId, batch.dataLakeId, userId, req.logger, {
         claimHeldByCaller: true,
         context,
+        req,
       });
     } catch (error) {
       // Unlike the queue handler, there's no SQS retry available on this synchronous

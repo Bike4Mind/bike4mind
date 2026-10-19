@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   runTaxonomyInference: vi.fn(),
   sendToClient: vi.fn(),
   meter: vi.fn(),
+  requestMeter: vi.fn(),
+  createRequestCompletionMeter: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -19,7 +21,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: async (id: string) => ({ id }) },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: async () => [{ id: 'gpt-4o-mini' }] }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => h.meter }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: () => h.meter,
+  createRequestCompletionMeter: (...a: unknown[]) => h.createRequestCompletionMeter(...a),
+}));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveApiKey: h.getEffectiveApiKey } }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/dataLakes/runTaxonomyInference', () => ({
@@ -267,5 +272,18 @@ describe('analyzeBatchTaxonomy', () => {
       outcome: 'failed',
       error: 'Not enough credits to analyze this batch',
     });
+  });
+
+  it("meters a re-analyze through the caller's request, so an API key bills its billing owner", async () => {
+    h.createRequestCompletionMeter.mockReturnValue(h.requestMeter);
+    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1', taxonomyStatus: 'ready' });
+    const req = { user: { id: 'u1' }, apiKeyInfo: { keyId: 'k1' } };
+
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { claimHeldByCaller: true, req: req as never });
+    await h.runTaxonomyInference.mock.calls[0][2].reserve([], 10);
+
+    expect(h.createRequestCompletionMeter).toHaveBeenCalledWith(req, 'data lake taxonomy', { systemModel: true });
+    expect(h.requestMeter).toHaveBeenCalled();
+    expect(h.meter).not.toHaveBeenCalled();
   });
 });
