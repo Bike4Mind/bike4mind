@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DATA_LAKE_STATUSES } from '@bike4mind/common';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 // Unit-level test of the connect handler's gate + org-credential capture. The repository layer,
 // AWS/SQS, auth gate, and crypto are mocked; the Drive folder-id validation runs for real.

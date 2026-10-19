@@ -2,7 +2,7 @@ import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
-import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeConnector, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { isGeneratedLakeTagPrefix, type RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
@@ -29,7 +29,7 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
   // Drive connect needs an org manager on an org lake and the creator on a personal one server-side
   // (the status route 404s otherwise). Gating on the same condition keeps a permanently disabled
   // button off every header the caller cannot connect, rather than an action that can only fail.
-  const canConnectDrive = canConnectLakeDrive(lake);
+  const canConnectDrive = canConnectLakeConnector(lake);
 
   return (
     <Box

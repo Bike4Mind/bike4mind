@@ -96,7 +96,7 @@ function GitHubSyncSummary({ connection }: { connection: LakeGitHubConnection })
  * GitHubLakeCallbackPage route exchanges the return and opens the repository picker to finish it.
  * Create mode has no lake id to sign into the flow, so it is not offered there.
  *
- * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
+ * Callers gate this on EnableDataLakeGitHub and canConnectLakeConnector (org + manage), as for Drive.
  *
  * The start route refuses a lake that is not connector-fed (githubLakeConnection.ts), so a curated or
  * unknown origin asks to switch it first; an absent origin reads as curated, the stored default. The
@@ -137,7 +137,7 @@ export default function GitHubConnectAction({
   if (isError || (!connection && !canManage)) {
     // Same as DriveConnectAction: the read admits an appointed org admin, but connecting is owner/manager only.
     return (
-      <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake.">
+      <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake, and to the creator of a personal one.">
         <span>
           <Button
             data-testid="github-connect-unavailable-btn"

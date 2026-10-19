@@ -81,9 +81,9 @@ vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: vi.f
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
 import { dispatch } from './driveDisconnectPurge';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const payload = { connectionId: 'conn1', dataLakeId: 'lake1', organizationId: 'orgA' };
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -141,7 +141,7 @@ describe('driveDisconnectPurge consumer', () => {
 
     await run(personalPayload);
 
-    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'user1' };
+    const userOwner: LakeConnectionOwner = { kind: 'user', userId: 'user1' };
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
     expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', userOwner);
   });

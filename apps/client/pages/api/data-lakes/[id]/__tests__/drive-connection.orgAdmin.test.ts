@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Runs the REAL org gate (orgAccess + authorizeLakeDriveAccess) against a mocked org repository, so an
+// Runs the REAL org gate (orgAccess + authorizeLakeConnectorAccess) against a mocked org repository, so an
 // appointed org admin's read-vs-write standing is proven through the route rather than asserted on a
 // mocked gate. drive-connection.test.ts covers the handler logic with the gate stubbed.
 const ORG = '650000000000000000000abc';

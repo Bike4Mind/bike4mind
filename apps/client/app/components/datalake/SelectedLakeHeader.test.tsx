@@ -123,7 +123,7 @@ describe('SelectedLakeHeader', () => {
   });
 
   it('offers the Drive control on a personal lake the caller created', () => {
-    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeDriveAccess),
+    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeConnectorAccess),
     // so creation - not org management, and not effective ownership - is the gate here. GitHub stays
     // org-only.
     renderHeader({ organizationId: undefined, isCreator: true });

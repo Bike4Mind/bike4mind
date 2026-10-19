@@ -4,6 +4,7 @@ import {
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
   GITHUB_DISCONNECT_STALL_MS,
+  type LakeConnectionOwner,
   type GitHubLakeTreeCounts,
   type GitHubLakeReleaseStatus,
 } from '@bike4mind/common';
@@ -11,6 +12,7 @@ import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { findOrphanedLakeConnections } from './orphanedLakeConnections';
+import { lakeConnectionOwnerFilter } from './lakeConnectionOwnerFilter';
 import { randomUUID } from 'crypto';
 import { redactLastError } from './OrgGoogleDriveConnectionModel';
 
@@ -38,10 +40,10 @@ function staleSyncClaimClauses() {
 }
 
 // The negation of isGitHubLakeSyncClaimLive, as one atomic match so a claimForSync cannot land in between.
-function noLiveSyncClaimFilter(id: string, organizationId: string) {
+function noLiveSyncClaimFilter(id: string, owner: LakeConnectionOwner) {
   return {
     _id: id,
-    organizationId,
+    ...lakeConnectionOwnerFilter(owner),
     $or: [{ status: { $ne: 'syncing' } }, { syncClaimedAt: { $in: [null] } }, ...staleSyncClaimClauses()],
   };
 }
@@ -50,13 +52,13 @@ function noLiveSyncClaimFilter(id: string, organizationId: string) {
 const NOT_DISABLED = { enabled: { $ne: false } };
 
 /**
- * One GitHub repository -> one org data lake, through the read-only data-lake GitHub App. See
+ * One GitHub repository -> one data lake (org or personal), through the read-only data-lake GitHub App. See
  * IOrgGitHubLakeConnection for why this is not OrgGitHubConnection and why installationId repeats.
  * No credential is stored: the App mints short-lived installation tokens from its private key.
  */
 const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocument>(
   {
-    organizationId: { type: String, required: true },
+    organizationId: { type: String },
     targetDataLakeId: { type: String, required: true },
     installationId: { type: Number, required: true },
     accountLogin: { type: String, required: true, trim: true },
@@ -143,8 +145,8 @@ class OrgGitHubLakeConnectionRepository
   }
 
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
-  async release(id: string, organizationId: string): Promise<boolean> {
-    const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
+  async release(id: string, owner: LakeConnectionOwner): Promise<boolean> {
+    const res = await this.model.deleteMany({ _id: id, ...lakeConnectionOwnerFilter(owner) }, { hardDelete: true });
     const deleted = (res?.deletedCount ?? 0) > 0;
     if (deleted) await releaseLakeClaimBestEffort(id);
     return deleted;
@@ -171,8 +173,8 @@ class OrgGitHubLakeConnectionRepository
     return claimed !== null ? claimToken : null;
   }
 
-  async disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null> {
-    const disabled = await this.model.findOneAndUpdate(noLiveSyncClaimFilter(id, organizationId), {
+  async disableIfNoLiveSyncClaim(id: string, owner: LakeConnectionOwner): Promise<{ wasEnabled: boolean } | null> {
+    const disabled = await this.model.findOneAndUpdate(noLiveSyncClaimFilter(id, owner), {
       $set: { enabled: false },
     });
     return disabled ? { wasEnabled: disabled.enabled !== false } : null;
@@ -180,14 +182,14 @@ class OrgGitHubLakeConnectionRepository
 
   async markDisconnecting(
     id: string,
-    organizationId: string
+    owner: LakeConnectionOwner
   ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
     const stamp = new Date();
     // The pre-update document is what tells a creator apart from a re-stamp.
     // $and, not $or: the base filter's top-level $or is the live-sync guard.
     const previous = await this.model.findOneAndUpdate(
       {
-        ...noLiveSyncClaimFilter(id, organizationId),
+        ...noLiveSyncClaimFilter(id, owner),
         $and: [
           {
             $or: [
@@ -203,9 +205,9 @@ class OrgGitHubLakeConnectionRepository
     return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
   }
 
-  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+  async cancelDisconnect(id: string, owner: LakeConnectionOwner, stamp: Date, enabled: boolean): Promise<boolean> {
     const res = await this.model.updateOne(
-      { _id: id, organizationId, disconnectRequestedAt: stamp },
+      { _id: id, ...lakeConnectionOwnerFilter(owner), disconnectRequestedAt: stamp },
       { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
     );
     return res.matchedCount > 0;

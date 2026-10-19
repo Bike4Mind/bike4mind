@@ -21,19 +21,28 @@ import {
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { verifyOrgAccess, verifyOrgAdminRead } from '@server/utils/orgAccess';
+import {
+  authorizeLakeConnectorAccess,
+  authorizeLakeConnectorRead,
+} from '@server/dataLakes/authorizeLakeConnectorAccess';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { isLakeIngestable } from '@bike4mind/common';
+import {
+  isLakeIngestable,
+  isSameLakeConnectionOwner,
+  lakeConnectionOwnerOf,
+  type LakeConnectionOwner,
+} from '@bike4mind/common';
 import { Request } from 'express';
 
 /**
- * The lake's connection, scoped to the lake's org. findByDataLakeIdAny is global; the tenant
- * boundary is the caller's org gate (verifyOrgAdminRead on GET, verifyOrgAccess on DELETE), and the
- * org comparison here is defence in depth only (same contract as drive-connection.ts findLakeConnection).
+ * The lake's connection, scoped to the lake's owner. findByDataLakeIdAny is global; the tenant
+ * boundary is the caller's gate (authorizeLakeConnectorRead on GET, authorizeLakeConnectorAccess on
+ * DELETE), and the owner comparison here is defence in depth only (same contract as
+ * drive-connection.ts findLakeConnection).
  */
-async function findLakeConnection(lakeId: string, organizationId: string) {
+async function findLakeConnection(lakeId: string, owner: LakeConnectionOwner) {
   const conn = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(lakeId);
-  if (conn && conn.organizationId !== organizationId) {
+  if (conn && !isSameLakeConnectionOwner(lakeConnectionOwnerOf(conn), owner)) {
     throw new NotFoundError('GitHub connection not found');
   }
   return conn;
@@ -78,7 +87,7 @@ async function switchLakeToConnectorFed(req: Request, lakeId: string) {
 
 /**
  * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null,
- *        canManage: boolean } (always false for a personal lake: GitHub lakes are org-only, so there is nothing to manage)
+ *        canManage: boolean }
  * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
  *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
  *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
@@ -90,10 +99,10 @@ async function switchLakeToConnectorFed(req: Request, lakeId: string) {
  *        `disconnecting`, until the purge releases it - see requestGitHubLakeDisconnect), or 204
  *        when the lake has no connection
  *
- * Mirrors drive-connection.ts: GET answers a personal lake with a null connection (it genuinely has
- * none), so a 404 always means the lake is missing or the caller has no standing on its org. GET also
- * admits an appointed org admin (the view is credential-free); POST and DELETE are org owner/manager
- * (or platform admin) only, and `canManage` tells the client which controls to offer.
+ * Mirrors drive-connection.ts: a 404 means the lake is missing or the caller has no standing on it. On
+ * an org lake GET also admits an appointed org admin (the view is credential-free) while POST and
+ * DELETE are org owner/manager (or platform admin) only, and `canManage` tells the client which
+ * controls to offer. A personal lake admits its creator alone, on every verb.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -104,11 +113,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     if (!lake) {
       throw new NotFoundError('Data lake not found');
     }
-    if (!lake.organizationId) {
-      return res.json({ connection: null, canManage: false });
-    }
-    const { canManage } = await verifyOrgAdminRead(req.user, lake.organizationId);
-    const conn = await findLakeConnection(lake.id, lake.organizationId);
+    const { owner, canManage } = await authorizeLakeConnectorRead(req.user, lake);
+    const conn = await findLakeConnection(lake.id, owner);
     if (!conn) {
       return res.json({ connection: null, canManage });
     }
@@ -140,12 +146,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const lake = await dataLakeRepository.findById(id);
-    // A GitHub connection only exists for an org-scoped lake; a personal lake reads as not-found.
-    if (!lake?.organizationId) {
+    if (!lake) {
       throw new NotFoundError('Data lake not found');
     }
-    await verifyOrgAccess(req.user, lake.organizationId);
-    const conn = await findLakeConnection(lake.id, lake.organizationId);
+    const owner = await authorizeLakeConnectorAccess(req.user, lake);
+    const conn = await findLakeConnection(lake.id, owner);
     if (!conn) {
       return res.status(204).send();
     }

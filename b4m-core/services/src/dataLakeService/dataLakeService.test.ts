@@ -5674,14 +5674,15 @@ describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1
 });
 
 describe('setLakeVisibility - personal ↔ org promotion', () => {
-  const noDriveConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
+  const noConnection = () => ({ findByDataLakeIdAny: vi.fn().mockResolvedValue(null) });
   const makeDb = (existing: Partial<IDataLakeDocument> = {}, clashes: IDataLakeDocument[] = []) => ({
     dataLakes: {
       findById: vi.fn().mockResolvedValue(lake(existing)),
       find: vi.fn().mockResolvedValue(clashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   // A connection's owner follows its lake's scope, so a move would strand a bound row: every manage
@@ -5698,6 +5699,21 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       } as any)
     ).rejects.toThrow(/Disconnect this data lake's Google Drive folder/);
     expect(db.orgGoogleDriveConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['promoting a personal lake to an org', {}, 'organization'],
+    ['demoting an org lake to private', { organizationId: 'orgA' }, 'private'],
+  ] as const)('refuses %s while a GitHub repository is bound', async (_label, existing, visibility) => {
+    const db = makeDb(existing);
+    db.orgGitHubLakeConnections.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', enabled: false });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', visibility, {
+        db,
+      } as any)
+    ).rejects.toThrow(/Disconnect this data lake's GitHub repository/);
+    expect(db.orgGitHubLakeConnections.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
@@ -5727,7 +5743,8 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
       update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
     },
-    orgGoogleDriveConnections: noDriveConnection(),
+    orgGoogleDriveConnections: noConnection(),
+    orgGitHubLakeConnections: noConnection(),
   });
 
   it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {
