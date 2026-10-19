@@ -128,8 +128,6 @@ function mutateTools(toolListAccessor: ToolListAccessor, matched: ICompletionOpt
  */
 export function createToolSearchTool(options: ToolSearchToolOptions): ICompletionOptionTools {
   const { registry, logger } = options;
-  const loadStrategy: ToolLoadStrategyName = options.loadStrategy ?? 'mutateTools';
-  const { toolListAccessor } = options;
 
   return {
     toolSchema: {
@@ -182,7 +180,7 @@ export function createToolSearchTool(options: ToolSearchToolOptions): ICompletio
         return hint;
       }
 
-      if (loadStrategy === 'toolReference') {
+      if (options.loadStrategy === 'toolReference') {
         const references: ToolReferenceBlock[] = matched.map(t => ({
           type: 'tool_reference',
           tool_name: t.toolSchema.name,
@@ -192,7 +190,7 @@ export function createToolSearchTool(options: ToolSearchToolOptions): ICompletio
         return JSON.stringify(references);
       }
 
-      const added = mutateTools(toolListAccessor!, matched);
+      const added = mutateTools(options.toolListAccessor, matched);
       logger?.debug(
         `[tool_search] query="${query}" matched=${matched.length} added=${added} alreadyLoaded=${matched.length - added}`
       );
