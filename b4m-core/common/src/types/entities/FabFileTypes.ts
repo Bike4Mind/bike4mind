@@ -479,6 +479,13 @@ export interface IFabFile {
   moderationETag?: string;
 
   /**
+   * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
+   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * a server-side door writes bytes it already holds, and judging those would discard its file.
+   */
+  clientUpload?: boolean;
+
+  /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
    * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows

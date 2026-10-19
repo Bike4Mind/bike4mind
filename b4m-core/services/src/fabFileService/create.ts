@@ -270,6 +270,7 @@ export const prepareFabFile = async (
   } else {
     // Bound to the declared size, the one the size and storage checks above ran on.
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
+    buildData.clientUpload = true;
   }
 
   return buildData;

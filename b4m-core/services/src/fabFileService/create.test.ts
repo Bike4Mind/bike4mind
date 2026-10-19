@@ -256,6 +256,8 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    // Bytes this service wrote itself are not judged by the landed-size gate.
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
   });
 
   it('mints only a PUT presignedUrl (never a GET fileUrl) when no content is provided (client-upload path, unaffected)', async () => {
@@ -274,6 +276,8 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put', { ContentLength: 2048 });
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
+    // Marks the row for the landed-size gate, which judges only client uploads.
+    expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
 
   // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was

@@ -173,6 +173,8 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     const [, command, options] = vi.mocked(getSignedUrl).mock.calls.at(-1)!;
     expect((command as { input: { ContentLength?: number } }).input.ContentLength).toBe(1234);
     expect(options?.signableHeaders?.has('content-length')).toBe(true);
+    // Marks the row for the landed-size gate, which judges only client uploads.
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
 
   it('stamps the lake org as owner of every file uploaded into an org lake', async () => {

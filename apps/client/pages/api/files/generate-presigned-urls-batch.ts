@@ -286,6 +286,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
           // through. This web upload door is the common case the lake previously could not identify
           // (sourceType left unset); the connector and chat-platform doors already stamp their own.
           sourceType: FabFileSourceType.MANUAL_UPLOAD,
+          clientUpload: true,
           ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
           ...(fileItem.contentHash && { contentHash: fileItem.contentHash }),
           ...(fileItem.relativePath && { relativePath: fileItem.relativePath }),

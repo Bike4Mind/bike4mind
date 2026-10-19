@@ -30,7 +30,11 @@ const owner = (over: Partial<IUserDocument> = {}) =>
 
 const logger = { warn: vi.fn(), error: vi.fn() } as never;
 const judge = ({ measuredSize = 1000, ...row }: Partial<LandedUploadRow> & { measuredSize?: number } = {}) =>
-  judgeLandedUpload({ _id: 'ff1', userId: 'u1', fileSize: 1000, status: 'pending', ...row }, measuredSize, logger);
+  judgeLandedUpload(
+    { _id: 'ff1', userId: 'u1', fileSize: 1000, status: 'pending', clientUpload: true, ...row },
+    measuredSize,
+    logger
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,8 +61,8 @@ describe('judgeLandedUpload', () => {
     expect(await judge()).toBe('storage_limit_exceeded');
   });
 
-  // A notebook import charges its rows before their S3 event can see them.
-  it('does not count the bytes an import already charged to this row twice', async () => {
+  // A redelivered event can read the row after its first landing was charged but before it went complete.
+  it('does not count the bytes already charged to this row twice', async () => {
     // 10 bytes of headroom in a 1 MB (decimal) limit: the row's 1000 bytes are already in the balance.
     h.findUser.mockResolvedValue(owner({ storageLimit: 1, currentStorageSize: 999_990 }));
     expect(await judge({ storageChargedAt: new Date() })).toBeNull();
@@ -75,6 +79,25 @@ describe('judgeLandedUpload', () => {
     h.findOrganization.mockResolvedValue({ id: 'o1', storageLimit: 0 });
     expect(await judge({ organizationId: 'o1' })).toBe('storage_limit_exceeded');
     expect(h.findOrganization).toHaveBeenCalledWith('o1');
+  });
+
+  // Org-owned storage is billed to the org, so its counter, not the uploader's, bounds the landing.
+  it("bounds an org-owned file by the org's usage, not the uploader's", async () => {
+    h.findUser.mockResolvedValue(owner({ storageLimit: 1, currentStorageSize: MB }));
+    h.findOrganization.mockResolvedValue({ id: 'o1', storageLimit: 1, currentStorageSize: 0 });
+    expect(await judge({ organizationId: 'o1' })).toBeNull();
+
+    h.findOrganization.mockResolvedValue({ id: 'o1', storageLimit: 1, currentStorageSize: MB - 10 });
+    expect(await judge({ organizationId: 'o1' })).toBe('storage_limit_exceeded');
+  });
+
+  // e.g. an agent avatar: the door wrote bytes it held and returned success, so the gate must not
+  // soft-delete it however far over the declared size or the owner's quota it lands.
+  it('admits a row a server-side door wrote, without reading the limits', async () => {
+    h.findUser.mockResolvedValue(owner({ storageLimit: 1, currentStorageSize: MB }));
+    expect(await judge({ clientUpload: undefined, measuredSize: 30 * MB })).toBeNull();
+    expect(await judge({ clientUpload: false, measuredSize: 2000 })).toBeNull();
+    expect(h.findUser).not.toHaveBeenCalled();
   });
 
   it('leaves a rewrite of an already-complete row to its own commit', async () => {

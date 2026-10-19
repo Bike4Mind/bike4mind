@@ -14,23 +14,26 @@ export interface LandedUploadRow extends StorageChargeFields {
   userId: string;
   organizationId?: string | null;
   fileSize?: number | null;
+  clientUpload?: boolean | null;
 }
 
 type GateLogger = Pick<ILogger, 'warn' | 'error'>;
 
 /**
- * Judges an upload by the size it measured, before the row is marked complete: the create-time
+ * Judges a client upload by the size it measured, before the row is marked complete: the create-time
  * size and quota checks ran on the size the uploader declared, so the object must not be larger
  * than that, must stay under MaxFileSize, and must fit the owner's (or owning org's) storage limit.
- * Only a first landing is judged; a later write to a complete row is a server-side rewrite, which
- * its own commit charges (commitContentRewrite).
+ * Only a first landing of a row minted for a client PUT (IFabFile.clientUpload) is judged. A
+ * server-side door (agent avatars, connector ingest, fabFileService content writes, notebook import)
+ * writes bytes it holds and does its own admission, and a later write to a complete row is a
+ * server-side rewrite, which its own commit charges (commitContentRewrite).
  */
 export const judgeLandedUpload = async (
   row: LandedUploadRow,
   measuredSize: number,
   logger: GateLogger
 ): Promise<LandedUploadRejection | null> => {
-  if (row.status === 'complete') return null;
+  if (row.status === 'complete' || !row.clientUpload) return null;
 
   // An unknown (0/unset) declaration is left to the size and quota checks below.
   const declaredSize = row.fileSize;
@@ -48,8 +51,11 @@ export const judgeLandedUpload = async (
     if (measuredSize >= maxBytes) return 'file_too_large';
 
     const owner = await User.findById(row.userId);
-    // Bytes a notebook import already charged for this row (stampImportedKnowledgeRows) are in the
-    // balance the limit reads, so only the rest is new.
+    // Bytes already charged for this row (a redelivery can read it before it went complete) are in
+    // the balance the limit reads, so only the rest is new.
+    // Check-then-charge, like the create-time check: landings racing for one owner can each pass
+    // before either is charged (the charge comes after the row is complete, and the user counter is
+    // a load-modify-save), so the overshoot is bounded by those landings, each within MaxFileSize.
     if (owner) {
       await checkStorageLimitForFile(owner, measuredSize - chargedBytes(row), row.organizationId ?? undefined, id =>
         organizationRepository.findById(id)
