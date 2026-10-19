@@ -45,7 +45,10 @@ describe('AdminAuditLogModel', () => {
     ['deleteOne', () => AdminAuditLogModel.deleteOne({})],
     ['deleteMany', () => AdminAuditLogModel.deleteMany({})],
     ['findOneAndDelete', () => AdminAuditLogModel.findOneAndDelete({})],
-    ['bulkWrite updateOne', () => AdminAuditLogModel.bulkWrite([{ updateOne: { filter: {}, update: { summary: 'x' } } }])],
+    [
+      'bulkWrite updateOne',
+      () => AdminAuditLogModel.bulkWrite([{ updateOne: { filter: {}, update: { summary: 'x' } } }]),
+    ],
     ['bulkWrite deleteMany', () => AdminAuditLogModel.bulkWrite([{ deleteMany: { filter: {} } }])],
   ];
 
@@ -108,8 +111,8 @@ describe('AdminAuditLogModel', () => {
         { category: 1, occurredAt: -1, _id: -1 },
         { action: 1, occurredAt: -1, _id: -1 },
         { severity: 1, occurredAt: -1, _id: -1 },
-        { 'context.requestId': 1, occurredAt: -1 },
-        { 'related.impersonationSessionId': 1, occurredAt: -1 },
+        { 'context.requestId': 1, occurredAt: -1, _id: -1 },
+        { 'related.impersonationSessionId': 1, occurredAt: -1, _id: -1 },
       ])
     );
   });

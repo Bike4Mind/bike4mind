@@ -135,11 +135,11 @@ AdminAuditLogSchema.index({ category: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ action: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index({ severity: 1, occurredAt: -1, _id: -1 });
 AdminAuditLogSchema.index(
-  { 'context.requestId': 1, occurredAt: -1 },
+  { 'context.requestId': 1, occurredAt: -1, _id: -1 },
   { partialFilterExpression: { 'context.requestId': { $exists: true } } }
 );
 AdminAuditLogSchema.index(
-  { 'related.impersonationSessionId': 1, occurredAt: -1 },
+  { 'related.impersonationSessionId': 1, occurredAt: -1, _id: -1 },
   { partialFilterExpression: { 'related.impersonationSessionId': { $exists: true } } }
 );
 
