@@ -53,6 +53,15 @@ const jsonSchemaFormat: ICompletionOptions['responseFormat'] = {
   json_schema: { name: 'answer', schema: { type: 'object', properties: {} }, strict: true },
 };
 
+const weatherTool: NonNullable<ICompletionOptions['tools']>[number] = {
+  toolFn: async () => '',
+  toolSchema: {
+    name: 'get_weather',
+    description: 'Get the weather',
+    parameters: { type: 'object', properties: {} },
+  },
+};
+
 describe('AnthropicBackend reasoningEffort', () => {
   it('switches thinking off for `none` and keeps the caller max_tokens', async () => {
     const request = await requestFor(ChatModels.CLAUDE_5_SONNET, { reasoningEffort: 'none', maxTokens: 800 });
@@ -255,20 +264,24 @@ describe('AnthropicBackend reasoningEffort', () => {
       const request = await requestFor(ChatModels.CLAUDE_5_OPUS, {
         complexity: 'simple',
         maxTokens: 2000,
-        tools: [
-          {
-            toolFn: async () => '',
-            toolSchema: {
-              name: 'get_weather',
-              description: 'Get the weather',
-              parameters: { type: 'object', properties: {} },
-            },
-          },
-        ],
+        tools: [weatherTool],
         tool_choice: 'required',
       });
 
       expect(request.tool_choice).toEqual({ type: 'any' });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('does not pair the complexity default with a forced named tool', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_OPUS, {
+        complexity: 'simple',
+        maxTokens: 2000,
+        tools: [weatherTool],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'get_weather' });
       expect(request.thinking).toBeUndefined();
       expect(request.output_config).toBeUndefined();
     });
