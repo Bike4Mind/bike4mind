@@ -216,9 +216,9 @@ export const removeFileFromLake = async (
   if (pulled > 0) {
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
-  // Unconditional, unlike the event above: a retry after a failed reassign, or the losing half of
-  // two concurrent removals, has already pulled the tags and would otherwise never recompute the
-  // owner from them. A no-op when the stamp already matches the tags.
+  // Unconditional, unlike the event above: the losing half of two concurrent removals has already
+  // pulled the tags and would otherwise never recompute the owner. Outside a transaction a throw here
+  // leaves the stamp stale: a retry finds the file no longer inLake and throws before reaching this.
   await reassignStorageOwner(file.id, db);
   return { contentTags };
 };

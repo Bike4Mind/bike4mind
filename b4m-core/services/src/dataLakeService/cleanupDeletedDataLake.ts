@@ -350,8 +350,8 @@ export const cleanupDeletedDataLake = async (
     const file = await db.fabFiles.findById(id);
     const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
     if (!file || !inLake) return;
-    // Not gated on the pull count: a retry after a failed reassign (this sweep re-runs the whole
-    // thing on DLQ redelivery) finds the tags already gone and must still recompute the owner.
+    // Not gated on the pull count, so a concurrent removal that pulled first still restamps. A reassign
+    // that throws after the pull is not retried: a redelivery no longer lists this file as a survivor.
     await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
     await reassignStorageOwner(file.id, db);
   });

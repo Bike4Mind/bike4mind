@@ -29,6 +29,8 @@ import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
  *   including the lake-delete sweep, always lands its bytes on the new owner even past quota:
  *   refusing it would let a full pool pin a file to a lake it was taken out of. The owner is then
  *   blocked at their next upload, like any other over-quota state.
+ *   A join that does not change the owner is not gated, so a later or same-batch leave of the owning
+ *   lake can move the bytes onto a pool that join never checked.
  * - Only `datalake:` meta-tags count, as in createFabFile's tag gate; prefix-arm content tags never
  *   move ownership.
  *
@@ -113,7 +115,8 @@ const MAX_REASSIGN_ATTEMPTS = 3;
  * transaction; a crash between them drifts the counters until the storage reconciliation runs. The
  * stamp itself is NOT re-derived by that reconciliation (it recomputes counters FROM the stamp), so
  * every caller runs this unconditionally after its tag write rather than only when the write changed
- * something: a retry after a failed reassign must recompute from the tags and restamp.
+ * something. That recovers a failed reassign on an add door or inside a caller transaction. A removal
+ * outside a transaction that throws after its pull leaves the stamp stale until the next membership write.
  */
 export async function reassignStorageOwner(
   fabFileId: string,
