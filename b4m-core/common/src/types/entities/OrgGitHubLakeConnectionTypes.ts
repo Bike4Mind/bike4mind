@@ -262,7 +262,7 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    */
   recordTreeCounts(id: string, expectedToken: string, counts: GitHubLakeTreeCounts): Promise<boolean>;
   /** Refreshes a pending disconnect's stamp (each purge slice); false when none is pending. */
-  touchDisconnect(id: string): Promise<boolean>;
+  touchDisconnect(id: string, owner: LakeConnectionOwner): Promise<boolean>;
   /**
    * Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none.
    * Never re-enables a binding with a pending disconnect.

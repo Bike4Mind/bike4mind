@@ -428,14 +428,14 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
     await repo.markDisconnecting(id, ORG_1);
     await ageDisconnect(id, 30);
     const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
-    expect(await repo.touchDisconnect(id)).toBe(true);
+    expect(await repo.touchDisconnect(id, ORG_1)).toBe(true);
     const after = await repo.findById(id);
     expect(after?.disconnectRequestedAt?.getTime()).toBeGreaterThan(staleStamp.getTime());
   });
 
   it('touchDisconnect reports false when no disconnect is pending', async () => {
     const { id } = await repo.create(base);
-    expect(await repo.touchDisconnect(id)).toBe(false);
+    expect(await repo.touchDisconnect(id, ORG_1)).toBe(false);
   });
 });
 

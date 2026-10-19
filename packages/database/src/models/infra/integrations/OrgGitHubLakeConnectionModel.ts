@@ -213,9 +213,9 @@ class OrgGitHubLakeConnectionRepository
     return res.matchedCount > 0;
   }
 
-  async touchDisconnect(id: string): Promise<boolean> {
+  async touchDisconnect(id: string, owner: LakeConnectionOwner): Promise<boolean> {
     const res = await this.model.updateOne(
-      { _id: id, disconnectRequestedAt: { $ne: null } },
+      { _id: id, ...lakeConnectionOwnerFilter(owner), disconnectRequestedAt: { $ne: null } },
       { $set: { disconnectRequestedAt: new Date() } }
     );
     return res.matchedCount > 0;

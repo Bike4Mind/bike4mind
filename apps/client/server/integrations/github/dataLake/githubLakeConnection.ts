@@ -697,7 +697,7 @@ async function disableAndPurgeSlice(
     throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
   }
   // Keeps a user-requested disconnect from reading as stalled while it progresses; no-op for a revoke.
-  await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id);
+  await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id, lakeConnectionOwnerOf(connection));
   const purged = await purgeConnectionIngestedFiles(
     lake,
     limit =>
