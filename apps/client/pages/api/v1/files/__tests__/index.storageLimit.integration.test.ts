@@ -1,9 +1,10 @@
 // @vitest-environment node
 /**
- * The typed 400 body POST /api/v1/files publishes as `createFileUploadResponse400`, driven through the
- * REAL route: the baseApi chain (apiKeyAuth included), the contract handler, createPresignedUpload's size/quota/type gates and the
- * error handler. Only I/O at the edges (S3, the FabFile write, the settings and lake reads) is stubbed,
- * so a refactor that drops the typed fields anywhere on that path fails here.
+ * The typed 400 body POST /api/v1/files publishes as `createFileUploadResponse400`, driven through
+ * the REAL route: the baseApi chain (apiKeyAuth included), the contract handler, createPresignedUpload's
+ * size/quota/type gates and the error handler. Only I/O at the edges (S3, the FabFile write, the
+ * settings and lake reads) is stubbed, so a refactor that drops the typed fields anywhere on that path
+ * fails here.
  * Harness shape follows scopes.integration.test.ts next to this file.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
