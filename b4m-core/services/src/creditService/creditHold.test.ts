@@ -180,6 +180,36 @@ describe('settleCreditHold', () => {
     expect(state.user).toBe(70);
   });
 
+  it.each(['text_to_speech_usage', 'speech_to_text_usage'] as const)(
+    'settles %s through the shared refund policy and its native ledger writer',
+    async type => {
+      const { adapters, state } = makeAdapters({ user: 100 });
+      const createTransaction = vi.fn().mockResolvedValue(undefined);
+      adapters.creditTransactions = { createTransaction } as unknown as CreditHoldAdapters['creditTransactions'];
+      const hold = await holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'speech', logger },
+        adapters
+      );
+
+      const charged = await settleCreditHold(
+        hold,
+        20,
+        { type, model: 'speech-model', sessionId: 's1' },
+        { featureLabel: 'speech', logger },
+        adapters
+      );
+
+      expect(charged).toBe(20);
+      expect(state.user).toBe(80);
+      expect(createTransaction).toHaveBeenCalledWith(
+        type,
+        expect.objectContaining({ ownerId: 'u1', credits: -20, model: 'speech-model', sessionId: 's1' })
+      );
+      expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+      expect(adapters.users.incrementCredits).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it('settles a hold that went through JSON, as a different process would', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(

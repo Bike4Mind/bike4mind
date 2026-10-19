@@ -206,6 +206,11 @@ describe('processSubagentDispatch admission and billing', () => {
       expect.objectContaining({ type: 'text_generation_usage', credits: 7, inputTokens: 10, outputTokens: 5 }),
       expect.anything()
     );
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    expect(agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledExactlyOnceWith('child-1', 7);
+    expect(vi.mocked(agentExecutionRepository.incrementCreditsUsed).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(agentExecutionRepository.markFailed).mock.invocationCallOrder[0]
+    );
   });
 
   it('charges the spend of a subagent this one delegates in-process', async () => {
@@ -222,6 +227,78 @@ describe('processSubagentDispatch admission and billing', () => {
         expect.anything()
       )
     );
+  });
+
+  it.each([false, true])('includes a stopped child charge in the parent total (user abort: %s)', async userAborted => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.mocked(agentExecutionRepository.checkAbortFlag).mockResolvedValueOnce(userAborted);
+    delegateToAgentMock.mockImplementation(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+      return childResult;
+    });
+    try {
+      const { handler } = await import('./agentExecutor');
+      await handler(dagNodeDispatchEvent(), { getRemainingTimeInMillis: () => 1_000 } as Context);
+
+      expect(deductCreditsMock).toHaveBeenCalledTimes(1);
+      expect(agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledExactlyOnceWith('child-1', 7);
+      const terminal = userAborted ? agentExecutionRepository.markAborted : agentExecutionRepository.markFailed;
+      expect(terminal).toHaveBeenCalledTimes(1);
+      const credited = vi.mocked(agentExecutionRepository.incrementCreditsUsed).mock.calls[0][1];
+      expect(3 + credited).toBe(10);
+      expect(vi.mocked(agentExecutionRepository.incrementCreditsUsed).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(terminal).mock.invocationCallOrder[0]
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records grandchild spend before completing the dispatched child, without charging it twice', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    delegateToAgentMock.mockImplementation(async () => {
+      const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits(credits: number, meta: { model: string; inputTokens: number; outputTokens: number }): void;
+      };
+      callbacks.onSubagentCredits(4, { model: 'test-model', inputTokens: 2, outputTokens: 1 });
+      return childResult;
+    });
+
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledTimes(2);
+    expect(agentExecutionRepository.incrementCreditsUsed).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(agentExecutionRepository.incrementCreditsUsed).mock.calls).toEqual([
+      ['child-1', 4],
+      ['child-1', 7],
+    ]);
+    const completedAt = vi.mocked(agentExecutionRepository.markComplete).mock.invocationCallOrder[0];
+    for (const auditedAt of vi.mocked(agentExecutionRepository.incrementCreditsUsed).mock.invocationCallOrder) {
+      expect(auditedAt).toBeLessThan(completedAt);
+    }
+  });
+
+  it('does not recharge a completed or failed run when its audit write rejects', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.incrementCreditsUsed).mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledTimes(1);
+    expect(agentExecutionRepository.markComplete).toHaveBeenCalledTimes(1);
+    expect(agentExecutionRepository.markFailed).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    delegateToAgentMock.mockRejectedValue(Object.assign(new Error('provider failed'), { spent: childResult }));
+    vi.mocked(agentExecutionRepository.incrementCreditsUsed).mockRejectedValueOnce(new Error('audit unavailable'));
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledTimes(1);
+    expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith('child-1', {
+      message: 'provider failed',
+      timedOut: false,
+    });
   });
 
   it('refuses a subagent on a disabled model before it runs', async () => {

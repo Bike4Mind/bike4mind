@@ -1,7 +1,7 @@
 /**
  * POST /api/v1/transcriptions - transcribe one upload minted by POST /api/v1/transcriptions/uploads.
- * The public twin of POST /api/ai/transcribe; both call transcribeUpload. Synchronous, so long audio
- * on the AWS backend can outlive the request timeout (see the contract).
+ * The public twin of POST /api/ai/transcribe; both call transcribeUpload with the request-arrival
+ * timestamp so provider cancellation leaves time to release the hold before the server deadline.
  */
 
 import { createTranscriptionContract } from '@bike4mind/common';
@@ -17,6 +17,7 @@ const handler = nextRouteForContract(createTranscriptionContract, {
   const { text } = await transcribeUpload({
     userId: req.user.id,
     fileKey: req.validated.file_key,
+    receivedAt: req.receivedAt,
     logger: req.logger,
     mapProviderError: err => {
       req.logger.error('Transcription provider failed', { err });

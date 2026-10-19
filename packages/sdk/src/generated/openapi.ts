@@ -1007,7 +1007,7 @@ export interface paths {
      * Transcribe audio
      * @description Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.
      *
-     *     **Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away (it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send shorter audio.
+     *     **Limit:** this call is synchronous. Provider work stops being awaited after 45 seconds from request arrival, leaving time to return reserved credits and delete the upload before the hosted server stops at 60 seconds. A slow recording returns a gateway timeout (`504`) instead of text. AWS batch jobs cannot be cancelled remotely and may finish later; their output expires automatically. Do not retry with the same `file_key`: mint a new upload and send shorter audio. If cleanup fails, the upload may not be deleted right away (it expires on its own).
      */
     post: operations['createTranscription'];
     delete?: never;
@@ -14808,6 +14808,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createTranscriptionResponse503'];
+        };
+      };
+      /** @description The transcription exceeded the request deadline; reserved credits are returned. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

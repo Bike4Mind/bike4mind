@@ -14,6 +14,7 @@ import {
   TranscriptionUploadResponseSchema,
   createTranscriptionContract,
   createTranscriptionUploadContract,
+  GatewayTimeoutError,
 } from '@bike4mind/common';
 
 const { mockCreateUpload, mockTranscribe } = vi.hoisted(() => ({
@@ -78,7 +79,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), u
 
 function post(body: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'u1' }, logger });
+  Object.assign(req, { user: { id: 'u1' }, receivedAt: new Date(), logger });
   return { req, res };
 }
 
@@ -108,7 +109,9 @@ describe('transcription contracts', () => {
 
   it('document the request timeout limit', () => {
     expect(createTranscriptionContract.description).toMatch(/60 seconds/);
-    // A timeout kills the cleanup in transcribeUpload's finally; only the bucket lifecycle rule removes it.
+    expect(createTranscriptionContract.description).toMatch(/45 seconds/);
+    expect(createTranscriptionContract.responses).toHaveProperty('504');
+    // Cleanup has time to run; lifecycle remains the backstop when its best-effort delete fails.
     expect(createTranscriptionContract.description).toMatch(/may not be deleted right away/);
   });
 });
@@ -152,6 +155,16 @@ describe('POST /api/v1/transcriptions/uploads', () => {
 });
 
 describe('POST /api/v1/transcriptions', () => {
+  it('preserves the deadline status and passes the original arrival timestamp', async () => {
+    const timeout = new GatewayTimeoutError('Timed out', { errorCode: 'request_timeout' });
+    mockTranscribe.mockRejectedValueOnce(timeout);
+    const { req, res } = post({ file_key: KEY });
+    const receivedAt = new Date(Date.now() - 60_000);
+    Object.assign(req, { receivedAt });
+    await expect(call(transcribeHandler, req, res)).rejects.toBe(timeout);
+    expect(mockTranscribe).toHaveBeenCalledWith(expect.objectContaining({ receivedAt }));
+  });
+
   it('returns { text }', async () => {
     const { req, res } = post({ file_key: KEY });
 

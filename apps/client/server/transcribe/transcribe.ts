@@ -19,7 +19,7 @@ import {
 import { speechToTextService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, GatewayTimeoutError } from '@bike4mind/common';
 import { usageEventRepository } from '@bike4mind/database';
 import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 import { v4 as uuidv4 } from 'uuid';
@@ -37,6 +37,8 @@ export class TranscribeRequestError extends BadRequestError {
 }
 
 export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
+// The hosted web Lambda stops at 60s. Leave time to refund and clean up after cancelling the provider.
+const TRANSCRIPTION_REQUEST_TIMEOUT_MS = 45_000;
 
 const s3Client = new S3Client();
 const bucketName = Resource.appFilesBucket.name;
@@ -98,11 +100,13 @@ export async function createTranscribeUpload({
 export async function transcribeUpload({
   userId,
   fileKey,
+  receivedAt,
   logger,
   mapProviderError,
 }: {
   userId: string;
   fileKey: string;
+  receivedAt: Date;
   logger: ILogger;
   mapProviderError?: (err: unknown) => unknown;
 }): Promise<speechToTextService.TranscriptionResult> {
@@ -113,17 +117,33 @@ export async function transcribeUpload({
     throw new TranscribeRequestError('invalid_key', 'Invalid file key');
   }
 
+  const controller = new AbortController();
+  const remainingMs = receivedAt.getTime() + TRANSCRIPTION_REQUEST_TIMEOUT_MS - Date.now();
+  const expire = () =>
+    controller.abort(
+      new GatewayTimeoutError('Transcription timed out. Please try a shorter recording.', {
+        errorCode: 'request_timeout',
+      })
+    );
+  const deadline = setTimeout(expire, Math.max(remainingMs, 0));
+  if (remainingMs <= 0) expire();
+  const { signal } = controller;
+
   try {
+    signal.throwIfAborted();
     // HEAD the object to get S3-attested metadata. We never trust
     // client-supplied size or mime - S3's content-length-range condition
     // already enforced size at upload, and this re-reads what S3 accepted.
     let contentType: string;
     let contentLength: number;
     try {
-      const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: fileKey }));
+      const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: fileKey }), {
+        abortSignal: signal,
+      });
       contentType = head.ContentType ?? '';
       contentLength = head.ContentLength ?? 0;
     } catch (err) {
+      signal.throwIfAborted();
       logger.warn('Transcribe HEAD failed', { fileKey, err });
       throw new TranscribeRequestError('not_found', 'Uploaded file not found or expired');
     }
@@ -138,6 +158,7 @@ export async function transcribeUpload({
     }
 
     const operationsModel = await OperationsModelService.getOperationsModel();
+    signal.throwIfAborted();
     const speechModelInfo = operationsModel.speechModelInfo;
     if (!speechModelInfo) {
       throw new TranscribeRequestError(
@@ -149,6 +170,7 @@ export async function transcribeUpload({
     const cost = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(speechModelInfo.backend));
 
     const apiKey = await getEffectiveApiKeyByBackend(userId || 'system', speechModelInfo.backend);
+    signal.throwIfAborted();
     if (!apiKey && speechModelInfo.backend !== 'aws') {
       throw new TranscribeRequestError(
         'not_configured',
@@ -163,15 +185,20 @@ export async function transcribeUpload({
     const hold = await asInsufficientCredits(() => holdTranscriptionCredits(userId, cost.credits, logger));
     let results: speechToTextService.TranscriptionResult;
     try {
+      // A slow hold write can finish after the deadline. It must still enter the refund boundary.
+      signal.throwIfAborted();
       if (speechModelInfo.backend === 'openai') {
-        results = await speechToText.transcribeOpenAIFromS3(fileKey, contentType, speechModelInfo, apiKey || '');
+        results = await speechToText.transcribeOpenAIFromS3(fileKey, contentType, speechModelInfo, apiKey || '', {
+          abortSignal: signal,
+        });
       } else if (speechModelInfo.backend === 'aws') {
-        results = await speechToText.transcribeAWSFromS3(fileKey, contentType);
+        results = await speechToText.transcribeAWSFromS3(fileKey, contentType, { abortSignal: signal });
       } else {
         throw new TranscribeRequestError('not_configured', `Unsupported speech backend: ${speechModelInfo.backend}`);
       }
     } catch (err) {
       await hold.release();
+      signal.throwIfAborted();
       if (err instanceof TranscribeRequestError || !mapProviderError) throw err;
       throw mapProviderError(err);
     }
@@ -186,6 +213,7 @@ export async function transcribeUpload({
 
     return results;
   } finally {
+    clearTimeout(deadline);
     // Always clean up the transient upload, even on transcription failure.
     // Lifecycle rule on transcribe-uploads/ is the backstop for orphans.
     await deleteSilently(fileKey, logger);
@@ -236,7 +264,9 @@ async function deductTranscriptionCredits({ hold, userId, backend, contentLength
 
 async function deleteSilently(key: string, logger: ILogger): Promise<void> {
   try {
-    await s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
+    await s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }), {
+      abortSignal: AbortSignal.timeout(2_000),
+    });
   } catch (err) {
     logger.warn('Failed to delete transcribe upload', { key, err });
   }

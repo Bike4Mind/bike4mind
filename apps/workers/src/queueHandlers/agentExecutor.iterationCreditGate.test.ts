@@ -6,6 +6,7 @@ import type { ModelInfo } from '@bike4mind/common';
 import { nextIterationCredits } from './agentExecutor.billing';
 import {
   aggregationWakeStartIteration,
+  aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
   stopUnfundedIteration,
@@ -189,6 +190,27 @@ describe('processExecution iteration-gate wiring', () => {
     expect(source).toContain(
       'if (refusesUnrunnableModel({ hasModel: Boolean(modelInfo), isRunnable: modelRunnable, isAggregationOnlyWake })) {'
     );
-    expect(source).toContain('maxIterations = clampMaxIterationsForUnrunnableAggregationWake({');
+    const clampCall = source.match(
+      /maxIterations = clampMaxIterationsForUnrunnableAggregationWake\(\{([\s\S]*?)\n {4}\}\);/
+    );
+    expect(clampCall).not.toBeNull();
+    expect(clampCall![1]).toContain('isRunnable: !modelInfo || modelRunnable,');
+    expect(source).toContain('aggregationGraceReason: aggregationGraceReasonOf({');
   });
+});
+
+describe('aggregationGraceReasonOf', () => {
+  it.each([
+    [false, true, false, true, undefined],
+    [true, true, false, false, 'model-unavailable'],
+    [true, true, false, true, 'model-unavailable'],
+    [true, true, true, true, 'credit-cap'],
+    [true, true, true, false, undefined],
+    [true, false, false, false, undefined],
+  ] as const)(
+    'selects the actual clamp reason (%s, %s, %s, %s)',
+    (isAggregationOnlyWake, hasModel, isRunnable, isOverCap, expected) => {
+      expect(aggregationGraceReasonOf({ isAggregationOnlyWake, hasModel, isRunnable, isOverCap })).toBe(expected);
+    }
+  );
 });

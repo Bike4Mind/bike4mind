@@ -2,6 +2,15 @@ import type { AgentStep } from '@bike4mind/agents';
 import type { ModelInfo } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { uncoveredIterationCredits } from './agentExecutor.billing';
+import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
+
+export function aggregationGraceReasonOf(
+  policy: UnrunnableModelPolicy & { isOverCap: boolean }
+): AggregationGraceReason | undefined {
+  if (!policy.isAggregationOnlyWake) return undefined;
+  if (policy.hasModel && !policy.isRunnable) return 'model-unavailable';
+  return policy.isOverCap ? 'credit-cap' : undefined;
+}
 
 /**
  * The loop belongs to `processExecution`, whose balance read and side effects are injected so

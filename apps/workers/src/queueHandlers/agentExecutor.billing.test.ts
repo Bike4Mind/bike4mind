@@ -22,6 +22,7 @@ import {
   nextIterationCredits,
   uncoveredIterationCredits,
   buildInProcessBalanceCheck,
+  readPayerBalance,
 } from './agentExecutor.billing';
 import type { ModelInfo } from '@bike4mind/common';
 import { estimateGeneratedMediaUsd } from '@bike4mind/services';
@@ -1061,5 +1062,45 @@ describe('buildInProcessBalanceCheck', () => {
 
     await expect(check('unknown')).resolves.toBe(false);
     expect(loadBalance).not.toHaveBeenCalled();
+  });
+});
+
+describe('readPayerBalance', () => {
+  it('uses the live org wallet for org-billed admission even when the personal wallet is funded', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce({ currentCredits: 1 }).mockResolvedValueOnce({ currentCredits: 100_000 }),
+    };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+    const model = { ...makeModelInfo(200_000), pricing: { 200000: { input: 0.000003, output: 0.000015 } } };
+    const check = buildInProcessBalanceCheck(true, [model], () => readPayerBalance(payer, { organizations, users }))!;
+
+    await expect(check('test-model')).resolves.toBe(true);
+    // Pin routing separately from pricing: the next call must observe the newly funded org.
+    users.findById.mockResolvedValue({ currentCredits: 0 });
+    await expect(check('test-model')).resolves.toBe(false);
+    expect(organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('uses the personal wallet only when no organization pays', async () => {
+    const organizations = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 2 }) };
+
+    await expect(readPayerBalance({ userId: 'user-1' }, { organizations, users })).resolves.toBe(2);
+    expect(users.findById).toHaveBeenCalledWith('user-1');
+    expect(organizations.findById).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the payer disappeared and propagates an unreadable wallet', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('wallet unavailable')),
+    };
+    const users = { findById: vi.fn() };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+
+    await expect(readPayerBalance(payer, { organizations, users })).resolves.toBe(0);
+    await expect(readPayerBalance(payer, { organizations, users })).rejects.toThrow('wallet unavailable');
+    expect(users.findById).not.toHaveBeenCalled();
   });
 });

@@ -39,7 +39,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'a clean answer',
       dagAggregationFallbackSummary: 'unused summary',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toBe('a clean answer');
   });
@@ -51,7 +51,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: '# DAG result\n\ncoffee, tea, chocolate summaries here',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toContain('coffee, tea, chocolate summaries here');
     // Must not be silently dropped - the whole point of the fallback.
@@ -67,7 +67,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: 'aggregated report',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toContain('25-iteration limit');
     expect(out).not.toContain('8-iteration limit');
@@ -80,7 +80,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'the model did answer before hitting the ceiling',
       dagAggregationFallbackSummary: 'aggregated report',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toContain('the model did answer before hitting the ceiling');
     expect(out).not.toContain('aggregated report');
@@ -93,7 +93,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: undefined,
       configuredMaxIterations: 10,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toContain('10-iteration limit');
   });
@@ -105,7 +105,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: 'aggregated report',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: true,
+      aggregationGraceReason: 'credit-cap',
     });
     expect(out).toContain('aggregated report');
     expect(out).toContain('credit cap');
@@ -128,7 +128,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'I reached the maximum number of iterations (8/8) without arriving at a final answer.',
       dagAggregationFallbackSummary: '# DAG result\n\ncoffee, tea, chocolate summaries here',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: true,
+      aggregationGraceReason: 'credit-cap',
     });
     expect(out).toContain('coffee, tea, chocolate summaries here');
     // The clamped grant size must not leak through as if it were the run's real ceiling.
@@ -146,7 +146,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'a stale answer from a much earlier iteration',
       dagAggregationFallbackSummary: 'the fresh aggregated report',
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: true,
+      aggregationGraceReason: 'credit-cap',
     });
     expect(out).toBe('the fresh aggregated report');
   });
@@ -158,8 +158,55 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'a stale answer from a much earlier iteration',
       dagAggregationFallbackSummary: undefined,
       configuredMaxIterations: 25,
-      isOverCapGraceIteration: false,
+      aggregationGraceReason: undefined,
     });
     expect(out).toBe('a stale answer from a much earlier iteration');
   });
+});
+
+describe('model-unavailable aggregation grace', () => {
+  it('preserves paid child results instead of the synthesized ceiling notice', () => {
+    const answer = resolveDisplayAnswer({
+      reachedMaxIterations: true,
+      ranAnyIteration: true,
+      finalAnswer: 'I reached the maximum number of iterations (5/5) without arriving at a final answer.',
+      dagAggregationFallbackSummary: 'PAID_CHILD_RESULT',
+      configuredMaxIterations: 20,
+      aggregationGraceReason: 'model-unavailable',
+    });
+
+    expect(answer).toContain('PAID_CHILD_RESULT');
+    expect(answer).toContain('model is no longer available');
+    expect(answer).not.toContain('5/5');
+    expect(answer).not.toContain('20-iteration limit');
+    expect(answer).not.toMatch(/send a follow-up to continue/i);
+    expect(answer).not.toContain('credit cap');
+  });
+});
+
+it('keeps a genuine completion on the model-unavailable grace iteration', () => {
+  expect(
+    resolveDisplayAnswer({
+      reachedMaxIterations: false,
+      ranAnyIteration: true,
+      finalAnswer: 'The completed answer.',
+      dagAggregationFallbackSummary: 'raw child report',
+      configuredMaxIterations: 20,
+      aggregationGraceReason: 'model-unavailable',
+    })
+  ).toBe('The completed answer.');
+});
+
+it('gives an honest model-unavailable notice when neither answer nor summary exists', () => {
+  const answer = resolveDisplayAnswer({
+    reachedMaxIterations: true,
+    ranAnyIteration: true,
+    finalAnswer: undefined,
+    dagAggregationFallbackSummary: undefined,
+    configuredMaxIterations: 20,
+    aggregationGraceReason: 'model-unavailable',
+  });
+  expect(answer).toContain('model is no longer available');
+  expect(answer).not.toContain('iteration limit');
+  expect(answer).not.toMatch(/send a follow-up/i);
 });

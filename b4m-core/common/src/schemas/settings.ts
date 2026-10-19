@@ -1071,9 +1071,12 @@ function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true') return true;
-          if (val.toLowerCase() === 'false') return false;
+          if (val.toLowerCase() === 'true' || val === '1') return true;
+          if (val.toLowerCase() === 'false' || val === '0') return false;
         }
+        // Legacy admin rows also store numeric toggles. Do not coerce other truthy values.
+        if (val === 1) return true;
+        if (val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),

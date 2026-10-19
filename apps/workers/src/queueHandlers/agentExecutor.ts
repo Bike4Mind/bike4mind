@@ -171,6 +171,7 @@ import {
   nextIterationCredits,
   uncoveredIterationCredits,
   buildInProcessBalanceCheck,
+  readPayerBalance as loadPayerBalance,
   reseedCounters,
   addToolUsage,
   takeToolUsage,
@@ -184,6 +185,7 @@ import {
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   aggregationWakeStartIteration as wakeStartIterationOf,
+  aggregationGraceReasonOf,
   refusesUnrunnableModel,
   shouldGateIteration,
   stopUnfundedIteration,
@@ -723,10 +725,7 @@ export function buildInProcessCreditCapCheck(
  * snapshot. Shared by the iteration gate and in-process subagent admission.
  */
 async function readPayerBalance(payer: { organizationId?: string | null; userId: string }): Promise<number> {
-  const holder = payer.organizationId
-    ? await organizationRepository.findById(payer.organizationId)
-    : await userRepository.findById(payer.userId);
-  return holder?.currentCredits ?? 0;
+  return loadPayerBalance(payer, { organizations: organizationRepository, users: userRepository });
 }
 
 /**
@@ -3195,12 +3194,6 @@ async function processExecution(
         return;
       }
 
-      // TODO(Phase 2): Add mid-execution credit exhaustion check here.
-      // Pre-flight check at line ~280 prevents starting with 0 credits, but once
-      // running, credits are deducted without re-checking balance. A user with 1
-      // credit can run many iterations. Re-read user/org credits periodically and
-      // stop execution if exhausted.
-
       // Check if agent is done
       if (iterationResult.isComplete || iterationResult.reachedMaxIterations) {
         break;
@@ -3225,7 +3218,12 @@ async function processExecution(
       finalAnswer,
       dagAggregationFallbackSummary,
       configuredMaxIterations,
-      isOverCapGraceIteration: isAggregationOnlyWake && isOverCapForAggregationClamp,
+      aggregationGraceReason: aggregationGraceReasonOf({
+        isAggregationOnlyWake,
+        hasModel: Boolean(modelInfo),
+        isRunnable: modelRunnable,
+        isOverCap: isOverCapForAggregationClamp,
+      }),
     });
 
     await agentExecutionRepository.markComplete(executionId, {
@@ -3880,6 +3878,31 @@ async function processSubagentDispatch(
     };
     // Awaited before either terminal write, so a frozen Lambda cannot drop a grandchild's charge.
     const grandchildCharges: Promise<void>[] = [];
+    const settleTokenCost = async (
+      model: string,
+      completionInfo: Parameters<typeof chargeSubagentTokens>[0]['completionInfo']
+    ): Promise<void> => {
+      await chargeSubagentTokens(
+        {
+          user: user as IUserDocument,
+          organization,
+          sessionId: child.sessionId,
+          questId: child.questId,
+          model,
+          completionInfo,
+        },
+        logger
+      );
+      const credits = completionInfo.totalCredits ?? 0;
+      if (credits > 0) {
+        // An audit failure must not re-enter the charge path or replace the subagent's result.
+        await agentExecutionRepository
+          .incrementCreditsUsed(childExecutionId, credits)
+          .catch(err =>
+            logger.error('[SubagentDispatch] failed to record token audit credits', { childExecutionId, credits, err })
+          );
+      }
+    };
     const foldSubagentMediaUsd = (phase: MediaCostPhase, toolName: string, data: unknown) =>
       foldGeneratedMediaUsd({
         phase,
@@ -3942,21 +3965,11 @@ async function processSubagentDispatch(
       // orchestrator never dispatches them and this is their only charge).
       onSubagentCredits: (credits, meta) => {
         grandchildCharges.push(
-          chargeSubagentTokens(
-            {
-              user: user as IUserDocument,
-              organization,
-              sessionId: child.sessionId,
-              questId: child.questId,
-              model: meta?.model ?? childModel,
-              completionInfo: {
-                totalCredits: credits,
-                totalInputTokens: meta?.inputTokens ?? 0,
-                totalOutputTokens: meta?.outputTokens ?? 0,
-              },
-            },
-            logger
-          )
+          settleTokenCost(meta?.model ?? childModel, {
+            totalCredits: credits,
+            totalInputTokens: meta?.inputTokens ?? 0,
+            totalOutputTokens: meta?.outputTokens ?? 0,
+          })
         );
       },
     };
@@ -4228,17 +4241,7 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
       // Every exit with a result (completed, aborted, timed out) spent these tokens.
-      await chargeSubagentTokens(
-        {
-          user: user as IUserDocument,
-          organization,
-          sessionId: child.sessionId,
-          questId: child.questId,
-          model: result.model,
-          completionInfo: result.completionInfo,
-        },
-        logger
-      );
+      await settleTokenCost(result.model, result.completionInfo);
 
       // If the abort signal fired during the run, treat the result as terminal.
       // The orchestrator's timeout-handling path returns partial results on
@@ -4301,13 +4304,6 @@ async function processSubagentDispatch(
         reachedMaxIterations: result.completionInfo.reachedMaxIterations,
         totalCredits: credits,
       });
-      // Update the child's own audit counter. `markComplete` stores the result
-      // snapshot with `totalCredits`; `incrementCreditsUsed` updates the
-      // top-level `totalCreditsUsed` field used by cap/billing queries. The wallet
-      // was charged above; generated media separately (`settleMediaCost`).
-      if (credits > 0) {
-        await agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits);
-      }
       await sendWs('subagent_completed', {
         executionId: parentId,
         childExecutionId,
@@ -4342,17 +4338,7 @@ async function processSubagentDispatch(
       await Promise.all(grandchildCharges);
       const spent = spentResultOf(err);
       if (spent) {
-        await chargeSubagentTokens(
-          {
-            user: user as IUserDocument,
-            organization,
-            sessionId: child.sessionId,
-            questId: child.questId,
-            model: spent.model,
-            completionInfo: spent.completionInfo,
-          },
-          logger
-        );
+        await settleTokenCost(spent.model, spent.completionInfo);
       }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:

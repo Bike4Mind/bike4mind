@@ -16,11 +16,17 @@ import {
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
+import { subtractCredits, type SubtractCreditsParameters } from './subtractCredits';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /** The ledger row a settlement writes, minus what the hold already knows. */
-export type CreditLedgerEntry = DistributiveOmit<DeductCreditsParams, 'user' | 'organization' | 'credits'>;
+export type CreditLedgerEntry =
+  | DistributiveOmit<DeductCreditsParams, 'user' | 'organization' | 'credits'>
+  | DistributiveOmit<
+      Extract<SubtractCreditsParameters, { type: 'text_to_speech_usage' | 'speech_to_text_usage' }>,
+      'ownerId' | 'ownerType' | 'credits'
+    >;
 
 /** Defined in common so a job document can carry it; see CreditHoldRecord. */
 export type CreditHold = CreditHoldRecord;
@@ -150,7 +156,7 @@ export async function settleCreditHold(
   hold: CreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Logger },
+  context: { featureLabel: string; logger: Pick<Logger, 'error'> },
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;
@@ -185,6 +191,20 @@ export async function settleCreditHold(
   if (charged === 0) return 0;
 
   try {
+    // Speech has no organization-usage rollup in deductCreditsWithOrgSupport. Reuse the same
+    // hold/refund policy and write these existing ledger shapes through their native writer.
+    if (entry.type === 'text_to_speech_usage' || entry.type === 'speech_to_text_usage') {
+      await subtractCredits(
+        { ...entry, ownerId: hold.ownerId, ownerType: hold.ownerType, credits: charged },
+        {
+          db: { creditTransactions: adapters.creditTransactions },
+          creditHolderMethods: holderMethodsFor(hold, adapters),
+          skipBalanceUpdate: true,
+          currentCreditHolder: settledHolder,
+        }
+      );
+      return charged;
+    }
     // Loaded here, not carried on the hold, so a different process can settle it.
     const user = await adapters.users.findById(hold.userId);
     if (!user) throw new Error('User not found');

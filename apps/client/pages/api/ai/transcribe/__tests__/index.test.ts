@@ -90,9 +90,10 @@ import handler from '../index';
 const FILE_KEY = 'transcribe-uploads/u1/abc.mp3';
 const SIZE = 2 * 1024 * 1024;
 
-const run = (body: Record<string, unknown> = { fileKey: FILE_KEY }) => {
+const run = (body: Record<string, unknown> = { fileKey: FILE_KEY }, receivedAt = new Date()) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = { id: 'u1' };
+  (req as Record<string, unknown>).receivedAt = receivedAt;
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const promise = (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return { res, promise };
@@ -112,6 +113,13 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/transcribe', () => {
+  it('rejects an expired request with 504 before taking credits or calling the provider', async () => {
+    const { promise } = run({ fileKey: FILE_KEY }, new Date(Date.now() - 60_000));
+    await expect(promise).rejects.toMatchObject({ statusCode: 504, additionalInfo: { errorCode: 'request_timeout' } });
+    expect(mocks.assertPreflightCredits).not.toHaveBeenCalled();
+    expect(mocks.transcribeOpenAIFromS3).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'aws'])(
     'gates on the S3-size estimate at the %s backend rate, then transcribes',
     async backend => {

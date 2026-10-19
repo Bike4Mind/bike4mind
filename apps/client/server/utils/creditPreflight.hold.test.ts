@@ -139,7 +139,7 @@ describe('holdPreflightCredits', () => {
 
     // The over-reserve still went back to the user even though its ledger row did not land.
     expect(balance.current).toBe(6);
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('settlement failed'), expect.anything());
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('ledger row missing'), expect.anything());
   });
 
   it('resolves release when the refund write rejects, so the provider error still reaches the caller', async () => {

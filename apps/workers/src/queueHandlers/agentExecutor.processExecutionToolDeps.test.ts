@@ -475,9 +475,7 @@ describe('processExecution tool deps', () => {
       const tracker = await subagentTracker();
       vi.mocked(agentExecutionRepository.markComplete).mockRejectedValueOnce(new Error('db down'));
 
-      await expect(tracker.onComplete({ childExecutionId: 'child-1', result: childResult })).rejects.toThrow(
-        'db down'
-      );
+      await expect(tracker.onComplete({ childExecutionId: 'child-1', result: childResult })).rejects.toThrow('db down');
 
       expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
     });
@@ -571,6 +569,29 @@ describe('processExecution tool deps', () => {
 
       await expect(deps.checkInsufficientCredits!('claude-sonnet-5')).resolves.toBe(true);
       expect(findUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('rechecks the organization that pays for the run rather than the personal wallet', async () => {
+      const { agentExecutionRepository, organizationRepository, userRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce({
+        ...execDoc,
+        organizationId: 'org-1',
+      } as never);
+      vi.mocked(organizationRepository.findById).mockResolvedValueOnce({
+        id: 'org-1',
+        currentCredits: 100_000,
+      } as never);
+      const deps = await toolDepsWith(true);
+      vi.mocked(organizationRepository.findById)
+        .mockClear()
+        .mockResolvedValueOnce({ currentCredits: 1 } as never);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValue({ currentCredits: 100_000 } as never);
+      findUser.mockClear();
+
+      await expect(deps.checkInsufficientCredits!('claude-sonnet-5')).resolves.toBe(true);
+
+      expect(organizationRepository.findById).toHaveBeenCalledExactlyOnceWith('org-1');
+      expect(findUser).not.toHaveBeenCalled();
     });
 
     it('is not wired when credits are not enforced', async () => {

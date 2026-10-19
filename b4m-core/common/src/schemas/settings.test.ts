@@ -47,6 +47,34 @@ import {
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
 
+describe('boolean setting legacy representations', () => {
+  it.each([
+    [true, true],
+    [false, false],
+    ['true', true],
+    ['TRUE', true],
+    ['false', false],
+    ['FALSE', false],
+    ['1', true],
+    ['0', false],
+    [1, true],
+    [0, false],
+  ])('parses %j as %j without changing its meaning', (stored, expected) => {
+    expect(settingsMap.EnableMCPServer.schema.parse(stored)).toBe(expected);
+    expect(settingsMap.enforceCredits.schema.parse(stored)).toBe(expected);
+  });
+
+  it.each(['', ' ', 'yes', 'no', '01', ' 1 ', 2, -1, null, {}, []])('rejects unsupported stored value %j', stored => {
+    expect(settingsMap.EnableMCPServer.schema.safeParse(stored).success).toBe(false);
+    expect(settingsMap.enforceCredits.schema.safeParse(stored).success).toBe(false);
+  });
+
+  it('preserves the declared default for an absent setting', () => {
+    expect(settingsMap.EnableMCPServer.schema.parse(undefined)).toBe(false);
+    expect(settingsMap.enforceCredits.schema.parse(undefined)).toBe(true);
+  });
+});
+
 describe('makeObjectSetting JSON preprocess', () => {
   // Test using contextTelemetryAlerts as a representative object setting
   const schema = settingsMap.contextTelemetryAlerts.schema;

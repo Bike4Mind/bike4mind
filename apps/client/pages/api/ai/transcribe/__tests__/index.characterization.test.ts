@@ -97,7 +97,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
 function post(body: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'u1' }, logger });
+  Object.assign(req, { user: { id: 'u1' }, receivedAt: new Date(), logger });
   return { req, res };
 }
 
@@ -136,7 +136,13 @@ describe('POST /api/ai/transcribe', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ text: 'hello world' });
-    expect(mockOpenAI).toHaveBeenCalledWith(KEY, 'audio/mpeg', { backend: 'openai', id: 'whisper-1' }, 'sk-test');
+    expect(mockOpenAI).toHaveBeenCalledWith(
+      KEY,
+      'audio/mpeg',
+      { backend: 'openai', id: 'whisper-1' },
+      'sk-test',
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) })
+    );
     expect(mockSubtractCredits).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'speech_to_text_usage', ownerId: 'u1', model: 'openai' }),
       expect.anything()
@@ -152,7 +158,11 @@ describe('POST /api/ai/transcribe', () => {
     await call(req, res);
 
     expect(res._getJSONData()).toEqual({ text: 'hello aws' });
-    expect(mockAWS).toHaveBeenCalledWith(KEY, 'audio/mpeg');
+    expect(mockAWS).toHaveBeenCalledWith(
+      KEY,
+      'audio/mpeg',
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) })
+    );
   });
 
   it('still returns the text when billing fails', async () => {

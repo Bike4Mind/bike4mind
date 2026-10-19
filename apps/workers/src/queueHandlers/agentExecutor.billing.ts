@@ -19,6 +19,20 @@ import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
 
+type BalanceRepository = {
+  findById(id: string): Promise<{ currentCredits?: number | null } | null | undefined>;
+};
+
+export async function readPayerBalance(
+  payer: { organizationId?: string | null; userId: string },
+  repositories: { organizations: BalanceRepository; users: BalanceRepository }
+): Promise<number> {
+  const holder = payer.organizationId
+    ? await repositories.organizations.findById(payer.organizationId)
+    : await repositories.users.findById(payer.userId);
+  return holder?.currentCredits ?? 0;
+}
+
 /** Input tokens (cached or not) the last provider request of a run sent; 0 before the first. */
 export function lastRequestInputTokens(turns: readonly TurnUsage[] | undefined): number {
   const last = turns?.at(-1);
@@ -542,7 +556,7 @@ export type SubagentMediaSettlementEffects = {
 
 /**
  * Charges the generated-media USD a dispatched subagent accrued via `foldGeneratedMediaUsd`.
- * That path has no per-iteration loop (and no token deduction yet), so media settles once,
+ * That path has no per-iteration loop, so media settles once,
  * after the run, on every exit: the provider cost was paid whether the run completed, was
  * aborted or threw. Drains `pending` so a second call cannot double-charge. Returns the
  * credits charged.
