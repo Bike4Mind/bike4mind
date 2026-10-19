@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { CitableSource } from '@bike4mind/common';
 import { getThemeConfig } from '../../utils/themes';
 import CitableSources, { citedFirst, conflictPlacementOf } from './CitableSources';
+import { replyProse } from './markdown/inlineCitations';
 import { CitationInteractionProvider } from './CitationInteractionContext';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 
@@ -332,10 +333,10 @@ describe('CitableSources badge tooltip placement', () => {
     metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
   });
 
-  const renderChips = (citables: CitableSource[]) =>
+  const renderChips = (citables: CitableSource[], reply?: string) =>
     render(
       <TestWrapper>
-        <CitableSources citables={citables} />
+        <CitableSources citables={citables} reply={reply} />
       </TestWrapper>
     );
 
@@ -375,6 +376,17 @@ describe('CitableSources badge tooltip placement', () => {
 
     expect(await placementOf(badgeOf('Q3 Revenue.pdf'))).toBe('top');
     expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('bottom');
+  });
+
+  it('places by the cited-first order on screen, not by retrieval order', async () => {
+    // Retrieval order puts Q3 Revenue above Annual Report; citing only Annual Report swaps them.
+    renderChips(
+      [lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf', ['file-a'])],
+      'Per the Annual Report, revenue grew.'
+    );
+
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('top');
+    expect(await placementOf(badgeOf('Q3 Revenue.pdf'))).toBe('bottom');
   });
 
   it('keeps top for partners with an unrelated chip between them', async () => {
@@ -661,6 +673,22 @@ describe('CitableSources cited-first order', () => {
   it('keeps retrieval order when the reply cites nothing it can detect, or is not finished', () => {
     expect(citedFirst(named, named, 'The rollout runs nightly.')).toEqual(named);
     expect(citedFirst(named, named, undefined)).toEqual(named);
+  });
+
+  it('does not count a name or [N] that only appears in code', () => {
+    const indexed = named.map((source, i) => ({ ...source, metadata: { ...source.metadata, citationIndex: i + 1 } }));
+    const codeOnly = 'Use `release_notes.md` here.\n\n```\nnotes[3] = load("deploy-guide.md")\n```';
+    expect(citedFirst(named, named, replyProse(codeOnly))).toEqual(named);
+    expect(citedFirst(indexed, indexed, replyProse(codeOnly))).toEqual(indexed);
+  });
+
+  it('keeps retrieval order when the only mention is inside a code block', () => {
+    render(
+      <TestWrapper>
+        <CitableSources citables={named} reply={'The rollout runs nightly.\n\n```\nsource: release_notes.md\n```'} />
+      </TestWrapper>
+    );
+    expect(screen.getAllByTestId('citable-source-chip')[0]).toHaveTextContent('sample.yaml');
   });
 
   it('renders the cited source above an uncited one retrieved before it', () => {

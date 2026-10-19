@@ -12,11 +12,14 @@ import { CitableSource, CitableSourceType, findCitationMarkers, sourceNamedIn } 
 import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useCitableSourceClick } from './useCitableSourceClick';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { citationMarkersLinkable } from './markdown/inlineCitations';
+import { citationMarkersLinkable, replyProse } from './markdown/inlineCitations';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
-  /** The finished reply, used to put the sources it cites first. Omit while streaming. */
+  /**
+   * The finished reply's rendered markdown (artifacts already stripped), used to put the sources it
+   * cites first. Omit while streaming.
+   */
   reply?: string;
 }
 
@@ -111,14 +114,14 @@ export const conflictPlacementOf = (
 const identityOf = (source: CitableSource): string | undefined => source.id || source.url || source.title;
 
 /**
- * Identities of the sources `reply` cites. On a turn whose `[N]` markers resolve to `citables[N-1]`
+ * Identities of the sources `prose` cites (replyProse: what the reader sees, no code or artifacts). On a turn whose `[N]` markers resolve to `citables[N-1]`
  * (citationMarkersLinkable) a marker is the citation; on any other turn a source counts when the
  * reply names it the way the lake RAG eval grades a named citation (sourceNamedIn), or links its URL.
  */
-const citedIdentities = (citables: readonly CitableSource[], reply: string): Set<string> => {
+const citedIdentities = (citables: readonly CitableSource[], prose: string): Set<string> => {
   const sources = citationMarkersLinkable(citables)
-    ? findCitationMarkers(reply).flatMap(marker => marker.numbers.map(n => citables[n.value - 1]))
-    : citables.filter(source => sourceNamedIn(reply, source.title) || (!!source.url && reply.includes(source.url)));
+    ? findCitationMarkers(prose).flatMap(marker => marker.numbers.map(n => citables[n.value - 1]))
+    : citables.filter(source => sourceNamedIn(prose, source.title) || (!!source.url && prose.includes(source.url)));
   const ids = new Set<string>();
   for (const source of sources) {
     // An out-of-range marker resolves to undefined.
@@ -137,10 +140,10 @@ const citedIdentities = (citables: readonly CitableSource[], reply: string): Set
 export const citedFirst = (
   unique: CitableSource[],
   citables: readonly CitableSource[],
-  reply: string | undefined
+  prose: string | undefined
 ): CitableSource[] => {
-  if (!reply) return unique;
-  const cited = citedIdentities(citables, reply);
+  if (!prose) return unique;
+  const cited = citedIdentities(citables, prose);
   if (cited.size === 0) return unique;
   const isCited = (source: CitableSource) => cited.has(identityOf(source) ?? '');
   return [...unique.filter(isCited), ...unique.filter(source => !isCited(source))];
@@ -442,7 +445,7 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, reply }) => {
       if (identity) seen.add(identity);
       out.push(source);
     }
-    return citedFirst(out, citables ?? [], reply);
+    return citedFirst(out, citables ?? [], reply && replyProse(reply));
   }, [citables, reply]);
 
   // Built off the DEDUPED list so a title resolves to the chip actually rendered for that id.

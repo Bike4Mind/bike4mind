@@ -53,6 +53,10 @@ describe('sourceNamedIn', () => {
     expect(sourceNamedIn('Read notes v2 first.', 'notes (v2).md')).toBe(false);
   });
 
+  it('matches nothing for a name that is not a string, as a malformed stored citable may carry', () => {
+    expect(sourceNamedIn('anything at all', undefined as unknown as string)).toBe(false);
+  });
+
   it('matches nothing for a name with no words', () => {
     expect(sourceNamedIn('anything at all', '')).toBe(false);
     expect(sourceNamedIn('anything at all', ' - ')).toBe(false);

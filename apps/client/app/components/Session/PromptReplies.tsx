@@ -1888,7 +1888,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
       {promptMeta?.citables && promptMeta.citables.length > 0 && (
         // The reply only once done, so chips do not reshuffle under the reader as citations stream in.
-        <CitableSources citables={promptMeta.citables} reply={completed ? cleanReply : undefined} />
+        // processedContent, not cleanReply: an artifact body the reader never sees must not count as
+        // citing a source. Not displayContent either, which is cut to the collapsed view.
+        <CitableSources citables={promptMeta.citables} reply={completed ? processedContent : undefined} />
       )}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their

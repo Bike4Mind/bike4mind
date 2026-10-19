@@ -16,6 +16,7 @@ import {
   remarkCitationMarkers,
   resolveCitationMarker,
   shouldLinkCitationMarkers,
+  replyProse,
 } from './inlineCitations';
 
 // The marker link calls useNavigate, which needs a router context we don't set up here.
@@ -227,5 +228,24 @@ describe('inline citation markers in a reply', () => {
 
     rerender(<Reply content="Streaming [1]" citables={[lakeCitable('a', 1)]} />);
     expect(markerLinks()).toHaveLength(1);
+  });
+});
+
+describe('replyProse', () => {
+  it('keeps text, link text and link URLs', () => {
+    const prose = replyProse('Per **deploy-schedule.md** [1], see [the post](https://other.dev/x).');
+    expect(prose).toContain('deploy-schedule.md');
+    expect(prose).toContain('[1]');
+    expect(prose).toContain('the post');
+    expect(prose).toContain('https://other.dev/x');
+  });
+
+  it('leaves out code spans, code blocks and raw HTML', () => {
+    const prose = replyProse('Plain.\n\nUse `sample.yaml`.\n\n```\nload("notes.md") [2]\n```\n\n<div>hidden.md</div>');
+    expect(prose).toContain('Plain.');
+    expect(prose).not.toContain('sample.yaml');
+    expect(prose).not.toContain('notes.md');
+    expect(prose).not.toContain('[2]');
+    expect(prose).not.toContain('hidden.md');
   });
 });

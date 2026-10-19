@@ -44,6 +44,9 @@ export const findCitationMarkers = (text: string): CitationMarkerMatch[] =>
  * agree on what counts as citing a source by name. A name with no words matches nothing.
  */
 export const sourceNamedIn = (text: string, name: string): boolean => {
+  // Typed as a string, but citables are read back from stored documents; a malformed one must not
+  // throw while rendering a reply.
+  if (typeof name !== 'string') return false;
   const words = name
     .replace(/\.[a-z0-9]+$/i, '')
     .split(/[\s_-]+/)
