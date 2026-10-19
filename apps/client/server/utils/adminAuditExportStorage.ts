@@ -26,5 +26,6 @@ export async function stageAdminAuditExport(csv: string, fileName: string): Prom
   return storage.getSignedUrl(key, 'get', {
     expiresIn: ADMIN_AUDIT_EXPORT_URL_TTL_SECONDS,
     ResponseContentDisposition: buildContentDisposition(fileName),
+    audience: 'browser',
   });
 }

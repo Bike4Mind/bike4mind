@@ -28,6 +28,7 @@ describe('stageAdminAuditExport', () => {
     expect(getSignedUrl).toHaveBeenCalledWith(key, 'get', {
       expiresIn: ADMIN_AUDIT_EXPORT_URL_TTL_SECONDS,
       ResponseContentDisposition: 'attachment; filename="audit-log-2026-10-19.csv"',
+      audience: 'browser',
     });
     expect(ADMIN_AUDIT_EXPORT_URL_TTL_SECONDS).toBeLessThanOrEqual(15 * 60);
   });
