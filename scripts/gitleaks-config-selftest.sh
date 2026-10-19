@@ -168,6 +168,28 @@ assert_rule_reachable bike4mind-gemini-key \
 assert_rule_reachable bike4mind-slack-webhook \
   "const hook = 'https://hooks.slack.com/services/T$(rand_str 'A-Za-z0-9' 9)/B$(rand_str 'A-Za-z0-9' 9)/$(rand_str 'A-Za-z0-9' 24)';"
 
+# Docs content is exempt, but deployed configuration and source must be scanned.
+for relative_path in docs-site/sst.config.ts docs-site/docusaurus.config.ts \
+    docs-site/src/index.tsx docs-site/scripts/check.mjs \
+    docs-site/scripts/check.test.mjs docs-site/docs/example.md; do
+  canary_file="$TEMP_DIR/$relative_path"
+  mkdir -p "$(dirname "$canary_file")"
+  cp "$TEMP_DIR/canary.ts" "$canary_file"
+  scan_status=0
+  "$GITLEAKS_PATH" detect --no-git --redact --no-banner --config "$CONFIG" \
+    -s "$canary_file" >/dev/null 2>&1 || scan_status=$?
+  expected_status=1
+  case "$relative_path" in
+    docs-site/docs/*|*.test.mjs) expected_status=0 ;;
+  esac
+  if [ "$scan_status" -eq "$expected_status" ]; then
+    echo "ok: $relative_path scan status $scan_status"
+  else
+    echo "FAIL: $relative_path scan status $scan_status (expected $expected_status)"
+    FAILED=1
+  fi
+done
+
 if [ "$FAILED" -ne 0 ]; then
   echo ""
   echo "gitleaks config self-test FAILED. The config may load cleanly and still"

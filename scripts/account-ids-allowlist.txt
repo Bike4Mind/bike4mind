@@ -9,6 +9,11 @@
 # Keep this list short — the goal is zero account-tied identifiers in shippable
 # code. Prefer moving the value to config/env over allowlisting it.
 
+# Public docs-site host defaults are deliberate branding for this standalone site.
+# Match the complete existing lines so extra identifiers on either line still fail.
+^docs-site/docusaurus\.config\.ts:[0-9]+:  url: process\.env\.DOCS_URL \|\| 'https://docs\.bike4mind\.com',$
+^docs-site/sst\.config\.ts:[0-9]+:      process\.env\.SERVER_DOMAIN \|\| \(\$app\.stage === 'production' \? 'bike4mind\.com' : 'staging\.bike4mind\.com'\);$
+
 # Test-environment seeds in vitest.setup.ts (not shipped, not account-tied config): dummy
 # real-format Stripe price ids, and a SERVER_DOMAIN value so modules that derive hosts from
 # it resolve to the bike4mind hosts the existing tests assert. The price pattern is narrowed
