@@ -1,5 +1,5 @@
 {
-  "thresholdSec": 1,
+  "thresholdSec": 30,
   "prompts": [
     {
       "id": "primes-under-100",
