@@ -600,6 +600,12 @@ export async function handlePermissionResponse(
     if (cmd.rememberForSession) {
       await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
     }
+    // Settle the dispatch-time Quest so chat history keeps the denial across a refresh
+    // instead of a permanently `pending` empty bubble - parity with the executor's
+    // policy-denied path (`agentExecutorUtils/toolPermissions.ts`). Persist before the
+    // send: a closed socket makes the send throw, and a retried Deny cannot repair it
+    // because the CAS above has already left `awaiting_permission`.
+    await persistRunAsQuest(cmd.executionId, denialMessage, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
@@ -607,10 +613,6 @@ export async function handlePermissionResponse(
       toolName: cmd.toolName,
       message: denialMessage,
     });
-    // Settle the dispatch-time Quest so chat history keeps the denial across a refresh
-    // instead of a permanently `pending` empty bubble - parity with the executor's
-    // policy-denied path (`agentExecutorUtils/toolPermissions.ts`).
-    await persistRunAsQuest(cmd.executionId, denialMessage, logger);
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,
       toolName: cmd.toolName,

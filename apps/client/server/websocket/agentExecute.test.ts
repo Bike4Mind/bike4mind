@@ -211,6 +211,20 @@ describe('handlePermissionResponse', () => {
     expect(noopLogger.warn).not.toHaveBeenCalled();
   });
 
+  it('still persists the denial when the failed frame cannot be delivered', async () => {
+    mockApiGwSend.mockRejectedValueOnce(new Error('GoneException'));
+
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    ).catch(() => undefined);
+
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
+  });
+
   it('marks the pause approved instead of clearing it, so the executor can still replay the withheld call', async () => {
     await handlePermissionResponse(
       baseCmd({ approved: true, rememberForSession: false }),
