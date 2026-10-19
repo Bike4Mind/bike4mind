@@ -321,6 +321,11 @@ describe('resolveScopedSettingEntries (stored)', () => {
 });
 
 describe('resolveScopedSetting (integration, through the real settingsMap)', () => {
+  it('carries neither stored nor platformRejected, even for a platform row that failed the schema', async () => {
+    const r = await resolveScopedSetting(KEY, {}, makeDb({ [KEY]: 'not-a-number' }));
+    expect(r).toEqual({ value: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, source: SettingScopeLevel.Platform });
+  });
+
   it('returns the platform value with an empty scope', async () => {
     const db = makeDb({ [KEY]: '3000' });
     const r = await resolveScopedSetting(KEY, {}, db);

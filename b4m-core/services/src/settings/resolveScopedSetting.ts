@@ -345,7 +345,8 @@ export async function resolveScopedSetting<K extends SettingKey>(
   opts?: { logger?: Logger }
 ): Promise<ResolvedSetting<SettingValue<K>>> {
   const resolved = await resolveAll([key], scope, db, opts?.logger);
-  const { stored, ...setting } = resolved.get(key)!;
+  // Entry-only fields stay off the single-key result, matching its ResolvedSetting type.
+  const { stored, platformRejected, ...setting } = resolved.get(key)!;
   return setting;
 }
 

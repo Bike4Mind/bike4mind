@@ -415,8 +415,9 @@ export async function invokeRemoteMcp(
 
   const context = options.context ?? (await resolveCustomMcpContext(request.userId));
   if (!context.enabled) {
-    audit.failure('policy_blocked', { policyVerdict: 'disabled' });
-    throw new CustomMcpPolicyBlockedError('Custom MCP connectors are disabled', 'disabled');
+    const reason = context.disabledReason ?? 'disabled';
+    audit.failure('policy_blocked', { policyVerdict: reason });
+    throw new CustomMcpPolicyBlockedError('Custom MCP connectors are disabled', reason);
   }
   const verdict = evaluateConnectionPolicy(context, {
     urlHost: connection.urlHost,

@@ -30,8 +30,13 @@ export interface RemoteMcpNetworkOptions {
 }
 
 export interface CustomMcpContext {
-  /** `EnableMCPServer` AND `EnableCustomMcpConnectors` AND no applicable org policy set to `off`. */
+  /**
+   * `EnableMCPServer` AND `EnableCustomMcpConnectors` AND no applicable org policy set to `off`
+   * AND a usable platform blocklist.
+   */
   enabled: boolean;
+  /** Set when `enabled` is false for a reason other than a switch being off. */
+  disabledReason?: 'platform_blocklist_invalid';
   /**
    * The resolved `customMcpPolicy` for each org the user is a member of, or the platform value
    * alone for a user in no org. Every one is applied: any org can close a host, none can reopen it.
@@ -75,29 +80,45 @@ function policyScope(userId: string, organizationId?: string): SettingScope {
 
 const CUSTOM_MCP_HOST_SETTING_KEYS = ['customMcpBlockedHosts', 'customMcpAllowPrivateNetworks'] as const;
 
+interface DroppedOverrideInfo {
+  platformRejected?: true;
+  ignoredOverrides?: { scopeLevel: string; scopeId: string }[];
+}
+
+// Every request resolves these settings, so each dropped value is reported once per process.
+const warnedDroppedOverrides = new Set<string>();
+
+function warnOnce(id: string, message: string): void {
+  if (warnedDroppedOverrides.has(id)) return;
+  warnedDroppedOverrides.add(id);
+  console.warn(message);
+}
+
 /**
  * A stored value the setting's schema now refuses (e.g. a private range saved before the shared
- * unreachable-network list) resolves to the default, so say so; otherwise the operator's list vanishes silently.
+ * unreachable-network list) is skipped, so say so; otherwise the operator's choice vanishes silently.
+ * A rejected platform row resolves to the coded default; a skipped narrower override falls back to
+ * the next wider scope.
  */
-function warnOnDroppedOverrides(
-  entries: Record<
-    (typeof CUSTOM_MCP_HOST_SETTING_KEYS)[number],
-    { platformRejected?: true; ignoredOverrides?: { scopeLevel: string; scopeId: string }[] }
-  >
-): void {
-  for (const key of CUSTOM_MCP_HOST_SETTING_KEYS) {
-    const entry = entries[key];
-    if (entry.platformRejected) {
-      console.warn(
-        `[customMcpAccess] Stored '${key}' at platform scope failed validation; using the default (no override applied)`
-      );
-    }
-    for (const ignored of entry.ignoredOverrides ?? []) {
-      console.warn(
-        `[customMcpAccess] Stored '${key}' at ${ignored.scopeLevel} scope ${ignored.scopeId} failed validation; using the default (no override applied)`
-      );
-    }
+function warnOnDroppedOverrides(key: string, entry: DroppedOverrideInfo): void {
+  if (entry.platformRejected) {
+    warnOnce(
+      `${key}:platform`,
+      `[customMcpAccess] Stored '${key}' at platform scope failed validation; using the coded default`
+    );
   }
+  for (const ignored of entry.ignoredOverrides ?? []) {
+    warnOnce(
+      `${key}:${ignored.scopeLevel}:${ignored.scopeId}`,
+      `[customMcpAccess] Stored '${key}' at ${ignored.scopeLevel} scope ${ignored.scopeId} failed validation; ` +
+        'falling back to the next wider scope'
+    );
+  }
+}
+
+/** Test seam: forget which dropped values were already reported. */
+export function resetDroppedOverrideWarnings(): void {
+  warnedDroppedOverrides.clear();
 }
 
 /**
@@ -114,16 +135,24 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
     scopedSettingsService.resolveScopedSettingEntries(CUSTOM_MCP_HOST_SETTING_KEYS, policyScope(userId), db),
   ]);
   const scopes = orgIds.length > 0 ? orgIds.map(orgId => policyScope(userId, orgId)) : [policyScope(userId)];
-  const policies = await Promise.all(
-    scopes.map(async scope => (await scopedSettingsService.resolveScopedSetting('customMcpPolicy', scope, db)).value)
+  const policyEntries = await Promise.all(
+    scopes.map(
+      async scope =>
+        (await scopedSettingsService.resolveScopedSettingEntries(['customMcpPolicy'], scope, db)).customMcpPolicy
+    )
   );
+  const policies = policyEntries.map(entry => entry.value);
 
   const platformFlag = mcpEnabled && customEnabled;
-  warnOnDroppedOverrides(platform);
+  for (const key of CUSTOM_MCP_HOST_SETTING_KEYS) warnOnDroppedOverrides(key, platform[key]);
+  for (const entry of policyEntries) warnOnDroppedOverrides('customMcpPolicy', entry);
+  // An empty blocklist would quietly reopen every host the operator closed, so fail closed instead.
+  const blocklistInvalid = platform.customMcpBlockedHosts.platformRejected === true;
   const privateNetworks = platform.customMcpAllowPrivateNetworks.value;
   const selfHostPrivate = isSelfHost() ? privateNetworks : undefined;
   return {
-    enabled: policies.every(policy => isCustomMcpEnabled(platformFlag, policy)),
+    enabled: !blocklistInvalid && policies.every(policy => isCustomMcpEnabled(platformFlag, policy)),
+    ...(blocklistInvalid ? { disabledReason: 'platform_blocklist_invalid' as const } : {}),
     policies,
     platformBlockedHosts: platform.customMcpBlockedHosts.value.hosts,
     organizationIds: orgIds,
@@ -143,7 +172,12 @@ export async function resolveCustomMcpContext(userId: string): Promise<CustomMcp
  */
 export async function assertCustomMcpEnabled(user: { id: string }): Promise<CustomMcpContext> {
   const context = await resolveCustomMcpContext(user.id);
-  if (!context.enabled) throw new ForbiddenError('Custom MCP connectors are disabled');
+  if (!context.enabled) {
+    throw new ForbiddenError(
+      'Custom MCP connectors are disabled',
+      context.disabledReason ? { code: 'policy_blocked', reason: context.disabledReason } : undefined
+    );
+  }
   return context;
 }
 

@@ -10,8 +10,12 @@ const state = vi.hoisted(() => ({
   blockedHosts: [] as string[],
   privateNetworks: { cidrs: [] as string[], allowHttp: false },
   policyScopes: [] as unknown[],
-  privateNetworksEntry: {} as { platformRejected?: true; ignoredOverrides?: { scopeLevel: string; scopeId: string }[] },
+  privateNetworksEntry: {} as DroppedInfo,
+  blockedHostsEntry: {} as DroppedInfo,
+  policyEntry: {} as DroppedInfo,
 }));
+
+type DroppedInfo = { platformRejected?: true; ignoredOverrides?: { scopeLevel: string; scopeId: string }[] };
 
 vi.mock('@server/middlewares/featureFlag', () => ({
   isFeatureEnabled: vi.fn(async (key: string) => state.flags[key] === true),
@@ -23,25 +27,44 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   scopedSettingsService: {
-    resolveScopedSettingEntries: vi.fn(async () => ({
-      customMcpBlockedHosts: { value: { hosts: state.blockedHosts }, source: 'platform', stored: true },
-      customMcpAllowPrivateNetworks: {
-        value: state.privateNetworks,
-        source: 'platform',
-        stored: true,
-        ...state.privateNetworksEntry,
-      },
-    })),
-    resolveScopedSetting: vi.fn(async (_key: string, scope: { organizationId?: string }) => {
-      state.policyScopes.push(scope);
-      const override = scope.organizationId ? state.orgPolicies[scope.organizationId] : undefined;
-      return { value: CustomMcpPolicySchema.parse({ ...state.platformPolicy, ...override }), source: 'platform' };
+    resolveScopedSettingEntries: vi.fn(async (keys: readonly string[], scope: { organizationId?: string }) => {
+      if (keys.includes('customMcpPolicy')) {
+        state.policyScopes.push(scope);
+        const override = scope.organizationId ? state.orgPolicies[scope.organizationId] : undefined;
+        return {
+          customMcpPolicy: {
+            value: CustomMcpPolicySchema.parse({ ...state.platformPolicy, ...override }),
+            source: 'platform',
+            stored: true,
+            ...state.policyEntry,
+          },
+        };
+      }
+      return {
+        customMcpBlockedHosts: {
+          value: { hosts: state.blockedHosts },
+          source: 'platform',
+          stored: true,
+          ...state.blockedHostsEntry,
+        },
+        customMcpAllowPrivateNetworks: {
+          value: state.privateNetworks,
+          source: 'platform',
+          stored: true,
+          ...state.privateNetworksEntry,
+        },
+      };
     }),
   },
 }));
 
-const { assertCustomMcpEnabled, evaluateConnectionPolicy, resolveCustomMcpContext, resolveOwnHosts } =
-  await import('./customMcpAccess');
+const {
+  assertCustomMcpEnabled,
+  evaluateConnectionPolicy,
+  resetDroppedOverrideWarnings,
+  resolveCustomMcpContext,
+  resolveOwnHosts,
+} = await import('./customMcpAccess');
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -54,6 +77,9 @@ beforeEach(() => {
   state.privateNetworks = { cidrs: [], allowHttp: false };
   state.policyScopes = [];
   state.privateNetworksEntry = {};
+  state.blockedHostsEntry = {};
+  state.policyEntry = {};
+  resetDroppedOverrideWarnings();
   process.env = {
     ...ORIGINAL_ENV,
     APP_URL: 'https://app.example.com',
@@ -101,12 +127,43 @@ describe('resolveCustomMcpContext', () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain("'customMcpAllowPrivateNetworks'");
       expect(warn.mock.calls[0][0]).toContain('platform scope');
+      expect(warn.mock.calls[0][0]).toContain('coded default');
     });
 
-    it('warns with the scope id for a narrower override that was skipped', async () => {
+    it('warns with the scope id for a narrower override that was skipped, naming the real fallback', async () => {
       state.privateNetworksEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
       await resolveCustomMcpContext('u1');
       expect(warn.mock.calls[0][0]).toContain('organization scope org-a');
+      expect(warn.mock.calls[0][0]).toContain('next wider scope');
+      expect(warn.mock.calls[0][0]).not.toContain('default');
+    });
+
+    it('warns about a dropped customMcpPolicy override too', async () => {
+      state.orgIds = ['org-a'];
+      state.policyEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
+      await resolveCustomMcpContext('u1');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("'customMcpPolicy' at organization scope org-a");
+    });
+
+    it('warns once per process for each key and scope', async () => {
+      state.privateNetworksEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-a' }] };
+      await resolveCustomMcpContext('u1');
+      await resolveCustomMcpContext('u2');
+      expect(warn).toHaveBeenCalledTimes(1);
+      state.privateNetworksEntry = { ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-b' }] };
+      await resolveCustomMcpContext('u1');
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('fails closed when the platform blocklist failed validation, rather than running with none', async () => {
+      state.blockedHostsEntry = { platformRejected: true };
+      const context = await resolveCustomMcpContext('u1');
+      expect(context).toMatchObject({ enabled: false, disabledReason: 'platform_blocklist_invalid' });
+      await expect(assertCustomMcpEnabled({ id: 'u1' })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { code: 'policy_blocked', reason: 'platform_blocklist_invalid' },
+      });
     });
   });
 

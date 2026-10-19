@@ -545,6 +545,17 @@ describe('invokeRemoteMcp - checks before any network', () => {
     expect(state.audits.map(a => a.errorCode)).toEqual(['policy_blocked', 'policy_blocked', 'policy_blocked']);
   });
 
+  it('fails closed with the typed reason when the platform blocklist is unusable', async () => {
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner, context: context({ enabled: false, disabledReason: 'platform_blocklist_invalid' }) }
+      )
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { reason: 'platform_blocklist_invalid' } });
+    expect(fixture.requests).toHaveLength(0);
+  });
+
   it('loads owner-scoped: another user gets a 404', async () => {
     const id = seed('/mcp');
     await expect(
