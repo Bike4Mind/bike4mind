@@ -83,7 +83,11 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 }));
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/managers/sessionManager', () => ({ getOrCreateSession: vi.fn().mockResolvedValue({}) }));
-vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/utils/orgAccess', async orig => ({
+  // Keep the real module: the route also reads the billing-input mapper and the stray-key guard.
+  ...(await orig<Record<string, unknown>>()),
+  resolveBillingOrgId: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@server/imageGenerations/imageEdit', () => ({ getImageEdit: () => ({ invoke: mockInvoke }) }));
 
 import uploadHandler from '../files/index';
