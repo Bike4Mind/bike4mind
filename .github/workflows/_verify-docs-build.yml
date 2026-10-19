@@ -28,47 +28,30 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 2  # Only fetch last 2 commits for quick diff
 
-      - name: Check for docs changes
+      # ci.yml only calls this workflow when its changes job saw docs-site/ in the full PR diff, so the build
+      # always runs here. The listing below is for the PR comment only; a git diff against a shallow clone
+      # cannot find the merge base once main has been merged into the branch and used to skip the whole job.
+      - name: List docs changes
         id: docs-changes
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          # Check if any files in docs-site/ were changed
-          # For PRs, fetch base branch efficiently
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            git fetch --depth=1 origin "$BASE_REF"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          DOCS_CHANGED=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null | grep '^docs-site/' || true)
+          TOTAL=$(printf '%s' "$DOCS_CHANGED" | grep -c . || true)
+          DISPLAY=$(printf '%s\n' "$DOCS_CHANGED" | head -5)
+          if [ "$TOTAL" -gt 5 ]; then
+            DISPLAY=$(printf '%s\n...and %d more' "$DISPLAY" "$((TOTAL - 5))")
           fi
-          
-          DOCS_CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null | grep '^docs-site/' || echo "")
-          if [ -n "$DOCS_CHANGED" ]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            TOTAL=$(echo "$DOCS_CHANGED" | wc -l | tr -d ' ')
-            DISPLAY=$(echo "$DOCS_CHANGED" | head -5)
-            if [ "$TOTAL" -gt 5 ]; then
-              DISPLAY=$(printf '%s\n...and %d more' "$DISPLAY" "$((TOTAL - 5))")
-            fi
-            {
-              echo "changed_files<<EOF"
-              echo "$DISPLAY"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-            echo "Docs changes detected:"
-            echo "$DOCS_CHANGED"
-          else
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No docs-site changes detected - skipping build verification"
-            echo "✅ This job will report success (skip is OK for deploy to proceed)"
-          fi
-
-      - name: Skip message
-        if: steps.docs-changes.outputs.has_changes == 'false'
-        run: |
-          echo "::notice::No docs-site changes in this PR - build verification skipped"
-          echo "Deploy job will proceed normally since this is expected behavior"
+          {
+            echo "changed_files<<EOF"
+            echo "$DISPLAY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "docs-site files changed: ${TOTAL}"
 
       - name: Setup pnpm
         if: steps.docs-changes.outputs.has_changes == 'true'
