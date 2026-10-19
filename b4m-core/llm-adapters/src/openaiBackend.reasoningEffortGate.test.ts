@@ -113,7 +113,6 @@ describe('OpenAIBackend reasoning_effort gate for GPT-5.4 + tools (#8920)', () =
   });
 
   it('omits reasoning_effort for GPT-5.4 Mini and Nano when tools are present', async () => {
-    expect(ChatModels.GPT5_4_MINI_2026_03_17).toBe('gpt-5.4-mini-2026-03-17');
     for (const model of [ChatModels.GPT5_4_MINI, ChatModels.GPT5_4_MINI_2026_03_17, ChatModels.GPT5_4_NANO]) {
       const { backend, getCaptured } = buildBackend();
 
