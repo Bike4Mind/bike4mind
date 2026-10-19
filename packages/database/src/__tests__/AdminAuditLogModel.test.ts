@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { Types } from 'mongoose';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import mongoose, { Types } from 'mongoose';
 import type { NewAdminAuditEntry } from '@bike4mind/common';
 import {
   AdminAuditLogModel,
@@ -114,14 +114,21 @@ describe('AdminAuditLogModel', () => {
     );
   });
 
-  it('exports the superseded index names', () => {
-    expect(SUPERSEDED_ADMIN_AUDIT_INDEX_NAMES).toEqual([
-      'actor.userId_1_occurredAt_-1',
-      'target.kind_1_target.id_1_occurredAt_-1',
-      'organizationId_1_occurredAt_-1',
-      'category_1_occurredAt_-1',
-      'action_1_occurredAt_-1',
-    ]);
+  it('names exactly the indexes the previous key specs produced', async () => {
+    const previousKeySpecs: Array<Record<string, 1 | -1>> = [
+      { 'actor.userId': 1, occurredAt: -1 },
+      { 'target.kind': 1, 'target.id': 1, occurredAt: -1 },
+      { organizationId: 1, occurredAt: -1 },
+      { category: 1, occurredAt: -1 },
+      { action: 1, occurredAt: -1 },
+    ];
+    const scratch = AdminAuditLogModel.db.collection('adminauditlogs_superseded_index_names');
+    for (const spec of previousKeySpecs) await scratch.createIndex(spec);
+
+    const names = (await scratch.listIndexes().toArray()).map(index => String(index.name)).filter(n => n !== '_id_');
+    await scratch.drop();
+
+    expect(names).toEqual([...SUPERSEDED_ADMIN_AUDIT_INDEX_NAMES]);
   });
 
   describe('reads', () => {
@@ -164,6 +171,17 @@ describe('AdminAuditLogModel', () => {
 
       expect(collected).toEqual([...ids].sort().reverse());
       expect(new Set(collected).size).toBe(5);
+    });
+
+    it('list bounds the query time so an unindexed filter fails fast', async () => {
+      const maxTimeSpy = vi.spyOn(mongoose.Query.prototype, 'maxTimeMS');
+      try {
+        await adminAuditLogRepository.list({}, { limit: 2 });
+        expect(maxTimeSpy).toHaveBeenCalledWith(expect.any(Number));
+        expect(maxTimeSpy.mock.calls[0][0]).toBeGreaterThan(0);
+      } finally {
+        maxTimeSpy.mockRestore();
+      }
     });
 
     it('list applies each filter', async () => {

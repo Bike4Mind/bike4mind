@@ -1,5 +1,6 @@
 import mongoose, { Model, model, Schema, Types } from 'mongoose';
 import {
+  IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
   type AuditEntry,
   type AuditLogCursor,
@@ -164,6 +165,8 @@ const toAuditEntry = (record: StoredRecord): AuditEntry => {
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-f]{24}$/i;
 const TOP_GRANTER_LIMIT = 3;
+// An unindexed filter combination fails fast rather than tying up the request until the gateway gives up.
+const LIST_QUERY_MAX_TIME_MS = 15_000;
 
 type FilterClause = Record<string, unknown>;
 
@@ -190,12 +193,16 @@ const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   return clauses;
 };
 
-const buildCursorClause = (cursor: AuditLogCursor): FilterClause => ({
-  $or: [
-    { occurredAt: { $lt: cursor.occurredAt } },
-    { occurredAt: cursor.occurredAt, _id: { $lt: new Types.ObjectId(cursor.id) } },
-  ],
-});
+// The redundant range bound lets the planner seek the occurredAt index instead of evaluating the $or alone.
+const buildCursorClauses = (cursor: AuditLogCursor): FilterClause[] => [
+  { occurredAt: { $lte: cursor.occurredAt } },
+  {
+    $or: [
+      { occurredAt: { $lt: cursor.occurredAt } },
+      { occurredAt: cursor.occurredAt, _id: { $lt: new Types.ObjectId(cursor.id) } },
+    ],
+  },
+];
 
 type SummaryFacets = {
   grantCount: Array<{ count: number }>;
@@ -245,12 +252,13 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     page: { limit: number; cursor?: AuditLogCursor }
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
     const clauses = buildFilterClauses(filters);
-    if (page.cursor) clauses.push(buildCursorClause(page.cursor));
+    if (page.cursor) clauses.push(...buildCursorClauses(page.cursor));
 
     const records = await this.auditLogModel
       .find(clauses.length > 0 ? { $and: clauses } : {})
       .sort({ occurredAt: -1, _id: -1 })
       .limit(page.limit + 1)
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS)
       .lean<StoredRecord[]>();
 
     const pageRecords = records.slice(0, page.limit);
@@ -281,7 +289,7 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
           ],
           permissionChanges: facetCount({
             category: 'access',
-            action: { $nin: [IMPERSONATION_STARTED_ACTION, 'user.impersonation.ended'] },
+            action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
           }),
           impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
           deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
