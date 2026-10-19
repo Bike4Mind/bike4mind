@@ -142,6 +142,8 @@ export interface paths {
      * Create a chat completion
      * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
+     *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
+     *
      *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
@@ -1597,6 +1599,15 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          type: 'provider_block';
+          /** @enum {string} */
+          provider: 'anthropic';
+          block: {
+            [key: string]: unknown;
+          };
+        }
+      | {
+          /** @enum {string} */
           type: 'error';
           message: string;
           requestId?: string;
@@ -1613,7 +1624,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'unknown_model';
+      errorCode?:
+        | 'unknown_model'
+        | 'tool_search_unsupported'
+        | 'all_tools_deferred'
+        | 'deferred_tool_cache_control'
+        | 'unknown_tool_reference';
     };
     createCompletionResponse422: {
       error: string;
@@ -1676,50 +1692,94 @@ export interface components {
             };
           };
       stream?: boolean;
-      tools?: {
-        toolSchema: {
-          name: string;
-          description: string;
-          parameters: {
-            /** @enum {string} */
-            type: 'object';
-            properties?: {
-              [key: string]: unknown;
+      tools?: (
+        | {
+            toolSchema: {
+              name: string;
+              description: string;
+              parameters: {
+                /** @enum {string} */
+                type: 'object';
+                properties?: {
+                  [key: string]: unknown;
+                };
+                additionalProperties?: boolean;
+                required?: string[];
+              } & {
+                [key: string]: unknown;
+              };
+              strict?: boolean;
+              /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
+              defer_loading?: boolean;
+              /** @description Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`). */
+              cache_control?: unknown;
             };
-            additionalProperties?: boolean;
-            required?: string[];
-          } & {
-            [key: string]: unknown;
-          };
-          strict?: boolean;
-        };
-        _isMcpTool?: boolean;
-      }[];
+            _isMcpTool?: boolean;
+          }
+        | {
+            /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
+            serverTool:
+              | {
+                  /** @enum {string} */
+                  type: 'tool_search_tool_regex_20251119';
+                  /** @enum {string} */
+                  name: 'tool_search_tool_regex';
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'tool_search_tool_bm25_20251119';
+                  /** @enum {string} */
+                  name: 'tool_search_tool_bm25';
+                };
+          }
+      )[];
       temperature?: number;
       max_tokens?: number;
       options?: {
         temperature?: number;
         maxTokens?: number;
         stream?: boolean;
-        tools?: {
-          toolSchema: {
-            name: string;
-            description: string;
-            parameters: {
-              /** @enum {string} */
-              type: 'object';
-              properties?: {
-                [key: string]: unknown;
+        tools?: (
+          | {
+              toolSchema: {
+                name: string;
+                description: string;
+                parameters: {
+                  /** @enum {string} */
+                  type: 'object';
+                  properties?: {
+                    [key: string]: unknown;
+                  };
+                  additionalProperties?: boolean;
+                  required?: string[];
+                } & {
+                  [key: string]: unknown;
+                };
+                strict?: boolean;
+                /** @description Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`). */
+                defer_loading?: boolean;
+                /** @description Accepted for validation only and not forwarded. Rejected on a deferred tool (`errorCode: "deferred_tool_cache_control"`). */
+                cache_control?: unknown;
               };
-              additionalProperties?: boolean;
-              required?: string[];
-            } & {
-              [key: string]: unknown;
-            };
-            strict?: boolean;
-          };
-          _isMcpTool?: boolean;
-        }[];
+              _isMcpTool?: boolean;
+            }
+          | {
+              /** @description A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it. */
+              serverTool:
+                | {
+                    /** @enum {string} */
+                    type: 'tool_search_tool_regex_20251119';
+                    /** @enum {string} */
+                    name: 'tool_search_tool_regex';
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'tool_search_tool_bm25_20251119';
+                    /** @enum {string} */
+                    name: 'tool_search_tool_bm25';
+                  };
+            }
+        )[];
         response_format?:
           | {
               /** @enum {string} */
@@ -2189,9 +2249,9 @@ export interface components {
         /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
         reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
-        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model only: `/api/ai/v1/completions` does not accept these yet. */
+        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`. A `bedrock` model with this flag set is not served with tool search there yet: a `serverTool` entry is refused with `errorCode: "tool_search_unsupported"` and `defer_loading` is ignored. */
         supports_tool_search: boolean;
-        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet. */
+        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet, and will accept them first for models whose `backend` is `anthropic`. */
         supports_tool_changes: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
@@ -6361,7 +6421,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

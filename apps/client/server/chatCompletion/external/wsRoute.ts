@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   IMessage,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
@@ -34,7 +34,7 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@server/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
-import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -232,7 +232,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-              const chunk = buildSSEEvent(text, info);
+              const chunk = buildCompletionStreamEvent(text, info);
               await sendToConnections({
                 action: 'cli_completion_chunk' as const,
                 requestId,
@@ -275,7 +275,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             await sendToConnections({
               action: 'cli_completion_error' as const,
               requestId,
-              error: sanitizeErrorMessage(error),
+              ...cliCompletionErrorFields(error),
             });
           } catch {
             // Best effort

@@ -264,11 +264,20 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // system on the request), which the ordering handles on its own: the budget is still there
     // for tools when system did not spend it.
     const tools = modifiedParams.tools as unknown[] | undefined;
-    if (strategy.cacheTools && Array.isArray(tools) && tools.length > 0) {
+    // The API rejects cache_control on a deferred tool; a server tool (a `type` with no input_schema) is
+    // skipped with it. The marker goes on the last tool that can carry one.
+    const markIndex = Array.isArray(tools)
+      ? tools.findLastIndex(t => {
+          const tool = t as Record<string, unknown>;
+          const isServerTool = typeof tool.type === 'string' && !('input_schema' in tool);
+          return tool.defer_loading !== true && !isServerTool;
+        })
+      : -1;
+    if (strategy.cacheTools && Array.isArray(tools) && markIndex >= 0) {
       const toolsCopy = [...tools];
-      const lastTool = toolsCopy[toolsCopy.length - 1] as Record<string, unknown>;
-      if (claim('tools', hasMarker(lastTool))) {
-        toolsCopy[toolsCopy.length - 1] = { ...lastTool, cache_control: cacheControl };
+      const markTool = toolsCopy[markIndex] as Record<string, unknown>;
+      if (claim('tools', hasMarker(markTool))) {
+        toolsCopy[markIndex] = { ...markTool, cache_control: cacheControl };
         modifiedParams.tools = toolsCopy;
       }
     }
