@@ -1,0 +1,9 @@
+{
+  "label": "AI Agents",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "title": "AI Agents Documentation",
+    "description": "Comprehensive documentation for Bike4Mind's AI agent system - architecture, development, tools, and integration guides."
+  }
+}
