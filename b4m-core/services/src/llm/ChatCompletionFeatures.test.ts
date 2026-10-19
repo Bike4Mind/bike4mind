@@ -594,6 +594,8 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(content).toContain('cite ONLY by bracketed index');
     expect(content).toContain("Numbered tool sources continue this turn's sequence; cite their supplied indices.");
     expect(content).not.toContain('never cite an index above');
+    expect(content).toContain('Do not cite an index above 2 ');
+    expect(content).toContain('unless a tool result supplies a higher number.');
     // Citables order IS the index order: [N] maps to citables[N-1].
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
