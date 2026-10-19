@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import type { CreateVideoGenerationBody, VideoGeneration, VideoModel } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { CREDITS_BALANCE_KEY } from './credits';
+import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
 import { switcherBillingTarget } from './generationBillingTarget';
 import {
   prependVideoGeneration,
@@ -14,7 +14,11 @@ import {
   type VideoGenerationList,
   type VideoGenerationPage,
 } from './videoGenerationCache';
-import { generationJobPollInterval, generationListRefreshInterval } from './generationJobPolling';
+import {
+  generationJobPollInterval,
+  generationListRefreshInterval,
+  isTerminalGenerationState,
+} from './generationJobPolling';
 import { describeVideoGenerationError } from './videoGenerationErrors';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
@@ -56,7 +60,17 @@ export function useVideoGenerations() {
       const response = await api.get<VideoGenerationPage>('/api/v1/video-generations', {
         params: { limit: VIDEO_GALLERY_PAGE_SIZE, ...(pageParam && { cursor: pageParam }) },
       });
-      return reconcileFetchedVideoGenerationPage(queryClient, response.data);
+      const previousJobs = new Map(
+        response.data.data.map(job => [
+          job.id,
+          queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(job.id)),
+        ])
+      );
+      const page = reconcileFetchedVideoGenerationPage(queryClient, response.data);
+      if (page.data.some(job => hasGenerationCreditSettlementChanged(previousJobs.get(job.id), job))) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+      return page;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: lastPage => lastPage.next_cursor ?? undefined,
@@ -70,11 +84,17 @@ export function useVideoGeneration(jobId: string) {
   const socketOpen = readyState === ReadyState.OPEN;
   return useQuery({
     queryKey: videoGenerationKeys.detail(jobId),
-    queryFn: async () =>
-      reconcileFetchedVideoGeneration(
+    queryFn: async () => {
+      const previous = queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(jobId));
+      const job = reconcileFetchedVideoGeneration(
         queryClient,
         (await api.get<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`)).data
-      ),
+      );
+      if (hasGenerationCreditSettlementChanged(previous, job)) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+      return job;
+    },
     enabled: jobId.length > 0,
     // List seeds and websocket patches keep this fresh; a mount right after a seed must not refetch.
     staleTime: 30_000,
@@ -95,7 +115,7 @@ export function useCreateVideoGeneration() {
       (await api.post<VideoGeneration>('/api/v1/video-generations', { ...body, ...switcherBillingTarget() })).data,
     onSuccess: job => {
       prependVideoGeneration(queryClient, job);
-      void queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
+      void invalidateGenerationCreditBalances(queryClient);
       toast.success('Video generation started');
     },
     onError: error => toast.error(describeVideoGenerationError(error, 'Could not start the video. Try again.')),
@@ -108,7 +128,13 @@ export function useCancelVideoGeneration() {
     mutationFn: async (jobId: string) =>
       (await api.post<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}/cancel`)).data,
     // The job usually comes back still running with the cancel queued; the websocket delivers `cancelled`.
-    onSuccess: job => upsertVideoGeneration(queryClient, job),
+    onSuccess: job => {
+      upsertVideoGeneration(queryClient, job);
+      const latest = queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(job.id));
+      if (latest && isTerminalGenerationState(latest.state) && latest.credits.settled !== null) {
+        void invalidateGenerationCreditBalances(queryClient);
+      }
+    },
     onError: error => toast.error(describeVideoGenerationError(error, 'Could not cancel the video. Try again.')),
   });
 }

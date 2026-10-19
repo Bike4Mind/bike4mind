@@ -142,14 +142,14 @@ export async function releaseCreditHold(hold: CreditHold, adapters: HolderAdapte
 
 /**
  * Keep `chargedCredits` (clamped to [0, reservedCredits]), refund the rest, and write the ledger
- * row. Returns the credits actually charged. Never throws: the balance already moved at hold time,
- * so a failed refund or ledger write is logged and only the audit trail is affected.
+ * row. Returns the credits actually charged. By default failures are logged after the balance moved.
+ * Transactional callers set throwOnWriteFailure so every failed write aborts their settlement instead.
  */
 export async function settleCreditHold(
   hold: CreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Logger },
+  context: { featureLabel: string; logger: Logger; throwOnWriteFailure?: boolean },
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;
@@ -174,6 +174,7 @@ export async function settleCreditHold(
       settledHolder =
         (await holderMethodsFor(hold, adapters).incrementCredits(hold.ownerId, overReserved)) ?? settledHolder;
     } catch (err) {
+      if (context.throwOnWriteFailure) throw err;
       logger.error(`${featureLabel} over-reserved credit refund failed - caller over-charged`, {
         ownerId: hold.ownerId,
         overReserved,
@@ -205,6 +206,7 @@ export async function settleCreditHold(
       { skipBalanceUpdate: true, currentCreditHolder: settledHolder }
     );
   } catch (err) {
+    if (context.throwOnWriteFailure) throw err;
     logger.error(`${featureLabel} usage transaction write failed - credits charged, ledger row missing`, {
       userId: hold.userId,
       organizationId: hold.organizationId ?? undefined,

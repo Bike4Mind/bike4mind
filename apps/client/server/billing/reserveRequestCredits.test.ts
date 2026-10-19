@@ -1,12 +1,30 @@
 import { CreditHolderType } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { deductCredits, userFindById, orgFindById, userIncrement, orgIncrement } = vi.hoisted(() => ({
+const {
+  deductCredits,
+  userFindById,
+  orgFindById,
+  userIncrement,
+  orgIncrement,
+  pendingHolds,
+  recordHold,
+  claimHold,
+  markSettled,
+  findSettlement,
+  withTransaction,
+} = vi.hoisted(() => ({
   deductCredits: vi.fn(),
   userFindById: vi.fn(),
   orgFindById: vi.fn(),
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
+  pendingHolds: new Map<string, unknown>(),
+  recordHold: vi.fn(),
+  claimHold: vi.fn(),
+  markSettled: vi.fn(),
+  findSettlement: vi.fn(),
+  withTransaction: vi.fn(async <T>(fn: () => Promise<T>): Promise<T> => fn()),
 }));
 
 vi.mock('@server/utils/errors', () => ({
@@ -18,6 +36,8 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: { findById: orgFindById, incrementCredits: orgIncrement },
   userRepository: { findById: userFindById, incrementCredits: userIncrement },
+  pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
+  withTransaction,
 }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
@@ -30,9 +50,10 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-import { reserveRequestCredits, type CreditLedgerEntry } from './reserveRequestCredits';
+import { CREDIT_HOLD_TTL_MS, reserveRequestCredits, type CreditLedgerEntry } from './reserveRequestCredits';
 
 const logger = { error: vi.fn(), warn: vi.fn() };
+
 const userReq = (apiKeyInfo?: unknown) =>
   ({ user: { id: 'u1', organizationId: null }, apiKeyInfo, logger }) as unknown as Parameters<
     typeof reserveRequestCredits
@@ -41,11 +62,44 @@ const ledger: CreditLedgerEntry = { type: 'sound_effects_usage', sessionId: 's1'
 
 describe('reserveRequestCredits', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    withTransaction.mockImplementation(async callback => {
+      const snapshot = new Map(pendingHolds);
+      try {
+        return await callback();
+      } catch (error) {
+        pendingHolds.clear();
+        for (const [id, hold] of snapshot) pendingHolds.set(id, hold);
+        throw error;
+      }
+    });
+    markSettled.mockImplementation(async (id: string, credits: number) => {
+      const pending = pendingHolds.get(id);
+      if (!pending || (typeof pending === 'object' && 'settledCredits' in pending)) return false;
+      pendingHolds.set(id, { ...(pending as object), settledCredits: credits });
+      return true;
+    });
+    findSettlement.mockImplementation(async (id: string) => {
+      const pending = pendingHolds.get(id);
+      return pending && typeof pending === 'object' && 'settledCredits' in pending ? pending.settledCredits : null;
+    });
     userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
     let balance = 100;
     userIncrement.mockImplementation(async (_id: string, delta: number) => ({ currentCredits: (balance += delta) }));
     deductCredits.mockResolvedValue(undefined);
+    pendingHolds.clear();
+    let nextId = 0;
+    recordHold.mockImplementation(async (hold: object, featureLabel: string, expiresAt: Date) => {
+      const pending = { ...hold, id: `hold-${++nextId}`, featureLabel, expiresAt };
+      pendingHolds.set(pending.id, pending);
+      return pending;
+    });
+    claimHold.mockImplementation(async (id: string) => {
+      const pending = pendingHolds.get(id) ?? null;
+      if (pending && typeof pending === 'object' && 'settledCredits' in pending) return null;
+      pendingHolds.delete(id);
+      return pending;
+    });
   });
 
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
@@ -83,7 +137,7 @@ describe('reserveRequestCredits', () => {
     );
   });
 
-  it('still settles and writes the ledger row when the partial refund fails', async () => {
+  it('retries the whole settlement when the partial refund fails', async () => {
     const reservation = await reserveRequestCredits({
       req: userReq(),
       requiredCredits: 3,
@@ -93,17 +147,11 @@ describe('reserveRequestCredits', () => {
     userIncrement.mockRejectedValueOnce(new Error('db down'));
 
     expect(await reservation.settle(1, ledger)).toBe(1);
-
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('over-reserved credit refund failed'),
-      expect.objectContaining({ overReserved: 2 })
-    );
-    expect(deductCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ credits: 1 }),
-      expect.anything(),
-      // No refund landed, so the ledger row carries the reservation's balance.
-      { skipBalanceUpdate: true, currentCreditHolder: { currentCredits: 97 } }
-    );
+    expect(markSettled).toHaveBeenCalledTimes(2);
+    expect(deductCredits).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ credits: 1 }), expect.anything(), {
+      skipBalanceUpdate: true,
+      currentCreditHolder: { currentCredits: 99 },
+    });
   });
 
   it('writes no ledger row when the settled charge rounds to zero, and refunds it all', async () => {
@@ -162,6 +210,63 @@ describe('reserveRequestCredits', () => {
     expect(userIncrement).toHaveBeenLastCalledWith('u1', 3);
   });
 
+  describe('explicit billingOrganizationId (JWT caller)', () => {
+    const homeOrgReq = () =>
+      ({ user: { id: 'u1', organizationId: 'homeOrg' }, logger }) as unknown as Parameters<
+        typeof reserveRequestCredits
+      >[0]['req'];
+    const base = { requiredCredits: 5, enforceCredits: true, featureLabel: 'sound generation' };
+
+    beforeEach(() => {
+      orgFindById.mockImplementation(async (id: string) => ({
+        id,
+        currentCredits: 50,
+        userDetails: [],
+        users: [{ userId: 'u1' }],
+      }));
+      orgIncrement.mockResolvedValue({ currentCredits: 50 });
+    });
+
+    it('bills the explicit org instead of the home org', async () => {
+      const reservation = await reserveRequestCredits({
+        ...base,
+        req: homeOrgReq(),
+        billingOrganizationId: 'teamOrg',
+      });
+
+      expect(reservation).toMatchObject({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization });
+      expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -5);
+      expect(userIncrement).not.toHaveBeenCalled();
+    });
+
+    it('bills the user when null, even with a home-org seat', async () => {
+      const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq(), billingOrganizationId: null });
+
+      expect(reservation).toMatchObject({ ownerId: 'u1', ownerType: CreditHolderType.User });
+      expect(userIncrement).toHaveBeenCalledWith('u1', -5);
+      expect(orgIncrement).not.toHaveBeenCalled();
+    });
+
+    it('keeps the home-org fallback when omitted', async () => {
+      const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq() });
+
+      expect(reservation).toMatchObject({ ownerId: 'homeOrg', ownerType: CreditHolderType.Organization });
+    });
+
+    it('ignores the param for an API key, whose target is fixed', async () => {
+      orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
+
+      const reservation = await reserveRequestCredits({
+        ...base,
+        req: userReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'o1' }),
+        billingOrganizationId: 'teamOrg',
+      });
+
+      expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+      expect(orgIncrement).toHaveBeenCalledWith('o1', -5);
+    });
+  });
+
   it('bills the organization pool for an org-billed API key', async () => {
     orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
     orgIncrement.mockResolvedValue({ currentCredits: 50 });
@@ -176,5 +281,195 @@ describe('reserveRequestCredits', () => {
     expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
     expect(orgIncrement).toHaveBeenCalledWith('o1', -2);
     expect(userIncrement).not.toHaveBeenCalled();
+  });
+
+  it('records the hold with an expiry before returning the reservation', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-19T12:00:00Z') });
+    try {
+      await reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 3,
+        enforceCredits: true,
+        featureLabel: 'embeddings',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(recordHold).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ownerId: 'u1', reservedCredits: 3, balanceAfterHold: 97 }),
+      'embeddings',
+      new Date(Date.parse('2026-10-19T12:00:00Z') + CREDIT_HOLD_TTL_MS)
+    );
+  });
+
+  it('records nothing when credits are not enforced', async () => {
+    await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: false,
+      featureLabel: 'embeddings',
+    });
+
+    expect(recordHold).not.toHaveBeenCalled();
+  });
+
+  it('moves the balance and records the hold in one transaction, failing the request if the record fails', async () => {
+    recordHold.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(
+      reserveRequestCredits({ req: userReq(), requiredCredits: 3, enforceCredits: true, featureLabel: 'embeddings' })
+    ).rejects.toThrow('db down');
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(userIncrement).toHaveBeenCalledExactlyOnceWith('u1', -3);
+    expect(recordHold.mock.invocationCallOrder[0]).toBeGreaterThan(userIncrement.mock.invocationCallOrder[0]);
+  });
+
+  it('records the settlement receipt so the sweep can no longer refund it', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+
+    await reservation.settle(1, ledger);
+
+    expect(markSettled).toHaveBeenCalledExactlyOnceWith('hold-1', 1);
+    expect(await findSettlement('hold-1')).toBe(1);
+    expect(await claimHold('hold-1')).toBeNull();
+  });
+
+  it('moves no credits when the sweep already refunded the hold', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    pendingHolds.clear();
+    userIncrement.mockClear();
+
+    expect(await reservation.settle(1, ledger)).toBe(0);
+    await reservation.refund();
+
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('embeddings settle found its credit hold already swept'),
+      expect.objectContaining({ holdId: 'hold-1', reservedCredits: 3 })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('embeddings refund found its credit hold already swept'),
+      {
+        holdId: 'hold-1',
+      }
+    );
+  });
+
+  it('refunds only once when refund is called twice', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    userIncrement.mockClear();
+
+    await reservation.refund();
+    await reservation.refund();
+
+    expect(userIncrement).toHaveBeenCalledExactlyOnceWith('u1', 3);
+  });
+
+  it('claims and refunds in one transaction, leaving the hold for the sweep when it fails', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    withTransaction.mockClear();
+    userIncrement.mockClear();
+    claimHold.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(reservation.refund()).resolves.toBeUndefined();
+
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(pendingHolds.has('hold-1')).toBe(true);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('refund failed - left for the expired-hold sweep'),
+      expect.objectContaining({ holdId: 'hold-1', error: 'db down' })
+    );
+  });
+
+  it('retries a settlement transition that fails transiently, then settles', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    markSettled.mockRejectedValueOnce(new Error('blip')).mockRejectedValueOnce(new Error('blip'));
+
+    expect(await reservation.settle(1, ledger)).toBe(1);
+    expect(markSettled).toHaveBeenCalledTimes(3);
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('charges nothing and leaves the hold for the sweep when every settlement fails', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    userIncrement.mockClear();
+    markSettled.mockRejectedValue(new Error('db down'));
+
+    expect(await reservation.settle(1, ledger)).toBe(0);
+
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(pendingHolds.has('hold-1')).toBe(true);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('settle could not confirm outcome - any pending hold remains refundable'),
+      expect.objectContaining({ holdId: 'hold-1', error: 'db down' })
+    );
+  });
+  it('recovers a zero-charge settlement after its commit acknowledgement is lost', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 1,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    withTransaction.mockImplementationOnce(async callback => {
+      await callback();
+      throw new Error('commit reply lost');
+    });
+
+    expect(await reservation.settle(0, ledger)).toBe(0);
+    expect(userIncrement).toHaveBeenLastCalledWith('u1', 1);
+    expect(await findSettlement('hold-1')).toBe(0);
+    expect(markSettled).toHaveBeenCalledTimes(1);
+    await reservation.settle(0, ledger);
+    expect(userIncrement).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the hold refundable when all ledger writes fail', async () => {
+    const reservation = await reserveRequestCredits({
+      req: userReq(),
+      requiredCredits: 3,
+      enforceCredits: true,
+      featureLabel: 'embeddings',
+    });
+    deductCredits.mockRejectedValue(new Error('ledger unavailable'));
+
+    expect(await reservation.settle(3, ledger)).toBe(0);
+    expect(await findSettlement('hold-1')).toBeNull();
+    await reservation.refund();
+    expect(userIncrement).toHaveBeenLastCalledWith('u1', 3);
   });
 });

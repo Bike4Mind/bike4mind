@@ -30,6 +30,7 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  type CreditHoldRecord,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -58,6 +59,13 @@ import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+
+/** Persistence boundary: implementations commit each callback and its hold transition atomically. */
+export type CompletionCreditHolds = {
+  reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
+  refund(refund: () => Promise<void>): Promise<boolean>;
+  settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+};
 
 export interface CompletionParams {
   userId: string;
@@ -160,6 +168,8 @@ export interface CompletionParams {
    * default, so existing callers record only on the settlement-success path as before.
    */
   alwaysRecordUsage?: boolean;
+  /** Durable reservation lifecycle, supplied by every hosted completion transport. */
+  creditHolds?: CompletionCreditHolds;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
   /**
@@ -594,25 +604,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       }
     }
 
-    // Atomically reserve credits using incrementCredits with negative value
-    const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
+    const debit = async (): Promise<ICreditHolder> => {
+      // Atomically reserve credits using incrementCredits with negative value
+      const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
 
-    if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
-      // Rollback the reservation immediately
-      await holderMethods.incrementCredits(holderId, reservedCredits);
-      const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
-      throw new InsufficientCreditsError(
-        billToOrg
-          ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
-          : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-              `Try using a smaller model or reducing the prompt size.`,
-        'insufficient_credits'
+      if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
+        // Rollback the reservation immediately
+        await holderMethods.incrementCredits(holderId, reservedCredits);
+        const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
+        throw new InsufficientCreditsError(
+          billToOrg
+            ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
+            : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
+                `Try using a smaller model or reducing the prompt size.`,
+          'insufficient_credits'
+        );
+      }
+
+      logger?.debug?.(
+        `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
       );
+      return holderAfterReservation;
+    };
+    if (params.creditHolds) {
+      await params.creditHolds.reserve(
+        {
+          ownerId: holderId,
+          ownerType: holderType,
+          userId,
+          organizationId: billToOrg ? holderId : null,
+          reservedCredits,
+        },
+        debit
+      );
+    } else {
+      await debit();
     }
-
-    logger?.debug?.(
-      `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
-    );
   }
 
   // Track tokens across callback invocations for credit calculation.
@@ -695,7 +722,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // If completion fails, refund the reserved credits to whichever pool paid
     if (reservedCredits > 0) {
       logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-      await holderMethods.incrementCredits(holderId, reservedCredits);
+      const refund = async () => {
+        await holderMethods.incrementCredits(holderId, reservedCredits);
+      };
+      if (params.creditHolds) await params.creditHolds.refund(refund);
+      else await refund();
     }
     // The success-path settlement/metering below is now unreachable, so an
     // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
@@ -825,150 +856,161 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     usageRecorded = true;
   };
 
+  let settlementCommitted = false;
+
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
-      // Reuse the settlement values computed above - recomputing would draw a
-      // second stochastic rounding and desync the charge from what the client saw.
-      const usdCost = finalUsdCost;
-      const actualCredits = finalCredits;
-      const creditDifference = reservedCredits - actualCredits;
+      let ledgerWritten = false;
+      const settle = async () => {
+        // Reuse the settlement values computed above - recomputing would draw a
+        // second stochastic rounding and desync the charge from what the client saw.
+        const usdCost = finalUsdCost;
+        const actualCredits = finalCredits;
+        const creditDifference = reservedCredits - actualCredits;
 
-      logger?.info?.(
-        `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
-          `Reserved: ${reservedCredits}, Difference: ${creditDifference}`
-      );
-
-      // Track the final holder (user or org) state for the transaction record
-      let holderAfterAdjustment: ICreditHolder | null = null;
-
-      // Adjust the difference between reserved and actual against the paying pool
-      if (creditDifference !== 0) {
-        // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
-        if (creditDifference < 0) {
-          // Under-reservation: we need to charge more credits
-          // Check if this will cause negative balance
-          const currentHolder = await fetchHolder();
-          const currentBalance = currentHolder?.currentCredits ?? 0;
-          const projectedBalance = currentBalance + creditDifference;
-
-          if (projectedBalance < 0) {
-            logger?.warn?.(
-              '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
-              {
-                userId,
-                holderId,
-                holderType,
-                currentBalance,
-                adjustment: creditDifference,
-                projectedBalance,
-                reserved: reservedCredits,
-                actual: actualCredits,
-              }
-            );
-            // Proceed with adjustment but track the shortfall in transaction metadata
-          }
-        }
-
-        holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
-        logger?.debug?.(
-          `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
-            `New balance: ${holderAfterAdjustment?.currentCredits}`
+        logger?.info?.(
+          `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
+            `Reserved: ${reservedCredits}, Difference: ${creditDifference}`
         );
 
-        // Check for negative balance (should be rare with atomic reservation)
-        if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
-          logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
-            userId,
-            holderId,
-            holderType,
-            balance: holderAfterAdjustment.currentCredits,
-            reserved: reservedCredits,
-            actual: actualCredits,
-          });
-        }
-      } else {
-        // No adjustment needed, fetch current state for transaction record
-        holderAfterAdjustment = await fetchHolder();
-      }
+        // Track the final holder (user or org) state for the transaction record
+        let holderAfterAdjustment: ICreditHolder | null = null;
 
-      // Create transaction record with ACTUAL usage (not estimated/reserved)
-      // Skip balance update since we already adjusted atomically above
-      if (holderAfterAdjustment) {
-        // Org-billed keys: record the actual charge against the acting member so
-        // per-member usage + maxCreditsPerMember stay accurate (matches
-        // deductCreditsWithOrgSupport). Balance already moved on the org above.
-        // Kept inside this guard so per-member tracking and the ledger row commit
-        // together: a null holder fetch skips both, never advancing usedCredits
-        // without a matching transaction.
-        if (billToOrg) {
-          // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
-          // the positional $inc in updateUserDetails cannot create the row it positions on, so without
-          // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-          // pays the extra read/write when the row is actually absent.
-          const member = organization!.userDetails?.find(u => u.id === userId);
-          if (!member) {
-            const actingUser = await db.users.findById(userId);
-            if (actingUser) {
-              await db.organizations!.ensureUserDetails(holderId, {
-                id: userId,
-                email: actingUser.email ?? actingUser.username,
-                name: actingUser.name,
-              });
+        // Adjust the difference between reserved and actual against the paying pool
+        if (creditDifference !== 0) {
+          // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
+          if (creditDifference < 0) {
+            // Under-reservation: we need to charge more credits
+            // Check if this will cause negative balance
+            const currentHolder = await fetchHolder();
+            const currentBalance = currentHolder?.currentCredits ?? 0;
+            const projectedBalance = currentBalance + creditDifference;
+
+            if (projectedBalance < 0) {
+              logger?.warn?.(
+                '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
+                {
+                  userId,
+                  holderId,
+                  holderType,
+                  currentBalance,
+                  adjustment: creditDifference,
+                  projectedBalance,
+                  reserved: reservedCredits,
+                  actual: actualCredits,
+                }
+              );
+              // Proceed with adjustment but track the shortfall in transaction metadata
             }
           }
 
-          await db.organizations!.updateUserDetails(holderId, userId, {
-            creditsDelta: actualCredits,
-            lastCreditUsedAt: new Date(),
-          });
+          holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
+          logger?.debug?.(
+            `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
+              `New balance: ${holderAfterAdjustment?.currentCredits}`
+          );
+
+          // Check for negative balance (should be rare with atomic reservation)
+          if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+            logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
+              userId,
+              holderId,
+              holderType,
+              balance: holderAfterAdjustment.currentCredits,
+              reserved: reservedCredits,
+              actual: actualCredits,
+            });
+          }
+        } else {
+          // No adjustment needed, fetch current state for transaction record
+          holderAfterAdjustment = await fetchHolder();
         }
 
-        Logger.globalInstance.debug('Credit usage:', actualCredits);
-        // Use completion_api_usage for ALL /api/ai/v1/completions requests
-        // Differentiate by endpoint, not by auth method
-        const description = apiKeyInfo
-          ? `API key (${apiKeyInfo.keyName}) completion usage${billToOrg ? ' (org-billed)' : ''}`
-          : 'Completion API usage';
+        // Create transaction record with ACTUAL usage (not estimated/reserved)
+        // Skip balance update since we already adjusted atomically above
+        if (!holderAfterAdjustment && params.creditHolds)
+          throw new Error('Completion billing owner disappeared during settlement');
+        if (holderAfterAdjustment) {
+          // Org-billed keys: record the actual charge against the acting member so
+          // per-member usage + maxCreditsPerMember stay accurate (matches
+          // deductCreditsWithOrgSupport). Balance already moved on the org above.
+          // Kept inside this guard so per-member tracking and the ledger row commit
+          // together: a null holder fetch skips both, never advancing usedCredits
+          // without a matching transaction.
+          if (billToOrg) {
+            // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
+            // the positional $inc in updateUserDetails cannot create the row it positions on, so without
+            // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
+            // pays the extra read/write when the row is actually absent.
+            const member = organization!.userDetails?.find(u => u.id === userId);
+            if (!member) {
+              const actingUser = await db.users.findById(userId);
+              if (actingUser) {
+                await db.organizations!.ensureUserDetails(holderId, {
+                  id: userId,
+                  email: actingUser.email ?? actingUser.username,
+                  name: actingUser.name,
+                });
+              }
+            }
 
-        await subtractCredits(
-          {
-            type: 'completion_api_usage',
-            ownerId: holderId,
-            ownerType: holderType,
-            credits: actualCredits,
-            description,
-            model: model as ChatModels,
-            apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
-            inputTokens: finalInputTokens,
-            outputTokens: finalOutputTokens,
-            source,
-            metadata: {
-              // Include API key info if present
-              ...(apiKeyInfo && {
-                apiKeyName: apiKeyInfo.keyName,
-              }),
-              authMethod: apiKeyInfo ? 'api_key' : 'jwt',
-              // For org-billed keys, keep the acting user for attribution even
-              // though the credits leave the org pool.
-              ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
-              usdCost,
-              reservedCredits,
-              creditDifference,
-            },
-          },
-          {
-            db: { creditTransactions: db.creditTransactions },
-            creditHolderMethods: holderMethods,
-            skipBalanceUpdate: true,
-            currentCreditHolder: holderAfterAdjustment,
+            await db.organizations!.updateUserDetails(holderId, userId, {
+              creditsDelta: actualCredits,
+              lastCreditUsedAt: new Date(),
+            });
           }
-        );
 
-        // Usage event on the settlement-success path (legacy behavior: an enforced
-        // run records an event only when the ledger row committed).
-        recordUsageEvent(actualCredits);
-      }
+          Logger.globalInstance.debug('Credit usage:', actualCredits);
+          // Use completion_api_usage for ALL /api/ai/v1/completions requests
+          // Differentiate by endpoint, not by auth method
+          const description = apiKeyInfo
+            ? `API key (${apiKeyInfo.keyName}) completion usage${billToOrg ? ' (org-billed)' : ''}`
+            : 'Completion API usage';
+
+          await subtractCredits(
+            {
+              type: 'completion_api_usage',
+              ownerId: holderId,
+              ownerType: holderType,
+              credits: actualCredits,
+              description,
+              model: model as ChatModels,
+              apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
+              inputTokens: finalInputTokens,
+              outputTokens: finalOutputTokens,
+              source,
+              metadata: {
+                // Include API key info if present
+                ...(apiKeyInfo && {
+                  apiKeyName: apiKeyInfo.keyName,
+                }),
+                authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+                // For org-billed keys, keep the acting user for attribution even
+                // though the credits leave the org pool.
+                ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
+                usdCost,
+                reservedCredits,
+                creditDifference,
+              },
+            },
+            {
+              db: { creditTransactions: db.creditTransactions },
+              creditHolderMethods: holderMethods,
+              skipBalanceUpdate: true,
+              currentCreditHolder: holderAfterAdjustment,
+            }
+          );
+
+          ledgerWritten = true;
+        }
+      };
+      const settled = params.creditHolds
+        ? await params.creditHolds.settle(finalCredits, settle)
+        : (await settle(), true);
+      settlementCommitted = settled && ledgerWritten;
+      // Emit analytics only after the transaction containing the ledger has committed.
+      if (settlementCommitted) recordUsageEvent(finalCredits);
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
       logger?.error?.('[CLI_CREDITS] CRITICAL: Failed to adjust credits - requires manual reconciliation', {
@@ -988,11 +1030,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // the rare enforced run whose settlement threw before recording). Guarded by
   // `usageRecorded` so an enforced run that already recorded on success never
   // double-writes. creditsCharged is 0 when enforcement is off (no charge occurred);
-  // in the enforced-but-settlement-missed case it records finalCredits, and a
-  // `[CLI_CREDITS] CRITICAL` reconciliation alert has already fired for that path.
+  // A swept or rolled-back durable reservation records zero charged credits. Legacy
+  // callers have already moved the balance even when their ledger write fails.
+  // Provider cost and per-key spend still reflect the work that actually ran.
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
-    recordUsageEvent(enforceCredits ? finalCredits : 0);
+    const charged = params.creditHolds ? settlementCommitted : enforceCredits;
+    recordUsageEvent(charged ? finalCredits : 0);
   }
 
   // A model missing from the catalog computes no cost, so per-key spend cannot

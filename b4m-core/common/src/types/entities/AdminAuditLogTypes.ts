@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AdminAuditCategory, AdminAuditSeverity } from './adminAuditCatalogue';
+import type { AuditLogCursor, AuditLogFilters, AuditSummary } from './adminAuditQuery';
 
 export const AuditActorSchema = z.object({
   kind: z.enum(['user', 'apiKey', 'system', 'script']),
@@ -36,7 +37,7 @@ export const AuditContextSchema = z.object({
 });
 export type AuditContext = z.infer<typeof AuditContextSchema>;
 
-const AdminAuditCategorySchema = z.enum([
+export const AdminAuditCategorySchema = z.enum([
   'credits',
   'access',
   'identity',
@@ -46,7 +47,7 @@ const AdminAuditCategorySchema = z.enum([
   'support',
 ]) satisfies z.ZodType<AdminAuditCategory>;
 
-const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
+export const AdminAuditSeveritySchema = z.enum(['info', 'notice', 'critical']) satisfies z.ZodType<AdminAuditSeverity>;
 
 export const AuditEntrySchema = z.object({
   id: z.string(),
@@ -81,4 +82,10 @@ export interface IAdminAuditLogRepository {
   appendBackfill(
     entries: Array<NewAdminAuditEntry & { id: string }>
   ): Promise<{ inserted: number; duplicates: number }>;
+  list(
+    filters: AuditLogFilters,
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
+  findById(id: string): Promise<AuditEntry | null>;
+  summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
 }

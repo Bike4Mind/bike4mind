@@ -1,4 +1,4 @@
-import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 
 /**
@@ -13,7 +13,10 @@ import { AdminTab } from './adminSidebarConfig';
  * lookup would resolve `?tab=toString` to an inherited Object.prototype member instead of
  * undefined - which then passes the caller's `!== undefined` guard.
  */
-const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([[ADMIN_FEEDBACK_TAB_SLUG, AdminTab.Feedback]]);
+const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([
+  [ADMIN_FEEDBACK_TAB_SLUG, AdminTab.Feedback],
+  [ADMIN_AUDIT_LOG_TAB_SLUG, AdminTab.AuditLog],
+]);
 
 /** Resolves a `?tab=` slug, or undefined when it is absent or not a linkable tab. */
 export function adminTabFromSlug(slug: string | undefined): AdminTab | undefined {

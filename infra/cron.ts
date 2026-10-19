@@ -301,6 +301,33 @@ const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Credit Hold Sweep - refunds request credit holds whose process died between reserve and settle.
+// Self-host twin: apps/workers/src/selfhost/creditHoldSweep.ts; keep the schedules in step.
+// Overlapping runs are safe: each hold's claim and refund commit in one transaction.
+const creditHoldSweepCron = new sst.aws.Cron('creditHoldSweep', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/creditHoldSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
@@ -1092,6 +1119,7 @@ export {
   telemetryCleanupCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
+  creditHoldSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,

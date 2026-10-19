@@ -36,7 +36,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { executeCompletion } from './cliCompletions';
+import { executeCompletion, type CompletionCreditHolds } from './cliCompletions';
 import { subtractCredits } from './creditService';
 
 const mockSubtractCredits = vi.mocked(subtractCredits);
@@ -147,7 +147,7 @@ describe('executeCompletion - org billing routing', () => {
     // Regression guard: updateUserDetails must not advance usedCredits without a
     // matching ledger transaction. Org loads fine at the top, then the settlement
     // re-fetch (creditDifference === 0 branch) comes back null.
-    const { db, organizations } = buildDb();
+    const { db, organizations, usageEvents } = buildDb();
     const org = buildOrg();
     organizations.findById.mockReset();
     organizations.findById.mockResolvedValueOnce(org).mockResolvedValue(null);
@@ -158,6 +158,7 @@ describe('executeCompletion - org billing routing', () => {
     // anchor the transaction, neither the member tracking nor the ledger write fire.
     expect(organizations.updateUserDetails).not.toHaveBeenCalled();
     expect(mockSubtractCredits).not.toHaveBeenCalled();
+    expect(usageEvents.record).not.toHaveBeenCalled();
   });
 
   it('self-heals a missing userDetails row before recording org-billed usage', async () => {
@@ -240,5 +241,88 @@ describe('executeCompletion - org billing routing', () => {
     await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
 
     expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+});
+
+describe('executeCompletion durable credit lifecycle', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function lifecycle() {
+    return {
+      reserve: vi.fn<CompletionCreditHolds['reserve']>(async (_hold, debit) => {
+        await debit();
+      }),
+      refund: vi.fn<CompletionCreditHolds['refund']>(async refund => {
+        await refund();
+        return true;
+      }),
+      settle: vi.fn<CompletionCreditHolds['settle']>(async (_credits, settle) => {
+        await settle();
+        return true;
+      }),
+    };
+  }
+
+  it.each([undefined, 'org1'])(
+    'persists the paying owner and settles through the transaction boundary (%s)',
+    async billingOrganizationId => {
+      const { db, usageEvents } = buildDb();
+      const creditHolds = lifecycle();
+      await executeCompletion({ ...baseParams, db, billingOrganizationId, creditHolds });
+      expect(creditHolds.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerId: billingOrganizationId ?? 'user1',
+          ownerType: billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User,
+          userId: 'user1',
+          reservedCredits: 10,
+        }),
+        expect.any(Function)
+      );
+      expect(creditHolds.settle).toHaveBeenCalledWith(10, expect.any(Function));
+      expect(mockSubtractCredits).toHaveBeenCalledTimes(1);
+      expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('refunds through the durable boundary when a provider cannot start', async () => {
+    const { db } = buildDb();
+    const creditHolds = lifecycle();
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db,
+        creditHolds,
+        onReady: () => {
+          throw new Error('provider unavailable');
+        },
+      })
+    ).rejects.toThrow('provider unavailable');
+    expect(creditHolds.refund).toHaveBeenCalledTimes(1);
+    expect(creditHolds.settle).not.toHaveBeenCalled();
+  });
+
+  it('does not write a ledger or charged usage after the hold was swept', async () => {
+    const { db, usageEvents } = buildDb();
+    const creditHolds = lifecycle();
+    creditHolds.settle.mockResolvedValue(false);
+    await executeCompletion({ ...baseParams, db, creditHolds });
+    expect(mockSubtractCredits).not.toHaveBeenCalled();
+    expect(usageEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('lets a ledger error escape the settlement callback so the durable adapter can roll back', async () => {
+    const { db } = buildDb();
+    const creditHolds = lifecycle();
+    mockSubtractCredits.mockRejectedValueOnce(new Error('ledger unavailable'));
+    await executeCompletion({ ...baseParams, db, creditHolds });
+    await expect(creditHolds.settle.mock.results[0]?.value).rejects.toThrow('ledger unavailable');
+  });
+  it('meters provider work with zero charged credits when durable settlement was swept', async () => {
+    const { db, usageEvents } = buildDb();
+    const creditHolds = lifecycle();
+    creditHolds.settle.mockResolvedValue(false);
+    await executeCompletion({ ...baseParams, db, creditHolds, alwaysRecordUsage: true });
+    expect(usageEvents.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+    expect(mockSubtractCredits).not.toHaveBeenCalled();
   });
 });

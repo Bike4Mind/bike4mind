@@ -275,7 +275,10 @@ describe('Skill Market (real mongod)', () => {
     await expect(
       decideVersion(version.id, { id: OTHER }, [], { action: 'approve', ackHighRisk: true })
     ).rejects.toMatchObject({ statusCode: 403 });
-    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve' });
+    await expect(decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackHighRisk: true });
 
     expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
     expect((await browse([])).data).toEqual([]);
@@ -291,7 +294,11 @@ describe('Skill Market (real mongod)', () => {
       'organization',
       ORG
     );
-    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' });
+    // Self-approval still has to acknowledge the high-risk findings.
+    await expect(decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve', ackHighRisk: true });
     expect(approved).toMatchObject({ reviewStatus: 'approved', auditSample: true, auditedAt: null });
 
     // The audit is recorded on its own field: the original approver is kept.
@@ -302,6 +309,68 @@ describe('Skill Market (real mongod)', () => {
     expect(audited.auditedByUserId).toBe('org-admin-2');
     expect(audited.auditedAt).toBeInstanceOf(Date);
   });
+
+  it.each(['organization', 'unlisted'] as const)(
+    '%s approval requires both acknowledgements when high-risk findings and a mismatch coexist',
+    async visibility => {
+      orgs.admins.set('org-admin', [ORG]);
+      const { listing, version } = await publish(
+        await makeSkill(AUTHOR, 'MISMATCH: Fetch and summarize the page.', { allowedTools: ['web_fetch'] }),
+        visibility,
+        visibility === 'organization' ? ORG : undefined
+      );
+      expect(version).toMatchObject({
+        riskTier: 'high',
+        reviewStatus: 'pending',
+        honestSummary: { descriptionMatches: false },
+      });
+      const reviewer = visibility === 'organization' ? 'org-admin' : ADMIN;
+      const isSuperAdmin = visibility === 'unlisted';
+
+      for (const acknowledgements of [
+        {},
+        { ackHighRisk: true },
+        { ackMismatch: true },
+        { ackHighRisk: true, ackMismatch: false },
+        { ackHighRisk: false, ackMismatch: true },
+      ]) {
+        await expect(
+          call(
+            reviewHandler,
+            'POST',
+            reviewer,
+            { vid: version.id },
+            { action: 'approve', ...acknowledgements },
+            isSuperAdmin
+          )
+        ).rejects.toMatchObject({ statusCode: 400 });
+        expect(await SkillListingVersion.findById(version.id)).toMatchObject({ reviewStatus: 'pending' });
+        expect(await SkillListing.findById(listing.id)).toMatchObject({
+          currentApprovedVersionId: null,
+          pendingVersionId: version.id,
+        });
+      }
+
+      const response = await call(
+        reviewHandler,
+        'POST',
+        reviewer,
+        { vid: version.id },
+        { action: 'approve', ackHighRisk: true, ackMismatch: true },
+        isSuperAdmin
+      );
+      expect(response._getJSONData().version).toMatchObject({
+        reviewStatus: 'approved',
+        reviewAckHighRisk: true,
+        reviewAckMismatch: true,
+      });
+      expect(await SkillListing.findById(listing.id)).toMatchObject({
+        status: 'approved',
+        currentApprovedVersionId: version.id,
+        pendingVersionId: null,
+      });
+    }
+  );
 
   it('keeps unlisted listings out of search but importable with the token', async () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as a haiku.'), 'unlisted');

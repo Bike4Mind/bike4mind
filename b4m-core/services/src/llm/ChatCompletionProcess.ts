@@ -4797,6 +4797,8 @@ export class ChatCompletionProcess {
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
+                // Claude still follows the auto-classified `complexity` below, which the adapters map
+                // to a low effort on simple/contextual queries.
                 reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
                 // Per attempt too: the explicit think-off is Ollama's alone, and a fallback can change backend.
                 thinking: withOllamaThinkingDefault(options.thinking, currentModel),

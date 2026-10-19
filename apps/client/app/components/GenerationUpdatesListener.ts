@@ -7,7 +7,7 @@ import type {
   VideoGeneration,
 } from '@bike4mind/common';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { CREDITS_BALANCE_KEY } from '@client/app/hooks/data/credits';
+import { invalidateGenerationCreditBalances } from '@client/app/hooks/data/generationCreditBalances';
 import { isAwaitingGenerationOutput, isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { patchMusicGeneration } from '@client/app/hooks/data/musicGenerationCache';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
@@ -52,7 +52,7 @@ const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<v
   }
   if (isTerminalGenerationState(job.state)) {
     pending.push(refetchDetail(queryClient, keys.detail(job.id)));
-    pending.push(queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY }));
+    pending.push(invalidateGenerationCreditBalances(queryClient));
   }
   await Promise.all(pending);
 };

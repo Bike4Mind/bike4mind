@@ -37,6 +37,8 @@ import HandshakeIcon from '@mui/icons-material/Handshake';
 import EventBusyIcon from '@mui/icons-material/EventBusy';
 import SummarizeIcon from '@mui/icons-material/Summarize';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import HistoryIcon from '@mui/icons-material/History';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 
 export enum AdminTab {
@@ -104,6 +106,7 @@ export enum AdminTab {
   OAuthClients = 63,
   GrowthPricing = 64,
   IntegrationDemand = 65,
+  AuditLog = 66,
 }
 
 /**
@@ -193,6 +196,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: AccountBoxIcon, tab: AdminTab.IdentityProviders, label: 'Identity Providers' },
       { Icon: VpnKeyIcon, tab: AdminTab.OAuthClients, label: 'OAuth Clients', testid: 'admin-oauth-clients-btn' },
     ],
+  },
+  {
+    key: 'securityCompliance',
+    Icon: VerifiedUserIcon,
+    label: 'Security & Compliance',
+    items: [{ Icon: HistoryIcon, tab: AdminTab.AuditLog, label: 'Audit Log', testid: 'admin-audit-log-btn' }],
   },
   {
     key: 'reliability',
