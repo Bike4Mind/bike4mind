@@ -289,14 +289,14 @@ export const cleanupDeletedDataLake = async (
     fileIds,
     chunkSize,
     async id => {
+      // An evidence-held file keeps its bytes: the row delete below is refused for it anyway, so
+      // deleting first would leave a held row over objects that are gone (same rule as
+      // fabFileService/deleteStoredObjects.ts).
       // EVERY stored key, not just the current one - an AI-edited file's earlier revisions each sit
       // under their own object key (see purgeDataLakeDocument.ts, the single-document sibling this
       // mirrors). Deliberately UNCAUGHT: a throw here aborts the sweep before this row goes, so the
       // id stays resolvable by findIdsByDataLakeTag on a DLQ retry instead of the row being
       // hard-deleted over an object that was never removed.
-      // An evidence-held file keeps its bytes: the row delete below is refused for it anyway, so
-      // deleting first would leave a held row over objects that are gone (same rule as
-      // fabFileService/deleteStoredObjects.ts).
       const file = storageKeysById.get(id);
       if (storage && file && isModerationEvidenceHold(file)) {
         logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', { fabFileId: id });
