@@ -11,7 +11,8 @@
  *
  * Stages:
  *   - production → docs.bike4mind.com
- *   - dev (staging) → docs.staging.bike4mind.com
+ *   - dev is retired (no staging site); it stays in the retain/protect lists
+ *     only so the leftover stage cannot be removed by accident.
  */
 
 export default $config({

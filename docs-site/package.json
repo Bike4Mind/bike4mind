@@ -15,8 +15,6 @@
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "echo 'TypeScript checking disabled for docs-site' && exit 0",
-    "check:orphaned-docs": "node scripts/check-orphaned-docs.js",
-    "check:docs": "npm run check:orphaned-docs",
     "add:metadata": "node scripts/add-metadata.js"
   },
   "dependencies": {
