@@ -12,10 +12,12 @@ export type ToolArgs = Record<string, unknown>;
  * What a permission prompt is asking about. 'tool' is a normal tool-call gate;
  * 'directory-grant' is a request to widen the filesystem allow-list, which is a
  * separate decision (deny-by-default in headless, never inheriting the tool's
- * own verdict). Passed as an optional 4th arg so existing 3-arg prompt callbacks
- * remain valid; a headless callback reads it to fail closed on scope widening.
+ * own verdict); 'sandbox-escalation' is a request to re-run a sandbox-denied command
+ * without the sandbox, never approved by auto-accept, trust or allow-lists. Passed as an
+ * optional 4th arg so existing 3-arg prompt callbacks remain valid; a headless callback
+ * reads it to fail closed.
  */
-export type PermissionPromptKind = 'tool' | 'directory-grant';
+export type PermissionPromptKind = 'tool' | 'directory-grant' | 'sandbox-escalation';
 
 export type ShowPermissionPrompt = (
   toolName: string,

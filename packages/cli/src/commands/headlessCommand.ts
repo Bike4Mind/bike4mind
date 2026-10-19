@@ -65,6 +65,7 @@ import {
   parseStringArray,
   parsePermissionPolicy,
   type HeadlessPermissionPolicy,
+  buildPermissionRequestEvent,
 } from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
@@ -275,12 +276,13 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
       const risk = classifyToolRisk(permissionManager.catalog.resolve(toolName), args);
       if (streaming) {
-        emit({ type: 'permission_request', toolName, risk });
+        emit(buildPermissionRequestEvent(toolName, risk, kind));
       }
 
       const decision = resolveHeadlessPermissionDecision({
         dangerouslySkipPermissions,
         isDirectoryGrant: kind === 'directory-grant',
+        isSandboxEscalation: kind === 'sandbox-escalation',
         toolName,
         riskLevel: risk.level,
         permissionPolicy,

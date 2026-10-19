@@ -12,6 +12,7 @@ import type { PermissionManager } from '../../utils/PermissionManager.js';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { SandboxOrchestrator } from '../../sandbox/SandboxOrchestrator.js';
 import { useCliStore } from '../../store/index.js';
+import { PermissionManager as RealPermissionManager } from '../../utils/PermissionManager.js';
 import { ToolCatalog } from './toolCatalog.js';
 import { wrapToolWithPermission, wrapTools } from './gateway.js';
 
@@ -268,6 +269,132 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
 
     expect(existsSync(profile)).toBe(false);
     expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wrapToolWithPermission sandbox escalation', () => {
+  const EPERM_RESULT = 'touch: /etc/hosts: Operation not permitted\nExit code: 1';
+
+  afterEach(async () => {
+    const { useCliStore: liveStore } = await import('../../store/index.js');
+    liveStore.setState({ interactionMode: 'normal' });
+  });
+
+  async function setup(options: { sandboxAutoAllow?: boolean; permissionManager?: PermissionManager } = {}) {
+    const profile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'b4m-sb-')), 'sandbox.sb');
+    await fs.writeFile(profile, '(version 1)');
+    const orchestrator = {
+      shouldSandbox: vi.fn(() => ({
+        type: 'sandbox',
+        wrappedCommand: { commandString: 'sandboxed-command', cleanupPaths: [profile] },
+      })),
+      getConfig: () => ({ allowUnsandboxedCommands: true }),
+      recordBlocked: vi.fn(),
+      recordSandboxed: vi.fn(),
+      recordUnsandboxed: vi.fn(),
+      recordViolation: vi.fn().mockResolvedValue(undefined),
+    } as unknown as SandboxOrchestrator;
+    const permissionManager = options.permissionManager ?? new RealPermissionManager(new ToolCatalog());
+    if (options.sandboxAutoAllow ?? true)
+      (permissionManager as RealPermissionManager).setSandboxState('auto-allow', true);
+    const profileStillThereOnRetry: boolean[] = [];
+    const toolFn = vi.fn(async (args: unknown) => {
+      const { command } = args as { command: string };
+      if (command === 'sandboxed-command') return EPERM_RESULT;
+      profileStillThereOnRetry.push(existsSync(profile));
+      return 'done';
+    });
+    const showPermissionPrompt = vi.fn(async (..._args: unknown[]) => ({ action: 'allow-once' as const }));
+    const wrapped = wrapToolWithPermission(createMockTool('bash_execute', toolFn), {
+      permissionManager,
+      showPermissionPrompt,
+      agentContext: { currentAgent: null },
+      configStore: {},
+      apiClient: {} as ApiClient,
+      sandboxOrchestrator: orchestrator,
+      allowedDirectories: [],
+    });
+    return {
+      wrapped,
+      toolFn,
+      showPermissionPrompt,
+      orchestrator,
+      permissionManager,
+      profile,
+      profileStillThereOnRetry,
+    };
+  }
+
+  it('asks as its own question after a denial, then retries the original command unsandboxed', async () => {
+    const { wrapped, toolFn, showPermissionPrompt, orchestrator } = await setup();
+
+    await expect(wrapped.toolFn({ command: 'touch /etc/hosts' })).resolves.toBe('done');
+
+    expect(showPermissionPrompt).toHaveBeenCalledTimes(1);
+    expect(showPermissionPrompt.mock.calls[0][3]).toBe('sandbox-escalation');
+    expect(toolFn).toHaveBeenNthCalledWith(1, expect.objectContaining({ command: 'sandboxed-command' }));
+    expect(toolFn).toHaveBeenNthCalledWith(2, expect.objectContaining({ command: 'touch /etc/hosts' }));
+    expect(orchestrator.recordUnsandboxed).toHaveBeenCalledTimes(1);
+  });
+
+  it('still asks in auto-accept mode', async () => {
+    // The gateway imports the store lazily; an earlier test resets the module registry, so set
+    // the mode on the instance the gateway will see.
+    const { useCliStore: liveStore } = await import('../../store/index.js');
+    liveStore.setState({ interactionMode: 'auto-accept' });
+    const { wrapped, showPermissionPrompt } = await setup({ sandboxAutoAllow: false });
+
+    await wrapped.toolFn({ command: 'touch notes.txt' });
+
+    expect(showPermissionPrompt.mock.calls.map(call => call[3])).toEqual(['sandbox-escalation']);
+  });
+
+  it('still asks when the tool is trusted for the session', async () => {
+    const { wrapped, showPermissionPrompt, permissionManager } = await setup();
+    (permissionManager as RealPermissionManager).trustToolForSession('bash_execute');
+
+    await wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    expect(showPermissionPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the sandbox error when denied, and runs nothing unsandboxed', async () => {
+    const { wrapped, toolFn, showPermissionPrompt } = await setup();
+    showPermissionPrompt.mockResolvedValueOnce({ action: 'deny' as never });
+
+    const result = await wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    expect(result).toContain(EPERM_RESULT);
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('allow-session skips the second prompt for the same command', async () => {
+    const { wrapped, showPermissionPrompt } = await setup();
+    showPermissionPrompt.mockResolvedValueOnce({ action: 'allow-session' as never });
+
+    await wrapped.toolFn({ command: 'touch /etc/hosts' });
+    await wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    expect(showPermissionPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the approval with another wrapped tool on the same permission manager', async () => {
+    const first = await setup();
+    first.showPermissionPrompt.mockResolvedValueOnce({ action: 'allow-session' as never });
+    await first.wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    const second = await setup({ permissionManager: first.permissionManager });
+    await second.wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    expect(second.showPermissionPrompt).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the temp profile after the sandboxed attempt and the retry', async () => {
+    const { wrapped, profile } = await setup();
+
+    await wrapped.toolFn({ command: 'touch /etc/hosts' });
+
+    expect(existsSync(profile)).toBe(false);
   });
 });
 

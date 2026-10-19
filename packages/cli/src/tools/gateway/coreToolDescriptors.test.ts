@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 import { ToolCatalog } from './toolCatalog.js';
-import { commandTextOf, writePathOf } from './toolPolicy.js';
+import { commandTextOf, sandboxedCommandArg, writePathOf } from './toolPolicy.js';
 import type { ToolCategory } from './toolDescriptor.js';
 
 /**
@@ -103,5 +103,13 @@ describe('core tool descriptor coherence', () => {
     if (descriptor.approval === 'auto_approve') {
       expect(['none', 'session', 'read']).toContain(descriptor.effect);
     }
+  });
+});
+
+describe('core tool sandbox declaration', () => {
+  it('is declared by bash_execute and by no other core tool', () => {
+    const declared = [...CORE_TOOL_DESCRIPTORS].filter(([, descriptor]) => descriptor.sandbox).map(([name]) => name);
+    expect(declared).toEqual(['bash_execute']);
+    expect(sandboxedCommandArg(CORE_TOOL_DESCRIPTORS.get('bash_execute'))).toBe('command');
   });
 });

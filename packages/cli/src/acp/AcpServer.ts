@@ -32,7 +32,7 @@ import { requireApiUrl, buildCliToolList, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
-import { ToolCatalog } from '../tools/gateway/index.js';
+import { ToolCatalog, type PermissionPromptKind } from '../tools/gateway/index.js';
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
@@ -458,8 +458,10 @@ export class AcpServer {
   private readonly promptFn = async (
     toolName: string,
     args: unknown,
-    preview?: string
+    preview?: string,
+    kind?: PermissionPromptKind
   ): Promise<{ action: PermissionResponse }> => {
+    const isSandboxEscalation = kind === 'sandbox-escalation';
     const turn = this.activeTurn;
     // No active turn should never happen, but deny rather than assume.
     if (!turn) return { action: 'deny' };
@@ -467,7 +469,7 @@ export class AcpServer {
     const toolCallId = `perm-${randomUUID()}`;
     const toolCall: schema.ToolCallUpdate = {
       toolCallId,
-      title: toolCallTitle(toolName, args),
+      title: `${isSandboxEscalation ? 'Run outside sandbox: ' : ''}${toolCallTitle(toolName, args)}`,
       kind: toolKind(toolName),
       status: 'pending',
       rawInput: args,
@@ -489,7 +491,11 @@ export class AcpServer {
         turn.client
           .request(
             methods.client.session.requestPermission,
-            { sessionId: turn.sessionId, toolCall, options: buildPermissionOptions() },
+            {
+              sessionId: turn.sessionId,
+              toolCall,
+              options: buildPermissionOptions({ allowAlways: !isSandboxEscalation }),
+            },
             { cancellationSignal: decisionController.signal }
           )
           .then(res => permissionResponseFromOutcome(res?.outcome))

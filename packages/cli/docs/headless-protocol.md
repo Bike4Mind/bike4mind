@@ -54,7 +54,7 @@ carry the envelope fields above.
 | `thought` | `content` | The agent's reasoning text for a step. |
 | `action` | `content`, `toolName`, `toolInput` | The agent invoked a tool. |
 | `observation` | `content`, `toolName` | The result returned by a tool. |
-| `permission_request` | `toolName`, `risk` | A gated tool is about to run; permission is being decided. `risk` is `{ level: "low"\|"medium"\|"high", reasons: string[] }`. |
+| `permission_request` | `toolName`, `risk`, `kind` | A gated tool is about to run; permission is being decided. `risk` is `{ level: "low"\|"medium"\|"high", reasons: string[] }`. `kind` is `"tool"`, `"directory-grant"` (widening the filesystem allow-list) or `"sandbox-escalation"` (re-running a sandbox-denied command outside the sandbox); the latter two are denied unless `--dangerously-skip-permissions` is set, whatever the policy says. |
 | `permission_decision` | `toolName`, `action`, `reason`, `risk` | The decision for a gated tool. `action` is `"allow-once"` or `"deny"`; `reason` explains why; `risk` is the classified level. |
 | `result` | `content`, `tokenUsage`, `iterations`, `toolCalls` | Terminal success event with the final answer. `tokenUsage` is `{ totalTokens, inputTokens, outputTokens }`. |
 | `error` | `error` | Terminal failure event with the error message. |

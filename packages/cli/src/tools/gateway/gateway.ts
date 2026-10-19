@@ -45,7 +45,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
       const args = input as ToolArgs | undefined;
       const descriptor = permissionManager.catalog.resolve(toolName);
 
-      const sandbox = prepareSandbox(toolName, args, deps.sandboxOrchestrator, allowedDirectories);
+      const sandbox = prepareSandbox(descriptor, args, deps.sandboxOrchestrator, allowedDirectories);
       if (sandbox.kind === 'blocked') return sandbox.message;
       const isSandboxed = sandbox.kind === 'sandboxed';
       const effectiveArgs = isSandboxed ? sandbox.args : args;
@@ -70,6 +70,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           originalFn,
           apiClient: deps.apiClient,
           showPermissionPrompt,
+          permissionManager,
           agentContext: deps.agentContext,
           configStore: deps.configStore,
           sandboxOrchestrator: deps.sandboxOrchestrator,
