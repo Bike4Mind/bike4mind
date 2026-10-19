@@ -6,7 +6,13 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
+import {
+  isTurnBudgetStop,
+  lastBoundaryIndex,
+  SESSION_EXPIRED_STOP,
+  type ChatMessage,
+  type ChatUsage,
+} from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { ReasoningRow } from './ReasoningRow';
@@ -67,6 +73,20 @@ function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: (
       </Chip>
     );
   }
+  if (reason === SESSION_EXPIRED_STOP) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+        <Chip size="sm" color="neutral" variant="soft" data-testid="chat-session-expired-chip">
+          Paused - sign in again, then continue
+        </Chip>
+        {onContinue && (
+          <Button size="sm" variant="soft" color="primary" onClick={onContinue} data-testid="chat-continue-reply-btn">
+            Continue
+          </Button>
+        )}
+      </Stack>
+    );
+  }
   if (reason === 'aborted') {
     return (
       <Chip size="sm" color="neutral" variant="soft" sx={{ mt: 1 }} data-testid="chat-stopped-chip">
@@ -113,12 +133,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip
-                size="sm"
-                variant="soft"
-                color={skillChipColor(skill.source)}
-                data-testid="chat-message-skill-chip"
-              >
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} data-testid="chat-message-skill-chip">
                 {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
@@ -284,7 +299,8 @@ const AssistantTurn = memo(function AssistantTurn({
           got there. `content` has already had the markup removed, so nothing is shown twice. */}
       <ArtifactList artifacts={message.artifacts ?? []} />
 
-      {message.error && (
+      {/* A paused turn says so in its stop row; the window's re-auth notice carries the why. */}
+      {message.error && message.stopReason !== SESSION_EXPIRED_STOP && (
         <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
           {message.error}
         </Alert>

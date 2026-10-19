@@ -3,8 +3,10 @@ import {
   DeviceFlowClient,
   NotAuthenticatedError,
   SessionRevokedError,
+  type AuthenticatedApiClientOptions,
   type AuthLogger,
   type AuthTokens,
+  type RefreshingOAuthClient,
   type TokenStore,
 } from '@bike4mind/client-auth';
 import type { OAuthDeviceClientId } from '@bike4mind/common';
@@ -21,6 +23,7 @@ import { classifyIdentifyFailure } from './identifyFailure';
 import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
 import { msUntilProactiveRefresh, msUntilRefreshRetry } from './refreshSchedule';
 import type { TokenVault } from './tokenVault';
+import { isCredentialAccepted401 } from './unauthorizedBody';
 
 /**
  * This app's RFC 8628 registration. Typed against the server's allowlist
@@ -63,16 +66,19 @@ export interface AuthServiceDeps {
   profilePhotos?: ProfilePhotoCache;
   /** Overridable so tests can drive the flow without a network. */
   createDeviceFlowClient?: (baseUrl: string) => DeviceFlowClient;
-  createApiClient?: (
-    baseUrl: string,
-    tokenStore: TokenStore,
-    onTokensCleared: (reason: string) => void
-  ) => AuthenticatedApiClient;
+  /** Handed the options the service would build its own client with. */
+  createApiClient?: (options: AuthenticatedApiClientOptions) => AuthenticatedApiClient;
 }
 
 /** What the panel says when the session ended without the user signing out. */
-const SESSION_EXPIRED_MESSAGE = 'This session has expired. Sign in again.';
-const SIGNED_OUT_ELSEWHERE_MESSAGE = 'You were signed out in another window. Sign in again.';
+const SESSION_EXPIRED_MESSAGE = 'Your session expired. Sign in again to continue.';
+const SIGNED_OUT_ELSEWHERE_MESSAGE = 'You were signed out in another window. Sign in again to continue.';
+
+/**
+ * How often a session waiting on re-authentication looks for one another instance sharing the
+ * vault signed in or refreshed. One small file read; nothing goes to the server.
+ */
+export const VAULT_WATCH_INTERVAL_MS = 10_000;
 
 /**
  * Owns the whole device-authorization flow and every token, in the main process.
@@ -88,6 +94,14 @@ export class AuthService {
   private tokenStore: TokenStore | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshAttempt = 0;
+  private vaultWatchTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * The access token a request was refused with even after a refresh. The vault keeps it (only a
+   * rejected refresh token clears it), so the vault watch must not adopt it straight back. Memory
+   * only, never logged.
+   */
+  private rejectedAccessToken: string | null = null;
 
   /**
    * Bumped whenever an in-flight sign-in stops being the current one (cancelled, or the
@@ -218,7 +232,14 @@ export class AuthService {
     // The picture goes with the session: dropping `user` clears it from the panel, and this
     // clears it from disk, so the next account does not inherit the last one's face.
     await this.forgetProfilePhoto();
-    this.patch({ status: 'signed-out', busy: 'idle', user: undefined, pending: undefined, error: undefined });
+    this.patch({
+      status: 'signed-out',
+      busy: 'idle',
+      user: undefined,
+      pending: undefined,
+      error: undefined,
+      reauthRequired: undefined,
+    });
   }
 
   async setEnvironment(selection: EnvironmentSelection): Promise<SetEnvironmentResult> {
@@ -256,6 +277,7 @@ export class AuthService {
     this.signInGeneration++;
     this.photoGeneration++;
     this.clearRefreshTimer();
+    this.clearVaultWatch();
   }
 
   private endpointUrl(): string {
@@ -327,8 +349,9 @@ export class AuthService {
       const response = await api.get<IdentifyResponse>('/api/identify');
       const tokens = knownTokens ?? (await this.currentTokens());
       const user = toDesktopUser(response.user, tokens?.userId ?? '');
-      this.patch({ status: 'signed-in', busy: 'idle', error: undefined, user });
+      this.patch({ status: 'signed-in', busy: 'idle', error: undefined, user, reauthRequired: undefined });
       this.refreshAttempt = 0;
+      this.rejectedAccessToken = null;
       // Detached on purpose: this is a download, and sign-in must not wait on one.
       void this.refreshProfilePhoto(user.id, readPhotoSource(response.user));
       await this.scheduleProactiveRefresh();
@@ -344,6 +367,7 @@ export class AuthService {
           busy: 'idle',
           user: this.state.user ?? (tokens ? { id: tokens.userId } : undefined),
           error: failure.error,
+          reauthRequired: undefined,
         });
         await this.scheduleProactiveRefresh();
         return;
@@ -351,6 +375,13 @@ export class AuthService {
 
       if (failure.outcome === 'signed-out') {
         this.clearRefreshTimer();
+        if (this.state.reauthRequired) {
+          // Re-authentication was already under way (a session adopted from the vault, or a fresh
+          // sign-in, that was refused): stay on the conversation and keep waiting.
+          this.patch({ status: 'signed-out', busy: 'idle', error: failure.error });
+          this.watchVault();
+          return;
+        }
         this.patch({ status: 'signed-out', busy: 'idle', user: undefined, error: failure.error });
         return;
       }
@@ -358,7 +389,7 @@ export class AuthService {
       // Policy acceptance and MFA are authenticated states, not login failures: the token is
       // good and must be kept, so that once the user clears the block in the browser a retry
       // succeeds without a second device flow.
-      this.patch({ status: failure.outcome, busy: 'idle', error: failure.error });
+      this.patch({ status: failure.outcome, busy: 'idle', error: failure.error, reauthRequired: undefined });
       await this.scheduleProactiveRefresh();
     }
   }
@@ -532,21 +563,77 @@ export class AuthService {
     this.endSession(reason);
   }
 
-  /** Show signed-out after the session ended on its own, rather than staying signed-in over an empty vault. */
+  /**
+   * A request was refused even with a freshly refreshed token. The tokens stay in the vault, which
+   * other instances share, but this one stops presenting them until the user signs in again.
+   */
+  private handleStillUnauthorized(baseUrl: string, reason: string): void {
+    if (baseUrl !== this.endpointUrl() || this.state.status !== 'signed-in') return;
+    const api = this.api;
+    this.endSession(reason);
+    void this.currentTokens().then(tokens => {
+      if (api === this.api && this.state.reauthRequired) this.rejectedAccessToken = tokens?.accessToken ?? null;
+    });
+  }
+
+  /**
+   * Show signed-out after the session ended on its own, rather than staying signed-in over an
+   * empty vault.
+   *
+   * A session that ends while the user is working becomes `reauthRequired`: the window stays on
+   * the conversation (drafts, the thread, the failed turn) with one notice to sign in again, and
+   * the vault is watched for a session another instance stores meanwhile. One that ends before
+   * the user ever got in, during restore or sign-in, shows the plain sign-in card as before.
+   */
   private endSession(reason: string, message: string = SESSION_EXPIRED_MESSAGE): void {
     this.deps.logger.warn(`AUTH: signed out: ${reason}`);
     this.clearRefreshTimer();
     // A device flow already under way is the way back in; leave it to finish.
     if (this.state.busy === 'signing-in') return;
+
+    const error = { message, remedy: 'retry-sign-in' as const };
+    if (this.state.status === 'signed-in' || this.state.reauthRequired) {
+      this.patch({ status: 'signed-out', busy: 'idle', pending: undefined, error, reauthRequired: true });
+      this.watchVault();
+      return;
+    }
+
     this.photoGeneration++;
     void this.forgetProfilePhoto();
-    this.patch({
-      status: 'signed-out',
-      busy: 'idle',
-      user: undefined,
-      pending: undefined,
-      error: { message, remedy: 'retry-sign-in' },
-    });
+    this.patch({ status: 'signed-out', busy: 'idle', user: undefined, pending: undefined, error });
+  }
+
+  private watchVault(): void {
+    this.clearVaultWatch();
+    const url = this.endpointUrl();
+    this.vaultWatchTimer = setInterval(() => void this.adoptStoredSession(url), VAULT_WATCH_INTERVAL_MS);
+  }
+
+  private clearVaultWatch(): void {
+    if (this.vaultWatchTimer) {
+      clearInterval(this.vaultWatchTimer);
+      this.vaultWatchTimer = null;
+    }
+  }
+
+  /** Another instance sharing the vault signed in or refreshed: carry on with its session. */
+  private async adoptStoredSession(url: string): Promise<void> {
+    const waiting = () =>
+      this.state.reauthRequired === true &&
+      this.state.status === 'signed-out' &&
+      this.state.busy === 'idle' &&
+      url === this.endpointUrl();
+    if (!waiting()) return;
+
+    const tokens = await this.deps.vault.reloadTokens(url);
+    if (!tokens || tokens.accessToken === this.rejectedAccessToken || !waiting()) return;
+
+    this.deps.logger.warn('AUTH: adopting a session another instance stored');
+    this.clearVaultWatch();
+    // Marked before the round trip: if it is refused, the watch must wait for a newer one.
+    this.rejectedAccessToken = tokens.accessToken;
+    this.patch({ status: 'initializing', busy: 'restoring', error: undefined });
+    await this.identify(tokens);
   }
 
   private clearRefreshTimer(): void {
@@ -573,23 +660,57 @@ export class AuthService {
     );
   }
 
+  /**
+   * Every 401 refreshes once and retries once, through the client's single shared refresh, even
+   * when the stored token has not expired by its own clock: the server stops accepting a token
+   * early (a secret rotation, a tokenVersion bump), and treating that as transient left every
+   * request failing until the user signed out by hand. 403 never refreshes - it means "not
+   * allowed", which a new token cannot change - and nor does a 401 whose body says the credential
+   * was accepted (see ./unauthorizedBody.ts).
+   */
   private buildApiClient(baseUrl: string, tokenStore: TokenStore): AuthenticatedApiClient {
-    const onTokensCleared = (reason: string) => this.handleTokensCleared(baseUrl, reason);
-    if (this.deps.createApiClient) return this.deps.createApiClient(baseUrl, tokenStore, onTokensCleared);
-
-    return new AuthenticatedApiClient({
+    const options: AuthenticatedApiClientOptions = {
       baseUrl,
       tokenStore,
-      onTokensCleared,
-      oauthClient: this.buildDeviceFlowClient(baseUrl),
+      onTokensCleared: reason => this.handleTokensCleared(baseUrl, reason),
+      onStillUnauthorized: reason => this.handleStillUnauthorized(baseUrl, reason),
+      refreshUnexpiredOn401: true,
+      isPassThrough401: isCredentialAccepted401,
+      oauthClient: this.loggedRefreshClient(this.buildDeviceFlowClient(baseUrl)),
       logger: this.deps.logger,
       timeoutMs: 30_000,
       headers: { 'User-Agent': this.deps.userAgent, 'X-B4M-Client': this.deps.userAgent },
       reauthMessages: {
-        refreshFailed: 'Your session expired. Sign in again.',
-        stillUnauthorized: 'Your session is no longer valid. Sign in again.',
+        // Thrown for a refresh that could not complete (network, 5xx). A rejected one is shown as
+        // the re-auth notice instead, so this wording only ever describes the transient case.
+        refreshFailed: 'Could not renew your session. Check your connection and try again.',
+        stillUnauthorized: SESSION_EXPIRED_MESSAGE,
       },
-    });
+    };
+    return this.deps.createApiClient?.(options) ?? new AuthenticatedApiClient(options);
+  }
+
+  /** Every refresh exchange and its outcome, at warn so they reach the installed app's log. */
+  private loggedRefreshClient(oauth: RefreshingOAuthClient): RefreshingOAuthClient {
+    const logger = this.deps.logger;
+    return {
+      async refreshToken(refreshToken) {
+        logger.warn('AUTH: refreshing the session');
+        try {
+          const response = await oauth.refreshToken(refreshToken);
+          logger.warn('AUTH: session refresh succeeded');
+          return response;
+        } catch (err) {
+          const status = httpStatus(err);
+          logger.warn(
+            status === 400 || status === 401
+              ? `AUTH: session refresh rejected (HTTP ${status})`
+              : `AUTH: session refresh failed, network or server: ${describeFailure(err)}`
+          );
+          throw err;
+        }
+      },
+    };
   }
 
   private patch(changes: Partial<AuthState>): void {
@@ -597,6 +718,7 @@ export class AuthService {
   }
 
   private setState(next: AuthState): void {
+    if (!next.reauthRequired) this.clearVaultWatch();
     this.state = next;
     this.deps.onStateChanged(next);
   }

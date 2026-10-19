@@ -79,6 +79,50 @@ export interface AuthenticatedApiClientOptions {
    * signed out, with the reason, instead of carrying on over an empty store.
    */
   onTokensCleared?: (reason: string) => void;
+  /**
+   * Refresh on a 401 even while the stored access token is inside its own lifetime. Off by
+   * default, which treats such a 401 as transient. A host that would rather re-authenticate than
+   * keep presenting a token the server has stopped accepting (a secret rotation, a tokenVersion
+   * bump) turns it on.
+   */
+  refreshUnexpiredOn401?: boolean;
+  /**
+   * Called when a request still 401s after a successful refresh. The tokens are kept (see
+   * {@link SessionRevokedError}); this lets a host stop using them until the user signs in again.
+   */
+  onStillUnauthorized?: (reason: string) => void;
+}
+
+/** Enough of an error body to classify it; a 401 body is a few hundred bytes. */
+const ERROR_BODY_LIMIT = 64 * 1024;
+
+function isReadableStream(data: unknown): data is AsyncIterable<unknown> {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    typeof (data as { pipe?: unknown }).pipe === 'function' &&
+    typeof (data as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === 'function'
+  );
+}
+
+/**
+ * A `responseType: 'stream'` request hands back its error body as a stream, which neither
+ * `isPassThrough401` nor the caller can read synchronously. Buffered into a string in place, so
+ * both see the same body. A read that fails leaves an empty string rather than a spent stream.
+ */
+async function bufferStreamedBody(response: { data?: unknown } | undefined): Promise<void> {
+  if (!response || !isReadableStream(response.data)) return;
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for await (const chunk of response.data) {
+      text += typeof chunk === 'string' ? chunk : decoder.decode(chunk as Uint8Array, { stream: true });
+      if (text.length >= ERROR_BODY_LIMIT) break;
+    }
+  } catch {
+    // Unreadable body: classified as an ordinary 401.
+  }
+  response.data = text.slice(0, ERROR_BODY_LIMIT);
 }
 
 function isExpired(tokens: AuthTokens): boolean {
@@ -102,6 +146,8 @@ export class AuthenticatedApiClient {
   private apiKey?: string;
   private isPassThrough401?: (data: unknown) => boolean;
   private onTokensCleared?: (reason: string) => void;
+  private onStillUnauthorized?: (reason: string) => void;
+  private refreshUnexpiredOn401: boolean;
   private reauthMessages: Required<ReauthMessages>;
   /** The one refresh exchange in flight, shared by every caller - see {@link refreshSession}. */
   private inFlightRefresh: Promise<AuthTokens> | null = null;
@@ -113,6 +159,8 @@ export class AuthenticatedApiClient {
     this.apiKey = options.apiKey;
     this.isPassThrough401 = options.isPassThrough401;
     this.onTokensCleared = options.onTokensCleared;
+    this.onStillUnauthorized = options.onStillUnauthorized;
+    this.refreshUnexpiredOn401 = options.refreshUnexpiredOn401 ?? false;
     this.reauthMessages = {
       notLoggedIn: 'Authentication failed: not logged in.',
       ...options.reauthMessages,
@@ -167,6 +215,8 @@ export class AuthenticatedApiClient {
           return Promise.reject(error);
         }
 
+        if (error.response?.status === 401) await bufferStreamedBody(error.response);
+
         if (error.response?.status === 401 && this.isPassThrough401?.(error.response.data)) {
           return Promise.reject(error);
         }
@@ -201,7 +251,7 @@ export class AuthenticatedApiClient {
           // until the token actually expires (checkSessionValid reports it valid until then).
           // REST calls still 401 in the meantime, so it is a bounded no-teardown delay, not
           // retained access.
-          if (!isExpired(tokens) && !this.inFlightRefresh) {
+          if (!this.refreshUnexpiredOn401 && !isExpired(tokens) && !this.inFlightRefresh) {
             this.logger.debug('AUTH: Access token has not expired, skipping refresh - 401 is likely transient');
             return Promise.reject(error);
           }
@@ -230,6 +280,7 @@ export class AuthenticatedApiClient {
         // stay: the refresh endpoint just accepted them, so only it can say the session is gone.
         if (error.response?.status === 401 && originalRequest._retry) {
           this.logger.debug('AUTH: Token refresh retry failed');
+          this.onStillUnauthorized?.('a request was still refused after the session was refreshed');
           throw new SessionRevokedError(stillUnauthorized);
         }
 

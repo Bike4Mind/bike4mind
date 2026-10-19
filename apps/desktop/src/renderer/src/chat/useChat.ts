@@ -637,7 +637,8 @@ export function useConversation(
           : startReply(current, event.messageId);
         return base.map(message => {
           if (message.id !== event.messageId) return message;
-          return event.type === 'done' ? applyReplyDone(message, event) : { ...message, error: event.message };
+          if (event.type === 'done') return applyReplyDone(message, event);
+          return { ...message, error: event.message, ...(event.stopReason ? { stopReason: event.stopReason } : {}) };
         });
       });
     });

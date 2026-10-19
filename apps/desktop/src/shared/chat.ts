@@ -1097,7 +1097,7 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string }
+  | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
   | {
       type: 'background-output';
       sessionId: string;
@@ -1213,6 +1213,8 @@ export type ChatQueueReturnReason =
   | 'stopped'
   /** That reply ended in an error. */
   | 'failed'
+  /** That reply was paused because the session expired. */
+  | 'session-expired'
   /** Its turn came and main refused it - signed out, or a model that cannot read its image. */
   | 'refused';
 
@@ -1535,4 +1537,20 @@ export interface ChatReplyRound {
  */
 export function isTurnBudgetStop(reason?: string): boolean {
   return reason === 'tool_turn_limit' || reason === 'turn_time_limit' || reason === 'tool_stall_limit';
+}
+
+/**
+ * The stop reason of a turn cut short because the session could not be renewed. The message
+ * also carries `error`, for readers that only know failed vs not; the thread shows it as a
+ * paused turn instead, under the one re-auth notice, rather than as a red line per message.
+ */
+export const SESSION_EXPIRED_STOP = 'session_expired';
+
+/**
+ * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
+ * a request boundary - before any of that request streamed - so its transcript ends where a
+ * budget-stopped one does, or on the user's own prompt.
+ */
+export function isResumableStop(reason?: string): boolean {
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
 }

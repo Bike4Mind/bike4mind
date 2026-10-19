@@ -123,7 +123,7 @@ function BlockedActions({ state }: { state: AuthState }) {
   return null;
 }
 
-function ApprovalPanel({ state }: { state: AuthState }) {
+export function ApprovalPanel({ state }: { state: AuthState }) {
   const pending = state.pending!;
 
   return (

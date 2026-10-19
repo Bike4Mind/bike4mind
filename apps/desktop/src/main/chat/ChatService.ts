@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
   ChatApprovalMode,
   ChatApprovalOption,
@@ -38,7 +38,14 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from '@shared/chat';
-import { awaitsWorktree, branchHolder, isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
+import {
+  awaitsWorktree,
+  branchHolder,
+  isResumableStop,
+  isTurnBudgetStop,
+  messagesSinceBoundary,
+  SESSION_EXPIRED_STOP,
+} from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
@@ -212,7 +219,10 @@ const TURN_LIMITS: TurnLimits = {
 };
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
-type TurnOutcome = 'completed' | 'aborted' | 'failed';
+type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
+
+/** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
+const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 
 /**
  * How many agent-spawned sessions may have a reply in flight at once, across the whole app.
@@ -1556,7 +1566,7 @@ export class ChatService {
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
     const last = session.messages[session.messages.length - 1];
-    if (!last || last.role !== 'assistant' || !isTurnBudgetStop(last.stopReason)) {
+    if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
@@ -2419,8 +2429,12 @@ export class ChatService {
       // message the user has already typed behind a button they may never press.
       return controller.signal.aborted ? 'aborted' : 'completed';
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.deps.logger.warn(`CHAT: reply failed: ${message}`);
+      // The client already refreshed and retried; what is left is a session only signing in
+      // again can fix, and AuthService is showing the one notice that says so.
+      const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
+      const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
+      const stop = expired ? { stopReason: SESSION_EXPIRED_STOP } : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -2430,11 +2444,12 @@ export class ChatService {
         content,
         createdAt: new Date().toISOString(),
         error: message,
+        ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message });
-      return 'failed';
+      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      return expired ? 'expired' : 'failed';
     }
   }
 
@@ -2535,7 +2550,8 @@ export class ChatService {
       this.flushQueue(sessionId);
       return;
     }
-    const stranded = this.deps.queue?.releaseAll(sessionId, outcome === 'aborted' ? 'stopped' : 'failed') ?? [];
+    const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
+    const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
   }
 

@@ -1,6 +1,11 @@
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { AuthenticatedApiClient, SessionRevokedError } from './AuthenticatedApiClient';
+import { Readable } from 'node:stream';
+import {
+  AuthenticatedApiClient,
+  SessionRevokedError,
+  type AuthenticatedApiClientOptions,
+} from './AuthenticatedApiClient';
 import type { RefreshTokenResponse } from './DeviceFlowClient';
 import type { AuthTokens, TokenStore } from './tokens';
 
@@ -67,7 +72,12 @@ function grant(index: number, rotate = true): RefreshTokenResponse {
   } as RefreshTokenResponse;
 }
 
-function build(store: TokenStore, refreshToken: ReturnType<typeof vi.fn>, onTokensCleared = vi.fn()) {
+function build(
+  store: TokenStore,
+  refreshToken: ReturnType<typeof vi.fn>,
+  onTokensCleared = vi.fn(),
+  options: Partial<AuthenticatedApiClientOptions> = {}
+) {
   const client = new AuthenticatedApiClient({
     baseUrl: 'https://b4m.example.com',
     tokenStore: store,
@@ -75,6 +85,7 @@ function build(store: TokenStore, refreshToken: ReturnType<typeof vi.fn>, onToke
     logger: silentLogger,
     reauthMessages: MESSAGES,
     onTokensCleared,
+    ...options,
   });
   // The API accepts only `access-1`; anything else is a 401.
   client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
@@ -282,5 +293,94 @@ describe('AuthenticatedApiClient cross-process refresh', () => {
     await expect(client.get('/a')).resolves.toEqual({ ok: true });
     expect(refreshToken).not.toHaveBeenCalled();
     expect(memory.store.reloadAuthTokens).toHaveBeenCalled();
+  });
+});
+
+describe('AuthenticatedApiClient refreshUnexpiredOn401', () => {
+  const unexpired = (overrides: Partial<AuthTokens> = {}) =>
+    tokens({ expiresAt: new Date(Date.now() + 600_000).toISOString(), ...overrides });
+
+  it('leaves a 401 on an unexpired token alone by default', async () => {
+    const { store } = memoryStore(unexpired());
+    const refreshToken = vi.fn().mockResolvedValue(grant(1));
+    const { client } = build(store, refreshToken);
+
+    const err = await rejection(client.get('/a'));
+
+    expect(err).toBeInstanceOf(AxiosError);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it('refreshes and retries once when the server refuses a token still inside its lifetime', async () => {
+    const { store, durable } = memoryStore(unexpired());
+    const refreshToken = vi.fn().mockResolvedValue(grant(1));
+    const { client } = build(store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    await expect(client.get('/a')).resolves.toEqual({ ok: true });
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(durable()?.accessToken).toBe('access-1');
+  });
+
+  it('shares one refresh between concurrent 401s on an unexpired token', async () => {
+    const { store } = memoryStore(unexpired());
+    let release: (value: RefreshTokenResponse) => void = () => {};
+    const refreshToken = vi.fn(() => new Promise<RefreshTokenResponse>(resolve => (release = resolve)));
+    const { client } = build(store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    const calls = [client.get('/a'), client.get('/b'), client.get('/c')];
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalled());
+    release(grant(1));
+
+    await expect(Promise.all(calls)).resolves.toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('adopts a token another process rotated into storage instead of exchanging', async () => {
+    const memory = memoryStore(unexpired());
+    memory.writeBehind(unexpired({ accessToken: 'access-1', refreshToken: 'refresh-1' }));
+    const refreshToken = vi.fn();
+    const { client } = build(memory.store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    await expect(client.get('/a')).resolves.toEqual({ ok: true });
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it('reports a request that is still refused after the refresh', async () => {
+    const { store, durable } = memoryStore(unexpired());
+    const onStillUnauthorized = vi.fn();
+    const { client, onTokensCleared } = build(store, vi.fn().mockResolvedValue(grant(2)), vi.fn(), {
+      refreshUnexpiredOn401: true,
+      onStillUnauthorized,
+    });
+
+    const err = await rejection(client.get('/a'));
+
+    expect(err).toBeInstanceOf(SessionRevokedError);
+    expect(onStillUnauthorized).toHaveBeenCalledTimes(1);
+    expect(onTokensCleared).not.toHaveBeenCalled();
+    expect(durable()?.refreshToken).toBe('refresh-2');
+  });
+});
+
+describe('AuthenticatedApiClient streamed 401 bodies', () => {
+  it('buffers a streamed 401 body so isPassThrough401 and the caller can both read it', async () => {
+    const { store } = memoryStore(tokens());
+    const refreshToken = vi.fn();
+    const isPassThrough401 = vi.fn((data: unknown) => typeof data === 'string' && data.includes('provider_rejected'));
+    const { client } = build(store, refreshToken, vi.fn(), { isPassThrough401 });
+    client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError('HTTP 401', 'ERR_BAD_REQUEST', config, {}, {
+        status: 401,
+        statusText: '401',
+        data: Readable.from([Buffer.from('{"errorCode":"provider_rejected"}')]),
+        headers: {},
+        config,
+      } as AxiosResponse);
+    }) as AxiosAdapter;
+
+    const err = (await rejection(client.get('/a', { responseType: 'stream' }))) as AxiosError;
+
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(err.response?.data).toBe('{"errorCode":"provider_rejected"}');
   });
 });

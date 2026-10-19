@@ -45,7 +45,12 @@ export function describeReturn(returned: ChatQueueEvent['returned']): string | n
       ? `Could not send ${subject}: ${returned.detail} ${back}`
       : `Could not send ${subject}. ${back}`;
   }
-  const cause = returned.reason === 'stopped' ? 'You stopped the reply' : 'That reply failed';
+  const cause =
+    returned.reason === 'stopped'
+      ? 'You stopped the reply'
+      : returned.reason === 'session-expired'
+        ? 'Your session expired'
+        : 'That reply failed';
   return `${cause}, so ${subject} ${one ? 'was' : 'were'} not sent. ${back}`;
 }
 
