@@ -152,7 +152,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Bike4Mind, Inc. Built with Docusaurus.`,
+      copyright: `Copyright \u00A9 ${new Date().getFullYear()} Bike4Mind, Inc. Built with Docusaurus.`,
     },
     prism: {
       theme: prismThemes.github,

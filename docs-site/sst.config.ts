@@ -10,7 +10,7 @@
  *   cd docs-site && npx sst deploy --stage <stage>
  *
  * Stages:
- *   - production → docs.bike4mind.com
+ *   - production -> docs.bike4mind.com
  *   - dev is retired (no staging site); it stays in the retain/protect lists
  *     only so the leftover stage cannot be removed by accident.
  */
