@@ -34,6 +34,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'security.attack_simulation.run': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'oauth_client.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'oauth_client.secret_rotated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'oauth_client.deactivated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'system_health.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
