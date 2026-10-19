@@ -225,9 +225,14 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({ filters, onChang
         <FormLabel>Action</FormLabel>
         <Autocomplete
           freeSolo
+          // Commits typed text on blur; without it a free-text action is dropped unless Enter is pressed.
+          autoSelect
           options={ACTION_OPTIONS}
           value={filters.action ?? null}
-          onChange={(_, next) => onChange({ action: next?.trim() || undefined })}
+          onChange={(_, next) => {
+            const action = next?.trim() || undefined;
+            if (action !== filters.action) onChange({ action });
+          }}
           placeholder="e.g. credits.granted"
           data-testid="audit-filter-action"
         />
