@@ -5,7 +5,6 @@ import {
   REASONING_SUPPORTED_MODELS,
   SERVABLE_CHAT_MODELS,
   supportedChatModels,
-  supportedModels,
 } from './models';
 import { settingsMap } from './schemas/settings';
 
@@ -18,11 +17,6 @@ describe('gpt-5.4-mini dated snapshot', () => {
   it('is rejected by supportedChatModels until it has a catalog row', () => {
     expect(supportedChatModels.safeParse(ChatModels.GPT5_4_MINI_2026_03_17).success).toBe(false);
     expect(supportedChatModels.safeParse(ChatModels.GPT5_4_MINI).success).toBe(true);
-  });
-
-  it('is rejected by supportedModels, which types ModelInfo.id', () => {
-    expect(supportedModels.safeParse(ChatModels.GPT5_4_MINI_2026_03_17).success).toBe(false);
-    expect(supportedModels.safeParse(ChatModels.GPT5_4_MINI).success).toBe(true);
   });
 
   it('is absent from SERVABLE_CHAT_MODELS, which integration-status checks the configured model against', () => {

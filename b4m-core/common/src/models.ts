@@ -560,14 +560,14 @@ export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
 /**
  * All supported models
  */
-export const supportedModels = z
-  .enum({
-    ...ChatModels,
-    ...ImageModels,
-    ...SpeechToTextModels,
-    ...VideoModels,
-  })
-  .exclude(['GPT5_4_MINI_2026_03_17']);
+// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
+export const supportedModels = z.enum({
+  ...ChatModels,
+  ...ImageModels,
+  ...SpeechToTextModels,
+  ...VideoModels,
+});
 
 export type ModelName = z.infer<typeof supportedModels>;
 
