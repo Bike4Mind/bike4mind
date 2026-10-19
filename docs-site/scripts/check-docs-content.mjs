@@ -29,6 +29,10 @@ const PLACEHOLDER_ACCOUNTS = new Set(['123456789012', '987654321098', '000000000
 const PLACEHOLDER_PASSWORD = /^(password|pass|<[^>]*>|\$\{[^}]*\}|x{3,}|changeme|your-.*|\*+)$/i;
 const ALLOWED_EMAIL_DOMAIN =
   /^((.+\.)?example\.(com|org|net)|acme[a-z0-9-]*\.[a-z.]+|(myapp|yourdomain|yourcompany|company|y)\.com|github\.com)$/i;
+// Marks an identifier as an obvious stand-in: bracket/angle/shell placeholders, wildcards, or example-ish words.
+const PLACEHOLDER_RESOURCE = /[<>[\]*{}$]|\.\.\.|example|your|xxx|^my[-_]?|bucket-name|placeholder/i;
+const REAL_CLOUDFRONT_ID = /^d[a-z0-9]{12,13}$/;
+const REAL_API_GATEWAY_ID = /^[a-z0-9]{10}$/;
 const PLACEHOLDER_OWNER = /^(org|owner|your-org|your-username|acme[a-z0-9-]*)$/i;
 
 const rules = [
@@ -40,11 +44,42 @@ const rules = [
         .map((m) => m[0]),
   },
   {
+    name: 'aws-account-id-dashed',
+    test: (line) =>
+      [...line.matchAll(/(?<![0-9A-Za-z-])[0-9]{4}-[0-9]{4}-[0-9]{4}(?![0-9A-Za-z-])/g)]
+        .filter((m) => !PLACEHOLDER_ACCOUNTS.has(m[0].replaceAll('-', '')))
+        .map((m) => m[0]),
+  },
+  {
     name: 'aws-arn',
     test: (line) =>
       [...line.matchAll(/arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:([^:\s]*):[^\s"'`)]*/g)]
         .filter((m) => /^[0-9]{12}$/.test(m[1]) && !PLACEHOLDER_ACCOUNTS.has(m[1]))
         .map((m) => m[0]),
+  },
+  {
+    name: 'aws-arn-no-account',
+    test: (line) =>
+      [...line.matchAll(/arn:aws[a-z-]*:s3:::([^\s"'`),/]+)/g)]
+        .filter((m) => !PLACEHOLDER_RESOURCE.test(m[1]))
+        .map((m) => m[0]),
+  },
+  {
+    name: 'aws-resource-host',
+    test: (line) => [
+      ...[...line.matchAll(/\b([a-z0-9]+)\.cloudfront\.net\b/g)]
+        .filter((m) => REAL_CLOUDFRONT_ID.test(m[1]) && !PLACEHOLDER_RESOURCE.test(m[1]))
+        .map((m) => m[0]),
+      ...[...line.matchAll(/\b([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\.s3[.-](?:[a-z0-9-]+\.)*amazonaws\.com\b/g)]
+        .filter((m) => !PLACEHOLDER_RESOURCE.test(m[1]))
+        .map((m) => m[0]),
+      ...[...line.matchAll(/\bs3[.-][a-z0-9-]+\.amazonaws\.com\/([A-Za-z0-9][A-Za-z0-9._-]{2,62})/g)]
+        .filter((m) => !PLACEHOLDER_RESOURCE.test(m[1]))
+        .map((m) => m[0]),
+      ...[...line.matchAll(/\b([a-z0-9]+)\.execute-api\.[a-z0-9-]+\.amazonaws\.com\b/g)]
+        .filter((m) => REAL_API_GATEWAY_ID.test(m[1]) && !PLACEHOLDER_RESOURCE.test(m[1]))
+        .map((m) => m[0]),
+    ],
   },
   { name: 'aws-access-key-id', re: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g },
   { name: 'private-key-block', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
@@ -58,14 +93,27 @@ const rules = [
   },
   {
     name: 'token-prefix',
-    re: /\b(ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,}|xoxb-[0-9]+-[A-Za-z0-9-]{8,}|xoxp-[0-9]+-[A-Za-z0-9-]{8,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35})/g,
+    test: (line) =>
+      [
+        ...line.matchAll(
+          /\b(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,}|xox[bpa]-[0-9]+-[A-Za-z0-9-]{8,}|xapp-[0-9]-[A-Za-z0-9-]{8,}|[sr]k_live_[A-Za-z0-9]{16,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{48}|AIza[0-9A-Za-z_-]{35})/g
+        ),
+      ]
+        .filter((m) => !PLACEHOLDER_RESOURCE.test(m[0]))
+        .map((m) => m[0]),
   },
   { name: 'internal-hostname', re: /\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(internal|corp)(?![-\w])/gi },
   {
     name: 'email',
     test: (line) =>
-      [...line.matchAll(/(?<![A-Za-z0-9._%+:-])[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g)]
-        .filter((m) => m[0].toLowerCase() !== 'support@bike4mind.com' && !ALLOWED_EMAIL_DOMAIN.test(m[1]))
+      // `:` before the local part is excluded (scheme://user:pass@host), except for mailto: links.
+      [...line.matchAll(/(?:(?<![A-Za-z0-9._%+:-])|(?<=mailto:))[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(:?)/g)]
+        .filter(
+          (m) =>
+            m[0].replace(/:$/, '').toLowerCase() !== 'support@bike4mind.com' &&
+            !ALLOWED_EMAIL_DOMAIN.test(m[1]) &&
+            !(m[0].startsWith('git@') && m[2] === ':')
+        )
         .map((m) => m[0]),
   },
   {
