@@ -8,6 +8,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const mockIncrementCredits = vi.fn();
+const mockFindById = vi.fn();
 const mockPost = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
 const mockCreateSession = vi.fn();
@@ -36,7 +37,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   projectRepository: {},
   fabFileRepository: {},
-  userRepository: { incrementCredits: (...a: unknown[]) => mockIncrementCredits(...a) },
+  userRepository: {
+    incrementCredits: (...a: unknown[]) => mockIncrementCredits(...a),
+    findById: (...a: unknown[]) => mockFindById(...a),
+  },
   questRepository: {},
 }));
 
@@ -63,6 +67,7 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => '
 
 import voiceSessionsHandler from '@pages/api/ai/voice-sessions';
 import errorHandler from '@server/middlewares/errorHandler';
+import { usdToCredits } from '@bike4mind/utils';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
@@ -83,6 +88,10 @@ let consoleError: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockIncrementCredits.mockReset();
+  mockClaimVoiceHold.mockReset();
+  mockFindById.mockReset();
+  mockFindById.mockResolvedValue({ id: 'user-1', currentCredits: 1_000_000 });
   mockGetEffectiveApiKey.mockResolvedValue('sk-test');
   mockCreateSession.mockResolvedValue({ id: 'session-1' });
   mockPost.mockResolvedValue({ data: { value: 'ek-test' } });
@@ -232,6 +241,7 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockClaimVoiceHold).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
+    expect(mockFindById).not.toHaveBeenCalled();
   });
 
   it('reserves afresh, and never reuses, a hold past its window', async () => {
@@ -248,10 +258,60 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
 
   it('refuses a reconnect with no live hold that cannot afford a fresh one, before OpenAI mints a key', async () => {
     mockGetSession.mockResolvedValueOnce({ id: 'session-1', userId: 'user-1' });
+    mockFindById.mockResolvedValueOnce({ id: 'user-1', currentCredits: 1 });
 
     const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true }, 1);
 
     expect(res._getStatusCode()).toBe(403);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it('uses the committed refund from an unused prior hold to afford the reconnect', async () => {
+    const priorReserve = usdToCredits(1);
+    mockGetSession.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'user-1',
+      voiceReservedCredits: priorReserve,
+      voiceSessionStartedAt: priorStartedAt,
+    });
+    mockClaimVoiceHold.mockResolvedValueOnce({ billedCredits: null, payerId: 'user-1' });
+    let balance = 1;
+    mockIncrementCredits.mockImplementation(async (_userId: string, delta: number) => {
+      balance += delta;
+      return { currentCredits: balance };
+    });
+    mockFindById.mockImplementation(async () => ({ id: 'user-1', currentCredits: balance }));
+
+    const { res } = await callRoute({ sessionId: 'session-1', isReconnect: true }, 1);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockIncrementCredits.mock.calls[0]).toEqual(['user-1', priorReserve]);
+    expect(mockFindById).toHaveBeenCalledWith('user-1');
+    expect(mockIncrementCredits.mock.invocationCallOrder[0]).toBeLessThan(mockFindById.mock.invocationCallOrder[0]);
+    expect(mockFindById.mock.invocationCallOrder[0]).toBeLessThan(mockPost.mock.invocationCallOrder[0]);
+    expect(balance).toBeGreaterThan(0);
+  });
+
+  it.each([null, { id: 'user-1', currentCredits: 1 }])(
+    'refuses an unaffordable fresh balance despite an affordable request snapshot: %j',
+    async freshUser => {
+      mockFindById.mockResolvedValueOnce(freshUser);
+
+      const { res } = await callRoute({ isReconnect: true });
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockPost).not.toHaveBeenCalled();
+      expect(mockOpenVoiceHold).not.toHaveBeenCalled();
+    }
+  );
+
+  it('fails before minting a key when the refreshed balance cannot be read', async () => {
+    mockFindById.mockRejectedValueOnce(new Error('balance read failed'));
+
+    const { res } = await callRoute({ isReconnect: true });
+
+    expect(res._getStatusCode()).toBe(500);
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockOpenVoiceHold).not.toHaveBeenCalled();
   });

@@ -164,11 +164,20 @@ const handler = baseApi().post(async (req, res) => {
   // Realtime: only a hold carrying the realtime marker.
   const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
 
-  // Gated on the hold actually being reused, not on the client's reconnect flag: a reconnect with no
-  // live hold reserves a fresh one, so it must afford it before OpenAI issues the call's key. The
-  // reserve itself is taken below, with the hold, once that key exists.
-  if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
-    throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold && session) {
+    await settlePriorVoiceHold(session);
+  }
+
+  // Settlement may refund the prior reserve. Read the committed balance before minting a new key;
+  // reserveVoiceHold checks it again atomically after the provider call.
+  if (enforceCredits && !reuseHold) {
+    const currentUser = await userRepository.findById(req.user.id);
+    if ((currentUser?.currentCredits ?? 0) < reservedCredits) {
+      throw new ForbiddenError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
+    }
   }
 
   // Build voice instructions with conversation history context
@@ -362,13 +371,6 @@ When you get the tool result back, summarize it conversationally for voice.`;
       max_output_tokens: 4096,
     },
   };
-
-  // The hold read before any credit moves; the new hold is written only over it (or over none).
-  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
-  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
-  if (!reuseHold && session) {
-    await settlePriorVoiceHold(session);
-  }
 
   let result;
   try {
