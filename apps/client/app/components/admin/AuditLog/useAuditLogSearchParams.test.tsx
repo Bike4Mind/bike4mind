@@ -1,16 +1,28 @@
 // @vitest-environment jsdom
 import { renderHook, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AuditLogFiltersSchema } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  navigateOverride: null as ((...args: unknown[]) => unknown) | null,
   search: {} as Record<string, unknown>,
+  pathname: '/admin',
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => mocks.navigate,
+  useNavigate: () => mocks.navigateOverride ?? mocks.navigate,
   useSearch: () => mocks.search,
+  useRouter: () => routerStub,
 }));
+
+const routerStub = {
+  state: {
+    get location() {
+      return { pathname: mocks.pathname };
+    },
+  },
+};
 
 import { useAuditLogSearchParams } from './useAuditLogSearchParams';
 
@@ -27,6 +39,13 @@ describe('useAuditLogSearchParams', () => {
   beforeEach(() => {
     mocks.navigate.mockReset();
     mocks.search = {};
+    mocks.pathname = '/admin';
+    mocks.navigateOverride = null;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('parses valid filters from the URL and drops invalid ones', () => {
@@ -66,33 +85,41 @@ describe('useAuditLogSearchParams', () => {
     expect(lastSearchUpdate({ entryId: 'e1' }).entryId).toBeUndefined();
   });
 
-  it('clears its own params on unmount', () => {
+  it('clears its own params on unmount while still on /admin', () => {
     const { unmount } = renderHook(() => useAuditLogSearchParams());
     unmount();
+    vi.runAllTimers();
     const next = lastSearchUpdate({ tab: 'audit-log', entryId: 'x', severity: 'critical', other: 'keep' });
-    expect(next).toEqual({
-      tab: undefined,
-      entryId: undefined,
-      severity: undefined,
-      other: 'keep',
-      category: undefined,
-      action: undefined,
-      verb: undefined,
-      actorUserId: undefined,
-      targetKind: undefined,
-      targetId: undefined,
-      source: undefined,
-      actorScope: undefined,
-      from: undefined,
-      to: undefined,
-      requestId: undefined,
-      impersonationSessionId: undefined,
-    });
+    const clearedFilters = Object.fromEntries(Object.keys(AuditLogFiltersSchema.shape).map(key => [key, undefined]));
+    expect(next).toEqual({ ...clearedFilters, tab: undefined, entryId: undefined, other: 'keep' });
+  });
+
+  it('does not navigate on unmount once the location has left /admin', () => {
+    const { unmount } = renderHook(() => useAuditLogSearchParams());
+    mocks.pathname = '/notebooks';
+    unmount();
+    vi.runAllTimers();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // A changed dependency replays the effect on the same instance (cleanup, then effect), which is the
+  // exact sequence StrictMode's dev double-invoke produces.
+  it('keeps deep-link params when the effect is cleaned up and re-run in the same tick', () => {
+    mocks.search = { tab: 'audit-log', severity: 'critical' };
+    const { result, rerender } = renderHook(() => useAuditLogSearchParams());
+    const replacementNavigate = vi.fn();
+    mocks.navigateOverride = replacementNavigate;
+    rerender();
+    vi.runAllTimers();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(replacementNavigate).not.toHaveBeenCalled();
+    expect(result.current.filters).toEqual({ severity: 'critical' });
   });
 
   it('leaves another tab in place on unmount', () => {
     const { unmount } = renderHook(() => useAuditLogSearchParams());
     unmount();
+    vi.runAllTimers();
     expect(lastSearchUpdate({ tab: 'feedback' }).tab).toBe('feedback');
   });
 });
