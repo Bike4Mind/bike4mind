@@ -18,7 +18,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { dayjs } from '@bike4mind/common';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -89,6 +89,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
+        onGranted: async ({ credits }) => {
+          await recordAdminActionFromRequest(req, {
+            action: 'user.subscription.granted',
+            target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+            summary: `granted individual subscription for ${durationMonths} month(s)`,
+            details: { subscriptionType: 'individual', priceId, credits, durationMonths },
+          });
+        },
       });
       if (grant.status === 'unknown_plan') {
         throw new BadRequestError('Invalid subscription plan');
@@ -105,22 +113,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         credits: grant.credits,
         durationMonths,
       });
-
-      await logAuditEvent(
-        {
-          userId,
-          action: AdminOrgAuditEvents.ORG_GRANTED,
-          adminUserId: req.user.id,
-          adminUsername: req.user.username,
-          metadata: {
-            subscriptionType: 'individual',
-            priceId,
-            credits: grant.credits,
-            durationMonths,
-          },
-        },
-        req.logger
-      );
 
       // Notify user
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
@@ -246,6 +238,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           await organizationRepository.update({ id: targetOrganization.id, seats });
         }
 
+        await recordAdminActionFromRequest(req, {
+          action: 'user.subscription.granted',
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+          organizationId: targetOrganization.id,
+          summary: `granted team subscription with ${seats} seats for ${durationMonths} month(s)`,
+          details: {
+            subscriptionType: 'team',
+            seats,
+            credits: seats * teamPlan.creditsPerSeat * durationMonths,
+            durationMonths,
+            organizationOwnerId: targetOrganization.userId,
+          },
+        });
+
         req.logger.info(`Admin ${req.user.id} granted team subscription to organization ${targetOrganization.id}`, {
           seats,
           credits: creditsToAdd,
@@ -253,23 +259,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           userId,
         });
       });
-
-      await logAuditEvent(
-        {
-          userId: targetOrganization.userId,
-          action: AdminOrgAuditEvents.ORG_GRANTED,
-          adminUserId: req.user.id,
-          adminUsername: req.user.username,
-          metadata: {
-            subscriptionType: 'team',
-            organizationId: targetOrganization.id,
-            seats,
-            credits: seats * teamPlan.creditsPerSeat * durationMonths,
-            durationMonths,
-          },
-        },
-        req.logger
-      );
 
       // Notify relevant users. (No ['entitlements'] push here: entitlement
       // resolution is User-owned only - when the org-seat fast-follow lands

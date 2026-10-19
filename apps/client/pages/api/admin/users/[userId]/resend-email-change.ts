@@ -7,7 +7,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { EmailEvents } from '@server/utils/eventBus';
 import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { userService } from '@bike4mind/services';
 
 interface RequestQuery {
@@ -53,20 +53,13 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         await userService.cancelEmailChange({ userId: user.id }, { db: { users: userRepository } });
 
         // Log the auto-cancellation
-        await logAuditEvent(
-          {
-            userId: user.id,
-            action: EmailAuditEvents.EMAIL_CHANGE_CANCELLED,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            adminUserId: req.user.id,
-            adminUsername: req.user.username,
-            oldEmail: oldEmail || undefined,
-            newEmail: expiredPendingEmail || undefined,
-            reason: `Token expired on ${expiredAt.toISOString()} - auto-cancelled by system when admin attempted resend`,
-          },
-          req.logger
-        );
+        await recordAdminActionFromRequest(req, {
+          action: 'user.email.change_cancelled',
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+          summary: 'cancelled expired email change',
+          reason: `Token expired on ${expiredAt.toISOString()} - auto-cancelled by system when admin attempted resend`,
+          details: { currentEmail: oldEmail, pendingEmail: expiredPendingEmail },
+        });
 
         req.logger.info(
           `Admin ${req.user.username} (${req.user.id}) triggered auto-cancellation of expired email change for user ${user.username} (${userId}). Token expired: ${expiredAt.toISOString()}`
@@ -151,19 +144,12 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
 
       // Log admin action
-      await logAuditEvent(
-        {
-          userId: user.id,
-          action: EmailAuditEvents.ADMIN_EMAIL_CHANGE_RESENT,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-          adminUserId: req.user.id,
-          adminUsername: req.user.username,
-          oldEmail: user.email || undefined,
-          newEmail: user.pendingEmail || undefined,
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'user.email.change_resent',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        summary: 'resent email change verification',
+        details: { currentEmail: user.email, pendingEmail: user.pendingEmail },
+      });
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) resent email change verification for user ${user.username} (${userId})`
