@@ -2334,9 +2334,7 @@ describe('ChatCompletionProcess', () => {
       });
 
       it('refunds a real reservation when the caller aborts the turn', async () => {
-        vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
-          (key: string) => key === 'enforceCredits'
-        );
+        enableAdminFlags('enforceCredits');
         mockedUsdToCredits.mockReturnValue(50);
         const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
         mockDb.users = {
