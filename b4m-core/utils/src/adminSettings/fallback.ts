@@ -12,6 +12,18 @@ export interface FallbackAttempt {
   attempt: number;
 }
 
+// Exceptions raised inside a Bedrock response stream keep `name` and `$fault` but never get
+// `$metadata.httpStatusCode`, so the name is the only status signal.
+const AWS_SDK_ERROR_NAME_STATUS = new Map<string, number>([
+  ['ValidationException', 400],
+  ['AccessDeniedException', 403],
+  ['ResourceNotFoundException', 404],
+  ['ThrottlingException', 429],
+  ['TooManyRequestsException', 429],
+  ['InternalServerException', 500],
+  ['ServiceUnavailableException', 503],
+]);
+
 /**
  * AWS SDK v3 service exceptions (Bedrock, etc.) are plain Error subclasses, not Axios errors:
  * their HTTP status lives on `$metadata.httpStatusCode`, not `response.status`. Read both
@@ -22,6 +34,10 @@ export interface FallbackAttempt {
  * (apps/client/server/chatCompletion/external/sseRoute.ts).
  */
 export function getHttpStatus(error: Error): number | undefined {
+  return readHttpStatus(error) ?? ('$fault' in error ? AWS_SDK_ERROR_NAME_STATUS.get(error.name) : undefined);
+}
+
+function readHttpStatus(error: Error): number | undefined {
   if (isAxiosError(error)) {
     return error.response?.status;
   }
@@ -41,10 +57,7 @@ export function getHttpStatus(error: Error): number | undefined {
  * to the HTTP status check.
  */
 const TRANSIENT_AWS_SDK_ERROR_NAMES = new Set([
-  'ServiceUnavailableException', // 503 — Bedrock capacity/availability
-  'ThrottlingException', // 429 — account/model throttling
-  'TooManyRequestsException', // 429
-  'InternalServerException', // 500 — transient server-side error
+  ...[...AWS_SDK_ERROR_NAME_STATUS].filter(([, status]) => [429, 500, 503].includes(status)).map(([name]) => name),
   'ModelNotReadyException', // model still scaling up
   'ModelTimeoutException', // upstream model timeout
 ]);
