@@ -141,7 +141,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'function:infra/database.ts:DatabaseMigrator',
     'ddc9d611ee11a49f55806b0dbbae33183546cbeb610550c0d228435fd7691db1'
   ),
-  gap('function:infra/database.ts:DatabaseSeeder', 'd0de1f957fe2e02c32ff318f42aff91979650b67a0050264d2d9b9597869f9c8', [
+  gap('function:infra/database.ts:DatabaseSeeder', 'aaf2ea29aae4258be24385977537d2273fa8306215ad0744040ef4cc65b9a91e', [
     'ssm:GetParameter',
   ]),
   gap('function:infra/dataSyncer.ts:DataSyncer', '6b34c84dc682604d934700c4c8156e0127c4779ea369a3de7a3d02649fae6b9b'),
