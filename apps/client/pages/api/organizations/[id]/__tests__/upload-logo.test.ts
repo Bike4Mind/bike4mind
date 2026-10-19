@@ -13,6 +13,7 @@ const ORG_ID = '64b7f0c2a1b2c3d4e5f60718';
 const OWNER = 'owner1';
 const MANAGER = 'manager1';
 const MEMBER = 'member1';
+const APPOINTED_ADMIN = 'appointed1';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
@@ -69,7 +70,8 @@ const ORG = {
   id: ORG_ID,
   userId: OWNER,
   managerId: MANAGER,
-  users: [{ userId: OWNER }, { userId: MANAGER }, { userId: MEMBER }],
+  adminUserIds: [APPOINTED_ADMIN],
+  users: [{ userId: OWNER }, { userId: MANAGER }, { userId: MEMBER }, { userId: APPOINTED_ADMIN }],
 };
 const sessionChain = () => ({ session: vi.fn(async () => undefined) });
 
@@ -97,6 +99,7 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
 
   it.each([
     ['a plain member', { id: MEMBER, isAdmin: false }],
+    ['an appointed org admin', { id: APPOINTED_ADMIN, isAdmin: false }],
     ['a non-member', { id: 'stranger1', isAdmin: false }],
   ])('refuses %s with a 404 and deletes nothing', async (_label, user) => {
     await expect(invoke(user)).rejects.toBeInstanceOf(NotFoundError);
@@ -104,6 +107,7 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(orgFindById).not.toHaveBeenCalled();
     expect(storageDelete).not.toHaveBeenCalled();
     expect(appFileFindByIdAndDelete).not.toHaveBeenCalled();
+    expect(orgUpdateOne).not.toHaveBeenCalled();
   });
 
   it.each([
