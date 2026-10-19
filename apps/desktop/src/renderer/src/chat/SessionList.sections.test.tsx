@@ -81,6 +81,7 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let bridge = fakeSidebarBridge({ sections: [], assignments: {} });
 let onCreate = vi.fn<() => void>();
+let onCreateInSection = vi.fn<(sectionId: string) => void>();
 let onDelete = vi.fn<(id: string) => void>();
 let onDismissSectionError = vi.fn<() => void>();
 let onToggleCollapsed = vi.fn<() => void>();
@@ -102,6 +103,7 @@ function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; s
       onCreate={onCreate}
       onOpenArtifacts={() => {}}
       onCreateInProject={() => {}}
+      onCreateInSection={onCreateInSection}
       onDelete={onDelete}
       onTogglePin={() => {}}
       onToggleArchived={() => {}}
@@ -192,6 +194,7 @@ const workAndHome: SidebarSectionsState = {
 
 beforeEach(() => {
   onCreate = vi.fn();
+  onCreateInSection = vi.fn();
   onDelete = vi.fn();
   onDismissSectionError = vi.fn();
   onToggleCollapsed = vi.fn();
@@ -361,6 +364,49 @@ describe('moving a session from its menu', () => {
 
     await openRowMenu('Alpha');
     expect(query('chat-pin-session-btn')).not.toBeNull();
+  });
+});
+
+describe('starting a session in a section', () => {
+  it("starts one in that section from the header's +", async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await click(el('sidebar-section-new-btn', sectionNamed('Home')));
+
+    expect(onCreateInSection).toHaveBeenCalledWith('home');
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it("starts one in that section from the section's menu", async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await click(el('sidebar-section-menu-btn', sectionNamed('Work')));
+    await click(el('sidebar-section-new-session-btn'));
+
+    expect(onCreateInSection).toHaveBeenCalledWith('work');
+  });
+
+  it('offers a new session in the section from a right-click on its header', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    rightClick(el('sidebar-section-header', sectionNamed('Home')));
+    await settle();
+
+    expect(el('sidebar-context-new-in-section-btn').textContent).toBe('New session in Home');
+    // The plain items stay, so the menu still offers a session outside every section.
+    expect(query('sidebar-context-new-session-btn')).not.toBeNull();
+    await click(el('sidebar-context-new-in-section-btn'));
+    expect(onCreateInSection).toHaveBeenCalledWith('home');
+  });
+
+  it('offers no section item from a right-click outside every section', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+
+    expect(query('sidebar-context-menu')).not.toBeNull();
+    expect(query('sidebar-context-new-in-section-btn')).toBeNull();
   });
 });
 

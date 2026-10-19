@@ -17,6 +17,13 @@ export interface SidebarSectionActions {
 export function useSidebarSections(): {
   sections: SidebarSectionsState;
   actions: SidebarSectionActions;
+  /**
+   * Takes a state main handed back from another call - creating a session in a section. The
+   * write already succeeded, so it clears a previous failure like any other change that lands.
+   */
+  adopt: (state: SidebarSectionsState) => void;
+  /** Reports that main could not file a new session in the section the user asked for. */
+  placementFailed: () => void;
   /** Set when the last change failed to save; cleared by the next one that succeeds. */
   error: string | null;
   dismissError: () => void;
@@ -51,6 +58,11 @@ export function useSidebarSections(): {
       });
   }, []);
   const dismissError = useCallback(() => setError(null), []);
+  const adopt = useCallback((state: SidebarSectionsState) => {
+    setSections(state);
+    setError(null);
+  }, []);
+  const placementFailed = useCallback(() => setError('Could not put the new session in its section.'), []);
 
   const actions = useMemo<SidebarSectionActions>(
     () => ({
@@ -62,5 +74,5 @@ export function useSidebarSections(): {
     [apply]
   );
 
-  return { sections, actions, error, dismissError };
+  return { sections, actions, adopt, placementFailed, error, dismissError };
 }

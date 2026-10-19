@@ -89,6 +89,7 @@ export function renderSidebar(
         onCreate={() => {}}
         onOpenArtifacts={() => {}}
         onCreateInProject={() => {}}
+        onCreateInSection={() => {}}
         onDelete={() => {}}
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
