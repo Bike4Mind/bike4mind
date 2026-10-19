@@ -443,7 +443,8 @@ export interface IChatCompletionServiceOptions {
    * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
    */
   loadSystemPromptById?: (promptId: string) => Promise<string | null>;
-  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
+  /** `payerId` is the turn's user, who pays for the summary even on a session they only share. */
+  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger, payerId: string) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
@@ -1667,7 +1668,7 @@ export class SummarizeNotebookFeature implements ChatCompletionFeature {
 
     if (decision[0]) {
       this.logger.info(`Triggering notebook summarization job for session ${quest.sessionId}`);
-      this.chatCompletion.summarizeSession(quest.sessionId, decision[1]);
+      this.chatCompletion.summarizeSession(quest.sessionId, decision[1], this.chatCompletion.user.id);
     } else {
       this.logger.debug(`Skipping summarization for session ${quest.sessionId} - criteria not met`);
     }

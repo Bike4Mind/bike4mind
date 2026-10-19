@@ -6,6 +6,7 @@ import {
   SessionPromptFeature,
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
+  SummarizeNotebookFeature,
   LakeMemoryFeature,
   mergeLakeFirstListing,
   listLakesFirst,
@@ -443,6 +444,26 @@ describe('shouldSummarizeSession', () => {
     const [shouldRun, trigger] = await shouldSummarizeSession(session, makeCtx(count));
     expect(shouldRun).toBe(false);
     expect(trigger).toBeUndefined();
+  });
+});
+
+// A sharee's turn can be the one that makes a shared session due for a summary; they pay for it.
+describe('SummarizeNotebookFeature', () => {
+  it("bills the summary a turn triggers to the turn's user", async () => {
+    const summarizeSession = vi.fn().mockResolvedValue(undefined);
+    const feature = new SummarizeNotebookFeature({
+      user: { id: 'sharee-1' },
+      db: { quests: { count: vi.fn().mockResolvedValue(SUMMARIZATION_CONFIG.earlyMilestoneQuestCount) } },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      summarizeSession,
+    } as unknown as ConstructorParameters<typeof SummarizeNotebookFeature>[0]);
+
+    await feature.onComplete({
+      quest: { sessionId: 'session1' } as IChatHistoryItemDocument,
+      session: makeSession({ id: 'session1', userId: 'owner-1', summaryAt: undefined }),
+    });
+
+    expect(summarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone', 'sharee-1');
   });
 });
 

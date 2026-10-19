@@ -81,7 +81,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
   it('does nothing when invokeSummarizeSession is not configured', async () => {
     const { service, findById } = makeService({ invokeSummarizeSession: undefined });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -93,8 +93,9 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
-    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone');
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
+    // The image requester pays, even on a session they only share.
+    expect(invokeSummarizeSession).toHaveBeenCalledWith('session1', 'earlyMilestone', 'requester-1');
   });
 
   it('skips with a debug log when the session lookup misses', async () => {
@@ -103,7 +104,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
     const logger = { ...silentLogger, debug } as unknown as Logger;
     const { service } = makeService({ invokeSummarizeSession, session: null });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('missing-session', logger);
+    await (service as any).maybeSummarizeAfterImage('missing-session', 'requester-1', logger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalledWith(expect.stringContaining('missing-session'));
   });
@@ -116,7 +117,7 @@ describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
       totalQuests: SUMMARIZATION_CONFIG.earlyMilestoneQuestCount - 1,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any).maybeSummarizeAfterImage('session1', silentLogger);
+    await (service as any).maybeSummarizeAfterImage('session1', 'requester-1', silentLogger);
     expect(invokeSummarizeSession).not.toHaveBeenCalled();
   });
 });

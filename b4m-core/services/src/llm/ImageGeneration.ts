@@ -182,7 +182,12 @@ interface IImageGenerationServiceOptions {
    * Wiring this lets image-only sessions accumulate long-term context just like chat sessions -
    * the resolver in `resolveImagePrompt` then has more than the last 6 turns to ground on.
    */
-  invokeSummarizeSession?: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
+  invokeSummarizeSession?: (
+    sessionId: string,
+    trigger: PersistedSessionSummaryTrigger,
+    /** The image requester, who pays for the summary even on a session they only share. */
+    payerId: string
+  ) => Promise<void>;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -249,7 +254,7 @@ export class ImageGenerationService {
    * one indexed quest count (or zero when throttled). Errors are logged and never propagate -
    * summarization is best-effort and must not affect the image-gen response.
    */
-  private async maybeSummarizeAfterImage(sessionId: string, logger: Logger): Promise<void> {
+  private async maybeSummarizeAfterImage(sessionId: string, payerId: string, logger: Logger): Promise<void> {
     if (!this.invokeSummarizeSession) return;
     const session = await this.db.sessions.findById(sessionId);
     if (!session) {
@@ -260,7 +265,7 @@ export class ImageGenerationService {
     const decision = await shouldSummarizeSession(session, { db: this.db, logger });
     if (decision[0]) {
       logger.info(`Triggering notebook summarization from image-gen for session ${sessionId}`);
-      await this.invokeSummarizeSession(sessionId, decision[1]);
+      await this.invokeSummarizeSession(sessionId, decision[1], payerId);
     }
   }
 
@@ -1533,7 +1538,7 @@ export class ImageGenerationService {
         await this.invokeSessionAutoNaming(sessionId, userId);
       }
 
-      this.maybeSummarizeAfterImage(sessionId, logger).catch(err =>
+      this.maybeSummarizeAfterImage(sessionId, userId, logger).catch(err =>
         logger.error('Error in fire-and-forget image-gen summarize check:', err)
       );
 

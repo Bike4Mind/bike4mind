@@ -174,9 +174,10 @@ export const SessionEvents = {
       // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, the acting
       // user the summary file and lake tags are resolved for.
       requesterId: z.string().optional(),
-      // Who pays for the operational calls, forwarded to the Tag job too: the user who asked
-      // (sharee or admin), never the owner on their behalf. Unset on owner-less triggers (spider,
-      // quest end), which bill `userId ?? session.userId`.
+      // Who pays for the operational calls, forwarded to the Tag job too: the user who asked or
+      // whose turn triggered it (sharee or admin), never the owner on their behalf. Unset only where
+      // `userId` already names that user (agent runs) or nobody asked (spider), which bill
+      // `userId ?? session.userId`.
       payerId: z.string().optional(),
     })
   ),

@@ -174,8 +174,12 @@ export const stopReply = async (sessionId: string, ability: Ability, questId?: s
   return quest;
 };
 
-export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger) => {
-  await publishSummarizeSession(sessionId, trigger);
+export const summarizeSession = async (
+  sessionId: string,
+  trigger: PersistedSessionSummaryTrigger,
+  payerId: string
+) => {
+  await publishSummarizeSession(sessionId, trigger, payerId);
 };
 
 export const contextSummarizeSession = async (sessionId: string, verbatimWindowStartQuestId: string) => {
