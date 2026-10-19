@@ -86,7 +86,12 @@ const GPT5_1_MODELS: string[] = [ChatModels.GPT5_1, ChatModels.GPT5_1_CHAT_LATES
 
 const GPT5_2_MODELS: string[] = [ChatModels.GPT5_2, ChatModels.GPT5_2_CHAT_LATEST];
 
-const GPT5_4_MODELS: string[] = [ChatModels.GPT5_4, ChatModels.GPT5_4_MINI, ChatModels.GPT5_4_NANO];
+const GPT5_4_MODELS: string[] = [
+  ChatModels.GPT5_4,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
+  ChatModels.GPT5_4_NANO,
+];
 
 const GPT5_5_MODELS: string[] = [ChatModels.GPT5_5];
 

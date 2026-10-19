@@ -314,7 +314,9 @@ export enum ChatModels {
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
 export const CHAT_MODELS = Object.values(ChatModels);
-export const supportedChatModels = z.enum(ChatModels);
+// The dated snapshot is excluded until it has a catalog row: with no row, no LLM backend can
+// serve it, so accepting it in agent `preferredModel` would pass validation and fail at run time.
+export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
 
 /**
@@ -340,6 +342,7 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
@@ -387,6 +390,7 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   // GPT-5.6 (Sol/Luna/Terra) also hard-reject tools+reasoning_effort with a 400, but
   // unlike the 5.4 family the chat-path drop does NOT rescue them (they still 400 with
