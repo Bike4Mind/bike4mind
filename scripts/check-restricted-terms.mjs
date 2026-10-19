@@ -215,8 +215,12 @@ export async function run({
   log = console.log,
   readFile = fs.readFileSync,
 } = {}) {
+  // Paths in a message come from the PR. Git allows a newline in a path, and an
+  // unescaped one would start a line the runner parses as a workflow command.
+  const annotate = (level, msg) =>
+    log(`::${level}::${msg.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
   const fail = msg => {
-    log(`::error::${msg}`);
+    annotate('error', msg);
     return 1;
   };
 
@@ -260,8 +264,8 @@ export async function run({
 
   log(`Checked ${summary}.`);
   const isPush = eventName === 'push';
-  for (const why of gaps) log(`${isPush ? '::warning::' : '::error::'}Incomplete check: ${why}`);
-  for (const where of hits) log(`::error::Restricted term found in ${where}.`);
+  for (const why of gaps) annotate(isPush ? 'warning' : 'error', `Incomplete check: ${why}`);
+  for (const where of hits) annotate('error', `Restricted term found in ${where}.`);
 
   if (hits.length > 0) {
     log(

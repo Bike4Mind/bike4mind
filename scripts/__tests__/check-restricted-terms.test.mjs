@@ -200,6 +200,15 @@ describe('run', () => {
     expect(output.toLowerCase()).not.toMatch(/zorblax|flim|glorp/);
   });
 
+  it('escapes a newline in a reported path so it cannot inject a workflow command', async () => {
+    const { code, output } = await check({
+      routes: prRoutes({ files: [file('src/a\n::stop-commands::x.ts', '@@ -0,0 +1 @@\n+zorblax')] }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('file src/a%0A::stop-commands::x.ts line 1');
+    expect(output.split('\n').some(line => line.startsWith('::stop-commands::'))).toBe(false);
+  });
+
   it('ignores removed lines', async () => {
     const { code } = await check({ routes: prRoutes({ files: [file('src/a.ts', '@@ -1,1 +0,0 @@\n-zorblax')] }) });
     expect(code).toBe(0);
