@@ -51,6 +51,8 @@ import {
   isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
+  filterRunnableModels,
+  type LLMModelConfig,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -3197,6 +3199,10 @@ export class ChatCompletionProcess {
         ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
+      const subagentModels = agentStore
+        ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
+        : undefined;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3231,6 +3237,7 @@ export class ChatCompletionProcess {
           adminSettingsEnforceCredits: !!adminSettingsEnforceCredits,
           models,
         },
+        subagentModels,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,
@@ -6780,6 +6787,36 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       ollamaBackend: '',
       EnableOllama: 'false',
     };
+  }
+
+  /**
+   * The models a chat-delegated subagent may run on: the user's runnable catalog under the rule
+   * ChatCompletionInvoke admits the turn's model by (`filterRunnableModels`), plus the turn's own
+   * model, which a subagent pinned to anything else falls back to. Fails closed to the turn's
+   * model alone when the model configurations cannot be read.
+   */
+  private async loadSubagentModels(
+    models: ModelInfo[],
+    turnModel: ModelInfo,
+    entitlementKeys: string[],
+    logger: Logger
+  ): Promise<ModelInfo[]> {
+    let configurations: LLMModelConfig[];
+    try {
+      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
+      configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
+    } catch (err) {
+      logger.warn('[Delegation] failed to read model configurations; subagents run on the turn model only', err);
+      return [turnModel];
+    }
+    const runnable = filterRunnableModels(
+      models,
+      configurations,
+      this.user.tags ?? [],
+      this.user.isAdmin ?? false,
+      entitlementKeys
+    );
+    return runnable.includes(turnModel) ? runnable : [turnModel, ...runnable];
   }
 
   /**

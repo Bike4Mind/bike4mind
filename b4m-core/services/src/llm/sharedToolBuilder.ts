@@ -101,8 +101,8 @@ export interface ToolBuilderDeps {
   /**
    * The models a delegated subagent may run on, when narrower than `precomputed.models`
    * (which also prices media and tool usage, so it stays the full catalog). The Agent
-   * Executor passes the user's runnable models here; a subagent pinned to any other
-   * model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
+   * Executor and the chat path pass the user's runnable models here; a subagent pinned to any
+   * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
    */
   subagentModels?: ModelInfo[];
   apiKeyTable?: ApiKeyTable;
@@ -170,6 +170,13 @@ export interface ToolBuilderDeps {
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * Returns true when the payer cannot cover a subagent's first iteration on the given model;
+   * forwarded like `checkMemberCreditCap`. Set by the agent executor when credits are enforced
+   * (see `ServerOrchestratorDeps.checkInsufficientCredits`).
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
 
   /**
    * The run's tool-permission lists, set only by the agent executor (whose parent gate
@@ -240,8 +247,11 @@ export interface ToolBuilderCallbacks {
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
 
-  /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
-  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
+  /**
+   * Bills a delegation's spend that no tracker bills (see `DelegateToAgentToolDeps.onCredits`);
+   * meta carries cost attribution when resolvable.
+   */
+  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void | Promise<void>;
 
   /** Called when a subagent completes with telemetry */
   onSubagentTelemetry?: (telemetry: unknown) => void;
@@ -591,9 +601,7 @@ export function buildSharedTools(
     logger,
     parentTools,
     getSignal: getAbortSignal,
-    onCredits: callbacks.onSubagentCredits
-      ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
-      : undefined,
+    onCredits: callbacks.onSubagentCredits,
     availableModels: subagentModels,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
@@ -610,6 +618,7 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    checkInsufficientCredits: deps.checkInsufficientCredits,
     toolPermissions: deps.toolPermissions,
   });
   tools.push(delegateTool);
@@ -625,6 +634,7 @@ export function buildSharedTools(
       parentTools,
       getSignal: getAbortSignal,
       availableModels: subagentModels,
+      onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
         : undefined,
@@ -639,6 +649,7 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      checkInsufficientCredits: deps.checkInsufficientCredits,
       toolPermissions: deps.toolPermissions,
     });
     tools.push(coordinateTool);

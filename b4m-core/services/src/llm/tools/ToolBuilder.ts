@@ -417,6 +417,8 @@ export interface BuildToolsArgs {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /** See `ToolBuilderDeps.subagentModels`. */
+  subagentModels?: ModelInfo[];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -900,6 +902,7 @@ export class ToolBuilder {
     model,
     organization,
     precomputed,
+    subagentModels,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -935,6 +938,7 @@ export class ToolBuilder {
         llm,
         model,
         precomputed,
+        subagentModels,
         apiKeyTable,
         thinking,
         agentStore,

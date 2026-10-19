@@ -20,6 +20,8 @@ import {
   type PendingToolUsage,
   lastRequestInputTokens,
   nextIterationCredits,
+  uncoveredIterationCredits,
+  buildInProcessBalanceCheck,
 } from './agentExecutor.billing';
 import type { ModelInfo } from '@bike4mind/common';
 import { estimateGeneratedMediaUsd } from '@bike4mind/services';
@@ -998,5 +1000,66 @@ describe('nextIterationCredits', () => {
         { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: 20, cacheCreationInputTokens: 5 },
       ])
     ).toBe(125);
+  });
+});
+
+// The per-iteration gate in `processExecution` and in-process subagent admission both stop on this.
+describe('uncoveredIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('returns the credits the next iteration needs when the balance is short of them', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required - 0.01, model, 150_000)).toBe(required);
+  });
+
+  it('lets an iteration the balance exactly covers run', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required, model, 150_000)).toBeUndefined();
+  });
+
+  it('stops a balance that covers a small request once the run has grown past it', () => {
+    const balance = nextIterationCredits(model, 0);
+    expect(uncoveredIterationCredits(balance, model, 0)).toBeUndefined();
+    expect(uncoveredIterationCredits(balance, model, 150_000)).toBe(nextIterationCredits(model, 150_000));
+  });
+});
+
+describe('buildInProcessBalanceCheck', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('is absent when credits are not enforced', () => {
+    expect(buildInProcessBalanceCheck(false, [model], vi.fn())).toBeUndefined();
+  });
+
+  it("refuses a subagent whose first iteration the payer's live balance cannot cover", async () => {
+    const loadBalance = vi.fn().mockResolvedValue(nextIterationCredits(model, 0) - 0.01);
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('m')).resolves.toBe(true);
+    expect(loadBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a subagent the balance covers', async () => {
+    const check = buildInProcessBalanceCheck(true, [model], vi.fn().mockResolvedValue(100_000))!;
+
+    await expect(check('m')).resolves.toBe(false);
+  });
+
+  it('admits a model it cannot price without reading the balance', async () => {
+    const loadBalance = vi.fn();
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('unknown')).resolves.toBe(false);
+    expect(loadBalance).not.toHaveBeenCalled();
   });
 });

@@ -7275,6 +7275,7 @@ describe('ChatCompletionProcess', () => {
       mcpServers?: string[];
       disabledTools?: string[];
       surface?: string;
+      extraModels?: Array<Record<string, unknown>>;
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -7292,18 +7293,20 @@ describe('ChatCompletionProcess', () => {
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
       });
+      const turnModel = {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: false,
+        pricing: {},
+        supportsImageVariation: false,
+      };
       mockedGetAvailableModels.mockResolvedValue([
-        {
-          id: ChatModels.GPT4,
-          type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
-          max_tokens: 100,
-          contextWindow: 200_000,
-          can_stream: false,
-          pricing: {},
-          supportsImageVariation: false,
-        },
+        turnModel,
+        ...(params.extraModels ?? []).map(extra => ({ ...turnModel, ...extra })),
       ]);
       mockedBuildAndSortMessages.mockResolvedValue({
         messages: [{ role: 'user', content: params.message }],
@@ -7341,6 +7344,42 @@ describe('ChatCompletionProcess', () => {
         message: '@researcher please look up the latest smartphone specs',
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // Chat admission checks only the turn's model, and a delegated agent pinned to another one
+    // runs on it if it is in this list, so the list carries the same runnable-model rule.
+    it('offers delegation only the models this user may run', async () => {
+      const adminSettings = service.db.adminSettings as Record<string, unknown>;
+      adminSettings.findOne = vi.fn().mockResolvedValue({
+        settingValue: [{ id: 'gated-model', enabled: true, allowedUserTags: ['pro'] }],
+      });
+      try {
+        await runWithBuildToolsSpy({
+          message: '@researcher please look up the latest smartphone specs',
+          extraModels: [{ id: 'paused-model', disabled: true }, { id: 'gated-model' }, { id: 'open-model' }],
+        });
+      } finally {
+        delete adminSettings.findOne;
+      }
+
+      const args = vi.mocked(ToolBuilder.prototype.buildTools).mock.calls[0]?.[0];
+      expect(args?.subagentModels?.map(m => m.id)).toEqual([ChatModels.GPT4, 'open-model']);
+    });
+
+    it('limits delegation to the turn model when the model configurations cannot be read', async () => {
+      const adminSettings = service.db.adminSettings as Record<string, unknown>;
+      adminSettings.findOne = vi.fn().mockRejectedValue(new Error('settings down'));
+      try {
+        await runWithBuildToolsSpy({
+          message: '@researcher please look up the latest smartphone specs',
+          extraModels: [{ id: 'open-model' }],
+        });
+      } finally {
+        delete adminSettings.findOne;
+      }
+
+      const args = vi.mocked(ToolBuilder.prototype.buildTools).mock.calls[0]?.[0];
+      expect(args?.subagentModels?.map(m => m.id)).toEqual([ChatModels.GPT4]);
     });
 
     it('exposes delegate_to_agent when the session has an agent attached', async () => {

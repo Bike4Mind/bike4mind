@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { resolveDeprecatedModelId, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { filterToolsByPatterns } from '@bike4mind/agents';
+import { filterToolsByPatterns, ReActAgent } from '@bike4mind/agents';
 import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import { usdToCredits } from '@bike4mind/utils';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
 import {
   MAX_SUBAGENT_DEPTH,
@@ -567,5 +568,58 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
     // Credits are still charged (onCredits fired) but no meta -> event is dropped.
     expect(captured).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(MODEL_ID));
+  });
+
+  // Its tracker (or the dispatched child's Lambda) already bills it.
+  it('does not report a run its tracker bills', async () => {
+    mockDelegation({ ...makeResult({}), billedByTracker: true });
+    const onCredits = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [model],
+      onCredits,
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(onCredits).not.toHaveBeenCalled();
+  });
+
+  // The ReAct loop turns a tool error into an observation, so nothing past this tool sees the
+  // spend of a subagent that failed outright.
+  it('reports what an untracked run spent before it failed, then rethrows', async () => {
+    vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+    vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+      totalTokens: 15_000,
+      totalInputTokens: 12_000,
+      totalOutputTokens: 3_000,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      turnUsage: [],
+      totalCredits: 0,
+    } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+    // The run is priced on the agent's own model, whatever the built-in researcher pins.
+    const agentModel = { ...model, id: resolveDeprecatedModelId(makeStore().getAgent('researcher')!.model!, 'test') };
+    const onCredits = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [agentModel],
+      onCredits,
+    });
+
+    await expect(tool.toolFn({ task: 'research', agent: 'researcher' })).rejects.toThrow('provider 500');
+
+    expect(onCredits).toHaveBeenCalledWith(
+      usdToCredits(getTextModelCost(agentModel, 12_000, 3_000, 0, 0)),
+      expect.objectContaining({ model: agentModel.id, inputTokens: 12_000, outputTokens: 3_000 })
+    );
   });
 });

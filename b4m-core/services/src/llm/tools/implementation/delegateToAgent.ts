@@ -3,8 +3,9 @@ import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
 import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
-import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
+import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSubagentOrchestrator';
 import type {
+  ServerAgentExecutionResult,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -84,8 +85,11 @@ export interface DelegateToAgentToolDeps {
    * construction time but will be available when the tool is actually invoked.
    */
   getSignal?: () => AbortSignal | undefined;
-  /** Callback to report credits used by the agent delegation */
-  onCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
+  /**
+   * Bills a delegation's spend, including what a failed run spent before it threw. Never
+   * called for a run its tracker bills (`ServerAgentExecutionResult.billedByTracker`).
+   */
+  onCredits?: (credits: number, meta?: SubagentUsageMeta) => void | Promise<void>;
   /** Available models for credit computation */
   availableModels?: ModelInfo[];
   /** Callback to send status updates to the client during subagent execution */
@@ -140,12 +144,63 @@ export interface DelegateToAgentToolDeps {
    * delegation depth, not just the first.
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+  /** See `ServerOrchestratorDeps.checkInsufficientCredits`; spread into the grandchild tool like the cap check. */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
   /**
    * The parent run's tool-permission lists; forwarded to the orchestrator, see
    * `ServerOrchestratorDeps.toolPermissions`. Spread into the nested grandchild tool
    * (`...deps`) so the child gate holds at every delegation depth.
    */
   toolPermissions?: SubagentToolPermissions;
+}
+
+/**
+ * Reports a delegation's spend through `onCredits` unless its tracker already bills it. Shared
+ * with coordinate_task, whose coordinator run is billed the same way.
+ */
+export async function reportSubagentCredits(
+  result: ServerAgentExecutionResult,
+  deps: Pick<DelegateToAgentToolDeps, 'onCredits' | 'availableModels' | 'logger'>
+): Promise<void> {
+  const credits = result.completionInfo.totalCredits;
+  if (!credits || !deps.onCredits || result.billedByTracker) return;
+  const modelInfo = deps.availableModels?.find(m => m.id === result.model);
+  const inputTokens = result.completionInfo.totalInputTokens ?? 0;
+  const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
+  // Thread the subagent's cache tokens through so the recorded provider
+  // cost is computed on the same basis as `creditsCharged` (which already
+  // reflects cache accounting). The cache buckets are additive, so dropping
+  // them makes costUsd understate true cost for any multi-iteration
+  // delegation, inflating the margins the dashboard reports above reality.
+  const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
+  const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
+  const turnUsage = result.completionInfo.turnUsage;
+  // When the model can't be resolved the usage event is dropped rather than
+  // fabricated from zeros (see #121/#132). Warn so the drop rate is observable
+  // in logs (#152) - the credit is still charged, only cost attribution is lost.
+  if (!modelInfo) {
+    deps.logger.warn(
+      `[delegateToAgent] usage event dropped: model "${result.model}" not in availableModels; ` +
+        `${credits} credits charged without cost attribution`
+    );
+  }
+  await deps.onCredits(
+    credits,
+    modelInfo
+      ? {
+          usdCost: turnUsage?.length
+            ? getTurnsCost(modelInfo, turnUsage)
+            : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+          provider: modelInfo.backend,
+          model: result.model,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          finishReason: result.completionInfo.finishReason,
+        }
+      : undefined
+  );
 }
 
 /**
@@ -275,6 +330,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         depth: childDepth,
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
+        checkInsufficientCredits: deps.checkInsufficientCredits,
         toolPermissions: deps.toolPermissions,
       });
 
@@ -355,45 +411,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
 
         const durationMs = Date.now() - startTime;
 
-        if (result.completionInfo.totalCredits && deps.onCredits) {
-          const modelInfo = deps.availableModels?.find(m => m.id === result.model);
-          const inputTokens = result.completionInfo.totalInputTokens ?? 0;
-          const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
-          // Thread the subagent's cache tokens through so the recorded provider
-          // cost is computed on the same basis as `creditsCharged` (which already
-          // reflects cache accounting). The cache buckets are additive, so dropping
-          // them makes costUsd understate true cost for any multi-iteration
-          // delegation, inflating the margins the dashboard reports above reality.
-          const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
-          const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
-          const turnUsage = result.completionInfo.turnUsage;
-          // When the model can't be resolved the usage event is dropped rather than
-          // fabricated from zeros (see #121/#132). Warn so the drop rate is observable
-          // in logs (#152) - the credit is still charged, only cost attribution is lost.
-          if (!modelInfo) {
-            deps.logger.warn(
-              `[delegateToAgent] usage event dropped: model "${result.model}" not in availableModels; ` +
-                `${result.completionInfo.totalCredits} credits charged without cost attribution`
-            );
-          }
-          deps.onCredits(
-            result.completionInfo.totalCredits,
-            modelInfo
-              ? {
-                  usdCost: turnUsage?.length
-                    ? getTurnsCost(modelInfo, turnUsage)
-                    : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
-                  provider: modelInfo.backend,
-                  model: result.model,
-                  inputTokens,
-                  outputTokens,
-                  cacheReadTokens,
-                  cacheWriteTokens,
-                  finishReason: result.completionInfo.finishReason,
-                }
-              : undefined
-          );
-        }
+        await reportSubagentCredits(result, deps);
 
         // Report telemetry for successful execution
         if (deps.onTelemetry) {
@@ -412,6 +430,15 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
 
         return result.summary;
       } catch (error) {
+        // A run that failed outright still spent tokens; nothing downstream bills an untracked one.
+        const spent = spentResultOf(error);
+        if (spent) {
+          await reportSubagentCredits(spent, deps).catch(err =>
+            deps.logger.error('[delegateToAgent] failed to report a failed subagent spend', {
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
+        }
         const durationMs = Date.now() - startTime;
         const errorMessage = error instanceof Error ? error.message : String(error);
         const isTimeout =

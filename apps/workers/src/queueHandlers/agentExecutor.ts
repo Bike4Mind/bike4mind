@@ -168,6 +168,8 @@ import {
   billIteration,
   lastRequestInputTokens,
   nextIterationCredits,
+  uncoveredIterationCredits,
+  buildInProcessBalanceCheck,
   reseedCounters,
   addToolUsage,
   takeToolUsage,
@@ -1496,18 +1498,11 @@ async function processExecution(
         // `dispatchBackgroundAgent` never runs to completion in this Lambda. So
         // here the child is always still `running` and we own the terminal write.
         const credits = result.completionInfo.totalCredits ?? 0;
-        await agentExecutionRepository.markComplete(childExecutionId, {
-          answer: result.finalAnswer,
-          steps: result.steps,
-          totalTokens: result.completionInfo.totalTokens,
-          totalIterations: result.completionInfo.iterations,
-          reachedMaxIterations: result.completionInfo.reachedMaxIterations,
-          totalCredits: credits,
-        });
         // In-process subagents are by definition NOT background (background always
-        // dispatches), so the rollup applies - match PR 1's behaviour. Charged here and
-        // not in `onSubagentCredits`: that callback also sees a dispatched child's result,
-        // which `processSubagentDispatch` has already charged.
+        // dispatches), so the rollup applies - match PR 1's behaviour. A tracked result is
+        // charged here and only here (`billedByTracker` keeps `onSubagentCredits` off it), and
+        // before the terminal write: the orchestrator swallows a throw from this hook, so a
+        // failed write must not skip the charge.
         await chargeSubagentTokens(
           {
             user: user as IUserDocument,
@@ -1519,6 +1514,14 @@ async function processExecution(
           },
           logger
         );
+        await agentExecutionRepository.markComplete(childExecutionId, {
+          answer: result.finalAnswer,
+          steps: result.steps,
+          totalTokens: result.completionInfo.totalTokens,
+          totalIterations: result.completionInfo.iterations,
+          reachedMaxIterations: result.completionInfo.reachedMaxIterations,
+          totalCredits: credits,
+        });
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
@@ -1537,8 +1540,8 @@ async function processExecution(
         // the client - raw `Error.message` can leak internal paths, DB connection
         // info, or stack fragments. `timedOut` is a typed signal so downstream
         // consumers don't substring-match `message`.
-        await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
-        // A timed-out or failed subagent spent tokens until it ended; they are charged like a completed run's.
+        // A timed-out or failed subagent spent tokens until it ended; they are charged like a
+        // completed run's, and before the terminal write for the same reason as `onComplete`.
         if (partialResult) {
           await chargeSubagentTokens(
             {
@@ -1551,10 +1554,11 @@ async function processExecution(
             },
             logger
           );
-          const partialCredits = partialResult.completionInfo.totalCredits ?? 0;
-          if (partialCredits > 0) {
-            await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
-          }
+        }
+        await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
+        const partialCredits = partialResult?.completionInfo.totalCredits ?? 0;
+        if (partialCredits > 0) {
+          await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
         }
         await sendWs('subagent_failed', {
           executionId,
@@ -1791,6 +1795,14 @@ async function processExecution(
         execution.organizationId,
         execution.userId
       ),
+      // In-process subagents skip `processSubagentDispatch`'s balance admission, and the loop's
+      // per-iteration gate only runs between this run's own iterations.
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, async () => {
+        const holder = organization
+          ? await organizationRepository.findById(organization.id)
+          : await userRepository.findById((user as IUserDocument).id);
+        return holder?.currentCredits ?? 0;
+      }),
       // In-process children are classified against this run's own lists.
       toolPermissions: { approvedTools, deniedTools },
     };
@@ -1897,8 +1909,27 @@ async function processExecution(
         publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
       sessionId: execution.sessionId,
       questId: runQuestId,
-      onSubagentCredits: credits => {
-        logger.info(`[Credits] Subagent used ${credits} credits`);
+      // Only spend no tracker bills reaches here: an in-process subagent whose `tracker.onStart`
+      // failed, so it ran untracked, or such a run's failure (see `reportSubagentCredits`).
+      onSubagentCredits: async (credits, meta) => {
+        await chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: meta?.model ?? resolvedModelId,
+            completionInfo: {
+              totalCredits: credits,
+              totalInputTokens: meta?.inputTokens ?? 0,
+              totalOutputTokens: meta?.outputTokens ?? 0,
+            },
+          },
+          logger
+        );
+        await agentExecutionRepository.incrementCreditsUsed(executionId, credits).catch(err =>
+          logger.warn('[Credits] failed to roll an untracked subagent spend into the run total', { err })
+        );
       },
       onSubagentStatusUpdate: async status => {
         await sendWs('progress', { executionId, status });
@@ -2688,11 +2719,11 @@ async function processExecution(
           ? await organizationRepository.findById(organization.id)
           : await userRepository.findById((user as IUserDocument).id);
         const balance = holder?.currentCredits ?? 0;
-        const nextCredits = nextIterationCredits(modelInfo, lastInputTokens);
-        if (balance < nextCredits) {
+        const uncoveredCredits = uncoveredIterationCredits(balance, modelInfo, lastInputTokens);
+        if (uncoveredCredits !== undefined) {
           logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
             balance,
-            requiredCredits: nextCredits,
+            requiredCredits: uncoveredCredits,
             iterationIndex,
           });
           const checkpoint = agent.toCheckpoint();
@@ -3344,10 +3375,17 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * refused, or fall back to the parent's model, rather than run on anything else.
  */
 async function loadRunnableModels(models: ModelInfo[], user: IUserDocument, logger: Logger): Promise<ModelInfo[]> {
-  const setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' }).catch(err => {
-    logger.warn('[AgentExecutor] failed to read model configurations', { err });
-    return null;
-  });
+  let setting: Awaited<ReturnType<typeof adminSettingsRepository.findOne>>;
+  try {
+    setting = await adminSettingsRepository.findOne({ settingName: 'llmModelConfigurations' });
+  } catch (err) {
+    // Fail closed, like the entitlement read below: an unread configuration could be the one
+    // disabling or gating this model.
+    logger.warn('[AgentExecutor] failed to read model configurations; treating every model as unavailable', {
+      err,
+    });
+    return [];
+  }
   const configurations = Array.isArray(setting?.settingValue) ? (setting.settingValue as LLMModelConfig[]) : [];
   const isAdmin = user.isAdmin ?? false;
   const needsEntitlements = !isAdmin && configurations.some(config => (config.allowedEntitlements?.length ?? 0) > 0);
@@ -3614,7 +3652,7 @@ async function processSubagentDispatch(
     const refusal =
       modelInfo && !runnableModels.includes(modelInfo)
         ? { message: `Model "${childModel}" is not available to this user`, error: 'model_unavailable' }
-        : enforceCredits && modelInfo && availableCredits < nextIterationCredits(modelInfo, 0)
+        : enforceCredits && modelInfo && uncoveredIterationCredits(availableCredits, modelInfo, 0) !== undefined
           ? { message: 'Insufficient credits to run subagent', error: 'insufficient_credits' }
           : null;
     if (refusal) {
@@ -3793,6 +3831,12 @@ async function processSubagentDispatch(
       // See `buildInProcessCreditCapCheck` for why this re-fetches rather than reusing
       // the `organization` snapshot captured above.
       checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
+      checkInsufficientCredits: buildInProcessBalanceCheck(enforceCredits, models, async () => {
+        const holder = child.organizationId
+          ? await organizationRepository.findById(child.organizationId)
+          : await userRepository.findById(child.userId);
+        return holder?.currentCredits ?? 0;
+      }),
       toolPermissions: childToolPermissions,
     };
     const pendingMediaUsage: PendingToolUsage = {

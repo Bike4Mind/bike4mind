@@ -467,6 +467,117 @@ describe('processExecution tool deps', () => {
 
       expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
     });
+
+    // The orchestrator swallows a throw from these hooks, so a charge placed after the terminal
+    // write would be lost whenever that write failed.
+    it('charges an in-process subagent even when its completion write fails', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const tracker = await subagentTracker();
+      vi.mocked(agentExecutionRepository.markComplete).mockRejectedValueOnce(new Error('db down'));
+
+      await expect(tracker.onComplete({ childExecutionId: 'child-1', result: childResult })).rejects.toThrow(
+        'db down'
+      );
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    it('charges a failed in-process subagent even when its failure write fails', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const tracker = await subagentTracker();
+      vi.mocked(agentExecutionRepository.markFailed).mockRejectedValueOnce(new Error('db down'));
+
+      await expect(
+        tracker.onFailure({ childExecutionId: 'child-1', error: 'boom', isTimeout: false, partialResult: childResult })
+      ).rejects.toThrow('db down');
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 7 }), expect.anything());
+    });
+
+    // Reached only by spend no tracker bills, e.g. a subagent that ran untracked after
+    // `tracker.onStart` failed.
+    it('charges untracked subagent spend reported through onSubagentCredits', async () => {
+      await runWithModels([runModel]);
+      const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+        onSubagentCredits: (
+          credits: number,
+          meta?: { model: string; inputTokens: number; outputTokens: number }
+        ) => Promise<void>;
+      };
+
+      await callbacks.onSubagentCredits(4, { model: 'claude-sonnet-5', inputTokens: 2, outputTokens: 1 });
+
+      expect(deductCreditsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          credits: 4,
+          model: 'claude-sonnet-5',
+          inputTokens: 2,
+          outputTokens: 1,
+          questId: 'quest-1',
+        }),
+        expect.anything()
+      );
+    });
+
+    it('refuses a run when the model configurations cannot be read', async () => {
+      const { adminSettingsRepository } = await import('@bike4mind/database');
+      vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
+
+      const { markFailed } = await runWithModels([runModel]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // In-process subagents never pass `processSubagentDispatch`'s admission, so the delegation
+  // itself checks the payer's live balance.
+  describe('in-process subagent balance admission', () => {
+    const pricedModel = {
+      id: 'claude-sonnet-5',
+      type: 'text',
+      name: 'Sonnet',
+      backend: 'anthropic',
+      max_tokens: 64_000,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+    };
+
+    async function toolDepsWith(enforceCredits: boolean) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, User } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([pricedModel] as never);
+      // Enough to pass the run's own admission.
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100_000 } as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+        (async (key: string) => key === 'enforceCredits' && enforceCredits) as never
+      );
+      try {
+        return (await runWithSession(baseSession)) as {
+          checkInsufficientCredits?: (model: string) => Promise<boolean>;
+        };
+      } finally {
+        vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      }
+    }
+
+    it("refuses a delegation the payer's live balance cannot start when credits are enforced", async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const deps = await toolDepsWith(true);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ currentCredits: 1 } as never);
+
+      await expect(deps.checkInsufficientCredits!('claude-sonnet-5')).resolves.toBe(true);
+      expect(findUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('is not wired when credits are not enforced', async () => {
+      const deps = await toolDepsWith(false);
+
+      expect(deps.checkInsufficientCredits).toBeUndefined();
+    });
   });
 
   it('resolves an unset library flag to included for a session with no explicit lake scope', async () => {

@@ -353,6 +353,12 @@ export interface ServerOrchestratorDeps {
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
   /**
+   * Returns true when the payer's balance cannot cover the first iteration of a subagent on
+   * `model`. Checked before an in-process delegation only: a Lambda-dispatched child runs the
+   * same admission in `processSubagentDispatch`. Omitted when credits are not enforced.
+   */
+  checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+  /**
    * Set when the parent runs under the agent executor's permission gate: every child tool
    * call is then classified against these lists and refused unless `allowed` (see
    * `gateSubagentTools`). Omitted by ungated parents (ChatCompletionProcess), whose
@@ -391,6 +397,20 @@ export interface ServerAgentExecutionResult extends AgentResult {
   summary: string;
   /** Model the delegation actually ran on, for cost attribution by the caller. */
   model: string;
+  /**
+   * True when the run's spend is billed by its tracked child execution (the tracker's
+   * `onComplete`/`onFailure` for an in-process run, the child's own Lambda for a dispatched
+   * one), so the delegating tool must not report it for billing again.
+   */
+  billedByTracker?: boolean;
+}
+
+/** Thrown before an in-process delegation the payer's balance cannot start. */
+export class InsufficientSubagentCreditsError extends Error {
+  constructor() {
+    super('Insufficient credits to run subagent');
+    this.name = 'InsufficientSubagentCreditsError';
+  }
 }
 
 /**
@@ -560,6 +580,14 @@ export class ServerSubagentOrchestrator {
         attachedFiles,
         effectiveModel,
       });
+    }
+
+    if (await this.deps.checkInsufficientCredits?.(effectiveModel)) {
+      this.deps.logger.warn('[Credits] Balance cannot cover a subagent iteration; refusing in-process delegation', {
+        agent: agentDef.name,
+        model: effectiveModel,
+      });
+      throw new InsufficientSubagentCreditsError();
     }
 
     // Build denied list: agent's deniedTools + depth cap enforcement.
@@ -732,6 +760,7 @@ export class ServerSubagentOrchestrator {
       taskWithFiles += `\n\n[ATTACHED FILES — Use these fabFileId values when calling upload tools. Use the exact filename and fabFileId provided.]\n${fileLines.join('\n')}`;
     }
 
+    const billedByTracker = childExecutionId !== undefined;
     const startTime = Date.now();
     try {
       const result = await agent.run(taskWithFiles, { maxIterations, signal: combinedSignal, maxHistoryIterations: 4 });
@@ -754,6 +783,7 @@ export class ServerSubagentOrchestrator {
         thoroughness: effectiveThoroughness,
         summary,
         model: effectiveModel,
+        billedByTracker,
       };
 
       if (this.deps.tracker && childExecutionId) {
@@ -815,6 +845,7 @@ export class ServerSubagentOrchestrator {
           thoroughness: effectiveThoroughness,
           summary: `⚠️ **Partial results (timed out after ${Math.round(duration / 1000)}s)**\n\n${summary}`,
           model: effectiveModel,
+          billedByTracker,
         };
 
         if (this.deps.tracker && childExecutionId) {
@@ -844,6 +875,7 @@ export class ServerSubagentOrchestrator {
         thoroughness: effectiveThoroughness,
         summary: '',
         model: effectiveModel,
+        billedByTracker,
       };
       if (error instanceof Error) Object.assign(error, { [SPENT_RESULT]: failedResult });
       if (this.deps.tracker && childExecutionId) {
@@ -1068,6 +1100,7 @@ export class ServerSubagentOrchestrator {
       thoroughness,
       summary,
       model,
+      billedByTracker: true,
       finalAnswer: summary,
       steps: [],
       completionInfo: {
@@ -1114,6 +1147,7 @@ export class ServerSubagentOrchestrator {
       thoroughness,
       model,
       summary,
+      billedByTracker: true,
     };
   }
 

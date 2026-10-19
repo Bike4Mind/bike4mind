@@ -677,6 +677,74 @@ describe('ServerSubagentOrchestrator', () => {
         10
       );
     });
+
+    const ranInfo: AgentResult['completionInfo'] = {
+      totalTokens: 15,
+      totalInputTokens: 10,
+      totalOutputTokens: 5,
+      totalCredits: 7,
+      iterations: 1,
+      toolCalls: 0,
+      reachedMaxIterations: false,
+    };
+
+    // The tracker's onComplete bills a tracked run; the delegating tool bills everything else.
+    it('marks a tracked run as billed by its tracker', async () => {
+      stubAgentRun(ranInfo);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker: makeTracker(),
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) });
+
+      expect(result.billedByTracker).toBe(true);
+    });
+
+    it('leaves a run untracked when tracker.onStart fails, so its caller bills it', async () => {
+      stubAgentRun(ranInfo);
+      const tracker = makeTracker({ onStart: vi.fn().mockRejectedValue(new Error('db down')) });
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) });
+
+      expect(result.billedByTracker).toBe(false);
+      expect(tracker.onComplete).not.toHaveBeenCalled();
+    });
+
+    it("refuses an in-process delegation the payer's balance cannot start, before any work", async () => {
+      const run = vi.spyOn(ReActAgent.prototype, 'run');
+      const tracker = makeTracker();
+      const checkInsufficientCredits = vi.fn().mockResolvedValue(true);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+        tracker,
+        checkInsufficientCredits,
+      });
+
+      await expect(
+        orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }) })
+      ).rejects.toThrow('Insufficient credits to run subagent');
+
+      expect(checkInsufficientCredits).toHaveBeenCalledWith(MODEL_ID);
+      expect(tracker.onStart).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
   });
 
   /**

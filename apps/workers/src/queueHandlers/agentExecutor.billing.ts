@@ -36,6 +36,37 @@ export function nextIterationCredits(modelInfo: ModelInfo, inputTokens: number):
   return usdToCredits(getTurnsCost(modelInfo, [{ inputTokens, outputTokens }]));
 }
 
+/**
+ * The credits the next iteration needs when `balance` cannot cover them, else undefined. The one
+ * rule behind the per-iteration gate and in-process subagent admission.
+ */
+export function uncoveredIterationCredits(
+  balance: number,
+  modelInfo: ModelInfo,
+  inputTokens: number
+): number | undefined {
+  const required = nextIterationCredits(modelInfo, inputTokens);
+  return balance < required ? required : undefined;
+}
+
+/**
+ * The `checkInsufficientCredits` hook for in-process delegations: true when the payer's live
+ * balance (read per call, like the per-iteration gate) cannot cover a first iteration on the
+ * subagent's model. Undefined when credits are not enforced. A model absent from `models` cannot
+ * be priced and is admitted; the orchestrator only resolves catalog models.
+ */
+export function buildInProcessBalanceCheck(
+  enforceCredits: boolean,
+  models: ModelInfo[],
+  loadBalance: () => Promise<number>
+): ((model: string) => Promise<boolean>) | undefined {
+  if (!enforceCredits) return undefined;
+  return async model => {
+    const modelInfo = models.find(m => m.id === model);
+    return modelInfo ? uncoveredIterationCredits(await loadBalance(), modelInfo, 0) !== undefined : false;
+  };
+}
+
 /** Last-billed cumulative totals; mutated in place as iterations settle. */
 export type BillingCounters = {
   cumulativeCost: number;
