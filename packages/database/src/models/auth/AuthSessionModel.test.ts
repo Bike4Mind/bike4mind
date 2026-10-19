@@ -29,6 +29,13 @@ describe('AuthSessionModel repository', () => {
     expect(await authSessionRepository.findBySid('missing')).toBeFalsy(); // base repo yields undefined for a miss
   });
 
+  it('persists clientId and reads it back as null when absent', async () => {
+    await authSessionRepository.create(base({ sid: 'oc', clientId: 'c1' }));
+    await authSessionRepository.create(base({ sid: 'no-client' }));
+    expect((await authSessionRepository.findBySid('oc'))?.clientId).toBe('c1');
+    expect((await authSessionRepository.findBySid('no-client'))?.clientId).toBeNull();
+  });
+
   it('findActiveByUserId excludes revoked and expired, newest-used first', async () => {
     await authSessionRepository.create(base({ sid: 'old', userId: 'u2', lastUsedAt: new Date(Date.now() - 1000) }));
     await authSessionRepository.create(base({ sid: 'new', userId: 'u2', lastUsedAt: new Date() }));
