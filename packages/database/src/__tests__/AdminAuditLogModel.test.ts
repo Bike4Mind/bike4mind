@@ -253,5 +253,15 @@ describe('AdminAuditLogModel', () => {
       expect(summary.deletions).toBe(1);
       expect(summary.deniedAttempts).toBe(1);
     });
+
+    it('summarize bounds the aggregation time', async () => {
+      const optionSpy = vi.spyOn(mongoose.Aggregate.prototype, 'option');
+      try {
+        await adminAuditLogRepository.summarize(new Date('2026-10-01T00:00:00Z'));
+        expect(optionSpy).toHaveBeenCalledWith({ maxTimeMS: 15_000 });
+      } finally {
+        optionSpy.mockRestore();
+      }
+    });
   });
 });
