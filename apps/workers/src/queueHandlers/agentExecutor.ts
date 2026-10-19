@@ -962,14 +962,9 @@ async function processExecution(
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
     if (!loadedSession) throw new Error(`Session ${execution.sessionId} not found`);
-    const session = await applyWorkspaceSessionSettings(
-      loadedSession,
-      { user, logger },
-      premiumWorkspaceSessionSettings
-    );
-    if (session.userId !== execution.userId) {
+    if (loadedSession.userId !== execution.userId) {
       logger.error('[Auth] Session ownership mismatch', {
-        sessionUserId: session.userId,
+        sessionUserId: loadedSession.userId,
         executionUserId: execution.userId,
       });
       await agentExecutionRepository.markFailed(executionId, {
@@ -978,6 +973,11 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'unauthorized' });
       return;
     }
+    const session = await applyWorkspaceSessionSettings(
+      loadedSession,
+      { user, logger },
+      premiumWorkspaceSessionSettings
+    );
 
     // Load organization if applicable
     const organization = execution.organizationId
@@ -3359,12 +3359,7 @@ async function processSubagentDispatch(
     if (!user) throw new Error(`User ${child.userId} not found`);
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
-    const session = await applyWorkspaceSessionSettings(
-      loadedSession,
-      { user, logger },
-      premiumWorkspaceSessionSettings
-    );
-    if (session.userId !== child.userId) {
+    if (loadedSession.userId !== child.userId) {
       await agentExecutionRepository.markFailed(childExecutionId, { message: 'Session ownership validation failed' });
       await sendWs('subagent_failed', {
         executionId: parentId,
@@ -3383,6 +3378,11 @@ async function processSubagentDispatch(
       });
       return;
     }
+    const session = await applyWorkspaceSessionSettings(
+      loadedSession,
+      { user, logger },
+      premiumWorkspaceSessionSettings
+    );
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
 
     // Pre-flight credit check.
