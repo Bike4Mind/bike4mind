@@ -208,7 +208,7 @@ jobs:
             4. Test with \`pnpm start\` to verify
             5. Push your fixes
             
-            See the [Docs Contribution Guide](docs/DOCS_CONTRIBUTION_GUIDE.md) for more help.`;
+            See \`docs-site/CLAUDE.md\` and \`docs-site/README.md\` for more help.`;
             
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

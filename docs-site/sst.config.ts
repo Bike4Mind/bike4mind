@@ -44,7 +44,7 @@ export default $config({
         : {
             build: {
               output: 'build',
-              command: `pnpm install --frozen-lockfile && DOCS_URL='${docsUrl}' pnpm build`,
+              command: `pnpm install --frozen-lockfile --ignore-workspace && DOCS_URL='${docsUrl}' pnpm build`,
             },
           }),
       dev: {

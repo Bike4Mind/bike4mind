@@ -34,9 +34,8 @@ jobs:
   # merge-base diff on pull_request, push range on push) and emit three
   # orthogonal signals: `deployable` (run the build/test legs), `published-changed`
   # (gates `published-dts` below) and `docs-changed`
-  # (gates `help-docs` below - the Docusaurus build verification was removed
-  # because this repo carries only docs-site markdown, not the site
-  # scaffolding, but the help guards still have to run on a docs-only change).
+  # (gates `help-docs` and `verify-docs-build` below, so the help guards and
+  # the Docusaurus build still run on a docs-only change).
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
