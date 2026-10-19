@@ -220,7 +220,57 @@ describe('AnthropicBackend reasoningEffort', () => {
         thinking: { enabled: true, budget_tokens: 16000 },
       });
 
-      expect(request.output_config).not.toEqual({ effort: 'low' });
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+      expect(request.output_config).toEqual({ effort: 'high' });
+    });
+
+    // Opus 4.7/4.8 do not think when `thinking` is omitted, so naming an effort would turn
+    // thinking on for a caller who never asked for it.
+    it.each([ChatModels.CLAUDE_4_7_OPUS, ChatModels.CLAUDE_4_8_OPUS] as const)(
+      'does not turn thinking on for %s, which does not think unless asked',
+      async model => {
+        const { request, thinkingEnabled } = await run(model, { complexity: 'simple', maxTokens: 2000 });
+
+        expect(request.thinking).toBeUndefined();
+        expect(request.output_config).toBeUndefined();
+        expect(thinkingEnabled).toBe(false);
+      }
+    );
+
+    it.each([ChatModels.CLAUDE_4_7_OPUS, ChatModels.CLAUDE_4_8_OPUS] as const)(
+      'keeps thinking off for %s when the user turned it off',
+      async model => {
+        const request = await requestFor(model, {
+          complexity: 'simple',
+          thinking: { enabled: false, budget_tokens: 16000 },
+          maxTokens: 2000,
+        });
+
+        expect(request.thinking).toBeUndefined();
+        expect(request.output_config).toBeUndefined();
+      }
+    );
+
+    it('does not pair the complexity default with a caller-forced tool_choice', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_OPUS, {
+        complexity: 'simple',
+        maxTokens: 2000,
+        tools: [
+          {
+            toolFn: async () => '',
+            toolSchema: {
+              name: 'get_weather',
+              description: 'Get the weather',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        tool_choice: 'required',
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'any' });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
     });
   });
 });
@@ -262,6 +312,33 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
 
   it('leaves a complex query at the provider default effort', () => {
     const body = bodyFor(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, { complexity: 'complex', maxTokens: 2000 });
+
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+  });
+
+  it('yields to an explicit reasoningEffort', () => {
+    const body = bodyFor(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, {
+      complexity: 'simple',
+      reasoningEffort: 'high',
+      maxTokens: 2000,
+    });
+
+    expect(body.output_config).toEqual({ effort: 'high' });
+  });
+
+  it('yields to an explicit thinking request', () => {
+    const body = bodyFor(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, {
+      complexity: 'simple',
+      thinking: { enabled: true, budget_tokens: 16000 },
+    });
+
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
+  });
+
+  it('does not turn thinking on for a model that does not think unless asked', () => {
+    const body = bodyFor(ChatModels.CLAUDE_4_7_OPUS_BEDROCK, { complexity: 'simple', maxTokens: 2000 });
 
     expect(body.thinking).toBeUndefined();
     expect(body.output_config).toBeUndefined();

@@ -997,7 +997,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       // questMaster is an Anthropic-specific extra not on the generic ICompletionOptions;
       // cast locally for that one field (thinking is already declared on the type).
       const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
-      const reasoningEffort = options.reasoningEffort ?? effortForComplexity(currentModelInfo, options.complexity);
+      const reasoningEffort =
+        options.reasoningEffort ?? effortForComplexity(model, currentModelInfo, options.complexity);
       const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {
