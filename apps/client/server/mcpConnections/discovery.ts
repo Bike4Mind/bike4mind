@@ -1,8 +1,17 @@
-import { randomUUID } from 'crypto';
-import { ConflictError, NotFoundError, type IMcpConnectionDocument } from '@bike4mind/common';
-import { mcpConnectionRepository } from '@bike4mind/database';
+import { createHash, randomUUID } from 'crypto';
+import {
+  ConflictError,
+  MCP_CONNECTION_LIMITS,
+  NotFoundError,
+  type IMcpConnectionDocument,
+  type IMcpConnectionServerInfo,
+  type IMcpConnectionTool,
+} from '@bike4mind/common';
+import { mcpConnectionRepository, measureStoredMcpToolsBytes } from '@bike4mind/database';
+import type { RemoteMcpListToolsResult } from '@bike4mind/mcp/remote';
 import {
   cleanDiscoveredTools,
+  cleanMcpToolText,
   computeMcpToolsFingerprint,
   mergeDiscoveredTools,
 } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
@@ -36,6 +45,34 @@ function auditDiscovery(
   }).success();
 }
 
+/** The longest prefix of `tools` (server order) whose stored form fits `maxToolsBytes`. */
+function fitToolsWithinStorageBound(tools: IMcpConnectionTool[]): IMcpConnectionTool[] {
+  // A JSON array is its brackets, its items and a comma between each pair.
+  const sizes = tools.map(tool => measureStoredMcpToolsBytes([tool]) - 2);
+  let count = tools.length;
+  let total = 2 + sizes.reduce((sum, size) => sum + size, 0) + Math.max(count - 1, 0);
+  while (count > 0 && total > MCP_CONNECTION_LIMITS.maxToolsBytes) {
+    count -= 1;
+    total -= sizes[count]! + (count > 0 ? 1 : 0);
+  }
+  return count === tools.length ? tools : tools.slice(0, count);
+}
+
+function cleanServerInfo(listed: RemoteMcpListToolsResult): IMcpConnectionServerInfo {
+  const clean = (value: string | undefined) =>
+    typeof value === 'string' ? cleanMcpToolText(value, MCP_CONNECTION_LIMITS.serverInfoFieldLength) : '';
+  const name = clean(listed.serverInfo?.name);
+  const version = clean(listed.serverInfo?.version);
+  const protocolVersion = clean(listed.protocolVersion);
+  return {
+    ...(name ? { name } : {}),
+    ...(version ? { version } : {}),
+    ...(protocolVersion ? { protocolVersion } : {}),
+  };
+}
+
+const nameSha256 = (name: string) => createHash('sha256').update(name, 'utf8').digest('hex');
+
 /**
  * Fetches the server's tools through the dispatcher, cleans them, merges them into the stored list
  * (new or changed tools wait for review) and stores the result with the fingerprint-and-revision
@@ -49,7 +86,7 @@ export async function discoverConnectionTools(
 ): Promise<DiscoveryOutcome> {
   const listed = await invokeRemoteMcp({ action: 'listTools', connectionId, userId }, options);
   const { tools: cleaned, dropped: refused } = cleanDiscoveredTools(listed.tools);
-  const dropped = listed.dropped.length + refused.length;
+  const serverInfo = cleanServerInfo(listed);
   const owner = { ownerType: 'user' as const, ownerKey: userId };
 
   for (let attempt = 0; attempt < DISCOVERY_MAX_ATTEMPTS; attempt++) {
@@ -57,37 +94,43 @@ export async function discoverConnectionTools(
     if (!current) throw new NotFoundError('Connection not found');
 
     const merged = mergeDiscoveredTools(current.tools ?? [], cleaned);
+    const tools = fitToolsWithinStorageBound(merged.tools);
+    const kept = new Set(tools.map(tool => tool.name));
+    const overflow = merged.tools
+      .slice(tools.length)
+      .map(tool => ({ reason: 'storage_cap', nameSha256: nameSha256(tool.name) }));
+    const added = merged.added.filter(name => kept.has(name));
+    const changed = merged.changed.filter(name => kept.has(name));
+    const dropped = listed.dropped.length + refused.length + overflow.length;
     const stored = await mcpConnectionRepository.updateDiscovery(connectionId, {
-      tools: merged.tools,
-      fingerprint: computeMcpToolsFingerprint(merged.tools),
+      tools,
+      fingerprint: computeMcpToolsFingerprint(tools),
       expectedFingerprint: current.toolsFingerprint ?? null,
       expectedRevision: current.toolsRevision ?? 0,
       detectedTransport: listed.detectedTransport,
-      serverInfo: {
-        ...(listed.serverInfo ? { name: listed.serverInfo.name, version: listed.serverInfo.version } : {}),
-        ...(listed.protocolVersion ? { protocolVersion: listed.protocolVersion } : {}),
-      },
+      serverInfo,
       dropped,
     });
     if (!stored) continue;
 
-    if (refused.length > 0) {
+    const refusedHere = [...refused, ...overflow];
+    if (refusedHere.length > 0) {
       auditDiscovery(stored, userId, 'tools_dropped', {
-        droppedCount: refused.length,
-        reasons: [...new Set(refused.map(drop => drop.reason))],
-        nameSha256s: refused.map(drop => drop.nameSha256),
+        droppedCount: refusedHere.length,
+        reasons: [...new Set(refusedHere.map(drop => drop.reason))],
+        nameSha256s: refusedHere.map(drop => drop.nameSha256),
       });
     }
     auditDiscovery(stored, userId, 'tools_discovered', {
-      toolCount: merged.tools.length,
+      toolCount: tools.length,
       droppedCount: dropped,
-      changedCount: merged.added.length + merged.changed.length,
+      changedCount: added.length + changed.length,
     });
     const connection =
       stored.status === 'connected'
         ? stored
         : ((await mcpConnectionRepository.setStatus(connectionId, 'connected')) ?? stored);
-    return { connection, added: merged.added, changed: merged.changed, removed: merged.removed, dropped };
+    return { connection, added, changed, removed: merged.removed, dropped };
   }
   throw new ConflictError('The tools changed while they were being refreshed; try again', {
     code: 'discovery_conflict',

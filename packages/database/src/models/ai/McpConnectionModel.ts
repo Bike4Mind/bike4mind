@@ -61,11 +61,19 @@ function unescapeSchemaKey(key: string): string {
   return key.replace(/~(d|p|t)/g, (_match, code: string) => (code === 'd' ? '$' : code === 'p' ? '.' : '~'));
 }
 
-function mapSchemaKeys(value: unknown, mapKey: (key: string) => string): unknown {
-  if (Array.isArray(value)) return value.map(item => mapSchemaKeys(item, mapKey));
+// Discovery refuses schemas nested deeper than 32 (toolDiscovery.ts in @bike4mind/server-utils);
+// this bound only keeps a hand-written value from exhausting the stack.
+const SCHEMA_KEY_MAP_MAX_DEPTH = 64;
+
+function mapSchemaKeys(value: unknown, mapKey: (key: string) => string, depth = 0): unknown {
+  if (depth > SCHEMA_KEY_MAP_MAX_DEPTH) throw new RangeError('Tool input schema is nested too deeply');
+  if (Array.isArray(value)) return value.map(item => mapSchemaKeys(item, mapKey, depth + 1));
   if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [mapKey(key), mapSchemaKeys(item, mapKey)])
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        mapKey(key),
+        mapSchemaKeys(item, mapKey, depth + 1),
+      ])
     );
   }
   return value;
@@ -76,6 +84,14 @@ function escapeToolSchemas(tools: IMcpConnectionTool[] | undefined): IMcpConnect
     ...tool,
     inputSchema: mapSchemaKeys(tool.inputSchema ?? {}, escapeSchemaKey) as Record<string, unknown>,
   }));
+}
+
+/**
+ * Bytes `tools` occupies once its schema keys are escaped, which is what the `maxToolsBytes` bound
+ * is held to. Discovery uses it to drop tools that would not fit instead of failing the write.
+ */
+export function measureStoredMcpToolsBytes(tools: IMcpConnectionTool[]): number {
+  return Buffer.byteLength(JSON.stringify(escapeToolSchemas(tools)));
 }
 
 const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(

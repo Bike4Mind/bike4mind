@@ -27,7 +27,7 @@ export interface CleanedMcpTool {
   annotations?: IMcpConnectionToolAnnotations;
 }
 
-export type DroppedMcpToolReason = 'invalid_name' | 'duplicate_name';
+export type DroppedMcpToolReason = 'invalid_name' | 'duplicate_name' | 'schema_invalid';
 
 /** A refused tool. The name itself is hostile input, so only its hash is kept (for the audit log). */
 export interface DroppedMcpTool {
@@ -35,9 +35,21 @@ export interface DroppedMcpTool {
   nameSha256: string;
 }
 
-export const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+/**
+ * Tools reach the model as `<slug>__<tool>`, which providers cap at 64 characters of
+ * `[A-Za-z0-9_-]`. Slugs are at most 20 characters (must stay in sync with
+ * MCP_CONNECTION_SLUG_PATTERN in @bike4mind/common), leaving 42 for the tool name.
+ */
+export const MCP_TOOL_NAME_MAX_LENGTH = 64 - '__'.length - 20;
+export const MCP_TOOL_NAME_PATTERN = new RegExp(`^[A-Za-z0-9_-]{1,${MCP_TOOL_NAME_MAX_LENGTH}}$`);
 
 const TITLE_MAX_CHARS = MCP_CONNECTION_LIMITS.serverInfoFieldLength;
+/** Per string value and per key inside an input schema. */
+export const MCP_SCHEMA_TEXT_MAX_CHARS = 512;
+/** Nesting allowed in an input schema; a deeper one drops the tool as `schema_invalid`. */
+export const MCP_SCHEMA_MAX_DEPTH = 32;
+// Leaves room for the wrappers toolSignature adds around a schema already within MCP_SCHEMA_MAX_DEPTH.
+const CANONICAL_JSON_MAX_DEPTH = 64;
 
 // Invisible and direction-changing characters: soft hyphen, combining grapheme joiner, Arabic letter
 // mark, Hangul fillers, Mongolian selectors, zero-width space/joiners, LRM/RLM, bidi embeddings and
@@ -63,28 +75,35 @@ function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-/** JSON with object keys sorted at every depth, so equal values always hash equal. */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+/**
+ * JSON with object keys sorted at every depth, so equal values always hash equal. Throws a
+ * RangeError past {@link CANONICAL_JSON_MAX_DEPTH} rather than exhausting the stack.
+ */
+export function canonicalJson(value: unknown, depth = 0): string {
+  if (depth > CANONICAL_JSON_MAX_DEPTH) throw new RangeError('Value is nested too deeply to fingerprint');
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item, depth + 1)).join(',')}]`;
   if (value && typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, item]) => item !== undefined)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item, depth + 1)}`).join(',')}}`;
   }
   return JSON.stringify(value ?? null);
 }
 
-function truncateCodePoints(value: string, maxChars: number): string {
-  const points = Array.from(value);
-  return points.length > maxChars ? points.slice(0, maxChars).join('') : value;
+// UTF-16 code units, because that is what Mongoose `maxlength` counts; a dangling high surrogate
+// left by the cut is dropped too.
+function truncateUtf16(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const cut = value.slice(0, maxChars);
+  return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
 /**
  * Cleans a server-supplied description (or title) before the model can see it: NFKC-normalise (so
  * fullwidth brackets become real ones and are caught below), drop invisible and bidi characters,
  * turn control characters into spaces, strip HTML/XML comments, tag-shaped markup and chat-template
- * tokens, collapse whitespace, and truncate to `maxChars` code points.
+ * tokens, collapse whitespace, and truncate to `maxChars` UTF-16 code units.
  */
 export function cleanMcpToolText(raw: string, maxChars: number = MCP_CONNECTION_LIMITS.toolDescriptionLength): string {
   let text = raw.normalize('NFKC').replace(INVISIBLE_BMP, '').replace(INVISIBLE_ASTRAL, '').replace(CONTROL_CHARS, ' ');
@@ -98,7 +117,7 @@ export function cleanMcpToolText(raw: string, maxChars: number = MCP_CONNECTION_
     if (next === text) break;
     text = next;
   }
-  return truncateCodePoints(text.replace(/\s+/g, ' ').trim(), maxChars);
+  return truncateUtf16(text.replace(/\s+/g, ' ').trim(), maxChars);
 }
 
 function cleanAnnotations(raw: unknown): IMcpConnectionToolAnnotations | undefined {
@@ -115,13 +134,49 @@ function cleanAnnotations(raw: unknown): IMcpConnectionToolAnnotations | undefin
   return Object.keys(annotations).length > 0 ? annotations : undefined;
 }
 
-function cleanInputSchema(raw: unknown): Record<string, unknown> {
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : { type: 'object' };
+class InvalidSchemaError extends Error {}
+
+function cleanSchemaValue(value: unknown, depth: number): unknown {
+  if (depth > MCP_SCHEMA_MAX_DEPTH) throw new InvalidSchemaError('too deep');
+  if (typeof value === 'string') return cleanMcpToolText(value, MCP_SCHEMA_TEXT_MAX_CHARS);
+  if (Array.isArray(value)) return value.map(item => cleanSchemaValue(item, depth + 1));
+  if (value && typeof value === 'object') {
+    const seen = new Set<string>();
+    const entries: [string, unknown][] = [];
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key.includes('\u0000')) throw new InvalidSchemaError('NUL in key');
+      const cleanKey = cleanMcpToolText(key, MCP_SCHEMA_TEXT_MAX_CHARS);
+      // Two keys that clean to the same text would silently merge two arguments.
+      if (seen.has(cleanKey)) throw new InvalidSchemaError('colliding keys');
+      seen.add(cleanKey);
+      entries.push([cleanKey, cleanSchemaValue(item, depth + 1)]);
+    }
+    // fromEntries defines own properties, so a `__proto__` key stays data instead of a prototype.
+    return Object.fromEntries(entries);
+  }
+  return value;
 }
 
 /**
- * Cleans every tool and refuses the ones whose name the model could not address safely: a name
- * outside {@link MCP_TOOL_NAME_PATTERN}, or a second tool with a name already seen.
+ * The schema with every key and string value (descriptions, titles, enums, defaults, examples)
+ * cleaned like a description, since all of it reaches the model. Null when the schema is nested
+ * deeper than {@link MCP_SCHEMA_MAX_DEPTH}, has a key containing NUL, or has keys that collide once
+ * cleaned. A missing or non-object schema becomes an empty object schema.
+ */
+function cleanInputSchema(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { type: 'object' };
+  try {
+    return cleanSchemaValue(raw, 0) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof InvalidSchemaError) return null;
+    throw error;
+  }
+}
+
+/**
+ * Cleans every tool and refuses the ones whose name the model could not address safely (a name
+ * outside {@link MCP_TOOL_NAME_PATTERN}, or a second tool with a name already seen) and the ones
+ * whose input schema {@link cleanInputSchema} refuses.
  */
 export function cleanDiscoveredTools(raw: readonly DiscoveredMcpTool[]): {
   tools: CleanedMcpTool[];
@@ -141,6 +196,11 @@ export function cleanDiscoveredTools(raw: readonly DiscoveredMcpTool[]): {
       continue;
     }
     seen.add(name);
+    const inputSchema = cleanInputSchema(tool.inputSchema);
+    if (!inputSchema) {
+      dropped.push({ reason: 'schema_invalid', nameSha256: sha256(name) });
+      continue;
+    }
     const rawDescription = typeof tool.description === 'string' ? tool.description : '';
     const title = typeof tool.title === 'string' ? cleanMcpToolText(tool.title, TITLE_MAX_CHARS) : '';
     const annotations = cleanAnnotations(tool.annotations);
@@ -149,7 +209,7 @@ export function cleanDiscoveredTools(raw: readonly DiscoveredMcpTool[]): {
       ...(title ? { title } : {}),
       description: cleanMcpToolText(rawDescription),
       descriptionRawHash: sha256(rawDescription),
-      inputSchema: cleanInputSchema(tool.inputSchema),
+      inputSchema,
       ...(annotations ? { annotations } : {}),
     });
   }

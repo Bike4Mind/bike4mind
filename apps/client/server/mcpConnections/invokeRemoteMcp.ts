@@ -23,6 +23,7 @@ import {
   type RemoteMcpLimits,
   type RemoteMcpListToolsResult,
 } from '@bike4mind/mcp/remote';
+import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { Resource } from 'sst';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -189,8 +190,11 @@ export function describeRemoteMcpError(
   }
 }
 
-function truncateScope(scope: string | undefined): string | undefined {
-  return scope?.slice(0, MCP_CONNECTION_LIMITS.requiredScopeLength);
+/** A server-supplied scope is shown to the user and later sent to the authorization server. */
+function cleanScope(scope: string | undefined): string | undefined {
+  return typeof scope === 'string'
+    ? cleanMcpToolText(scope, MCP_CONNECTION_LIMITS.requiredScopeLength) || undefined
+    : undefined;
 }
 
 /**
@@ -209,7 +213,7 @@ async function recordFailure(
     if (connection.auth.kind === 'none') {
       await mcpConnectionRepository.setPendingAuth(connection.id, {
         resourceMetadataUrl: error.resourceMetadataUrl,
-        scope: error.scope,
+        scope: cleanScope(error.scope),
         message,
       });
       return;
@@ -217,7 +221,7 @@ async function recordFailure(
     await mcpConnectionRepository.setStatus(connection.id, 'needs_reconnect', {
       code: 'auth_required',
       message,
-      requiredScope: truncateScope(error.scope),
+      requiredScope: cleanScope(error.scope),
     });
     return;
   }
@@ -226,7 +230,7 @@ async function recordFailure(
       await mcpConnectionRepository.setStatus(connection.id, 'needs_reconnect', {
         code: 'insufficient_scope',
         message: 'The server needs more access than was granted',
-        requiredScope: truncateScope(error.scope),
+        requiredScope: cleanScope(error.scope),
       });
       return;
     }

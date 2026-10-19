@@ -12,7 +12,7 @@ import {
   type IMcpConnectionTool,
 } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { McpConnection, mcpConnectionRepository } from './McpConnectionModel';
+import { McpConnection, mcpConnectionRepository, measureStoredMcpToolsBytes } from './McpConnectionModel';
 
 type CreateInput = Omit<IMcpConnectionDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -1097,6 +1097,18 @@ describe('McpConnectionModel', () => {
       expect((await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER))?.tools[0]?.inputSchema).toEqual(
         jsonSchema
       );
+    });
+
+    it('measures the stored size with the schema keys escaped', () => {
+      const plain = [tool('a', { inputSchema: { type: 'object' } })];
+      const escaped = [tool('a', { inputSchema: { $defs: {}, 'a.b': 1 } })];
+      expect(measureStoredMcpToolsBytes(plain)).toBe(Buffer.byteLength(JSON.stringify(plain)));
+      // `$defs` -> `~ddefs` and `a.b` -> `a~pb`: one extra byte each.
+      expect(measureStoredMcpToolsBytes(escaped)).toBe(Buffer.byteLength(JSON.stringify(escaped)) + 2);
+
+      let deep: Record<string, unknown> = {};
+      for (let i = 0; i < 10_000; i++) deep = { a: deep };
+      expect(() => measureStoredMcpToolsBytes([tool('a', { inputSchema: deep })])).toThrow(RangeError);
     });
 
     it('round-trips through create too', async () => {
