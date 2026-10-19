@@ -40,7 +40,7 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 }));
 
 import handler from '../update';
-import { MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
@@ -273,7 +273,7 @@ describe('settings/update per-credit price floor', () => {
   it('refuses to save a per-credit price below the floor', async () => {
     await expect(runHandler('pricePerCredit', String(MIN_PRICE_PER_CREDIT_USD / 2))).rejects.toMatchObject({
       statusCode: 400,
-      message: expect.stringContaining(`at least $${MIN_PRICE_PER_CREDIT_USD}`),
+      message: expect.stringContaining(`at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)},`),
     });
     expect(findOneAndUpdate).not.toHaveBeenCalled();
     expect(invalidateSettingsCache).not.toHaveBeenCalled();

@@ -3,6 +3,7 @@ import {
   isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
+  formatUsdPerCredit,
   isMaskedSensitiveSettingValue,
   isPricePerCreditBelowFloor,
   maskSensitiveSettingValue,
@@ -60,7 +61,7 @@ const handler = baseApi().put(
     // predates the floor is still refused at charge time (lib/credits/utils.ts).
     if (key === 'pricePerCredit' && isPricePerCreditBelowFloor(Number(value))) {
       throw new BadRequestError(
-        `Price Per Credit must be at least $${MIN_PRICE_PER_CREDIT_USD}, the per-credit sale price including markup.`
+        `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
       );
     }
 

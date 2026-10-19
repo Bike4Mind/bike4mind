@@ -75,16 +75,30 @@ export const CREDITS_PER_USD_COST = (() => {
   return Math.round(DEFAULT_PRICE_MARGIN / DEFAULT_USD_TO_CREDITS_RATE);
 })();
 
+// What one credit costs us at the built-in rate. Read from the defaults, never the env, so it is an
+// absolute backstop under the floor below that no env override can lower.
+const DEFAULT_PROVIDER_COST_PER_CREDIT_USD = 1 / Math.round(DEFAULT_PRICE_MARGIN / DEFAULT_USD_TO_CREDITS_RATE);
+
 /**
  * Lowest USD price a credit may be sold for: the provider cost one credit stands for, times the
- * markup - the same sale price usage is billed at. The admin `pricePerCredit` save
- * (apps/client/pages/api/settings/update.ts) refuses a price below it, and per-credit purchases
- * re-check it at charge time (apps/client/lib/credits/utils.ts).
+ * markup - the same sale price usage is billed at - and never less than what a credit costs us at
+ * the built-in rate. The admin `pricePerCredit` save (apps/client/pages/api/settings/update.ts)
+ * refuses a price below it, and per-credit purchases re-check it at charge time
+ * (apps/client/lib/credits/utils.ts).
  */
-export const MIN_PRICE_PER_CREDIT_USD = PRICE_MARGIN / CREDITS_PER_USD_COST;
+export const MIN_PRICE_PER_CREDIT_USD = (() => {
+  const derived = PRICE_MARGIN / CREDITS_PER_USD_COST;
+  // Unreachable with envNumber's guards, but a non-finite value must not open the floor.
+  if (!Number.isFinite(derived)) return DEFAULT_USD_TO_CREDITS_RATE;
+  return Math.max(derived, DEFAULT_PROVIDER_COST_PER_CREDIT_USD);
+})();
 
-/** True when a per-credit price is below MIN_PRICE_PER_CREDIT_USD, ignoring float noise (and NaN). */
-export const isPricePerCreditBelowFloor = (usd: number): boolean => !(usd >= MIN_PRICE_PER_CREDIT_USD * (1 - 1e-9));
+/** USD price per credit for display, without float noise (0.0006, not 0.0006000000000000001). */
+export const formatUsdPerCredit = (usd: number): string => `$${Number(usd.toPrecision(6))}`;
+
+/** True when a per-credit price is below MIN_PRICE_PER_CREDIT_USD (ignoring float noise) or is not finite. */
+export const isPricePerCreditBelowFloor = (usd: number): boolean =>
+  !Number.isFinite(usd) || usd < MIN_PRICE_PER_CREDIT_USD * (1 - 1e-9);
 
 /**
  * Converts a USD cost to credits, including markup, rounding UP (minimum 1).

@@ -198,6 +198,20 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     expect(logger.error).toHaveBeenCalledWith(expect.any(String), { userId: 'user_1' });
   });
 
+  it('refuses a per-credit total above the card maximum before creating any Stripe object', async () => {
+    const actual = await vi.importActual<typeof import('@client/lib/credits/utils')>('@client/lib/credits/utils');
+    mockHandlePerCredit.mockImplementation(actual.handlePerCreditTransaction);
+    storedSettings = { pricePerCredit: '1000' };
+    const { req, res } = makeReq(
+      { transactionType: TransactionType.PerCredit, credits: 1_000_000 },
+      { stripeCustomerId: null }
+    );
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
   it('records a PII-free checkout-started marker keyed by the payment intent id', async () => {
     const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
 

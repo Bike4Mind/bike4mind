@@ -55,7 +55,17 @@ describe('handlePerCreditTransaction', () => {
   it('refuses a purchase that totals less than the card minimum', async () => {
     storedSettings = { pricePerCredit: '0.01' };
 
-    await expect(buy(49)).rejects.toThrow(/at least 50 credits/);
+    await expect(buy(49)).rejects.toThrow('A credit purchase must total at least $0.50. Buy at least 50 credits.');
     expect((await buy(50)).amount).toBe(50);
+  });
+
+  it('refuses a purchase that totals more than the card maximum', async () => {
+    storedSettings = { pricePerCredit: '1000' };
+
+    await expect(buy(1_000_000)).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'A credit purchase cannot total more than $999,999.99. Buy at most 999 credits.',
+    });
+    expect((await buy(999)).amount).toBe(99_900_000);
   });
 });

@@ -191,6 +191,23 @@ describe('pricing utils', () => {
       expect(pricing.isPricePerCreditBelowFloor(pricing.MIN_PRICE_PER_CREDIT_USD)).toBe(false);
       expect(pricing.isPricePerCreditBelowFloor(pricing.MIN_PRICE_PER_CREDIT_USD * 0.99)).toBe(true);
       expect(pricing.isPricePerCreditBelowFloor(Number.NaN)).toBe(true);
+      expect(pricing.isPricePerCreditBelowFloor(Number.POSITIVE_INFINITY)).toBe(true);
+    });
+
+    it('an env override cannot lower the floor below the cost of a credit', async () => {
+      // 1.2 / 0.0001 = 12,000 credits per USD would derive a 0.0001 floor; a credit still costs 1/2000.
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', '1.2');
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', '0.0001');
+      const pricing = await importPricing();
+      expect(pricing.CREDITS_PER_USD_COST).toBe(12000);
+      expect(pricing.MIN_PRICE_PER_CREDIT_USD).toBe(1 / 2000);
+      expect(pricing.isPricePerCreditBelowFloor(0.0001)).toBe(true);
+    });
+
+    it('formats the floor without float noise', async () => {
+      const pricing = await importPricing();
+      expect(pricing.formatUsdPerCredit(0.1 + 0.2)).toBe('$0.3');
+      expect(pricing.formatUsdPerCredit(0.0006)).toBe('$0.0006');
     });
   });
 
