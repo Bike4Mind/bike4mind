@@ -1,7 +1,7 @@
 import { SettingKey, settingsMap } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
-import { RequestHandler } from 'express';
+import type { RequestHandler } from 'express';
 
 /**
  * Single source of truth for coercing an admin-setting value into a boolean.
