@@ -294,6 +294,13 @@ const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    // The stale-hold alarms in infra/alarms.ts watch the counts this function publishes.
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
     logging: {
       retention: '1 week',
     },

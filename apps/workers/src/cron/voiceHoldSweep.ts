@@ -81,21 +81,21 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 
 export async function handler(): Promise<VoiceHoldSweepResult> {
   const stage = Resource.App.stage;
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
-  const result = await runVoiceHoldSweep();
-  await emitMetrics(VOICE_NAMESPACE, [
-    {
-      name: VOICE_METRICS.HoldSweepSettled,
-      value: result.settled,
-      dimensions: { Stage: stage },
-      unit: StandardUnit.Count,
-    },
-    {
-      name: VOICE_METRICS.HoldSweepFailed,
-      value: result.failed,
-      dimensions: { Stage: stage },
-      unit: StandardUnit.Count,
-    },
-  ]);
+  const publish = (settled: number, failed: number) =>
+    emitMetrics(VOICE_NAMESPACE, [
+      { name: VOICE_METRICS.HoldSweepSettled, value: settled, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+      { name: VOICE_METRICS.HoldSweepFailed, value: failed, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+    ]);
+
+  let result: VoiceHoldSweepResult;
+  try {
+    await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+    result = await runVoiceHoldSweep();
+  } catch (err) {
+    // A run that never reached the holds emits nothing otherwise, and notBreaching reads that as OK.
+    await publish(0, 1);
+    throw err;
+  }
+  await publish(result.settled, result.failed);
   return result;
 }

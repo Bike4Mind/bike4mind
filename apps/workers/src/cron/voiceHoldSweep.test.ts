@@ -200,6 +200,17 @@ describe('voiceHoldSweep', () => {
     ]);
   });
 
+  it('reports a run that fails before reaching the holds as a failure, and still throws', async () => {
+    findStaleVoiceHolds.mockRejectedValueOnce(new Error('query failed'));
+
+    await expect(handler()).rejects.toThrow('query failed');
+
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
   it('leaves metrics to the hosted handler, so the self-host twin never calls CloudWatch', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
 

@@ -35,6 +35,12 @@ describe('voiceHoldSweep cron', () => {
     expect(Number(timeout?.[1])).toBeLessThan(5);
   });
 
+  // Without the grant every PutMetricData is denied and swallowed, so the stale-hold alarms never
+  // see a datapoint and stay OK forever.
+  it('may publish the metrics the stale-hold alarms watch', () => {
+    expect(cron).toMatch(/actions:\s*\['cloudwatch:PutMetricData'\]/);
+  });
+
   it('keeps the self-host twin on the same interval', () => {
     expect(SELF_HOST).toMatch(/VOICE_HOLD_SWEEP_INTERVAL_MS = 5 \* 60_000/);
   });

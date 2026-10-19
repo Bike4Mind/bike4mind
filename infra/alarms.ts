@@ -1603,11 +1603,9 @@ if (isMonitoredStage) {
   /**
    * Alarm: Stale voice credit hold settled by the sweep
    *
-   * A voice hold no client ever ended (closing the tab sends the end request, so this is a
-   * crash, a lost network, or a client that skips the end call) was settled by the stale-hold
-   * sweep. Steady state is 0: a non-zero count means the client hold leak is back. A single
-   * genuine browser crash can also trip it, hence Medium. The sweep has drained the historical
-   * backlog since it shipped, so deploying this alarm does not page.
+   * The stale-hold sweep settled a voice hold no client ever ended. Steady state is 0: a
+   * non-zero count means the client hold leak is back. A single genuine browser crash can also
+   * trip it, hence Medium.
    *
    * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
    * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
@@ -1635,8 +1633,10 @@ if (isMonitoredStage) {
   /**
    * Alarm: Stale voice hold sweep cannot settle a hold
    *
-   * The sweep found a stale hold and its settlement threw. The hold stays charged and the next
-   * run retries it, so a failure that repeats for three runs is a stuck settlement, not a blip.
+   * A hold's settlement threw, or the whole run did (database unreachable, query error). The hold
+   * stays charged and the next run retries it, so failures in two of three runs are a stuck
+   * sweep, not a blip. Two of three rather than three in a row: a period with no run reads as
+   * not breaching and would reset the streak.
    *
    * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
    */
@@ -1645,6 +1645,7 @@ if (isMonitoredStage) {
     alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 3,
+    datapointsToAlarm: 2,
     metricName: VOICE_METRICS.HoldSweepFailed,
     namespace: VOICE_NAMESPACE,
     period: 300, // 5 minutes
