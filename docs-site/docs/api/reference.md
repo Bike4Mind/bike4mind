@@ -28,6 +28,8 @@ All endpoints require authentication unless specified otherwise:
 Authorization: Bearer <jwt-token>
 ```
 
+API keys are also accepted, sent as `x-api-key: <key>` or `Authorization: Bearer b4m_<key>`.
+
 ## AI Services API
 
 ### Audio Transcription
@@ -361,7 +363,7 @@ Generic endpoint for retrieving resources.
 
 **Example:**
 ```
-GET /api/invite/inv_123
+GET /api/invites/inv_123
 ```
 
 ### Resource Invites
