@@ -34,6 +34,12 @@ const KNOWN_BLOCK_TYPES = new Set([
   'search_result',
   'video',
   'guard_content',
+  // Server-side tool blocks, kept when a replayed history turn still offers tools (base.ts strips
+  // them only when no tools are offered). image_url is absent on purpose: it is normalized to `image`
+  // before reaching a Bedrock payload.
+  'server_tool_use',
+  'web_search_tool_result',
+  'tool_search_tool_result',
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
