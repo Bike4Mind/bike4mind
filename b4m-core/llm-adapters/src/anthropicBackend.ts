@@ -56,6 +56,7 @@ import {
 } from '@bike4mind/common';
 import {
   buildThinkingParams,
+  effortForComplexity,
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
@@ -1254,6 +1255,7 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking?: { enabled?: boolean; budget_tokens?: number };
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
+      const reasoningEffort = options.reasoningEffort ?? effortForComplexity(currentModelInfo, options.complexity);
       // The forced response_format tool cannot run alongside thinking, so an explicit request falls
       // through to the reasoningEffort plan below, which only keeps the off switch there.
       const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
@@ -1292,11 +1294,11 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.debug(
           `[AnthropicBackend] ${isQuestMaster ? 'QuestMaster' : 'User'} thinking enabled (${currentModelInfo.thinkingStyle ?? 'legacy'}): max_tokens=${apiParams.max_tokens}, effort=${effort}`
         );
-      } else if (options.reasoningEffort) {
+      } else if (reasoningEffort) {
         const requested = planReasoningEffort(
           model,
           currentModelInfo,
-          options.reasoningEffort,
+          reasoningEffort,
           apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
         );
         // The synthesized response_format tool is forced via tool_choice, which the API rejects
@@ -1308,7 +1310,7 @@ export class AnthropicBackend implements ICompletionBackend {
             : requested;
         this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
         this.logger.debug(
-          `[AnthropicBackend] reasoningEffort=${options.reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
+          `[AnthropicBackend] reasoningEffort=${reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
         );
       } else {
         this.isThinkingEnabled = false;

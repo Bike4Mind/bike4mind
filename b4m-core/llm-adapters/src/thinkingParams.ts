@@ -7,6 +7,7 @@ import {
   type ModelInfo,
   type ReasoningEffort,
 } from '@bike4mind/common';
+import type { ICompletionOptions } from './backend';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -430,4 +431,19 @@ export function planReasoningEffort(
     thinking: { type: 'enabled', budget_tokens: budgetTokens },
     temperature: NO_TEMPERATURE_MODELS.has(model) ? 'delete' : 1,
   };
+}
+
+/**
+ * The effort an adaptive model runs at when the caller named none, from the auto-classified
+ * query complexity. Adaptive models think on every request (and every tool round) at the
+ * provider default effort unless told otherwise, so a simple lookup would pay for deep
+ * reasoning that GPT-5 skips at `low` (openaiBackend's effortMap). `complex` keeps the
+ * provider default. Legacy models return undefined: any effort would turn their thinking on.
+ */
+export function effortForComplexity(
+  modelInfo: ModelInfo,
+  complexity: ICompletionOptions['complexity']
+): ReasoningEffort | undefined {
+  if (!modelInfo.can_think || modelInfo.thinkingStyle !== 'adaptive') return undefined;
+  return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
 }

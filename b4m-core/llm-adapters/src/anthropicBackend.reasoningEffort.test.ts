@@ -177,6 +177,52 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
+
+  describe('auto-classified complexity, with no reasoningEffort', () => {
+    it.each(['simple', 'contextual'] as const)(
+      'runs an adaptive model at low effort for a %s query and replays its thinking',
+      async complexity => {
+        const { request, thinkingEnabled } = await run(ChatModels.CLAUDE_5_5_OPUS, { complexity, maxTokens: 2000 });
+
+        expect(request.thinking).toEqual({ type: 'adaptive' });
+        expect(request.output_config).toEqual({ effort: 'low' });
+        expect(request.max_tokens).toBe(2000);
+        expect(thinkingEnabled).toBe(true);
+      }
+    );
+
+    it('leaves a complex query at the provider default effort', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, { complexity: 'complex', maxTokens: 2000 });
+
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('does not turn thinking on for a legacy model', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_4_5_SONNET, { complexity: 'simple', maxTokens: 8192 });
+
+      expect(request.thinking).toBeUndefined();
+    });
+
+    it('yields to an explicit reasoningEffort', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, {
+        complexity: 'simple',
+        reasoningEffort: 'high',
+        maxTokens: 2000,
+      });
+
+      expect(request.output_config).toEqual({ effort: 'high' });
+    });
+
+    it('yields to an explicit thinking request', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, {
+        complexity: 'simple',
+        thinking: { enabled: true, budget_tokens: 16000 },
+      });
+
+      expect(request.output_config).not.toEqual({ effort: 'low' });
+    });
+  });
 });
 
 describe('AnthropicBedrockBackend reasoningEffort', () => {
@@ -205,5 +251,19 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
     expect(body.thinking).toEqual({ type: 'adaptive' });
     expect(body.output_config).toEqual({ effort: 'medium' });
     expect(body.max_tokens).toBe(2000);
+  });
+
+  it('runs an adaptive model at low effort for a simple query with no reasoningEffort', () => {
+    const body = bodyFor(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, { complexity: 'simple', maxTokens: 2000 });
+
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'low' });
+  });
+
+  it('leaves a complex query at the provider default effort', () => {
+    const body = bodyFor(ChatModels.CLAUDE_5_5_OPUS_BEDROCK, { complexity: 'complex', maxTokens: 2000 });
+
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
   });
 });
