@@ -28,9 +28,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # ci.yml only calls this workflow when its changes job saw docs-site/ in the full PR diff, so the build
-      # always runs here. The listing below is for the PR comment only; a git diff against a shallow clone
-      # cannot find the merge base once main has been merged into the branch and used to skip the whole job.
+      # ci.yml's docs-changed gate also fires for the help tooling, which does not affect the site, so the build
+      # runs only when the PR touches docs-site/. The listing comes from the PR files API: a git diff against a
+      # shallow clone cannot find the merge base once main has been merged into the branch and skipped the build.
+      # Anything unresolved (merge queue, API error) builds.
       - name: List docs changes
         id: docs-changes
         env:
@@ -38,11 +39,15 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          HAS=true
           DOCS_CHANGED=""
           if [ -n "$PR" ]; then
-            DOCS_CHANGED=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null | grep '^docs-site/' || true)
+            if FILES=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename' 2>/dev/null); then
+              DOCS_CHANGED=$(printf '%s\n' "$FILES" | grep '^docs-site/' || true)
+              [ -n "$DOCS_CHANGED" ] || HAS=false
+            fi
           fi
+          echo "has_changes=${HAS}" >> "$GITHUB_OUTPUT"
           TOTAL=$(printf '%s' "$DOCS_CHANGED" | grep -c . || true)
           DISPLAY=$(printf '%s\n' "$DOCS_CHANGED" | head -5)
           if [ "$TOTAL" -gt 5 ]; then
@@ -53,7 +58,11 @@ jobs:
             echo "$DISPLAY"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "docs-site files changed: ${TOTAL}"
+          echo "docs-site files changed: ${TOTAL}, build: ${HAS}"
+
+      - name: Skip message
+        if: steps.docs-changes.outputs.has_changes == 'false'
+        run: echo "::notice::No docs-site files in this PR, build skipped"
 
       - name: Setup pnpm
         if: steps.docs-changes.outputs.has_changes == 'true'
