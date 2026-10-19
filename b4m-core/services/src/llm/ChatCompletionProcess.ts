@@ -5700,7 +5700,8 @@ export class ChatCompletionProcess {
                 settledInputTokens,
                 settledOutputTokens,
                 cacheReadInputTokens,
-                cacheCreationInputTokens
+                cacheCreationInputTokens,
+                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
               )
           : getTextModelCost(
               currentModel,

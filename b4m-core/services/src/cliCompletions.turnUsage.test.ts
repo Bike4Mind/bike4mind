@@ -132,4 +132,9 @@ describe('executeCompletion - long-context tier per request', () => {
     const usd = await settledUsd({ inputTokens: 240_000, outputTokens: 3_000 });
     expect(usd).toBeCloseTo(1.014, 10);
   });
+
+  it('prices a cached long prompt in the aggregates on the tier its whole prompt falls in', async () => {
+    const usd = await settledUsd({ inputTokens: 20_000, cacheReadInputTokens: 190_000, outputTokens: 1_000 });
+    expect(usd).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(0.4) + 1_000 * perM(18), 10);
+  });
 });

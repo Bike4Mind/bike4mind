@@ -678,7 +678,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalInputTokens,
           finalOutputTokens,
           finalCacheReadTokens,
-          finalCacheCreationTokens
+          finalCacheCreationTokens,
+          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
         );
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {

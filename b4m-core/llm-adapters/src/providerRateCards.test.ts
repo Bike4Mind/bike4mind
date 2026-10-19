@@ -18,7 +18,11 @@ interface RateCardTier {
   cacheWrite?: number;
 }
 
-// Checked 2026-10-19 against https://platform.claude.com/docs/en/about-claude/pricing,
+/** UTC day the fixture below was last checked against the provider pages. */
+export const RATE_CARDS_CHECKED_ON = '2026-10-19';
+const RATE_CARDS_MAX_AGE_DAYS = 60;
+
+// Sources: https://platform.claude.com/docs/en/about-claude/pricing,
 // https://developers.openai.com/api/docs/pricing and https://ai.google.dev/gemini-api/docs/pricing.
 // gpt-5.6-sol is left out on purpose: its literal carries the regular rate, not the promotion the
 // provider page lists (see openaiBackend.ts).
@@ -71,6 +75,16 @@ function billedRates(model: ModelInfo, promptTokens: number) {
 }
 
 describe('provider rate cards', () => {
+  it('were re-verified against the provider pages recently', () => {
+    const ageDays = (Date.now() - Date.parse(`${RATE_CARDS_CHECKED_ON}T00:00:00Z`)) / 86_400_000;
+
+    expect(
+      ageDays,
+      `PROVIDER_RATE_CARDS was last checked on ${RATE_CARDS_CHECKED_ON}. Re-verify every rate against the ` +
+        'provider pricing pages, fix any drifted adapter literal, then bump RATE_CARDS_CHECKED_ON.'
+    ).toBeLessThanOrEqual(RATE_CARDS_MAX_AGE_DAYS);
+  });
+
   it.each(Object.entries(PROVIDER_RATE_CARDS))(
     'every %s price tier matches the provider rate card fixture',
     async (id, tiers) => {

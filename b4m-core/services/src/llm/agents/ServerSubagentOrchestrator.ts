@@ -714,7 +714,8 @@ export class ServerSubagentOrchestrator {
                 totalInputTokens,
                 totalOutputTokens,
                 totalCacheReadTokens ?? 0,
-                totalCacheWriteTokens ?? 0
+                totalCacheWriteTokens ?? 0,
+                totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
               );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
         } else {

@@ -109,7 +109,8 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
               finalInputTokens,
               finalOutputTokens,
               finalCacheReadTokens ?? 0,
-              finalCacheWriteTokens ?? 0
+              finalCacheWriteTokens ?? 0,
+              finalInputTokens + (finalCacheReadTokens ?? 0) + (finalCacheWriteTokens ?? 0)
             );
         creditsUsed = usdToCredits(costInUsd); // markup applied here
       } else if (!modelInfo) {
