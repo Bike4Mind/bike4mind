@@ -24,7 +24,7 @@ This guide walks you through deploying B4M on your own AWS account. Your deploym
 
 | Path | Best For | CI/CD |
 |------|----------|-------|
-| **[GitHub Actions](./ci-cd/github-actions.md)** (Recommended) | Most customers | GitHub Actions |
+| **GitHub Actions** (Recommended) | Most customers | GitHub Actions |
 | **[Seed](./ci-cd/seed.md)** | Legacy/existing Seed users | Seed CI/CD |
 
 ## Quick Start Checklist

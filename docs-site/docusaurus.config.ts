@@ -45,6 +45,7 @@ const config: Config = {
             'features/libreoncology.md',
             'features/tavern/**',
             'features/b4m-pi.md',
+            'deployment/ci-cd/github-actions.md',
           ],
         },
         blog: false,

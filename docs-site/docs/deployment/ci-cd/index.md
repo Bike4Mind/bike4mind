@@ -29,7 +29,6 @@ For most new deployments, GitHub Actions provides:
 - Automatic PR preview environments
 - No additional service costs
 
-**[Set up GitHub Actions →](./github-actions.md)**
 
 ### Seed
 

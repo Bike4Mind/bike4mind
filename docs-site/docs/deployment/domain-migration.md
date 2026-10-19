@@ -974,4 +974,3 @@ If you manually delete a CloudFront distribution in AWS Console, SST will NOT au
 ## Related Documentation
 
 - [Deployment Guide](./index.md) - Complete deployment walkthrough
-- [GitHub Actions Setup](./ci-cd/github-actions) - CI/CD configuration details

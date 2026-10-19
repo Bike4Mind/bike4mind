@@ -324,4 +324,3 @@ aws ce get-cost-and-usage \
 - [Deployment Guide](./index.md) - Getting started overview
 - [Prerequisites](./prerequisites.md) - AWS account and VPC setup
 - [DocumentDB Setup](/databases/documentdb-setup) - Database configuration
-- [GitHub Actions Setup](./ci-cd/github-actions.md) - CI/CD deployment
