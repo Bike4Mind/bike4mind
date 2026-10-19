@@ -218,6 +218,58 @@ describe('proxy security blocking', () => {
     const response = proxy(req);
     expect(response.status).toBe(400);
   });
+
+  describe('logged source address', () => {
+    function blockTraversal(headers: Record<string, string>): string {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/../etc/passwd', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/../etc/passwd',
+        method: 'GET',
+        headers: new Headers(headers),
+      } as unknown as NextRequest);
+      return String(warn.mock.calls.at(-1)?.[0]);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it('logs the CloudFront viewer address, not the client-supplied x-forwarded-for', () => {
+      const line = blockTraversal({
+        'cloudfront-viewer-address': '198.51.100.7:51234',
+        'x-forwarded-for': '203.0.113.66',
+      });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+
+    it('logs unknown when only x-forwarded-for is present', () => {
+      expect(blockTraversal({ 'x-forwarded-for': '203.0.113.66' })).toContain('from unknown');
+    });
+
+    it('applies the same rule to the malformed-encoding line', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/%25zz', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/%25zz',
+        method: 'GET',
+        headers: new Headers({ 'x-forwarded-for': '203.0.113.66' }),
+      } as unknown as NextRequest);
+      const line = String(warn.mock.calls.at(-1)?.[0]);
+      expect(line).toContain('malformed URL encoding');
+      expect(line).toContain('from unknown');
+    });
+
+    it('logs the trusted x-forwarded-for hop on self-host', () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const line = blockTraversal({ 'x-forwarded-for': '203.0.113.66, 198.51.100.7' });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+  });
 });
 
 describe('proxy CSP for the pdf.js worker', () => {

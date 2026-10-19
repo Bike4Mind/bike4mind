@@ -25,9 +25,14 @@
 #     and serves the app over tailnet HTTPS via TS_SERVE_CONFIG (selfhost/tailscale/
 #     serve.json): `/` -> app:3000 and `/ws` -> ws:3001, reached over the compose
 #     network. Tailscale provisions and renews the TLS cert automatically.
-#   - Publishes NO host ports. The base stack still publishes app/ws on the host
-#     (LAN-only behind NAT); if this host has a PUBLIC IP, firewall those or use
-#     the Caddy path instead - Tailscale alone does not close them.
+#   - Publishes NO host ports, and REBINDS the app's host publish to 127.0.0.1:
+#     `tailscale serve` overwrites X-Forwarded-For with the tailnet peer, so the
+#     app trusts one hop (TRUSTED_PROXY_HOPS=1) and gives each tailnet member
+#     their own rate-limit bucket. That is only safe while :3000 is reachable
+#     solely through the sidecar. The ws gateway is still published on the host
+#     (LAN-only behind NAT); if this host has a PUBLIC IP, firewall it or use the
+#     Caddy path instead. The rebind uses the Compose `!override` merge tag,
+#     which needs Docker Compose v2.24+.
 #
 # What this file does NOT do (see the SELF_HOST.md checklist):
 #   - It does not change MinIO credentials, enable Mongo auth, or configure SMTP.
@@ -65,6 +70,15 @@ services:
     depends_on:
       - app
       - ws
+
+  app:
+    ports: !override
+      - '127.0.0.1:${APP_HOST_PORT:-3000}:3000'
+    environment:
+      # tailscale serve proxies through Go's httputil.ReverseProxy with a Rewrite hook, which drops
+      # any client-sent X-Forwarded-For, then sets it to the tailnet peer's address (Funnel: the
+      # public client's). So exactly one hop is trusted. See apps/client/server/utils/ip.ts.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
 
 volumes:
   tailscale-state:

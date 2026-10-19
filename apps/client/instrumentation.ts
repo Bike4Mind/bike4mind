@@ -9,5 +9,10 @@
  * @see https://nextjs.org/docs/app/guides/instrumentation
  */
 export async function register() {
-  // Node.js-specific instrumentation is in instrumentation.node.ts
+  // Fail the server at boot on a malformed TRUSTED_PROXY_HOPS; otherwise getClientIp throws inside
+  // the logging middleware and every baseApi route serves a 500.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { readTrustedProxyHops } = await import('./server/utils/trustedClientIpHeaders');
+    readTrustedProxyHops();
+  }
 }
