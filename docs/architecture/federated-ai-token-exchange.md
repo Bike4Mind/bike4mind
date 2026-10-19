@@ -58,6 +58,10 @@ OAuth authorization flow requesting the needed scope. Refreshing or re-exchangin
 an ID token does not create a grant. A grant lookup failure returns 503 in
 enforcement mode; retry after the underlying service recovers.
 
+The self-asserted `'identities'` subject source (see below) stays accepted on every
+stage, `production` and `dev` included, unless `OAUTH_AI_TOKEN_REQUIRE_SUB=true` is
+set for that stage. Set it only once every live federated client uses `'sub'`.
+
 ## The two issuer shapes
 
 The client's `federatedIdp.subjectSource` decides how the presented token is verified.
