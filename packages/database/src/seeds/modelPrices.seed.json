@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T09:12:49.531Z",
+  "generatedAt": "2026-10-19T19:17:26.364Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -211,8 +211,8 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000003,
-          "output": 0.000015
+          "input": 0.000002,
+          "output": 0.00001
         }
       }
     },
@@ -324,10 +324,15 @@
       "modelId": "gemini-2.5-pro",
       "unit": "per_token",
       "pricing": {
-        "2097152": {
+        "200000": {
           "input": 0.00000125,
           "output": 0.00001,
           "cache_read": 1.25e-7
+        },
+        "2097152": {
+          "input": 0.0000025,
+          "output": 0.000015,
+          "cache_read": 2.5e-7
         }
       }
     },
@@ -356,8 +361,12 @@
       "modelId": "gemini-3-pro-preview",
       "unit": "per_token",
       "pricing": {
-        "2097152": {
+        "200000": {
           "input": 0.000002,
+          "output": 0.000012
+        },
+        "2097152": {
+          "input": 0.000004,
           "output": 0.000018
         }
       }
@@ -377,10 +386,15 @@
       "modelId": "gemini-3.1-pro-preview",
       "unit": "per_token",
       "pricing": {
-        "2097152": {
+        "200000": {
           "input": 0.000002,
-          "output": 0.000018,
+          "output": 0.000012,
           "cache_read": 2.0000000000000002e-7
+        },
+        "2097152": {
+          "input": 0.000004,
+          "output": 0.000018,
+          "cache_read": 4.0000000000000003e-7
         }
       }
     },
@@ -506,8 +520,8 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000003,
-          "output": 0.000015
+          "input": 0.000002,
+          "output": 0.00001
         }
       }
     },
@@ -691,9 +705,13 @@
       "modelId": "gpt-5.4",
       "unit": "per_token",
       "pricing": {
-        "400000": {
+        "272000": {
           "input": 0.0000025,
           "output": 0.000015
+        },
+        "1050000": {
+          "input": 0.000005,
+          "output": 0.0000225
         }
       }
     },
@@ -721,9 +739,13 @@
       "modelId": "gpt-5.5",
       "unit": "per_token",
       "pricing": {
-        "1050000": {
+        "272000": {
           "input": 0.000005,
           "output": 0.00003
+        },
+        "1050000": {
+          "input": 0.00001,
+          "output": 0.000045
         }
       }
     },
