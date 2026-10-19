@@ -10,6 +10,7 @@ const { mocks } = vi.hoisted(() => ({
     toastSuccess: vi.fn(),
     toastWarning: vi.fn(),
     getState: vi.fn(),
+    selectedAccount: vi.fn(),
     invalidateQueries: vi.fn(),
   },
 }));
@@ -33,6 +34,10 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 vi.mock('@client/app/stores/useAudioGenSettings', () => ({
   useAudioGenSettings: { getState: () => mocks.getState() },
+}));
+
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: { getState: () => ({ selectedAccount: mocks.selectedAccount() }) },
 }));
 
 import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
@@ -60,6 +65,7 @@ const generate = async (text = 'hello', mode: AudioGenMode = 'tts') => {
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getState.mockReturnValue({ ttsProvider: 'openai', voice: '', format: 'mp3' });
+  mocks.selectedAccount.mockReturnValue({ id: 'u1', personal: true });
   URL.createObjectURL = vi.fn(() => 'blob:audio');
   URL.revokeObjectURL = vi.fn();
 });
@@ -198,7 +204,7 @@ describe('useGenerateAudio sound effects', () => {
 
     expect(mocks.post).toHaveBeenCalledWith(
       '/api/ai/sound-effects',
-      { text: 'hello', durationSeconds: 3, promptInfluence: 0.5, encoding: 'base64' },
+      { text: 'hello', durationSeconds: 3, promptInfluence: 0.5, encoding: 'base64', organization_id: null },
       expect.not.objectContaining({ responseType: expect.anything() })
     );
     expect(result.current.result).toEqual({
@@ -209,6 +215,34 @@ describe('useGenerateAudio sound effects', () => {
       contentType: 'audio/mpeg',
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Sound effect generated and saved to your Files.');
+  });
+
+  it('sends the team the switcher shows as the billing target', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'sound-effects');
+
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+  });
+
+  it('sends the team the switcher shows on the speech request too', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'teamOrg', personal: false });
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', format: 'mp3', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'tts');
+
+    expect(mocks.post.mock.calls[0][0]).toBe('/api/ai/tts');
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
+  });
+
+  it('omits the billing target when no account is selected yet, leaving the server default', async () => {
+    mocks.selectedAccount.mockReturnValue(null);
+    mocks.post.mockResolvedValue({ data: { audio: 'AAA=', contentType: 'audio/mpeg' } });
+
+    await generate('hello', 'sound-effects');
+
+    expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('organization_id');
   });
 
   it('plays a url-delivery response without creating an object URL', async () => {

@@ -2443,7 +2443,121 @@
           "fabFileId": "664f1c2b9a1e4d0012ab34cd"
         }
       },
+      "synthesizeSpeechResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "synthesizeSpeechResponse401": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse404": {
         "type": "object",
         "properties": {
           "error": {
@@ -2655,6 +2769,14 @@
           "languageCode": {
             "type": "string",
             "pattern": "^[a-z]{2}$"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "encoding": {
             "type": "string",
@@ -2964,6 +3086,45 @@
           "saved": true
         }
       },
+      "generateSoundEffectResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "generateSoundEffectResponse413": {
         "type": "object",
         "properties": {
@@ -3028,6 +3189,14 @@
           },
           "format": {
             "type": "string"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "encoding": {
             "type": "string",
@@ -14530,7 +14699,7 @@
       "post": {
         "operationId": "synthesizeSpeech",
         "summary": "Synthesize speech from text",
-        "description": "Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your personal credits, as this endpoint always has. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -14768,6 +14937,60 @@
               }
             }
           },
+          "400": {
+            "description": "The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the provider refused the key we sent and no alternate could stand in (`provider_rejected`).",
             "content": {
@@ -14823,11 +15046,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse403"
                 }
               }
             },
@@ -14836,6 +15059,96 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -15793,7 +16106,7 @@
       "post": {
         "operationId": "generateSoundEffect",
         "summary": "Generate a sound effect",
-        "description": "Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your home organization (or personal credits if you have none). The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -15996,7 +16309,7 @@
             }
           },
           "400": {
-            "description": "The billing user or organization could not be resolved.",
+            "description": "The billing user or organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16068,11 +16381,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/generateSoundEffectResponse403"
                 }
               }
             },
@@ -16081,6 +16394,96 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }

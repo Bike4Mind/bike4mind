@@ -162,6 +162,63 @@ describe('reserveRequestCredits', () => {
     expect(userIncrement).toHaveBeenLastCalledWith('u1', 3);
   });
 
+  describe('explicit billingOrganizationId (JWT caller)', () => {
+    const homeOrgReq = () =>
+      ({ user: { id: 'u1', organizationId: 'homeOrg' }, logger }) as unknown as Parameters<
+        typeof reserveRequestCredits
+      >[0]['req'];
+    const base = { requiredCredits: 5, enforceCredits: true, featureLabel: 'sound generation' };
+
+    beforeEach(() => {
+      orgFindById.mockImplementation(async (id: string) => ({
+        id,
+        currentCredits: 50,
+        userDetails: [],
+        users: [{ userId: 'u1' }],
+      }));
+      orgIncrement.mockResolvedValue({ currentCredits: 50 });
+    });
+
+    it('bills the explicit org instead of the home org', async () => {
+      const reservation = await reserveRequestCredits({
+        ...base,
+        req: homeOrgReq(),
+        billingOrganizationId: 'teamOrg',
+      });
+
+      expect(reservation).toMatchObject({ ownerId: 'teamOrg', ownerType: CreditHolderType.Organization });
+      expect(orgIncrement).toHaveBeenCalledWith('teamOrg', -5);
+      expect(userIncrement).not.toHaveBeenCalled();
+    });
+
+    it('bills the user when null, even with a home-org seat', async () => {
+      const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq(), billingOrganizationId: null });
+
+      expect(reservation).toMatchObject({ ownerId: 'u1', ownerType: CreditHolderType.User });
+      expect(userIncrement).toHaveBeenCalledWith('u1', -5);
+      expect(orgIncrement).not.toHaveBeenCalled();
+    });
+
+    it('keeps the home-org fallback when omitted', async () => {
+      const reservation = await reserveRequestCredits({ ...base, req: homeOrgReq() });
+
+      expect(reservation).toMatchObject({ ownerId: 'homeOrg', ownerType: CreditHolderType.Organization });
+    });
+
+    it('ignores the param for an API key, whose target is fixed', async () => {
+      orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
+
+      const reservation = await reserveRequestCredits({
+        ...base,
+        req: userReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'o1' }),
+        billingOrganizationId: 'teamOrg',
+      });
+
+      expect(reservation).toMatchObject({ ownerId: 'o1', ownerType: CreditHolderType.Organization });
+      expect(orgIncrement).toHaveBeenCalledWith('o1', -5);
+    });
+  });
+
   it('bills the organization pool for an org-billed API key', async () => {
     orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 50, userDetails: [], users: [{ userId: 'u1' }] });
     orgIncrement.mockResolvedValue({ currentCredits: 50 });

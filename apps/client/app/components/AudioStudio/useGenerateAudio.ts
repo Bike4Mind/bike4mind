@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { switcherBillingTarget } from '@client/app/hooks/data/generationBillingTarget';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toPlayableAudio } from '@client/app/utils/generatedAudio';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
@@ -153,6 +154,8 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   format,
                   languageCode: ttsProvider === 'elevenlabs' && languageCode ? languageCode : undefined,
                   encoding: 'base64',
+                  // The account the switcher shows, read at submit: null is personal, an id is that team.
+                  ...switcherBillingTarget(),
                 },
               }
             : {
@@ -162,6 +165,7 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   durationSeconds: durationSeconds ?? undefined,
                   promptInfluence,
                   encoding: 'base64',
+                  ...switcherBillingTarget(),
                 },
               };
 
