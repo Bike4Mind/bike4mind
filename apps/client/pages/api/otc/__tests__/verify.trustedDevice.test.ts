@@ -19,7 +19,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 
 const mockSetRefreshCookie = vi.fn();
 vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
-  setRefreshCookie: (...a: any[]) => mockSetRefreshCookie(...a),
+  setRefreshCookie: (...a: unknown[]) => mockSetRefreshCookie(...a),
 }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 
