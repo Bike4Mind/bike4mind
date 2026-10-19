@@ -20,6 +20,7 @@ const ALL_TABS_RENDERABLE: IsAdminTabRenderable = () => true;
  * Store -> URL: the URL follows the store, because the tab is also driven from outside this page
  * (the sidebar, the chat model picker's "manage models" shortcut) and a bare `/admin` navigation
  * would otherwise strip the param. `replace` keeps tab changes out of the history stack.
+ * A caller that navigates with extra params must not also set the store: the mirror can run before the router commits the new URL and would rebuild search without them.
  *
  * `isTabRenderable` rules out tabs the page cannot currently draw (a gate is off, or the value has
  * no panel): such a tab is never selected, and one already selected falls back to Users, so a

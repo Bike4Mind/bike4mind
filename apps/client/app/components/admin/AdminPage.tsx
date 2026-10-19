@@ -309,7 +309,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData } = useQuery({
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
     queryKey: ['liveops-triage', 'env'],
     queryFn: async () => {
       const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
@@ -325,8 +325,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
   // treats it as unknown and corrects the store instead.
   const isAdminTabRenderable = useCallback(
-    (tab: AdminTab) => canRenderAdminTab(tab, { enableUserMigration, liveOpsTriage: liveopsEnvData?.showTab }),
-    [enableUserMigration, liveopsEnvData]
+    (tab: AdminTab) =>
+      canRenderAdminTab(tab, {
+        enableUserMigration,
+        liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
+      }),
+    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
   );
 
   useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);

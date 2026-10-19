@@ -80,9 +80,10 @@ describe('useAdminTabUrlSync', () => {
 
     renderHook(() => useHarness(AdminTab.Users));
 
-    expect(lastNavigation().search({ emergency_access: 'true' })).toEqual({
+    expect(lastNavigation().search({ emergency_access: 'true', redirectTo: '/somewhere' })).toStrictEqual({
       emergency_access: 'true',
       tab: 'users',
+      feedbackId: undefined,
     });
   });
 
@@ -153,9 +154,15 @@ describe('useAdminTabUrlSync', () => {
   it('ignores a deep link to a tab the console cannot render', () => {
     routerMock.search = { tab: 'live-ops-triage' };
 
-    const { result } = renderHook(() => useHarness(AdminTab.Users, gatedOffLiveOps));
+    const seen: unknown[] = [];
+    const { result } = renderHook(() => {
+      const h = useHarness(AdminTab.Users, gatedOffLiveOps);
+      seen.push(h.activeTab);
+      return h;
+    });
 
     expect(result.current.activeTab).toBe(AdminTab.Users);
+    expect(seen).not.toContain(AdminTab.LiveOpsTriage);
     expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
   });
 
