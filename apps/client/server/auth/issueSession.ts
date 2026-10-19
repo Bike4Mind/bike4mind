@@ -27,6 +27,7 @@ export async function issueSessionForRequest(
     createdVia: AuthSessionCreatedVia;
     tokenVersion: number;
     impersonatedBy?: string | null;
+    clientId?: string | null;
     device?: IAuthSessionDevice;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
@@ -36,6 +37,7 @@ export async function issueSessionForRequest(
       createdVia: params.createdVia,
       tokenVersion: params.tokenVersion,
       impersonatedBy: params.impersonatedBy,
+      clientId: params.clientId,
       device: params.device ?? buildSessionDevice(req),
     },
     {

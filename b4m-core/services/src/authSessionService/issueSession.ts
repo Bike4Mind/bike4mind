@@ -14,6 +14,8 @@ export interface IssueSessionParams {
   /** User's current tokenVersion, embedded in the minted access token. */
   tokenVersion: number;
   impersonatedBy?: string | null;
+  /** OAuth client that minted this session (oauth-token only). */
+  clientId?: string | null;
   device?: IAuthSessionDevice;
   /** Override the session/refresh lifetime; defaults to DEFAULT_REFRESH_TTL_MS. */
   refreshTtlMs?: number;
@@ -58,6 +60,7 @@ export const issueSession = async (
     device: params.device,
     createdVia: params.createdVia,
     impersonatedBy: params.impersonatedBy ?? null,
+    clientId: params.clientId ?? null,
     lastUsedAt: now,
     expiresAt,
     revokedAt: null,
