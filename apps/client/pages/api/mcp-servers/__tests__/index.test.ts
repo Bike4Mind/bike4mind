@@ -164,6 +164,17 @@ describe('GET /api/mcp-servers', () => {
 
     expect(mockInvoke).not.toHaveBeenCalled();
   });
+
+  // A legacy row must not turn the whole list into a 500: one bad row used to fail respond().
+  it('serves a legacy row with a null envVariables array and null metadata', async () => {
+    mockFind.mockResolvedValue([server({ envVariables: null, metadata: null, toolSchemasFetchedAt: new Date() })]);
+
+    const res = await run();
+
+    const [body] = res._getJSONData();
+    expect(body.envVariables).toEqual([]);
+    expect(body.metadata).toBeNull();
+  });
 });
 
 describe('POST /api/mcp-servers', () => {
@@ -194,5 +205,14 @@ describe('POST /api/mcp-servers', () => {
     const res = await runPost();
 
     expectSecretsWithheld(res._getJSONData());
+  });
+
+  // The server was deleted between the findOne and the update; respond() cannot parse null.
+  it('returns 404 when the update finds no server', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(null);
+    mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
+
+    await expect(runPost()).rejects.toThrow('MCP Server not found');
   });
 });

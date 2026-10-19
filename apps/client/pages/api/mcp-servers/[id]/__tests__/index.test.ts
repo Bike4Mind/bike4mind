@@ -138,4 +138,41 @@ describe('PUT /api/mcp-servers/[id]', () => {
     await expect(runPut()).rejects.toThrow('A value is required for a new environment variable');
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
+
+  it('keeps a stored value while adding a new key in the same body', async () => {
+    bodyWith([
+      { key: 'NOTION_ACCESS_TOKEN', value: '' },
+      { key: 'NOTION_WORKSPACE_ID', value: 'workspace-1' },
+    ]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([
+      { key: 'NOTION_ACCESS_TOKEN', value: STORED_TOKEN },
+      { key: 'NOTION_WORKSPACE_ID', value: 'workspace-1' },
+    ]);
+  });
+
+  it('drops a stored key that the body omits', async () => {
+    bodyWith([{ key: 'OTHER_KEY', value: 'other-value' }]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([{ key: 'OTHER_KEY', value: 'other-value' }]);
+  });
+
+  it('treats a legacy null envVariables array as empty', async () => {
+    mockFindById.mockResolvedValue({ id: SERVER_ID, userId: 'u1', envVariables: null });
+    bodyWith([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
+
+    await runPut();
+
+    expect(setEnv()).toEqual([{ key: 'NOTION_ACCESS_TOKEN', value: 'new-token' }]);
+  });
+
+  it('returns 404 when the update finds no server', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+
+    await expect(runPut()).rejects.toThrow('MCP Server not found');
+  });
 });
