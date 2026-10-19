@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
-import { INDEXED_TOOL_CITATION_RULE } from '../../citationNumbering';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
   CitableSource,
@@ -139,16 +139,24 @@ function describePlace(place: WebSearchPlace): string {
     .join(' - ');
 }
 
-export function formatPlaceResults(places: WebSearchPlace[], anchor?: WebSearchPlace): string {
+export function formatPlaceResults(
+  places: WebSearchPlace[],
+  anchor?: WebSearchPlace,
+  citationNumbers?: ReadonlyMap<string, number>
+): string {
+  const numberOf = (place: WebSearchPlace) => citationNumbers?.get(`place:${place.id}`);
   return [
     'Places found for this search (each has a map location; refer to it by its id):',
     '',
-    ...places.map((place, index) => `${index + 1}. ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`),
+    ...places.map((place, index) => {
+      const n = numberOf(place);
+      return `${n !== undefined ? `[${n}]` : `${index + 1}.`} ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`;
+    }),
     ...(anchor
       ? [
           '',
           'Anchor location (the place the user named):',
-          `${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
+          `${numberOf(anchor) !== undefined ? `[${numberOf(anchor)}] ` : ''}${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
         ]
       : []),
   ].join('\n');
@@ -432,7 +440,9 @@ export async function performWebSearch(
     // return zero organic hits but a real image cluster (the dedicated image search runs
     // independently of the organic search), and that image cluster - plus the cards prompt telling
     // the model how to use it - must not be thrown away just because there's no prose to go with it.
-    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
+    const placeSection = withPlaces
+      ? `\n${formatPlaceResults(places, anchor, numberedCitables ? citationNumbersById(numberedCitables) : undefined)}\n`
+      : '';
     const baseText = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}` +
         (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')

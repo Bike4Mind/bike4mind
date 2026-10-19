@@ -493,6 +493,29 @@ describe('performWebSearch - place handling', () => {
     vi.unstubAllGlobals();
   });
 
+  it('labels places with the numbers the turn stamped on them, and keeps local labels otherwise', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+    const numberCitables: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((c, i) => ({ ...c, metadata: { ...c.metadata, citationIndex: i + 3 } }));
+
+    const numbered = await performWebSearch(
+      mockAdapters,
+      { query: 'dinner', include_places: true },
+      '',
+      undefined,
+      numberCitables
+    );
+    expect(numbered.formattedResults).toMatch(/^\[4\] A - /m);
+    expect(numbered.formattedResults).toMatch(/^\[5\] B - /m);
+    expect(numbered.formattedResults).not.toMatch(/^1\. A/m);
+
+    const plain = await performWebSearch(mockAdapters, { query: 'dinner', include_places: true });
+    expect(plain.formattedResults).toMatch(/^1\. A - /m);
+    expect(plain.formattedResults).toMatch(/^2\. B - /m);
+    vi.unstubAllGlobals();
+  });
+
   it('sends the model query unchanged to the organic search, without US geo-targeting', async () => {
     useSerpApi();
     const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
