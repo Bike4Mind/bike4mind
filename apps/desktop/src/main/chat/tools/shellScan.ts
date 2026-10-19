@@ -433,12 +433,14 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       return `gh ${sub} ${action}`;
     }
     if (sub === 'release' && action === 'create') return 'gh release create';
-    // gh's flag parser accepts the short form with its value attached (`-ftitle=x`), and any
-    // field turns the call into a POST.
-    const fields = args.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
     if (sub !== 'api') return null;
-    if (sendsBody(optionValue(args, ['-X', '--method']))) return 'gh api';
-    return fields && !(action === 'graphql' && graphqlReadOnly(args)) ? 'gh api' : null;
+    // gh's flag parser accepts clustered shorthands: `-iftitle=x` is `--include --field title=x`
+    // and `-iXPOST` is `--include --method POST`. Cut each cluster at its first field or method
+    // letter so both checks see the flag it means, and any field turns the call into a POST.
+    const apiArgs = args.map(arg => arg.replace(/^-[a-zA-Z]*?([fFX])/, '-$1'));
+    if (sendsBody(optionValue(apiArgs, ['-X', '--method']))) return 'gh api';
+    const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
+    return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
   if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
