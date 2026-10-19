@@ -15,6 +15,30 @@ type McpServerMetadata = NonNullable<IMcpServerDocument['metadata']>;
 export const MCP_SERVER_ENV_VARIABLE_WITHHELD_FIELDS = ['value'] as const;
 export const MCP_SERVER_GITHUB_WEBHOOK_WITHHELD_FIELDS = ['secret'] as const;
 
+type McpServerEnvVariable = IMcpServerDocument['envVariables'][number];
+
+// Held to the env variable shape: `value` is classified above as withheld, so a new field fails
+// the build here until it is classified too.
+const ENV_VARIABLE_RESPONSE_FIELDS = {
+  key: z.string(),
+} as const satisfies Record<
+  Exclude<keyof McpServerEnvVariable, (typeof MCP_SERVER_ENV_VARIABLE_WITHHELD_FIELDS)[number]>,
+  z.ZodType
+>;
+
+// A legacy row can hold a null array or an item without a key, and one bad row must not 500 a
+// whole list read (see responseShape.ts); such items are dropped rather than passed on.
+const envVariableResponseSchema = z.preprocess(
+  value =>
+    Array.isArray(value)
+      ? value.flatMap(item => {
+          const key = (item as { key?: unknown } | null)?.key;
+          return typeof key === 'string' ? [{ key }] : [];
+        })
+      : [],
+  z.array(z.object(ENV_VARIABLE_RESPONSE_FIELDS))
+);
+
 // Held to IGitHubWebhookConfig: a new field fails the build here until it is classified.
 const GITHUB_WEBHOOK_RESPONSE_FIELDS = {
   routingToken: true,
@@ -62,6 +86,6 @@ const MCP_SERVER_RESPONSE_FIELDS = {
 /** An MCP server as returned by the SPA's /api/mcp-servers routes. */
 export const mcpServerResponseSchema = z.object({
   ...passthroughShape(MCP_SERVER_RESPONSE_FIELDS),
-  envVariables: z.array(z.object({ key: z.string() })),
+  envVariables: envVariableResponseSchema,
   metadata: metadataResponseSchema.nullish(),
 });

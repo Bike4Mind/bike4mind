@@ -53,7 +53,14 @@ const handler = baseApi()
 
     // A blank value means "unchanged": the client never receives stored values, only keys. A
     // blank key that is not stored yet has nothing to keep, so it is refused rather than saved empty.
-    const storedValues = new Map(server.envVariables.map(v => [v.key, v.value]));
+    // A legacy row can hold a null (or malformed) envVariables array; read it as empty rather
+    // than throwing on `.map`.
+    const storedVariables = Array.isArray(server.envVariables) ? server.envVariables : [];
+    const storedValues = new Map(
+      storedVariables
+        .filter(variable => typeof variable?.key === 'string')
+        .map(variable => [variable.key, variable.value] as const)
+    );
     const mergedEnvVariables = envVariables.map(({ key, value }) => {
       if (value) return { key, value };
       const storedValue = storedValues.get(key);
