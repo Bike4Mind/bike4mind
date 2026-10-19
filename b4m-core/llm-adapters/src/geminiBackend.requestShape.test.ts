@@ -173,6 +173,10 @@ describe.each([
       { name: '3.x id', overrides: { id: 'gemini-3-x' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
       { name: 'unrecognised id', overrides: { id: 'gemini-exp-1206' as ChatModels } },
       { name: '4.x id', overrides: { id: 'gemini-4-argon' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
+      { name: '30 family', overrides: { id: 'gemini-30-pro' as ChatModels } },
+      { name: '40 family', overrides: { id: 'gemini-40-pro' as ChatModels } },
+      { name: 'suffixed Flash alias', overrides: { id: 'gemini-flash-latest-001' as ChatModels } },
+      { name: 'suffixed Flash-Lite alias', overrides: { id: 'gemini-flash-lite-latest-001' as ChatModels } },
       {
         name: 'gemini-flash-latest alias',
         overrides: { id: 'gemini-flash-latest' as ChatModels },
