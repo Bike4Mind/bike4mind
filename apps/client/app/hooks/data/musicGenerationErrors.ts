@@ -29,7 +29,9 @@ const STORAGE_FULL_MESSAGE = 'Your file storage is full. Free up space in Files,
 
 // The cancel hook uses this to refetch the card; the toast text comes from MESSAGES like any other code.
 export const isMusicNotCancellableError = (error: unknown): boolean =>
-  isAxiosError(error) && error.response?.status === 409 && readErrorCode(error.response.data) === 'not_cancellable';
+  isAxiosError(error) &&
+  error.response?.status === 409 &&
+  readErrorCode(error.response.data) === ('not_cancellable' satisfies MusicGenerationApiErrorCode);
 
 export function describeMusicCancelError(error: unknown): string {
   return describeMusicGenerationError(error, 'Could not cancel the song. Try again.');
