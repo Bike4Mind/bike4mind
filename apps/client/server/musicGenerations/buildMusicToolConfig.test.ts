@@ -48,4 +48,13 @@ describe('buildMusicToolConfig', () => {
     expect(createMusicJob).toHaveBeenCalledWith(input, deps.createDeps);
     expect(result).toEqual({ ok: true, job: { id: 'job-1' } });
   });
+
+  it('reads jobs back through the engine repository', async () => {
+    vi.mocked(listUsableMusicModels).mockResolvedValue([{ id: 'test-music' }] as never);
+    const findById = vi.fn().mockResolvedValue({ id: 'job-1', state: 'blocked' });
+    const config = await buildMusicToolConfig('u1', { ...deps, createDeps: { repository: { findById } } as never });
+
+    expect(await config?.findJob?.('job-1')).toEqual({ id: 'job-1', state: 'blocked' });
+    expect(findById).toHaveBeenCalledWith('job-1');
+  });
 });
