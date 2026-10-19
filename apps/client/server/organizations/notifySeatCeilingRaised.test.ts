@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockPostToSlack = vi.fn();
-const mockLogAuditEvent = vi.fn();
+const mockRecordAdminAction = vi.fn();
 
 vi.mock('@server/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostToSlack(...args),
 }));
 
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_SEAT_CEILING_RAISED: 'ORG_SEAT_CEILING_RAISED' },
-  logAuditEvent: (...args: unknown[]) => mockLogAuditEvent(...args),
+vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { recordAdminAction: (...args: unknown[]) => mockRecordAdminAction(...args) },
+}));
+vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: vi.fn() } }));
+vi.mock('@server/utils/adminAudit', () => ({
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
 
 import {
@@ -23,30 +26,31 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 describe('auditSeatCeilingRaised', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLogAuditEvent.mockResolvedValue(undefined);
+    mockRecordAdminAction.mockResolvedValue(undefined);
     mockPostToSlack.mockResolvedValue(undefined);
   });
 
-  it('writes the ORG_SEAT_CEILING_RAISED audit event and does NOT post to Slack', async () => {
+  it('writes the org.seats.ceiling_raised audit entry as the system actor and does NOT post to Slack', async () => {
     await auditSeatCeilingRaised(
       { organizationId: 'org-1', userId: 'user-1', previousSeats: 2, newSeats: 3, trigger: 'otc-signup' },
       logger
     );
 
     expect(mockPostToSlack).not.toHaveBeenCalled();
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'user-1',
-        action: 'ORG_SEAT_CEILING_RAISED',
-        metadata: { organizationId: 'org-1', previousSeats: 2, newSeats: 3, trigger: 'otc-signup' },
+        action: 'org.seats.ceiling_raised',
+        actor: expect.objectContaining({ kind: 'system', name: 'Seat ceiling' }),
+        target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
+        context: { source: 'worker' },
+        details: { userId: 'user-1', previousSeats: 2, newSeats: 3, trigger: 'otc-signup' },
       }),
-      logger
+      expect.objectContaining({ logger })
     );
-    // No admin actor on a live signup.
-    expect(mockLogAuditEvent.mock.calls[0][0]).not.toHaveProperty('adminUserId');
+    expect(mockRecordAdminAction.mock.calls[0][0].details).not.toHaveProperty('actingAdminId');
   });
 
-  it('records the acting admin as the audit actor for a bulk backfill raise', async () => {
+  it('records the acting admin in the details of a bulk backfill raise', async () => {
     await auditSeatCeilingRaised(
       {
         organizationId: 'org-1',
@@ -59,12 +63,12 @@ describe('auditSeatCeilingRaised', () => {
       logger
     );
 
-    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        adminUserId: 'admin-9',
-        metadata: expect.objectContaining({ trigger: 'admin-backfill' }),
+        actor: expect.objectContaining({ kind: 'system' }),
+        details: expect.objectContaining({ actingAdminId: 'admin-9', trigger: 'admin-backfill' }),
       }),
-      logger
+      expect.objectContaining({ logger })
     );
   });
 });
@@ -72,7 +76,7 @@ describe('auditSeatCeilingRaised', () => {
 describe('notifySeatCeilingRaised', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLogAuditEvent.mockResolvedValue(undefined);
+    mockRecordAdminAction.mockResolvedValue(undefined);
     mockPostToSlack.mockResolvedValue(undefined);
   });
 
@@ -84,7 +88,7 @@ describe('notifySeatCeilingRaised', () => {
 
     expect(mockPostToSlack).toHaveBeenCalledTimes(1);
     expect(mockPostToSlack.mock.calls[0][0]).toContain('2 -> 3');
-    expect(mockLogAuditEvent).toHaveBeenCalledTimes(1);
+    expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
   });
 
   it('never throws when Slack fails - a signup already committed must not be broken', async () => {

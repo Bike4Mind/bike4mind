@@ -22,7 +22,7 @@ import { resolveInviteType } from '@server/utils/inviteRouteType';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ProjectEvents } from '@bike4mind/common';
 import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
 
@@ -134,22 +134,22 @@ const handler = baseApi()
       );
 
       // Group invites carry a membership grant, so they get the same audit trail as the members
-      // route's ORG_GROUP_MEMBER_ASSIGNED. Best-effort, never fails the write.
+      // route's org.group_member.assigned entry. Best-effort, never fails the write.
       if (inviteType === InviteType.Group) {
-        await logAuditEvent(
-          {
-            userId: req.user.id,
-            action: AdminOrgAuditEvents.ORG_GROUP_INVITE_CREATED,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            metadata: {
+        const group = await Group.findById(id);
+        if (group) {
+          await recordAdminActionFromRequest(req, {
+            action: 'org.invite.created',
+            actorScope: 'organization',
+            target: { kind: 'organization', id: group.organizationId, displayName: group.organizationId },
+            summary: 'created a group invite',
+            details: {
               groupId: id,
               inviteId: created.id,
               recipientCount: created.recipients?.pending?.length ?? 0,
             },
-          },
-          req.logger
-        );
+          });
+        }
       }
 
       // If this is a project invite, also log ADD_MEMBER event

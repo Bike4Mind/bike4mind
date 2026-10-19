@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
-import { AdminConfigAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { updateOAuthClient } from '@bike4mind/database';
 import { ApiKeyScope, updateOAuthClientSchema } from '@bike4mind/common';
 
@@ -15,24 +15,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (re
   const action =
     input.isActive !== undefined && input.isActive !== before.isActive
       ? input.isActive
-        ? AdminConfigAuditEvents.OAUTH_CLIENT_ACTIVATED
-        : AdminConfigAuditEvents.OAUTH_CLIENT_DEACTIVATED
-      : AdminConfigAuditEvents.OAUTH_CLIENT_UPDATED;
+        ? ('oauth_client.activated' as const)
+        : ('oauth_client.deactivated' as const)
+      : ('oauth_client.updated' as const);
 
-  await logAuditEvent(
-    {
-      userId: req.user!.id,
-      action,
-      adminUserId: req.user!.id,
-      adminUsername: req.user!.username,
-      ip: req.ip,
-      configType: 'oauth-client',
-      oldConfig: { redirectUris: before.redirectUris, isActive: before.isActive },
-      newConfig: { redirectUris: after.redirectUris, isActive: after.isActive },
-      metadata: { oauthClientId: after.id, clientId: after.clientId, name: after.name },
-    },
-    req.logger
-  );
+  await recordAdminActionFromRequest(req, {
+    action,
+    target: { kind: 'oauthClient', id: after.id, displayName: after.name },
+    summary:
+      action === 'oauth_client.updated' ? 'updated the OAuth client' : `${action.split('.')[1]} the OAuth client`,
+    changes: [
+      { field: 'redirectUris', before: before.redirectUris, after: after.redirectUris },
+      { field: 'isActive', before: before.isActive, after: after.isActive },
+    ],
+    details: { clientId: after.clientId },
+  });
 
   res.status(200).json(after);
 });

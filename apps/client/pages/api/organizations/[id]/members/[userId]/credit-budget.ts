@@ -10,7 +10,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -31,16 +31,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
       { db: { organizations: organizationRepository, users: userRepository } }
     );
 
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_MEMBER_CREDIT_BUDGET_UPDATED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, memberUserId: userId, previous: change.previous, current: change.current },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.member_budget.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organizationId, displayName: change.organization.name },
+      summary: 'updated a member credit budget override',
+      changes: [{ field: 'maxCredits', before: change.previous, after: change.current }],
+      details: { memberUserId: userId },
+    });
 
     return res.json(toSafeOrganization(change.organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
   })

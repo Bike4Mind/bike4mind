@@ -1,5 +1,7 @@
 import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { adminAuditLogRepository } from '@bike4mind/database';
+import { adminAuditService } from '@bike4mind/services';
+import { systemAuditActor } from '@server/utils/adminAudit';
 
 interface SeatCeilingRaisedLogger {
   info: (message: string, ...args: unknown[]) => void;
@@ -24,7 +26,7 @@ interface SeatCeilingRaisedParams {
   previousSeats: number;
   newSeats: number;
   trigger: SeatCeilingRaiseTrigger;
-  /** The admin who ran a bulk raise (backfill). Recorded as the audit actor; absent on live signup. */
+  /** The admin who ran a bulk raise (backfill). Recorded in the audit details; absent on live signup. */
   actingAdminId?: string;
 }
 
@@ -33,22 +35,24 @@ interface SeatCeilingRaisedParams {
  *
  * Every path that can grow an org's seat count without an admin seat change must leave a durable
  * record ("who added seats and why"), including the admin backfill, which raises many ceilings in
- * one deliberate action and so skips the per-raise Slack ping. Best-effort: `logAuditEvent` swallows
+ * one deliberate action and so skips the per-raise Slack ping. Best-effort: the writer swallows
  * its own errors; the membership + seat raise have already committed by the time this runs.
  */
 export async function auditSeatCeilingRaised(
   { organizationId, userId, previousSeats, newSeats, trigger, actingAdminId }: SeatCeilingRaisedParams,
   logger?: SeatCeilingRaisedLogger
 ): Promise<void> {
-  await logAuditEvent(
+  await adminAuditService.recordAdminAction(
     {
-      userId,
-      action: AdminOrgAuditEvents.ORG_SEAT_CEILING_RAISED,
+      action: 'org.seats.ceiling_raised',
+      actor: systemAuditActor('Seat ceiling'),
+      target: { kind: 'organization', id: organizationId, displayName: organizationId },
+      summary: `raised seat ceiling from ${previousSeats} to ${newSeats}`,
       reason: `partner-rule domain signup (${trigger})`,
-      ...(actingAdminId ? { adminUserId: actingAdminId } : {}),
-      metadata: { organizationId, previousSeats, newSeats, trigger },
+      context: { source: 'worker' },
+      details: { userId, previousSeats, newSeats, trigger, ...(actingAdminId ? { actingAdminId } : {}) },
     },
-    logger
+    { db: { adminAuditLog: adminAuditLogRepository }, logger }
   );
 }
 
@@ -59,7 +63,7 @@ export async function auditSeatCeilingRaised(
  * Domain-signup provisioning raises the seat ceiling rather than rejecting a legit partner user at
  * capacity, so the billing owner's seat count can grow without any admin action. That is only
  * acceptable if every raise is loud: this posts to the LiveOps Slack channel AND writes an
- * ORG_SEAT_CEILING_RAISED audit event.
+ * org.seats.ceiling_raised audit entry.
  *
  * Best-effort and never throws: both underlying calls swallow their own errors, and this wraps them
  * so an alerting hiccup can never break an already-successful signup/verification. The core service
