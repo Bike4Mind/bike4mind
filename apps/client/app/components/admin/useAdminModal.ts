@@ -18,7 +18,7 @@ export const useAdminModal = create<{
   setActiveTab: (activeTab: AdminTab | string | null) => void;
 }>((set, get) => ({
   open: true, // open by default
-  activeTab: AdminTab.Users, // defaults to Users; overridden when migration is available
+  activeTab: AdminTab.Dashboard,
   setOpen: open => set({ open: typeof open === 'function' ? open(get().open) : open }),
   setActiveTab: (activeTab: AdminTab | string | null) => set({ activeTab }),
 }));

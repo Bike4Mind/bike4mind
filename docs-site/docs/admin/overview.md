@@ -32,9 +32,19 @@ The environment banner is always visible at the top of the admin panel. It uses 
 
 The banner includes a close button on the right side that navigates back to the previous page.
 
+## Dashboard Landing Page
+
+The admin panel opens on **Dashboard** by default. You can link directly to it with `/admin?tab=dashboard`; a link to another tab still opens that tab.
+
+- **Client usage** shows a chart and table of users and events by source, including Web, Desktop, and CLI. Choose the last 24 hours, 7 days, or 30 days. Only events with source metadata are included. A user active on several clients is counted in each client's row, so adding the user counts does not give a distinct overall user count.
+- **Explore admin** opens Feature activity (Event Metrics), User activity & reports (Analytics), Model performance (Model Metrics), Credits & costs (Credit Analytics), Users, and System health.
+- **Recent activity** shows events over time, categories, and the top tracked events for the last 7 calendar days, including today. This is a snapshot of up to the latest 1,000 matching events, not a complete measure of feature adoption. The client usage chart has its own time range and is not subject to that snapshot limit.
+
+Use **Refresh activity** to reload the activity snapshot. While activity loads or fails, client usage and the navigation shortcuts remain available. An empty snapshot means no matching events were returned; a request failure displays an error instead. If client usage is empty, check its selected time range: older events without source metadata do not appear there.
+
 ## Sidebar Navigation
 
-The left sidebar uses an accordion group with three collapsible sections. Each section can be independently expanded or collapsed. All three sections are expanded by default.
+The **Dashboard** button stays above the collapsible sidebar sections, so you can always return to the overview. On a narrow screen, open the admin menu to reach it. Each section can be independently expanded or collapsed, and your preferences are saved.
 
 ### User Ops
 
@@ -96,7 +106,7 @@ The admin panel uses a vertical tab system where clicking a sidebar button activ
 
 ## Default Tab Behavior
 
-- The default active tab is **Users** when the admin panel opens.
+- The default active tab is **Dashboard** when the admin panel first opens. Selecting another tab keeps it active during the current app session and updates the URL.
 - If the `enableUserMigration` feature flag is active and the current tab is Users, the panel automatically switches to the **Migration** tab instead.
 
 ## Notification Badges

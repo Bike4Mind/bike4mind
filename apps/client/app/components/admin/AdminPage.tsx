@@ -8,6 +8,7 @@ import EmailVerificationTab from '@client/app/components/admin/EmailVerification
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
 import CloseIcon from '@mui/icons-material/Close';
+import DashboardIcon from '@mui/icons-material/Dashboard';
 import { IconButton } from '@mui/joy';
 import {
   Accordion,
@@ -75,6 +76,8 @@ import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
 export { AdminTab } from './adminSidebarConfig';
+
+const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -192,44 +195,55 @@ const SidebarNav = ({
   };
 
   return (
-    <AccordionGroup sx={{ marginLeft: 0.5 }}>
-      {SIDEBAR_SECTIONS.map(section => {
-        const { Icon: SectionIcon } = section;
-        const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
-        return (
-          <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
-            <AccordionSummary>
-              <SectionIcon color="primary" />
-              <Typography color="primary" level="body-md">
-                {section.label}
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails sx={{ '& .MuiAccordionDetails-content': { p: 1 } }}>
-              <Stack direction={'column'} spacing={1}>
-                {visibleItems.map(item => {
-                  const { Icon: ItemIcon } = item;
-                  return (
-                    <Button
-                      key={item.tab}
-                      {...(item.testid ? { 'data-testid': item.testid } : {})}
-                      startDecorator={<ItemIcon />}
-                      onClick={() => onTabSelect(item.tab)}
-                      variant="plain"
-                      sx={getMenuButtonSx(item.tab)}
-                      endDecorator={renderEndDecorator(item)}
-                    >
-                      <Typography level="body-sm" sx={{ color: 'inherit' }}>
-                        {item.label}
-                      </Typography>
-                    </Button>
-                  );
-                })}
-              </Stack>
-            </AccordionDetails>
-          </Accordion>
-        );
-      })}
-    </AccordionGroup>
+    <Stack spacing={1} sx={{ p: 0.5 }}>
+      <Button
+        startDecorator={<DashboardIcon />}
+        onClick={() => onTabSelect(AdminTab.Dashboard)}
+        variant="plain"
+        sx={getMenuButtonSx(AdminTab.Dashboard)}
+        data-testid="admin-dashboard-tab-btn"
+      >
+        Dashboard
+      </Button>
+      <AccordionGroup sx={{ marginLeft: 0.5 }}>
+        {SIDEBAR_SECTIONS.map(section => {
+          const { Icon: SectionIcon } = section;
+          const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
+          return (
+            <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
+              <AccordionSummary>
+                <SectionIcon color="primary" />
+                <Typography color="primary" level="body-md">
+                  {section.label}
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ '& .MuiAccordionDetails-content': { p: 1 } }}>
+                <Stack direction={'column'} spacing={1}>
+                  {visibleItems.map(item => {
+                    const { Icon: ItemIcon } = item;
+                    return (
+                      <Button
+                        key={item.tab}
+                        {...(item.testid ? { 'data-testid': item.testid } : {})}
+                        startDecorator={<ItemIcon />}
+                        onClick={() => onTabSelect(item.tab)}
+                        variant="plain"
+                        sx={getMenuButtonSx(item.tab)}
+                        endDecorator={renderEndDecorator(item)}
+                      >
+                        <Typography level="body-sm" sx={{ color: 'inherit' }}>
+                          {item.label}
+                        </Typography>
+                      </Button>
+                    );
+                  })}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          );
+        })}
+      </AccordionGroup>
+    </Stack>
   );
 };
 
@@ -483,6 +497,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               orientation="vertical"
               sx={{ flex: 1, minHeight: 0, '& [role="tabpanel"]': { height: '100%', overflow: 'auto' } }}
             >
+              <TabPanel value={AdminTab.Dashboard}>
+                {activeTab === AdminTab.Dashboard && <AdminDashboardTab onNavigate={setActiveTab} />}
+              </TabPanel>
               <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
               <TabPanel value={AdminTab.EmailVerification}>
                 {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
