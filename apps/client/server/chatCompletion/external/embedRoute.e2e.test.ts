@@ -3,7 +3,7 @@ import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
 import mongooseDirect from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
@@ -129,10 +129,11 @@ vi.mock('@server/utils/storage', () => ({
 }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%', STAGE: 'test' } }));
 
-// createMongoServer is not exported from the package barrel / dist; deep-import the source.
+// Test helpers are not exported from the package barrel / dist; deep-import the source.
 import {
-  createMongoServer,
+  createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { Organization, AdminSettings, Agent, Project, FabFile, FabFileChunk, UsageEvent } from '@bike4mind/database';
 import { User } from '../../../../../packages/database/src/models/auth/UserModel';
@@ -142,15 +143,17 @@ import { registerEmbedRoutes } from './embedRoute';
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-let mongoServer: MongoMemoryServer;
+let mongoServer: MongoMemoryReplSet;
 let server: Server;
 let baseUrl: string;
 
 const evidence: Array<{ title: string; request: unknown; status: number; sseBody: string }> = [];
 
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
-  await mongooseDirect.connect(mongoServer.getUri());
+  mongoServer = await createMongoReplSet();
+  await mongooseDirect.connect(mongoServer.getUri(), { autoIndex: false });
+  // Durable credit holds open transactions, which must not race model initialization.
+  await settleAutoIndexBuilds(mongooseDirect);
 
   const app = express();
   registerEmbedRoutes(app, () => {});
@@ -173,7 +176,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  await mongooseDirect.connection.dropDatabase();
+  await Promise.all(Object.values(mongooseDirect.connection.collections).map(collection => collection.deleteMany({})));
   h.script = null;
   h.lastBackendTools = [];
 });
@@ -398,7 +401,7 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     // The route writes the UsageEvent fire-and-forget (not awaited on the response
     // path), so poll until it lands instead of reading once and racing the write.
     // Scope to THIS test's org: a prior test's fire-and-forget write can also land
-    // after its own dropDatabase, so filter rather than asserting a global count.
+    // after its own cleanup, so filter rather than asserting a global count.
     const events = await vi.waitFor(
       async () => {
         const found = await UsageEvent.find({ feature: 'completion_api', ownerId: org.id }).lean();
