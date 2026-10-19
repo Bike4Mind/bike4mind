@@ -117,8 +117,10 @@ export function formatImageResults(images: WebSearchImageResult[], imageUrlSigni
       const title = stripNewlines(image.title || image.source);
       const source = stripNewlines(image.source);
       const pageUrl = stripNewlines(image.pageUrl);
+      // Non-numeric prefix so an image line cannot be mistaken for a citation number in the same
+      // tool output, where organic hits are labelled [N].
       return (
-        `${index + 1}. ${title}\n` +
+        `img-${index + 1}. ${title}\n` +
         `   image: ${signImageUrl(image.url, imageUrlSigningSecret)}\n` +
         `   source: ${source}\n` +
         `   page: ${pageUrl}`

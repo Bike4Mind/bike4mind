@@ -212,6 +212,8 @@ describe('formatImageResults', () => {
     expect(output).toContain('image: https://cdn.a.com/x.jpg');
     expect(output).toContain('source: Alpha');
     expect(output).toContain('page: https://a.com/post');
+    // Non-numeric so it cannot be read as a citation index next to the [N] organic hits.
+    expect(output).toContain('img-1. A Watch');
   });
 
   // A substring check against the unsigned prefix would still pass if `signImageUrl` were dropped
@@ -503,6 +505,16 @@ describe('performWebSearch - place handling', () => {
       expect(result.formattedResults).toContain('[10] B');
       expect(result.formattedResults).not.toContain('1. **Guide**');
     }
+  });
+
+  it('keeps legacy local labels when no registrar is wired', async () => {
+    useSerpApi();
+    stubSerpApi([]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'dinner' });
+
+    expect(result.formattedResults).toContain('1. **Guide**');
+    expect(result.formattedResults).not.toContain('[1] **Guide**');
   });
 
   it('forwards the context registrar and publishes the stamped web source', async () => {

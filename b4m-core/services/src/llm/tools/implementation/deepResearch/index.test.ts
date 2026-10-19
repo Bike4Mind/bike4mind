@@ -130,6 +130,27 @@ describe('performDeepResearch citation numbering', () => {
     expect(result.data.finalAnalysisPrompt).toContain('Cite the numbered sources inline with [N] markers');
     expect(result.data.finalAnalysisPrompt).not.toContain('unused');
   });
+
+  it('keeps legacy link citations when no registrar is wired', async () => {
+    const url = 'https://research.example/only';
+    createFirecrawlApp.mockReturnValue({
+      search: vi.fn(async () => ({ data: [{ url, title: 'Only source' }] })),
+      scrapeUrl: vi.fn(async () => ({ markdown: 'Finding text', error: null })),
+    });
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
+    const context = makeContext();
+
+    const result = await performDeepResearch(context, { topic: 'research topic' }, { maxDepth: 1, duration: 1 });
+
+    expect(result.success).toBe(true);
+    const prompt = result.data.finalAnalysisPrompt;
+    expect(prompt).toContain(`[From ${url}]`);
+    expect(prompt).toContain('Include citations to sources with links');
+    expect(prompt).not.toContain('Sources:');
+    expect(vi.mocked(context.statusUpdate).mock.calls.some(([changes]) => 'promptMeta' in (changes as object))).toBe(
+      false
+    );
+  });
 });
 
 describe('performDeepResearch discovery precedence', () => {
