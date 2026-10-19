@@ -245,8 +245,8 @@ export async function assertOwnerCanAfford(user: IUserDocument): Promise<void> {
  * the request bills (resolveRequestBillingOrgId), so an API key's billing owner is checked, not the
  * key holder's org seat.
  */
-export async function assertRequestCanAfford(req: MeteredRequest & { user: IUserDocument }): Promise<void> {
-  await assertCanAfford(req.user, resolveRequestBillingOrgId(req));
+export async function assertRequestCanAfford(req: MeteredRequest): Promise<void> {
+  await assertCanAfford(req.user!, resolveRequestBillingOrgId(req));
 }
 
 async function assertCanAfford(user: IUserDocument, organizationId: string | undefined): Promise<void> {

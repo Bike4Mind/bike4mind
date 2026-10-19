@@ -43,7 +43,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   // POST: manually re-run AI tag inference for an already-analyzed (or failed) batch. Shares
   // its claim/sample/infer/store/notify orchestration with the automatic post-upload queue
   // handler via analyzeBatchTaxonomy - see that function for the guarded-claim details.
-  .post(async (req: Request, res) => {
+  .post(async (req, res) => {
     const { batchId } = req.query as { batchId: string };
     const { context } = ReanalyzeTaxonomyRequestInput.parse(req.body);
     const userId = req.user.id;
