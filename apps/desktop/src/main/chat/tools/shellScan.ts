@@ -25,6 +25,8 @@ export interface ShellScan {
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
+  /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
+  outbound: string[];
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
@@ -143,6 +145,324 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
+// ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
+// a full per-wrapper option table if that matters.
+const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
+
+// `-K` reads options from a file, which can hold `--data`; the `--url-query` and `--variable`
+// families read one into the URL, and `--expand-*` runs a template over variables.
+const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
+// GNU wget accepts any unambiguous prefix, so `--post-f` means `--post-file`.
+const WGET_SENDS = /^--(post|body)/;
+
+/** Options that run a script given inline, which can open a socket no scan of the text sees. */
+const DASH_C = /^-[a-zA-Z]*c/;
+// Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
+const SHELL_C = /^[+-][a-zA-Z]*c/;
+const INLINE_SCRIPT: Record<string, RegExp> = {
+  node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
+  ruby: /^-[a-zA-Z]*e/,
+  perl: /^-[a-zA-Z]*[eE]/,
+  php: /^-r/,
+  bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
+  osascript: /^-e/,
+  sh: SHELL_C,
+  bash: SHELL_C,
+  zsh: SHELL_C,
+  dash: SHELL_C,
+};
+
+/**
+ * The option letters whose value is glued to the flag, so a letter after one is that value rather
+ * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
+ * the interpreter documents as taking a value.
+ */
+const OPTION_VALUE_LETTERS: Record<string, string> = {
+  python: 'WX',
+  node: 'rC',
+  bun: 'rld',
+  perl: 'IMmx',
+  ruby: 'rICEKFx',
+  osascript: 'ls',
+  zsh: 'oO',
+};
+
+/**
+ * Value letters that take only a glued value (`ruby -xdir`): even at the end of a cluster they do
+ * not swallow the next word, so a script's own `-e` after `ruby -x script.rb` is not ruby's option.
+ */
+const GLUED_ONLY_LETTERS: Record<string, string> = {
+  perl: 'x',
+  ruby: 'xKF',
+};
+
+/** The long forms of the above whose value is the next argument rather than glued to the flag. */
+const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
+  node: ['--require', '--import'],
+  bun: ['--require', '--preload'],
+  bash: ['--rcfile', '--init-file'],
+};
+
+/** Common long options that take no value, so the word after one is not assumed to be its value. */
+const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
+  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
+  bun: ['--watch', '--hot', '--smol'],
+};
+
+/** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
+const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
+
+function optionValueLetters(program: string): string {
+  return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+}
+
+/** The value letters that take the next word when they end a cluster; glued-only letters do not. */
+function nextWordLetters(program: string): string {
+  const glued = GLUED_ONLY_LETTERS[program] ?? '';
+  return [...optionValueLetters(program)].filter(letter => !glued.includes(letter)).join('');
+}
+
+/** A flag cluster cut at its first value-taking letter: everything after it is that value. */
+function flagRun(arg: string, letters: string): string {
+  if (arg.startsWith('--')) return arg;
+  const at = [...arg.slice(1)].findIndex(char => letters.includes(char));
+  return at === -1 ? arg : arg.slice(0, at + 2);
+}
+
+/** Whether an option takes its value in the next argument rather than glued to its flag. */
+function takesNextArgument(program: string, arg: string): boolean {
+  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
+  const cluster = arg.slice(1);
+  const letters = nextWordLetters(program);
+  const at = [...cluster].findIndex(char => letters.includes(char));
+  return at !== -1 && at === cluster.length - 1;
+}
+
+/** A word that could be an option's value rather than the start of another option. */
+function plainWord(arg: string | undefined): boolean {
+  return arg !== undefined && !arg.startsWith('-') && !arg.startsWith('+');
+}
+
+/**
+ * An interpreter's options, and the operands after them (a script file and its arguments). A
+ * value-taking option swallows the rest of its cluster (`ruby -rset x.rb`) or its next argument
+ * (`python3 -W ignore -c ...`), so neither the swallowed word nor a later script argument is read
+ * as one of the interpreter's own options. An unrecognised long option is assumed to take the next
+ * word, so a script after it cannot end the option prefix early (`node --loader ./x.mjs -e ...`
+ * still runs `-e`).
+ */
+function interpreterOptions(program: string, args: readonly string[]): { options: string[]; operands: string[] } {
+  const letters = optionValueLetters(program);
+  const shellWord = SHELL_OPTION_WORD.has(program);
+  // Shells also take flags as `+e`, which turn an option off rather than ending the options.
+  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
+  const options: string[] = [];
+  let i = 0;
+  for (; i < args.length; i++) {
+    const arg = args[i];
+    // `bash -oc pipefail '...'` is `-o pipefail` plus `-c`: `o` takes the next word and the letters
+    // after it stay flags, unlike the glued value other interpreters read.
+    if (shellWord && /^[+-][a-zA-Z]*[oO]/.test(arg)) {
+      options.push(arg);
+      i += [...arg.slice(1)].filter(letter => letter === 'o' || letter === 'O').length;
+      continue;
+    }
+    // A lone `-` is the stdin operand, not an option.
+    if (arg === '-' || (!arg.startsWith('-') && !(plusFlags && arg.startsWith('+')))) break;
+    options.push(flagRun(arg, letters));
+    if (takesNextArgument(program, arg)) i++;
+    else if (
+      arg.startsWith('--') &&
+      arg !== '--' &&
+      !arg.includes('=') &&
+      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      plainWord(args[i + 1])
+    ) {
+      i++;
+    }
+  }
+  return { options, operands: args.slice(i) };
+}
+
+/**
+ * Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`,
+ * `echo x | sh`, and the shell builtins that read one in-process: `source <(curl https://x)`.
+ */
+const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash|source|\.)$/;
+
+/** Arguments that name the command's own standard input rather than a script file. */
+const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
+
+/** Programs that resolve a name, so a computed argument can smuggle data into a query. */
+const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
+
+/** Git's global options that take the value in the next argument, which is not a subcommand. */
+const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
+
+/**
+ * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
+ * here-string parses as the command's own child, and `cat <<'EOF' | python3` nests the pipe that
+ * feeds python3 inside the heredoc redirect, where python3 is that pipeline's first command.
+ */
+function readsStdin(node: Node): boolean {
+  if (
+    node.namedChildren.some(child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution')
+  ) {
+    return true;
+  }
+  let self: Node = node;
+  let parent = node.parent;
+  if (parent?.type === 'redirected_statement') {
+    const fed = parent.namedChildren.some(
+      child =>
+        child !== null &&
+        (child.type === 'heredoc_redirect' ||
+          child.type === 'herestring_redirect' ||
+          (child.type === 'file_redirect' && redirectOperator(child) === '<'))
+    );
+    if (fed) return true;
+    self = parent;
+    parent = parent.parent;
+  }
+  return (
+    parent?.type === 'pipeline' &&
+    (parent.namedChildren[0]?.id !== self.id || parent.parent?.type === 'heredoc_redirect')
+  );
+}
+
+/** The value an option sets, as `-X POST`, `-XPOST` or `--request=POST`; undefined when absent. */
+function optionValue(args: readonly string[], flags: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    for (const flag of flags) {
+      if (args[i] === flag) return args[i + 1] ?? '';
+      const joined = flag.startsWith('--') ? `${flag}=` : flag;
+      if (args[i].startsWith(joined)) return args[i].slice(joined.length);
+    }
+  }
+  return undefined;
+}
+
+function sendsBody(method: string | undefined): boolean {
+  return method !== undefined && !/^(GET|HEAD)$/i.test(method);
+}
+
+/**
+ * Why one simple command can send data off this computer, or null. Defence in depth only: a
+ * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
+ * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ */
+export function outboundReason(raw: readonly string[], stdin = false): string | null {
+  const tokens = raw.map(unquote);
+  let start = 0;
+  while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
+    start++;
+    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+  }
+  if (start >= tokens.length) return null;
+  const program = basename(tokens[start]);
+  const args = tokens.slice(start + 1);
+  // Any computed argument: `curl https://x/$(base64 a)` sends the file in a GET.
+  const computed = raw.slice(start + 1).some(isDynamic);
+
+  if (ALWAYS_OUTBOUND.has(program)) return program;
+  if (program === 'curl') {
+    const flag = args.find(
+      arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
+    );
+    if (flag) return `curl ${flag.split('=')[0]}`;
+    // A header read from a file (`-H @path`) sends what the file holds as a header value. Check
+    // every header, not just the first: a call usually carries several, and any one of them can
+    // name a file, however it is spelled (`-sH@file`, `--header=@file`, `--proxy-header @file`).
+    const headerFile = args.some((arg, i) => {
+      const glued = /^(?:-[a-zA-Z]*H|--(?:proxy-)?header=)(.+)$/.exec(arg);
+      if (glued) return glued[1].startsWith('@');
+      if (/^-[a-zA-Z]*H$/.test(arg) || arg === '--header' || arg === '--proxy-header') {
+        return (args[i + 1] ?? '').startsWith('@');
+      }
+      return false;
+    });
+    if (headerFile) return 'curl -H';
+    // `-sX POST` sets the method too.
+    const method = optionValue(
+      args.map(arg => arg.replace(/^-[a-zA-Z]*X/, '-X')),
+      ['-X', '--request']
+    );
+    if (sendsBody(method)) return 'curl --request';
+    return computed ? 'curl with a computed argument' : null;
+  }
+  if (program === 'wget') {
+    const flag = args.find(arg => WGET_SENDS.test(arg.split('=')[0]));
+    if (flag) return `wget ${flag.split('=')[0]}`;
+    if (sendsBody(optionValue(args, ['--method']))) return 'wget --method';
+    return computed ? 'wget with a computed argument' : null;
+  }
+  if (program === 'rsync') {
+    return args.some(arg => !arg.startsWith('-') && (/^[^/]*:/.test(arg) || arg.startsWith('rsync://')))
+      ? 'rsync to a remote host'
+      : null;
+  }
+  if (program === 'git') {
+    const words: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-C' || args[i] === '-c') i++;
+      else if (GIT_OPTION_VALUES.test(args[i])) {
+        if (!args[i].includes('=')) i++;
+      } else if (!args[i].startsWith('-')) words.push(args[i]);
+    }
+    const [sub, action] = words;
+    if (sub === 'push' || sub === 'send-email') return `git ${sub}`;
+    if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
+    return null;
+  }
+  if (program === 'gh') {
+    const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+    if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
+      return `gh ${sub} ${action}`;
+    }
+    // Writing an issue, a pull request or a release posts text under the user's own account.
+    if ((sub === 'issue' || sub === 'pr') && (action === 'create' || action === 'comment' || action === 'edit')) {
+      return `gh ${sub} ${action}`;
+    }
+    if (sub === 'release' && action === 'create') return 'gh release create';
+    const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
+    return sub === 'api' && (fields || sendsBody(optionValue(args, ['-X', '--method']))) ? 'gh api' : null;
+  }
+  if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
+    const positional = args.filter(arg => !arg.startsWith('-'));
+    const copies = positional.some(arg => /^(cp|mv|sync|rsync)$/.test(arg));
+    if (copies && /^(s3|gs):\/\//.test(positional.at(-1) ?? '')) return `${program} upload`;
+    return positional.includes('put-object') ? `${program} put-object` : null;
+  }
+  if (program === 'docker' || program === 'podman') {
+    return args.find(arg => !arg.startsWith('-')) === 'push' ? `${program} push` : null;
+  }
+  if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
+  if (program === 'eval') return 'eval';
+  // A name built from a command substitution carries what it read into the lookup itself.
+  if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
+  const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
+  const { options, operands } = interpreterOptions(program, args);
+  const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
+  if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
+  // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
+  const scriptOperand =
+    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+  if (
+    stdin &&
+    STDIN_SCRIPT.test(program) &&
+    (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
+  ) {
+    return `${program} reading a script from stdin`;
+  }
+  if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
+    return `${program} publish`;
+  }
+  return null;
+}
+
 function words(node: Node): string[] {
   const out: string[] = [];
   for (const child of node.namedChildren) {
@@ -180,6 +500,7 @@ export async function scanShell(
     const commands: ShellCommand[] = [];
     const directories = new Set<string>();
     const envFiles = new Set<string>();
+    const outbound = new Set<string>();
     const writtenCommands = new Set<number>();
 
     const noteEnvFile = (raw: string): void => {
@@ -226,6 +547,8 @@ export async function scanShell(
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
       });
+      const sends = outboundReason(tokens, readsStdin(node));
+      if (sends) outbound.add(sends);
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) return;
@@ -311,7 +634,7 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
-    return { commands, directories: [...directories], envFiles: [...envFiles] };
+    return { commands, directories: [...directories], envFiles: [...envFiles], outbound: [...outbound] };
   } finally {
     tree.delete();
   }

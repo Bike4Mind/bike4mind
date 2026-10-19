@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSession, ChatSessionSummary } from '@shared/chat';
+import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
@@ -82,11 +83,13 @@ beforeEach(() => {
         renameSession: (_id: string, _title: string) =>
           new Promise<ChatSessionSummary | null>(resolve => (resolveRename = resolve)),
       }),
+      // An empty list is not a sections state; the sidebar groups by this one.
+      sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
     },
     {
       get(target, name: string | symbol) {
         if (typeof name !== 'string') return undefined;
-        return name in target ? target[name as 'chat'] : quietBridge({});
+        return name in target ? target[name as 'chat' | 'sidebar'] : quietBridge({});
       },
     }
   );

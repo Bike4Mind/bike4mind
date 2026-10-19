@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
 
 /**
  * Regression test for the WS subscribe handler's rotation-grace wiring: this path
@@ -28,14 +28,30 @@ vi.mock('@bike4mind/common', async importOriginal => ({
  * go red when the projection grew citables.metadata.fullContext. A new owner-only path now lands
  * in both expectations for free.
  */
+const serverOnlyQuestExclusions = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
+
 const expectedQuestExclusions = {
   ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
-  callback: false,
+  ...serverOnlyQuestExclusions,
 };
 
 const mockFindModelByCollectionName = vi.fn();
-const mockQuerySubscriptionFindOneAndUpdate = vi.fn();
+const mockUpsertSubscriber = vi.fn();
+const mockRemoveConnectionSubscribers = vi.fn();
+// The registered Connection row the handler requires; a test overrides it to null or another user.
+let connectionRow: { userId: string } | null = { userId: 'caller-1' };
+const mockConnectionFindOne = vi.fn(() => ({ lean: async () => connectionRow }));
+const mockCloseConnection = vi.fn(async () => undefined);
+vi.mock('@server/websocket/closeConnection', () => ({
+  closeConnection: (...args: unknown[]) => mockCloseConnection(...(args as [])),
+}));
+// The enforceMFA gate in verifyWsAccessToken is covered in its own test; inert here.
+vi.mock('@server/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: async () => false,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
 vi.mock('@bike4mind/database', () => ({
+  Connection: { findOne: (...args: unknown[]) => mockConnectionFindOne(...(args as [])) },
   AdminSettings: {},
   ApiKey: {},
   AppFile: {},
@@ -48,9 +64,12 @@ vi.mock('@bike4mind/database', () => ({
   mongoose: {},
   Organization: { collection: { collectionName: 'organizations' } },
   Project: {},
-  QuerySubscription: { findOneAndUpdate: (...args: unknown[]) => mockQuerySubscriptionFindOneAndUpdate(...args) },
   Quest: { collection: { collectionName: 'quests' } },
   QuestMasterPlan: { collection: { collectionName: 'questMasterPlans' } },
+  realtimeConnectionRepository: {
+    upsertSubscriber: (...args: unknown[]) => mockUpsertSubscriber(...args),
+    removeConnectionSubscribers: (...args: unknown[]) => mockRemoveConnectionSubscribers(...args),
+  },
   User: { findById: vi.fn() },
 }));
 
@@ -204,7 +223,7 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'caller-1' });
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
-    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
   });
 
   it('does not exclude returnValue/error when the caller owns the requested session', async () => {
@@ -218,7 +237,7 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.returnValue');
     expect(scopedFields).not.toHaveProperty('promptMeta.functionCalls.error');
     // The callback belongs to whichever API key armed it, possibly a collaborator's.
-    expect(scopedFields).toEqual({ callback: false });
+    expect(scopedFields).toEqual(serverOnlyQuestExclusions);
   });
 
   it('still excludes returnValue/error when the caller only has a share on the requested session', async () => {
@@ -258,7 +277,7 @@ describe('dataSubscribeRequest WS handler - account state', () => {
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
     // Set here rather than inherited from an earlier describe's mock state.
     mockSessionFind.mockResolvedValue([]);
-    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
   });
 
   it.each([
@@ -272,7 +291,7 @@ describe('dataSubscribeRequest WS handler - account state', () => {
 
       await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(errorClass);
       expect(mockSessionFind).not.toHaveBeenCalled();
-      expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockUpsertSubscriber).not.toHaveBeenCalled();
     }
   );
 });
@@ -302,7 +321,7 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
       tokenVersion: undefined,
     });
     (Project as unknown as { find: unknown }).find = vi.fn(() => ({ distinct: vi.fn().mockResolvedValue([]) }));
-    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
   });
 
   it.each([
@@ -318,7 +337,7 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
       'Disallowed subscription filter'
     );
     expect(find).not.toHaveBeenCalled();
-    expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
   });
 
   it('still accepts the filters the app sends', async () => {
@@ -331,6 +350,116 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
     await func(inviteEvent({ documentId: 'doc-1', type: 'Project' }) as any, {} as any, noopLogger as any);
 
     expect(find).toHaveBeenCalled();
-    expect(mockQuerySubscriptionFindOneAndUpdate).toHaveBeenCalled();
+    expect(mockUpsertSubscriber).toHaveBeenCalled();
+  });
+});
+
+describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'caller-1',
+      email: 'caller@example.test',
+      tokenVersion: undefined,
+    });
+    (Project as unknown as { find: unknown }).find = vi.fn(() => ({ distinct: vi.fn().mockResolvedValue([]) }));
+    mockFindModelByCollectionName.mockReturnValue({
+      find: vi.fn().mockReturnValue({
+        setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}), then: (r: (v: unknown[]) => void) => r([]) }),
+      }),
+    });
+    vi.mocked(inviteSubscriptionScope).mockReturnValue({ $or: [] });
+    mockRemoveConnectionSubscribers.mockResolvedValue(undefined);
+    mockCloseConnection.mockResolvedValue(undefined);
+  });
+
+  const inviteEvent = () => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'invites',
+      query: {},
+      fields: {},
+      fetchInitialData: false,
+    }),
+  });
+
+  it('backs out the entry it wrote and closes the socket when the row was ended after the write', async () => {
+    // First read (registration check) sees the live row; the re-read after the write does not.
+    mockConnectionFindOne
+      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
+      .mockImplementationOnce(() => ({ lean: async () => null }));
+
+    await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(mockUpsertSubscriber).toHaveBeenCalledTimes(1);
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+    expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+  });
+
+  const endAfterWrite = () =>
+    mockConnectionFindOne
+      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
+      .mockImplementationOnce(() => ({ lean: async () => null }));
+
+  it('still refuses with UnauthorizedError when the close fails', async () => {
+    endAfterWrite();
+    mockCloseConnection.mockRejectedValueOnce(new Error('close failed'));
+
+    await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('still closes the socket and refuses with UnauthorizedError when the subscriber pull fails', async () => {
+    endAfterWrite();
+    mockRemoveConnectionSubscribers.mockRejectedValueOnce(new Error('pull failed'));
+
+    await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to remove subscribers of ended connection conn-1'),
+      expect.any(Error)
+    );
+  });
+
+  it('keeps the entry when the row is still live after the write', async () => {
+    await func(inviteEvent() as any, {} as any, noopLogger as any);
+
+    expect(mockUpsertSubscriber).toHaveBeenCalledTimes(1);
+    expect(mockRemoveConnectionSubscribers).not.toHaveBeenCalled();
+  });
+});
+
+describe('dataSubscribeRequest - registered connection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+  });
+
+  it('refuses to subscribe on a connection whose row was removed, and closes the socket', async () => {
+    connectionRow = null;
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+
+  it("refuses to subscribe on another user's connection", async () => {
+    connectionRow = { userId: 'someone-else' };
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
   });
 });

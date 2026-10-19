@@ -15,7 +15,8 @@ if (process.platform === 'linux') {
   const images = (await readdir(release)).filter(name => name.endsWith('.AppImage'));
   assert.equal(images.length, 1, 'Expected exactly one packaged AppImage');
   executable = join(release, images[0]);
-  platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage');
+  // Xvfb has no hardware GPU; use software rendering for the startup screenshot.
+  platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu');
 }
 if (process.platform === 'darwin') {
   // A temporary HOME has no login keychain; startup tests must not prompt or touch the real one.
@@ -95,6 +96,7 @@ try {
       expression: `(async () => {
         if (!window.b4m || !document.querySelector('[data-testid="environment-active-text"]')) return null;
         return { info: await window.b4m.getAppInfo(), auth: (await window.b4m.auth.getState()).status,
+          update: (await window.b4m.update.getState()).status,
           heading: document.body.innerText.includes('Bike4Mind Desktop') };
       })()`,
       awaitPromise: true, returnByValue: true,
@@ -109,6 +111,9 @@ try {
   assert.ok(state?.heading, 'Packaged sign-in screen did not render');
   assert.ok(['signed-out', 'unconfigured'].includes(state.auth), 'Auth initialization did not finish');
   assert.equal(state.info.appVersion, process.env.DESKTOP_VERSION);
+  if (process.env.EXPECT_UPDATES_DISABLED === 'true') {
+    assert.equal(state.update, 'unsupported', 'Manual-install builds must not enable in-app updates');
+  }
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
   assert.equal(child.exitCode, null, 'App exited during startup verification');
   await writeFile(join(output, 'result.json'), JSON.stringify(state, null, 2));

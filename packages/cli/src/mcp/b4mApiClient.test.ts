@@ -614,6 +614,61 @@ describe('B4mApiClient', () => {
     expect(sent().body).toEqual({ name: 'Apollo', description: 'Moon' });
   });
 
+  const v1Artifact = {
+    id: 'a1',
+    type: 'html',
+    title: 'Spec',
+    description: null,
+    version: 1,
+    version_tag: null,
+    status: 'draft',
+    tags: ['docs'],
+    session_id: 's1',
+    project_id: null,
+    visibility: 'private',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    content: '<h1>Spec</h1>',
+  };
+
+  it('creates an artifact via v1, sending snake_case ids and mapping the resource', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    const artifact = await client.createArtifact({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      notebookId: 's1',
+      projectId: 'p1',
+      tags: ['docs'],
+    });
+    expect(sent()).toMatchObject({ url: 'http://localhost:3000/api/v1/artifacts', method: 'POST' });
+    expect(sent().body).toStrictEqual({
+      type: 'html',
+      title: 'Spec',
+      content: '<h1>Spec</h1>',
+      description: 'A spec',
+      session_id: 's1',
+      project_id: 'p1',
+      tags: ['docs'],
+    });
+    expect(artifact).toEqual({
+      id: 'a1',
+      type: 'html',
+      title: 'Spec',
+      version: 1,
+      notebookId: 's1',
+      projectId: undefined,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('sends only the required artifact fields when the optional ones are omitted', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(v1Artifact, { status: 201 }));
+    await client.createArtifact({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B', tags: [] });
+    expect(sent().body).toStrictEqual({ type: 'mermaid', title: 'Flow', content: 'graph TD; A-->B' });
+  });
+
   it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({
       artifacts: [{ id: 'artifact_a_1', title: 'A' }],
@@ -737,6 +792,16 @@ describe('mapApiError', () => {
     expect(msg).not.toContain('API key forbidden');
   });
 
+  it('surfaces the user-scope ownership message on a 403 instead of the key-scope hint', () => {
+    const msg = mapApiError(
+      axiosError(403, { data: { error: 'You can only publish to your own user scope' } }),
+      'http://x',
+      'files:write'
+    );
+    expect(msg).toContain('You can only publish to your own user scope');
+    expect(msg).not.toContain('recommended scope');
+  });
+
   it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
       "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
@@ -810,5 +875,99 @@ describe('mapApiError', () => {
 
   it('falls back to the message for a non-axios error', () => {
     expect(mapApiError(new Error('boom'), 'http://x')).toBe('boom');
+  });
+});
+
+describe('B4mApiClient publish', () => {
+  let client: B4mApiClient;
+  const globalFetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', globalFetch);
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens a draft and finalizes it through the authenticated client', async () => {
+    mockPost.mockResolvedValueOnce({ draftId: 'd1', uploadUrls: [] }).mockResolvedValueOnce({ publicId: 'p1' });
+    const request = {
+      tier: 'user' as const,
+      scopeId: 'u1',
+      slug: 'chart-abc',
+      title: 'Chart',
+      files: [{ path: 'index.html', size: 3, mimeType: 'text/html' }],
+    };
+
+    await client.requestPublishUpload(request);
+    await client.finalizePublish('d1');
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/api/publish/artifact/upload-url', request);
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/api/publish/artifact/finalize', { draftId: 'd1' });
+  });
+
+  it('looks up an existing publication by the caller of an artifact', async () => {
+    const page = { publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'chart-1', visibility: 'public' };
+    mockGet.mockResolvedValueOnce({ artifacts: [page] }).mockResolvedValueOnce({ artifacts: [] });
+
+    await expect(client.findPublishedArtifact('artifact_1')).resolves.toEqual(page);
+    await expect(client.findPublishedArtifact('artifact_2')).resolves.toBeNull();
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/api/publish/artifacts', {
+      params: { sourceArtifactId: 'artifact_1', limit: 1 },
+    });
+  });
+
+  it('PUTs draft bytes with plain fetch so no auth header breaks a presigned signature', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile(
+      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      '<p/>',
+      'text/html'
+    );
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1');
+    expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
+  });
+
+  it('resolves a self-host relative proxy URL against the base URL', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
+
+    expect(String(globalFetch.mock.calls[0][0])).toBe(
+      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    );
+  });
+
+  it('fails loudly when the upload is rejected', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+      'publish upload failed (403)'
+    );
+  });
+});
+
+describe('mapApiError publish slug collisions', () => {
+  it('surfaces the server message instead of a key-scope hint', () => {
+    const err = axiosError(403, {
+      data: { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' },
+    });
+
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
+  });
+
+  it('keeps the key-scope hint for any other 403', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
+      'recommended scope: files:write'
+    );
   });
 });

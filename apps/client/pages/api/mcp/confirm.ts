@@ -3,16 +3,15 @@ initializeSlackPackage();
 
 import { z } from 'zod';
 import { Quest, Session } from '@bike4mind/database';
-import { isImageServeable, MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
+import { MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
-import { GitHubResource } from '@bike4mind/slack';
-import { JiraResource } from '@bike4mind/slack';
-import { ConfluenceResource } from '@bike4mind/slack';
+import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
@@ -23,8 +22,8 @@ const ConfirmRequestSchema = z.object({
   questId: z.string(),
   sessionId: z.string(),
   confirmed: z.boolean(),
-  // The action the card displayed. Optional only for cards rendered before this field existed.
-  pendingActionTs: z.number().optional(),
+  // The action the card displayed, so the click confirms exactly that action and never a newer one.
+  pendingActionTs: z.number(),
 });
 
 /**
@@ -91,7 +90,7 @@ const handler = baseApi().post(async (req, res) => {
   }
 
   // Checked before Cancel and expiry too, so a stale card can neither run nor clear a newer action.
-  if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
+  if (pendingActionTs !== pendingAction.ts) {
     logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
     return res.status(409).json({
       error: 'This action was replaced by a newer one. Please review it again.',
@@ -122,21 +121,20 @@ const handler = baseApi().post(async (req, res) => {
   await assertMcpServerEnabled();
 
   // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
-  // executor: same server routing, repo checks, expiry and claim-before-invoke ordering.
+  // executor: same routing and file loading (pendingActionTarget.ts), expiry and claim-before-invoke
+  // ordering. Only this route checks the selected repositories before invoking.
+  const target = resolvePendingActionTarget(pendingAction.tool, user, logger);
+  if (!target) {
+    logger.warn('[Web MCP Confirm] Refusing a pending action for a non-confirmable tool', {
+      questId,
+      tool: pendingAction.tool,
+    });
+    return res.status(400).json({ error: 'This action cannot be confirmed.' });
+  }
+  const { mcpName, resource } = target;
+
   try {
-    let resource: GitHubResource | JiraResource | ConfluenceResource;
-    if (pendingAction.tool.startsWith('jira_')) {
-      resource = new JiraResource(user, logger);
-    } else if (pendingAction.tool.startsWith('confluence_')) {
-      resource = new ConfluenceResource(user, logger);
-    } else {
-      resource = new GitHubResource(user, logger);
-    }
-
     const envVariables = await resource.getMcpEnvVariables();
-
-    const mcpName =
-      pendingAction.tool.startsWith('jira_') || pendingAction.tool.startsWith('confluence_') ? 'atlassian' : 'github';
 
     // Get selected repositories for GitHub security filtering
     const selectedRepositories = await getSelectedRepositoriesForMcp(user.id, mcpName);
@@ -177,44 +175,23 @@ const handler = baseApi().post(async (req, res) => {
       fabFileId &&
       !hasContent
     ) {
-      logger.info('[Web MCP Confirm] Fetching FAB file from S3', { fabFileId, filename: toolParams.filename });
-
-      try {
-        const { FabFile } = await import('@bike4mind/database');
-        const { getFilesStorage } = await import('@server/utils/storage');
-
-        const fabFile = await FabFile.findById(fabFileId);
-        // Explicit skip before attempting the download, not a throw relying on the
-        // surrounding try/catch: a thrown error here gets swallowed by the catch below,
-        // which then falls through to the slackFileUrl fallback only because that catch
-        // doesn't distinguish "blocked image" from "download failed" - safe only because
-        // slackFileUrl points at a distinct resource. This if/else-if makes the skip a
-        // first-class branch instead of an exception-handling coincidence.
-        if (fabFile && !isImageServeable(fabFile)) {
-          logger.warn('[Web MCP Confirm] Skipping FAB file attachment: image not serveable', { fabFileId });
-        } else if (fabFile?.filePath) {
-          const fileBuffer = await getFilesStorage().download(fabFile.filePath);
-          toolParams.content = fileBuffer.toString('base64');
-          if (!toolParams.mimeType && fabFile.mimeType) {
-            toolParams.mimeType = fabFile.mimeType;
-          }
-          logger.info('[Web MCP Confirm] Downloaded FAB file from S3', {
-            fabFileId,
-            filename: toolParams.filename,
-            sizeBytes: fileBuffer.length,
-          });
-        } else {
-          logger.warn('[Web MCP Confirm] FAB file not found or has no filePath', { fabFileId });
+      const attachment = await loadFabFileAttachment(fabFileId, user, logger);
+      if (attachment.status === 'forbidden') {
+        return res
+          .status(403)
+          .json({ success: false, error: 'The file to attach was not found or you do not have access to it.' });
+      }
+      if (attachment.status === 'loaded') {
+        toolParams.content = attachment.content;
+        if (!toolParams.mimeType && attachment.mimeType) {
+          toolParams.mimeType = attachment.mimeType;
         }
-      } catch (fabError) {
-        logger.error('[Web MCP Confirm] Failed to download FAB file from S3', {
-          fabFileId,
-          error: fabError instanceof Error ? fabError.message : String(fabError),
-        });
       }
     }
 
-    // Fallback: download from slackFileUrl (S3 presigned URL) if content is still empty
+    // Fallback: download slackFileUrl (an LLM-supplied tool arg) if content is still empty. It goes
+    // through the SSRF guard, so a private-address URL (e.g. self-host object storage) is refused;
+    // fabFileId above is the path for files already in our storage.
     const slackFileUrl = toolParams.slackFileUrl as string | undefined;
     const hasContentAfterFab =
       toolParams.content && typeof toolParams.content === 'string' && (toolParams.content as string).length > 100;
@@ -229,12 +206,7 @@ const handler = baseApi().post(async (req, res) => {
       });
 
       try {
-        const response = await fetch(slackFileUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
+        const fileBuffer = await downloadAttachmentUrl(slackFileUrl);
         toolParams.content = fileBuffer.toString('base64');
         logger.info('[Web MCP Confirm] Downloaded file from URL', {
           filename: toolParams.filename,
@@ -244,6 +216,9 @@ const handler = baseApi().post(async (req, res) => {
         logger.error('[Web MCP Confirm] Failed to download file from URL', {
           error: urlError instanceof Error ? urlError.message : String(urlError),
         });
+        // Return before claiming so the action stays for a retry, matching the Slack executor. The
+        // message is generic: the guard's detail (e.g. what a hostname resolved to) is logged above.
+        return res.status(502).json({ success: false, error: 'Failed to download file' });
       }
     }
 

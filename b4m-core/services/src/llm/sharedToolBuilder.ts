@@ -40,6 +40,7 @@ import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } f
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
 import { extractMcpPendingAction, type McpPendingAction } from './mcpPendingAction';
+import { JIRA_LIST_ATTACHMENTS, CONFLUENCE_LIST_ATTACHMENTS } from '@bike4mind/mcp/atlassian/constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -291,6 +292,12 @@ export interface BuildSharedToolsOptions {
    */
   toolAvailability?: ToolAvailability;
 }
+
+/** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
+const ATTACHMENT_LIST_SOURCE_BY_TOOL: ReadonlyMap<string, 'jira' | 'confluence'> = new Map([
+  [`atlassian__${JIRA_LIST_ATTACHMENTS}`, 'jira'],
+  [`atlassian__${CONFLUENCE_LIST_ATTACHMENTS}`, 'confluence'],
+]);
 
 // Sentinel types for wrapping. A tool may emit one of these generic
 // optimization-console side-effects; the type must be allowlisted here so its
@@ -833,14 +840,17 @@ function createMcpToolWrapper(
       try {
         if (typeof result === 'string' && result.includes('_attachmentList')) {
           const parsed = JSON.parse(result);
-          if (parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
+          // Only the Atlassian list tools may mint a list the delete buttons act on; the source comes
+          // from which tool ran, never from the (tool-controlled) payload.
+          const attachmentListSource = ATTACHMENT_LIST_SOURCE_BY_TOOL.get(name);
+          if (attachmentListSource && parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
             logger.debug(`[MCP] Extracted attachment list from tool ${name}`, {
-              source: parsed.source,
+              source: attachmentListSource,
               count: parsed.attachments.length,
             });
 
             const attachmentList = {
-              source: parsed.source,
+              source: attachmentListSource,
               issueKey: parsed.issueKey,
               pageId: parsed.pageId,
               pageTitle: parsed.pageTitle,
@@ -866,7 +876,7 @@ function createMcpToolWrapper(
             }
 
             // Default: return simplified result for AI
-            const sourceLabel = parsed.source === 'jira' ? 'Jira issue' : 'Confluence page';
+            const sourceLabel = attachmentListSource === 'jira' ? 'Jira issue' : 'Confluence page';
             const identifier = parsed.issueKey || parsed.pageId || '';
             return JSON.stringify(
               {

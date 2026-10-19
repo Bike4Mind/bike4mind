@@ -163,19 +163,31 @@ describe('POST /api/v1/music-generations/{id}/cancel', () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
   });
 
-  it('requests cancellation of a running job and returns it', async () => {
-    h.findById.mockResolvedValue(musicJob({ state: 'running' }));
-    h.requestCancel.mockResolvedValue(musicJob({ state: 'running', cancelRequested: true }));
+  it('requests cancellation of a pending job and returns it', async () => {
+    h.findById.mockResolvedValue(musicJob({ state: 'pending' }));
+    h.requestCancel.mockResolvedValue({
+      status: 'requested',
+      job: musicJob({ state: 'pending', cancelRequested: true }),
+    });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
-    expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'music_generation', state: 'running' });
+    expect(h.requestCancel).toHaveBeenCalledWith(expect.objectContaining({ id: JOB_ID, kind: 'music' }));
+    expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'music_generation', state: 'pending' });
+  });
+
+  it('409s not_cancellable for a song already rendering at the provider', async () => {
+    h.findById.mockResolvedValue(musicJob({ state: 'running' }));
+    h.requestCancel.mockResolvedValue({ status: 'not_cancellable', job: musicJob({ state: 'running' }) });
+    const { req, res } = cancel(JOB_ID);
+    await cancelHandler(req, res);
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({ error: expect.any(String), errorCode: 'not_cancellable' });
   });
 
   it('returns the job as read when the engine declines the cancel', async () => {
     h.findById.mockResolvedValue(musicJob({ state: 'storing', updatedAt: new Date('2026-10-06T00:05:00Z') }));
-    h.requestCancel.mockResolvedValue(null);
+    h.requestCancel.mockResolvedValue({ status: 'unchanged', job: null });
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);

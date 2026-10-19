@@ -9,6 +9,8 @@ import {
   getTurnsCost,
   type TurnUsage,
   pricingTierForTokens,
+  publishesCacheReadRate,
+  PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -53,6 +55,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { prepareWireTools } from './cliCompletionsToolSearch';
 
 export interface CompletionParams {
   userId: string;
@@ -181,14 +184,17 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Backends whose server caches prompt prefixes without a client flag; they only get the cache
  * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
- * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
- * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
- * options.cacheStrategy.enableCaching, which this path never sets.
+ * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
+ * model that publishes cache_read, the same condition this path checks. Ollama publishes no
+ * cache_read; Bedrock's cache_control is gated on options.cacheStrategy.enableCaching, which this
+ * path never sets.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
 ]);
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
@@ -243,7 +249,12 @@ function estimateReservationUsd(
     writeEnd = lastFlagged;
     hoistsSystem = true;
   } else {
-    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    // Mirror the adapter gate exactly: for a backend that forwards cache reads only for a model
+    // publishing cache_read on every tier, a single tier carrying one must not discount the hold,
+    // or settlement bills full-rate input against a discounted reservation.
+    const publishesCacheRead = PUBLISHED_CACHE_READ_BACKENDS.has(modelInfo.backend)
+      ? publishesCacheReadRate(modelInfo)
+      : tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
     readEnd = lastAssistantIndex - 1;
     hoistsSystem = false;
@@ -377,6 +388,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
+  // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
+  if (modelInfo?.disabled) {
+    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+    throw new BadRequestError(
+      `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
@@ -429,6 +449,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+  // Before any credit reservation, so a refused tool search request costs nothing.
+  const wireTools = prepareWireTools(options?.tools, messages, modelInfo);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -436,7 +458,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // ICompletionOptionTools requires a stricter property shape - the backend's
   // formatTools() coerces both shapes correctly.
   const noopToolFn: ICompletionOptionTools['toolFn'] = async () => '';
-  const promotedTools: ICompletionOptionTools[] | undefined = options?.tools?.map(t => ({
+  const promotedTools: ICompletionOptionTools[] | undefined = wireTools.tools.map(t => ({
     ...t,
     toolFn: (t as { toolFn?: ICompletionOptionTools['toolFn'] }).toolFn ?? noopToolFn,
   })) as ICompletionOptionTools[] | undefined;
@@ -452,6 +474,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     maxTokens,
     stream: options?.stream ?? true,
     tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
     executeTools: useServerTools,
     ...(useServerTools && params.maxToolCalls !== undefined
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
@@ -575,6 +598,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Per-request breakdown of the same totals, from adapters that report it; prices each request on
   // its own long-context tier. Same assign-not-add contract.
   let finalTurnUsage: TurnUsage[] | undefined;
+  // Informational subset of finalOutputTokens, never billed. Undefined until a provider
+  // reports a count, and checked against undefined (not truthiness) so a reported 0 survives.
+  let finalReasoningTokens: number | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
@@ -599,6 +625,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
     if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    // Latched only alongside outputTokens so the pair always comes from the same frame.
+    // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
+    // fully-filtered reply - still latches its count instead of dropping it.
+    if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
+      finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
@@ -713,6 +744,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     await onChunk([], {
       inputTokens: finalInputTokens,
       outputTokens: finalOutputTokens,
+      ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
       cacheReadInputTokens: finalCacheReadTokens || undefined,
       cacheCreationInputTokens: finalCacheCreationTokens || undefined,
       creditsUsed: finalCredits,

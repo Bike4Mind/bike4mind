@@ -49,9 +49,12 @@ interface ResearchTaskProcessAdapters {
   db: {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
-    fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite' | 'findChargeState'
+    >;
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
-    users: Pick<IUserRepository, 'findById'>;
+    users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     adminSettings: IAdminSettingsRepository;
     // Optional, but wire it: this `db` reaches `createFabFile`, whose admission contract (#1680)
     // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
@@ -137,7 +140,8 @@ export const process = async (
 
   // Update status to PROCESSING before starting (no transaction needed for single operation)
   researchTask.status = ResearchTaskStatus.PROCESSING;
-  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
+  researchTask.warnings = [];
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status, warnings: researchTask.warnings });
 
   logger?.info(`✅ [PROCESS_START] Processing research task ${researchTask.id} with status: ${researchTask.status}`);
 
@@ -397,6 +401,14 @@ const processScrape = async (
         adapters,
         logger
       );
+
+      if (result?.storageLimitReached) {
+        await db.researchTasks.addWarning(researchTask.id, `Storage limit reached: kept the previous copy of ${url}`);
+        await sendStatusUpdate(
+          `\u26a0\ufe0f [${index}/${urls.length}] Storage limit reached: kept the previous copy of ${url}`,
+          0
+        );
+      }
 
       if (result?.file) {
         mainFile = result.file;

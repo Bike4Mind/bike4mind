@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+// The same module instance the handler imports, so the assertion below pins identity, not a copy.
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
 
@@ -121,6 +123,14 @@ describe('questProcessor getStaticOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 120_000);
+
+  // This factory is hand-maintained (unlike the shared defaults), so losing the table here
+  // silently re-opens every surface denial on this route only.
+  it('carries the contributed surface denials into the options', async () => {
+    const { getStaticOptions } = await import('./questProcessor');
+
+    expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
   }, 120_000);
 });
 

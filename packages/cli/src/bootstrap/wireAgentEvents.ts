@@ -1,6 +1,6 @@
 import { AgentStep, ReActAgent } from '@bike4mind/agents';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
-import { type AgentContext, formatStep } from '../utils';
+import { formatStep } from '../utils';
 import { useCliStore } from '../store';
 import { PENDING_ASSISTANT_CONTENT, type Message } from '../storage';
 import { bridgePresence } from '../features/bridgePresence/index.js';
@@ -16,7 +16,6 @@ function updatePendingAssistant(update: (message: Message) => Message): void {
 
 export interface WireAgentEventsInput {
   agent: ReActAgent;
-  agentContext: AgentContext;
   orchestrator: SubagentOrchestrator;
 }
 
@@ -31,13 +30,7 @@ export interface WireAgentEventsInput {
  * singleton; neither owns React-lifecycle state.
  */
 export function wireAgentEvents(input: WireAgentEventsInput): void {
-  const { agent, agentContext, orchestrator } = input;
-
-  // Share the observation-queue reference with the agent so tool wrappers and
-  // the agent drain the same array. `observationQueue` is private on ReActAgent's
-  // public surface, so bridge through a minimal shape rather than `any`.
-  (agent as unknown as { observationQueue: AgentContext['observationQueue'] }).observationQueue =
-    agentContext.observationQueue;
+  const { agent, orchestrator } = input;
 
   // Set up step event handlers for real-time UI updates
   // These persist for the lifetime of the agent and update pending messages in the store

@@ -18,7 +18,7 @@ import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueu
 import { createSendStatusUpdate } from './utils';
 import { z } from 'zod';
 import plimit from 'p-limit';
-import axios from 'axios';
+import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { fileTypeFromBuffer } from 'file-type';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask } from './utils';
@@ -66,6 +66,9 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
 
 // TODO: have this as an admin settings
 const BATCH_SIZE = 3;
+// Safety net only; createFabFile still enforces the MaxFileSize admin setting afterwards.
+const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const LINK_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export const downloadRelevantLinks = async (
   parameters: IResearchTaskDownloadRelevantLinks,
@@ -111,6 +114,7 @@ export const downloadRelevantLinks = async (
   await sendStatusUpdate(`⬇️ Starting download of ${relevantLinks.length} high-value files...`, 3);
 
   let downloadCount = 0;
+  let keptPreviousCount = 0;
   const files: IFabFileDocument[] = [];
   const progressPerDownload = Math.floor(18 / relevantLinks.length); // Reserve 18% for downloads (within 29% range)
 
@@ -119,10 +123,11 @@ export const downloadRelevantLinks = async (
       limit(async () => {
         try {
           logger?.info(`📥 [DOWNLOAD] Starting download: ${link.url}`);
-          const response = await axios.get(link.url, {
-            responseType: 'arraybuffer',
+          // Scraped page links are attacker-influenced: fetch through the full SSRF guard.
+          const { data: buffer } = await ssrfSafeDownload(link.url, {
+            maxBytes: MAX_LINK_DOWNLOAD_BYTES,
+            timeoutMs: LINK_DOWNLOAD_TIMEOUT_MS,
           });
-          const buffer = Buffer.from(response.data);
           const fileType = await fileTypeFromBuffer(buffer);
           const index = getIndex(link.url) + 1;
 
@@ -159,6 +164,15 @@ export const downloadRelevantLinks = async (
           );
 
           let downloadedFile: IFabFileDocument;
+
+          if (existingDownloadResult?.storageLimitReached) {
+            keptPreviousCount++;
+            await db.researchTasks.addWarning(
+              researchTask.id,
+              `Storage limit reached: kept the previous copy of ${link.url}`
+            );
+            await sendStatusUpdate(`\u26a0\ufe0f Storage limit reached: kept the previous copy of ${link.text}`, 0);
+          }
 
           if (existingDownloadResult?.file) {
             downloadedFile = existingDownloadResult.file;
@@ -207,7 +221,9 @@ export const downloadRelevantLinks = async (
           );
         } catch (error) {
           logger?.error(`❌ [DOWNLOAD_ERROR] Failed to download file from ${link.url}: ${(error as Error).message}`);
-          await sendStatusUpdate(`❌ Download failed: ${link.text} - ${(error as Error).message}`, progressPerDownload);
+          // Generic on purpose: the guard's message can name the private address a hostname resolved
+          // to, which is logged above, not surfaced to the task owner.
+          await sendStatusUpdate(`❌ Download failed: ${link.text}`, progressPerDownload);
         }
       })
     )
@@ -238,7 +254,11 @@ export const downloadRelevantLinks = async (
     logger?.info(`🔄 [CHUNKING_QUEUED] All ${files.length} files queued for background processing!`);
   }
 
-  await sendStatusUpdate(`🎉 Research task completed with ${downloadCount} files downloaded`, 100);
+  const keptNote = keptPreviousCount ? `, ${keptPreviousCount} kept their previous copy (storage limit reached)` : '';
+  await sendStatusUpdate(
+    `\u{1F389} Research task completed with ${downloadCount - keptPreviousCount} files downloaded${keptNote}`,
+    100
+  );
 
   await queueRunner.close();
 

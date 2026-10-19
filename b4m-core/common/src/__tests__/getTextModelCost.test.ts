@@ -96,7 +96,7 @@ describe('pricingTierForTokens', () => {
 
 const perM = (usd: number) => usd / 1_000_000;
 
-// Two-tier ladders shaped like gpt-5.4 (272K) and gemini-3.1-pro-preview (200K).
+// Two-tier ladders: gpt-5.4 (272K) and a synthetic Gemini-style 200K ladder.
 const gpt54 = {
   ...baseModel,
   pricing: {
@@ -146,10 +146,8 @@ describe('getTurnsCost', () => {
     const rates = expected === 'base' ? geminiPro.pricing[200_000] : geminiPro.pricing[1_048_576];
     const cached = 50_000;
     const turn = { inputTokens: prompt - cached, cacheReadInputTokens: cached, outputTokens: 0 };
-    expect(getTurnsCost(geminiPro, [turn])).toBeCloseTo(
-      (prompt - cached) * rates.input + cached * rates.input * 0.1,
-      12
-    );
+    // This fixture carries no cache_read, so the read bills at that tier's input rate.
+    expect(getTurnsCost(geminiPro, [turn])).toBeCloseTo((prompt - cached) * rates.input + cached * rates.input, 12);
   });
 
   it('counts cache writes toward the tier', () => {
@@ -205,5 +203,34 @@ describe('getTurnsCost', () => {
 describe('getTextModelCost tierBasisTokens', () => {
   it('picks the tier on the given basis while pricing the given counts', () => {
     expect(getTextModelCost(gpt54, 20_000, 0, 0, 0, 300_000)).toBeCloseTo(20_000 * perM(5), 10);
+  });
+});
+
+describe('cache-read default rate', () => {
+  const flat = (backend: ModelBackend) =>
+    ({ ...baseModel, backend, pricing: { 1_000_000: { input: perM(2), output: perM(8) } } }) as ModelInfo;
+
+  it.each([ModelBackend.Gemini, ModelBackend.XAI])(
+    'bills a %s cache read at the input rate when the priced tier publishes no cache_read',
+    backend => {
+      // The adapter forwards reads off its own literal; a catalog row without cache_read must not
+      // turn them into Anthropic's 0.1x discount.
+      expect(getTextModelCost(flat(backend), 1_000, 0, 9_000)).toBeCloseTo(10_000 * perM(2), 12);
+      expect(
+        getTurnsCost(flat(backend), [{ inputTokens: 1_000, cacheReadInputTokens: 9_000, outputTokens: 0 }])
+      ).toBeCloseTo(10_000 * perM(2), 12);
+    }
+  );
+
+  it('keeps the published cache_read when the tier carries one', () => {
+    const model = {
+      ...flat(ModelBackend.Gemini),
+      pricing: { 1_000_000: { input: perM(2), output: perM(8), cache_read: perM(0.2) } },
+    } as ModelInfo;
+    expect(getTextModelCost(model, 1_000, 0, 9_000)).toBeCloseTo(1_000 * perM(2) + 9_000 * perM(0.2), 12);
+  });
+
+  it.each([ModelBackend.Anthropic, ModelBackend.OpenAI])('keeps the 0.1x default for %s', backend => {
+    expect(getTextModelCost(flat(backend), 1_000, 0, 9_000)).toBeCloseTo(1_000 * perM(2) + 9_000 * perM(2) * 0.1, 12);
   });
 });

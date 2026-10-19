@@ -13,34 +13,56 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navigate, navItems, entitlements } =
-  vi.hoisted(() => ({
-    useFeatureEnabledMock: vi.fn(),
-    useGearsNavSignalMock: vi.fn(),
-    useVideoModelsMock: vi.fn(),
-    navigate: vi.fn(),
-    // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-    navItems: [] as Array<{
-      path: string;
-      label: string;
-      icon?: ComponentType;
-      requireEntitlement?: string;
-      sidebar?: boolean;
-    }>,
-    entitlements: [] as string[],
-  }));
+const {
+  useFeatureEnabledMock,
+  useGearsNavSignalMock,
+  useVideoModelsMock,
+  useMusicModelsMock,
+  useAudioProvidersMock,
+  navigate,
+  location,
+  navItems,
+  entitlements,
+  userState,
+} = vi.hoisted(() => ({
+  useFeatureEnabledMock: vi.fn(),
+  useGearsNavSignalMock: vi.fn(),
+  useVideoModelsMock: vi.fn(),
+  useMusicModelsMock: vi.fn(),
+  useAudioProvidersMock: vi.fn(),
+  navigate: vi.fn(),
+  location: { pathname: '/new' },
+  // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
+  navItems: [] as Array<{
+    path: string;
+    label: string;
+    icon?: ComponentType;
+    requireEntitlement?: string;
+    sidebar?: boolean;
+  }>,
+  entitlements: [] as string[],
+  // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
+  userState: {
+    isAdmin: false,
+    currentUser: undefined as { preferences?: { hiddenSurfaces?: string[] } } | undefined,
+  },
+}));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
 vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
-// The row is gated on GET /api/v1/video-models (react-query); stubbed like the other data hooks here.
+// The Studio row is gated on GET /api/v1/video-models, /music-models and /api/ai/audio-providers (react-query);
+// stubbed like the other data hooks here.
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useVideoModelsMock }));
+vi.mock('@client/app/hooks/data/musicGenerations', () => ({ useMusicModels: useMusicModelsMock }));
+vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: useAudioProvidersMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => undefined }));
-vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => false }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: typeof userState) => unknown) => selector(userState),
+}));
 // SidenavNav gates the Bob row on entitlements via useEntitlements (react-query useQuery).
 // This suite renders SidenavNav without a QueryClientProvider, so stub the hook like the
 // others rather than mount a client; the Bob row tests set what the user holds.
@@ -52,11 +74,12 @@ vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
-vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
+// Only /opti is mounted, so the Opti row is the one premium row that access can reveal here.
+vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [{ path: '/opti' }] }));
 vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({ premiumNavItems: navItems }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useLocation: () => ({ pathname: '/new', search: {} }),
+  useLocation: () => ({ pathname: location.pathname, search: {} }),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -86,15 +109,55 @@ function renderNav(section?: 'pinned' | 'scroll' | 'all') {
   );
 }
 
-const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
-
 beforeEach(() => {
   vi.clearAllMocks();
-  useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
+  useFeatureEnabledMock.mockReturnValue(false);
   useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
+  useMusicModelsMock.mockReturnValue({ data: [] });
+  useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: [] } });
+  location.pathname = '/new';
   navItems.length = 0;
   entitlements.length = 0;
+  userState.isAdmin = false;
+  userState.currentUser = undefined;
+});
+
+describe('SidenavNav Opti row', () => {
+  const optiRow = () => screen.queryByTestId('sidenav-nav-opti');
+
+  it('hides without access', () => {
+    renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+  });
+
+  it('shows with access when the workspace is not hidden', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    renderNav();
+    expect(optiRow()).toBeInTheDocument();
+  });
+
+  it('hides with access when the user hid the workspace', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
+    renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+  });
+
+  it('shows the workspace again when unhidden', () => {
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: ['opti'] } };
+    const { rerender } = renderNav();
+    expect(optiRow()).not.toBeInTheDocument();
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <SidenavNav />
+      </CssVarsProvider>
+    );
+    expect(optiRow()).toBeInTheDocument();
+  });
 });
 
 describe('SidenavNav feature rows', () => {
@@ -103,22 +166,29 @@ describe('SidenavNav feature rows', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
+    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
   });
 });
 
-describe('SidenavNav Hearth row', () => {
-  it('shows when the experimental flag is on', () => {
-    renderNav();
-    expect(hearthRow()).toBeInTheDocument();
-  });
-
-  it('hides when the experimental flag is off', () => {
+describe('SidenavNav Skill Market row', () => {
+  it('is always present and opens the market', () => {
     useFeatureEnabledMock.mockReturnValue(false);
     renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
+    const row = screen.getByTestId('sidenav-nav-skill-market');
+    expect(row).toHaveTextContent('Skill Market');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+  });
+});
+
+describe('SidenavNav Hearth row', () => {
+  // Hearth lives in the profile menu's More flyout, not the top of the sidenav.
+  it('is not in the sidenav even with its flag on', () => {
+    useFeatureEnabledMock.mockReturnValue(true);
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-hearth')).not.toBeInTheDocument();
   });
 });
 
@@ -164,28 +234,84 @@ describe('SidenavNav Gears row tag', () => {
   });
 });
 
-describe('SidenavNav Video Studio row', () => {
-  const videoRow = () => screen.queryByTestId('sidenav-nav-video-studio');
+describe('SidenavNav Studio row', () => {
+  const studioRow = () => screen.queryByTestId('sidenav-nav-studio');
+  const usable = { data: [{ id: 'some-model' }] };
 
-  it('shows when at least one video model is usable', () => {
-    useVideoModelsMock.mockReturnValue({ data: [{ id: 'grok-imagine-video-1.5' }] });
+  it('is one Studio row, shown when a video model is usable', () => {
+    useVideoModelsMock.mockReturnValue(usable);
     renderNav();
-    expect(videoRow()).toHaveTextContent('Video Studio');
+    expect(screen.getAllByTestId('sidenav-nav-studio')).toHaveLength(1);
+    expect(studioRow()).toHaveTextContent('Studio');
   });
 
-  it('hides when no model is usable or the models have not loaded', () => {
+  it('hides when no modality has a usable model or the models have not loaded', () => {
     renderNav();
-    expect(videoRow()).not.toBeInTheDocument();
+    expect(studioRow()).not.toBeInTheDocument();
     useVideoModelsMock.mockReturnValue({ data: undefined });
+    useMusicModelsMock.mockReturnValue({ data: undefined });
+    useAudioProvidersMock.mockReturnValue({ data: undefined });
     renderNav();
-    expect(videoRow()).not.toBeInTheDocument();
+    expect(studioRow()).not.toBeInTheDocument();
   });
 
-  it('opens the video studio route with the modality param', () => {
-    useVideoModelsMock.mockReturnValue({ data: [{ id: 'grok-imagine-video-1.5' }] });
+  it('shows with only a speech provider usable, and opens on the speech tab', () => {
+    useAudioProvidersMock.mockReturnValue({ data: { speech: ['openai'], soundEffects: [] } });
     renderNav();
-    fireEvent.click(screen.getByTestId('sidenav-nav-video-studio'));
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'speech' } });
+  });
+
+  it('opens on the sound effects tab when only a sound-effect provider is usable', () => {
+    useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: ['elevenlabs'] } });
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'sound-effects' } });
+  });
+
+  it('waits for the audio providers before deciding which tab to open', () => {
+    useAudioProvidersMock.mockReturnValue({ data: undefined, isPending: true });
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    expect(studioRow()).not.toBeInTheDocument();
+  });
+
+  it('opens on the video tab when video is usable', () => {
+    useVideoModelsMock.mockReturnValue(usable);
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
     expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'video' } });
+  });
+
+  it('shows with only music usable, and opens on the music tab', () => {
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
+  });
+
+  it('waits for both model lists before deciding which tab to open', () => {
+    useVideoModelsMock.mockReturnValue({ data: undefined, isPending: true });
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    expect(studioRow()).not.toBeInTheDocument();
+  });
+
+  it('stays reachable through the other modality when one model list errors', () => {
+    useVideoModelsMock.mockReturnValue({ data: undefined, isPending: false, isError: true });
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    expect(studioRow()).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
+  });
+
+  it('is active on any Studio tab', () => {
+    useMusicModelsMock.mockReturnValue(usable);
+    location.pathname = '/studio/music';
+    renderNav();
+    expect(studioRow()).toHaveAttribute('aria-current', 'page');
   });
 });
 

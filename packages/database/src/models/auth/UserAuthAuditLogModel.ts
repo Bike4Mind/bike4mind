@@ -131,11 +131,15 @@ const UserAuthAuditLogSchema = new Schema<IUserAuthAuditLogDocument>(
 UserAuthAuditLogSchema.index({ userId: 1, createdAt: -1 });
 UserAuthAuditLogSchema.index({ event: 1, createdAt: -1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with IntegrationAuditLog).
-UserAuthAuditLogSchema.index(
-  { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
-);
+/**
+ * TTL on createdAt: auth audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235950_set-user-auth-audit-log-retention).
+ */
+export const USER_AUTH_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
+UserAuthAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: USER_AUTH_AUDIT_LOG_RETENTION_SECONDS });
 
 export const UserAuthAuditLogModel: Model<IUserAuthAuditLogDocument> =
   (mongoose.models.UserAuthAuditLog as unknown as Model<IUserAuthAuditLogDocument>) ??

@@ -205,6 +205,9 @@ const handler = baseApi({ auth: false })
             existingUser.tags = grants.tags;
             existingUser.pendingCreditGrant = null;
           }
+          if (grants.tagsApplied.length > 0) {
+            existingUser.tags = [...new Set([...(existingUser.tags ?? []), ...grants.tagsApplied])];
+          }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
         } catch (err) {
@@ -395,7 +398,7 @@ const handler = baseApi({ auth: false })
     }
 
     // registerViaOTC set emailVerified=true, so the now-verified domain may confer its signup
-    // grant (one-time domain credits on top of the flat grant, partner-rule org membership).
+    // grant (one-time domain credits on top of the flat grant, partner-rule org membership and tags).
     // Never throws, so it cannot 500 a completed registration. Reflect the grant and any join on
     // the returned user so the client sees the full balance and the org immediately.
     const domainGrant = await applySignupDomainGrant({
@@ -406,6 +409,9 @@ const handler = baseApi({ auth: false })
     });
     if (domainGrant.currentCredits !== null) newUser.currentCredits = domainGrant.currentCredits;
     if (domainGrant.joinedOrganizationId) newUser.organizationId = domainGrant.joinedOrganizationId;
+    if (domainGrant.tagsApplied.length > 0) {
+      newUser.tags = [...new Set([...(newUser.tags ?? []), ...domainGrant.tagsApplied])];
+    }
 
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).

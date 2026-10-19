@@ -33,7 +33,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@bike4mind/database', () => {
   mockRefs.findBySid = vi.fn();
-  return { authSessionRepository: { findBySid: mockRefs.findBySid } };
+  return {
+    authSessionRepository: { findBySid: mockRefs.findBySid },
+    realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+  };
 });
 vi.mock('@bike4mind/services', () => {
   mockRefs.listUserSessions = vi.fn();

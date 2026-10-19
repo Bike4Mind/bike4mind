@@ -32,6 +32,7 @@ import type {
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   ProjectInspection,
+  RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageRequest,
@@ -44,9 +45,19 @@ import type {
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
+import type {
+  TerminalAttachment,
+  TerminalCreateRequest,
+  TerminalCreateResult,
+  TerminalDataEvent,
+  TerminalInfo,
+  TerminalsChangedEvent,
+} from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { FleetState } from './fleet';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -71,6 +82,12 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
   usageGetHistory: 'usage:get-history',
+  fleetGetState: 'fleet:get-state',
+  fleetRefresh: 'fleet:refresh',
+  fleetSetConsent: 'fleet:set-consent',
+  fleetSendNow: 'fleet:send-now',
+  /** main -> renderer push of the integration's state; never carries the key. */
+  fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
@@ -86,6 +103,8 @@ export const IPC_CHANNELS = {
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
+  chatListRecentFolders: 'chat:list-recent-folders',
+  chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
@@ -245,6 +264,28 @@ export const IPC_CHANNELS = {
   prGetSummaries: 'pr:get-summaries',
   /** main -> renderer push; one conversation's sidebar PR icon changed. */
   prSummaryChanged: 'pr:summary-changed',
+  /** The user's sidebar sections. Every change answers with the whole state. */
+  sidebarGetSections: 'sidebar:get-sections',
+  sidebarCreateSection: 'sidebar:create-section',
+  sidebarRenameSection: 'sidebar:rename-section',
+  sidebarDeleteSection: 'sidebar:delete-section',
+  sidebarMoveSession: 'sidebar:move-session',
+  /**
+   * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
+   * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
+   */
+  terminalList: 'terminal:list',
+  terminalCreate: 'terminal:create',
+  terminalAttach: 'terminal:attach',
+  terminalDetach: 'terminal:detach',
+  terminalInput: 'terminal:input',
+  terminalResize: 'terminal:resize',
+  terminalRestart: 'terminal:restart',
+  terminalClose: 'terminal:close',
+  /** main -> renderer push, batched; only to a window attached to that terminal. */
+  terminalData: 'terminal:data',
+  /** main -> renderer push; one conversation's tab list changed. */
+  terminalsChanged: 'terminal:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -399,6 +440,15 @@ export interface DesktopApi {
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
   };
+  fleet: {
+    getState(): Promise<FleetState>;
+    /** Read Fleet's installer file again. Its key stays in main; the state never carries it. */
+    refresh(): Promise<FleetState>;
+    /** Off empties the unsent queue, and nothing is recorded until it is on again. */
+    setConsent(consent: boolean): Promise<FleetState>;
+    sendNow(): Promise<FleetState>;
+    onStateChanged(listener: (state: FleetState) => void): () => void;
+  };
   chat: {
     /**
      * Models this deployment offers the agent, from the server's own catalog. `force` skips
@@ -433,6 +483,10 @@ export interface DesktopApi {
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
+    /** Recently used project folders that still exist, most recent first. */
+    listRecentFolders(): Promise<RecentFolder[]>;
+    /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
+    removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
     /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */
@@ -672,6 +726,17 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /** User-made sidebar sections; see @shared/sidebarSections. */
+  sidebar: {
+    getSections(): Promise<SidebarSectionsState>;
+    /** Makes a section and, when given a session, moves it in. A blank name changes nothing. */
+    createSection(name: string, sessionId?: string): Promise<SidebarSectionsState>;
+    renameSection(sectionId: string, name: string): Promise<SidebarSectionsState>;
+    /** Deletes the section only; its sessions go back to the default groups. */
+    deleteSection(sectionId: string): Promise<SidebarSectionsState>;
+    /** Null takes the session out of its section. */
+    moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
@@ -697,6 +762,26 @@ export interface DesktopApi {
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
     onSummaryChanged(listener: (event: PrSummaryEvent) => void): () => void;
+  };
+  /**
+   * The user's own terminals. Reached from the terminal panel and from nowhere else; the agent
+   * has no tool on this surface. See @shared/terminal.
+   */
+  terminal: {
+    list(sessionId: string): Promise<TerminalInfo[]>;
+    /** Spawns the conversation's login shell in its working directory, or home with none. */
+    create(request: TerminalCreateRequest): Promise<TerminalCreateResult>;
+    /** Start receiving one terminal's output; answers with what it already printed. */
+    attach(terminalId: string): Promise<TerminalAttachment | null>;
+    detach(terminalId: string): void;
+    write(terminalId: string, data: string): void;
+    resize(terminalId: string, cols: number, rows: number): void;
+    /** A fresh shell in the same tab; the old one is ended first. */
+    restart(terminalId: string): Promise<TerminalInfo | null>;
+    /** Ends the shell and drops the tab. */
+    close(terminalId: string): Promise<void>;
+    onData(listener: (event: TerminalDataEvent) => void): () => void;
+    onChanged(listener: (event: TerminalsChangedEvent) => void): () => void;
   };
   shell: {
     /**

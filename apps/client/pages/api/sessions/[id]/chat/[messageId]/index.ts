@@ -2,7 +2,20 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { canUpdateShareable, IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
+import {
+  canUpdateShareable,
+  chatMessageResponseSchema,
+  IChatHistoryItem,
+  redactPromptMetaForViewer,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { z } from 'zod';
+
+const updateChatMessageResponseSchema = z.object({
+  success: z.literal(true),
+  message: z.string(),
+  data: chatMessageResponseSchema,
+});
 
 const handler = baseApi()
   /**
@@ -36,7 +49,10 @@ const handler = baseApi()
       // A share grant authorizes reading the conversation, not re-reading whatever the
       // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
       const isOwner = session.userId === userId;
-      return res.json({ ...message, promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner) });
+      return respond(res, chatMessageResponseSchema, {
+        ...message,
+        promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner),
+      });
     })
   )
   /**
@@ -150,7 +166,7 @@ const handler = baseApi()
       // (updatedMessage is already a plain object here - BaseRepository.update calls
       // .toJSON() internally before returning.)
       const isOwner = session.userId === userId;
-      return res.json({
+      return respond(res, updateChatMessageResponseSchema, {
         success: true,
         message: 'Message updated successfully',
         data: { ...updatedMessage, promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner) },

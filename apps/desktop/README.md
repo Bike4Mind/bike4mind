@@ -11,17 +11,17 @@ ported over from `apps/client` only as later tasks need them.
 
 ## Download and install
 
-Download installers from [Desktop releases](https://github.com/bike4mind/bike4mind/releases?q=desktop-v).
+Download installers from [Desktop releases](https://github.com/Bike4Mind/desktop-releases/releases).
 No Node.js, pnpm, or source checkout is required.
 
-1. On macOS, choose `arm64.dmg` for Apple Silicon or `x64.dmg` for Intel, open it,
+1. On macOS, choose `arm64.dmg` for Apple Silicon (Intel builds are paused), open it,
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
 
-Builds are currently unsigned and not notarized. macOS may require approval in
-System Settings > Privacy & Security after a blocked launch. Only approve a download
-you trust. `SHA256SUMS.txt` accompanies each release for checksum verification.
+New distribution releases require Developer ID signing and notarization. Legacy unsigned
+builds in the source repository do not gain an updater retroactively: install the first signed
+feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
 Windows packaging exists locally but is not yet part of the release pipeline.
 
 ## Running it
@@ -102,9 +102,11 @@ defaulting to `macos-26-runner` when unset or empty. The selected runner must be
 Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
 Paid runner usage is billed by GitHub.
 
-Publication uses the existing release App with repository-scoped contents write access
-to create protected tags. The workflow token and PR build jobs remain read-only. Missing
-App credentials fail publication rather than falling back to the workflow token.
+Publication uses the existing release App only to reserve protected source version tags.
+A separate distribution App token has contents write access only to the installer repository.
+The workflow token and PR build jobs remain read-only. Missing credentials fail publication.
+The distribution repository needs no Actions workflows; disable Actions there. The source
+workflow is the only publisher. Anyone can read public installers and metadata, not drafts.
 
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
@@ -137,9 +139,24 @@ Installer versions follow SemVer, selected automatically by
 (`0.1.0`). After that, desktop release tags are the version source of truth; there is
 no version-bump commit or separate package release PR.
 
+Local `pnpm package:*` commands use the highest stable desktop tag reachable from
+the checkout, with `-local.<commit>` appended so an unreleased build does not
+impersonate a published installer. Fetch tags with `git fetch origin --tags` first.
+Missing tags fail with instructions instead of silently producing version 0.1.0.
+Set `DESKTOP_VERSION=0.6.0-test.1` for an explicit local test version. Local builds
+never publish. CI continues to select its own version and call the builder directly.
+Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
+notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
+needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper acceptance.
+
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.
-- `type!: ...` or a `BREAKING CHANGE:` footer bumps major, including before `1.0`.
+- During beta, `type!: ...` or a `BREAKING CHANGE:` footer bumps minor, not major.
+  Moving to 1.x requires a deliberate policy change reviewed before release.
+- The accidental `desktop-v1.0.0` release is excluded from baseline selection in
+  CI and local packaging, but its source tag is retained. The beta line resumes
+  from 0.5.0 with 0.6.0. Other stable major baselines fail closed, not silently ignored.
+  Existing 1.0.0 installations need a manual 0.x installation, not an updater downgrade.
 - `docs`, `test`, `ci`, and `style` alone do not publish a new stable release.
 - The highest bump across unreleased, desktop-relevant first-parent commits wins.
   Unrelated web-only commits do not affect the desktop version. Squash merges use the
@@ -149,15 +166,80 @@ no version-bump commit or separate package release PR.
 
 Reruns at an already released commit reuse its version and leave published assets
 unchanged. Draft releases reserve their version so a failed upload can be retried.
-An older checkout cannot publish after a newer desktop release. Desktop releases do
-not replace the repository's overall latest release. Keep desktop release tags intact;
+An older checkout cannot publish after a newer desktop release. Version selection reads
+both repositories and source tag reservations, preserving the pre-migration SemVer baseline.
+Desktop updates use only the dedicated repository's Latest release. Production release
+automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
 Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. The workflow deliberately leaves
-`B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
-Installing a newer release is currently manual. Only the final publication job has
-`contents: write`; build jobs have read-only tokens. PR builds have no signing credentials.
+Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
+`https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
+destinations fail closed. PR builds have no signing credentials and are not published.
+
+The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
+installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
+are pinned to the version tag, so a later Latest switch cannot break an already offered
+update. All assets are uploaded to a draft and downloaded for byte comparison before
+publication promotes the complete release to Latest. A failed upload never exposes a
+partial manifest. Published assets are not overwritten on retry.
+
+#### Distribution setup checklist
+
+1. Create a public, distribution-only repository with an initial `main` commit. Do not
+   publish source, credentials, debug dumps, or builder configuration as release assets.
+2. Set source Actions variable `DESKTOP_RELEASE_REPOSITORY` to the dedicated `owner/repo`
+   in the same organization as the source. Keep its name stable for installed clients.
+3. Install a dedicated GitHub App on only that repository with Contents read/write.
+   Set source variable `DESKTOP_RELEASE_APP_ID` and secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   The existing source release App and protected-tag bypass remain unchanged.
+4. Choose a macOS signing path. Set `DESKTOP_MAC_SIGNING=true` with the five Apple
+   secrets below for Developer ID signing and notarization. Alternatively, explicitly
+   set `DESKTOP_MAC_ADHOC_BETA=true` for account-free 0.x beta distribution. Unset,
+   false or malformed opt-ins deny publication; Apple signing takes precedence.
+   The ad-hoc path ships DMG/ZIP manual installers, disables macOS in-app updates
+   and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
+   signing provides bundle integrity, not publisher identity or notarization.
+   Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
+5. Merge through review, then inspect the first trusted run's signatures, notarization,
+   packaged startup evidence, and destination release asset set. Confirm anonymous
+   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   the Developer ID path only). CI logs record
+   publication and tag operations; organization audit-log retention is managed separately.
+6. Test two signed versions using a temporary installation and profile. Check, download,
+   and explicitly restart into the newer version. Never use a user's existing profile.
+   Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
+
+To disable account-free publication, unset `DESKTOP_MAC_ADHOC_BETA` before another
+run. To switch to Developer ID, configure its credentials and set
+`DESKTOP_MAC_SIGNING=true`; missing credentials fail rather than falling back to
+ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover with
+a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
+Distribution App setup is still required independently of Apple. These opt-ins do
+not enable Sparkle or prove macOS auto-update compatibility.
+
+#### GitHub App setup (independent of Apple)
+
+1. In the organization settings, open Developer settings > GitHub Apps > New GitHub App.
+   Use a dedicated distribution publisher, disable webhooks, and limit installation to
+   this account. It needs no OAuth callback, user permissions, or event subscriptions.
+2. Under Repository permissions, grant Contents read/write. Metadata read is implicit;
+   leave every other permission unset. No organization permissions are needed.
+3. Install the App with Only select repositories and select only the distribution repo.
+   Do not add the source repo or grant this App a source tag-ruleset bypass.
+4. Set source Actions variable `DESKTOP_RELEASE_APP_ID` to the App's client ID, as required
+   by `actions/create-github-app-token@v3`. Generate a private key and upload its PEM
+   contents directly into source Actions secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   Never paste the PEM into chat, commit it, or put it in the distribution repository.
+5. After credentials are available, verify the minted token can create and remove a
+   temporary destination draft, but cannot write to the source or another repository.
+   A successful test using a personal gh login does not prove the App's token scope.
+
+This can be configured while Apple access is pending. Leave `DESKTOP_MAC_SIGNING` unset
+until the Apple credentials are ready. PR packaging remains available; main distribution
+stays blocked, and no unsigned installer becomes an automatic update.
 
 Release notes list desktop-relevant first-parent changes and explain the semantic bump.
 The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
@@ -172,11 +254,14 @@ Set `DESKTOP_MAC_SIGNING=true` only after configuring all five repository secret
 `DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD`, `DESKTOP_APPLE_ID`,
 `DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, and `DESKTOP_APPLE_TEAM_ID`.
 Only trusted main runs receive these credentials. Opting in with incomplete credentials
-fails rather than silently publishing unsigned builds. Signed runs require code-signature
-and stapling validation. Without opt-in, releases remain unsigned. Signing credentials
+fails rather than silently publishing unsigned builds. Signed runs require Developer ID
+code-signature and app/DMG stapling validation. Without opt-in, main distribution is blocked. Signing credentials
 and end-to-end notarization verification are external setup requirements.
 
-To roll back, download and reinstall an earlier desktop release. Back up the app's
+To stop offering a broken release, mark it as a prerelease and explicitly mark the last
+good complete distribution release as Latest. Verify both manifest URLs anonymously.
+Do not overwrite existing assets or enable updater downgrades. Ship a higher fixed version.
+To roll back manually, download and reinstall an earlier desktop release. Back up the app's
 user-data directory before downgrading because older builds may not understand newer
 local data. If a release is broken, mark it as a prerelease or return it to draft in
 GitHub Releases, then rerun the workflow on corrected `main` to publish a new version.
@@ -212,14 +297,16 @@ state for an unbranded fork: Local Dev and a self-hosted URL still work.
 
 ### Signing
 
-Nothing in `electron-builder.yml` names a certificate, and an unsigned build is the
-supported default - it produces a working dmg on a machine with no credentials at all.
-electron-builder logs `skipped macOS application code signing` and ad-hoc signs instead,
-which is the minimum macOS needs to run an arm64 build locally. An unsigned app is still
-quarantined on another machine: Gatekeeper needs a right-click -> Open, or
-`xattr -d com.apple.quarantine`.
+Nothing in `electron-builder.yml` names a certificate. Local package scripts explicitly
+request ad-hoc signing; skipping signing can leave an invalid linker signature after
+Electron is repackaged. Verify bundle integrity with `codesign --verify --deep --strict`.
+Ad-hoc signing is not notarization and does not establish the publisher's identity.
+Fresh-download Gatekeeper approval must be tested separately. Do not bypass an invalid
+signature by removing quarantine attributes.
 
-Signing turns itself on once credentials are in the environment:
+Direct electron-builder invocations (including the trusted CI signing job) can use
+credentials from the environment. Local package scripts additionally require
+`DESKTOP_MAC_IDENTITY` to opt into a Developer ID identity:
 
 | Variable | Effect |
 | --- | --- |
@@ -263,6 +350,14 @@ and mammoth, and electron-builder ships what is declared. Bundling that one subp
 `@anthropic-ai/sdk` and `@octokit/rest` alongside the MCP SDK that main actually uses, and
 those still ship. Fixing that is a change to `b4m-core/mcp`'s entry points, not to this
 config.
+
+`node-pty` (the terminal panel's pty) is the one native dependency, so it is a `dependency`
+and stays external, while `@xterm/*` is bundled into the renderer and lives in
+`devDependencies`. It is pinned to a 1.2 beta because 1.1.0 publishes its macOS
+`spawn-helper` without the execute bit, and every spawn then fails with `posix_spawnp failed`.
+`electron-builder.yml` unpacks it from the asar (a `.node` file and the helper both have to be
+real files) and turns `npmRebuild` off: the module is N-API with prebuilt binaries for every
+target, so a rebuild would only compile a different binary from the one dev runs.
 
 ## Layout
 
@@ -405,6 +500,10 @@ token.
   `registerAuth()` must be called from inside `whenReady()`. Where
   `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
   memory-only and the UI says so - it never falls back to writing plaintext.
+- **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
+  the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
+  sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
+  starts signed out.
 - **Per-environment tokens.** Switching between Production, Local Dev and a self-hosted URL
   restores the session already cached for that endpoint instead of forcing another device
   flow, matching the CLI.
@@ -486,14 +585,17 @@ restores the transparent corners with a circular mask.
 | File | Consumed by |
 | --- | --- |
 | `build/icon.icns` | electron-builder, macOS app bundle |
+| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
 | `build/icon.ico` | electron-builder, Windows |
 | `build/icon.png` | electron-builder, Linux (512x512) |
 | `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
 
-The mark is inset rather than bled to the edge: 824/1024 on macOS, which is Apple's icon
-grid, and a looser 0.92 elsewhere, where there is no grid to match. It stops reading as a
-wheel below about 32px - the white filigree inside the disc washes out into a pale blob at
-16px - but the disc silhouette and the brand blue still carry it.
+macOS uses the full-size mark with its own blue gradient extended behind it, making the
+circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
+width. The tile retains the 824/1024 outer inset for the macOS icon grid; the
+transparent margin is outside the tile, not between a circular silhouette and the grid.
+Windows, Linux, and the favicon keep the circular mark with a 0.92 inset. At small sizes,
+the fine detail softens, but the silhouette and brand blue still carry it.
 
 Where the icon actually shows:
 
@@ -502,7 +604,9 @@ Where the icon actually shows:
   path is correct both in dev and when packaged.
 - **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
   app bundle, which only exists once the app is packaged. `app.dock.setIcon()` covers the gap
-  for `pnpm dev`.
+  for `pnpm dev`, using `build/icon-mac.png` with the same tile as the bundle icon. Restart
+  dev after regenerating icons. An installed app needs to be rebuilt and replaced before
+  its bundle icon changes.
 - The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
   the window. It is there for where the renderer is opened as a page: devtools and
   `electron-vite preview`.

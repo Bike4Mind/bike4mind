@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService, userService } from '@bike4mind/services';
-import { userRepository, authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
+import {
+  userRepository,
+  authSessionRepository,
+  passkeyCredentialRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
@@ -73,7 +78,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
         // tokenVersion AND clears session rows, so other devices can't silently refresh back in),
         // then mint a fresh session for THIS device with the new version.
         const newTokenVersion = await userService.revokeUserSessions(result.user.id, {
-          db: { users: userRepository, authSessions: authSessionRepository },
+          db: {
+            users: userRepository,
+            authSessions: authSessionRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
           logger: req.logger,
         });
         // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps
@@ -95,10 +104,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
           user: redactUserSecretsForSelf(result.user),
         };
       } catch (error: unknown) {
-        // Atomically increment the failed-attempt counter (mirrors mfa/verify.ts) - a
-        // read-modify-write lets concurrent requests each read the same count and all write
-        // count+1, letting an attacker batch requests to defeat the 3-strike lockout.
-        const updatedUser = await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
+        // A code checked by mfaService was counted before it was compared; anything else is counted now.
+        const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
 
         if (updatedUser && mfaService.isUserLockedOut(updatedUser)) {
           const remainingMinutes = mfaService.getLockoutTimeRemaining(updatedUser);

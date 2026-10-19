@@ -17,6 +17,7 @@ import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
+import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -24,7 +25,11 @@ let warnedSelfHostPlaintext = false;
 
 // Update Admin Setting
 const handler = baseApi().put(
-  asyncHandler<unknown, unknown, { key: string; value: unknown; confirmClear?: boolean }>(async (req, res) => {
+  asyncHandler<
+    unknown,
+    unknown,
+    { key: string; value: unknown; confirmClear?: boolean; confirmAboveMeasuredFloor?: boolean }
+  >(async (req, res) => {
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
     // Authorize before any branch reads or returns stored setting data.
@@ -44,6 +49,10 @@ const handler = baseApi().put(
     }
 
     let value = settingsMap[key].schema.parse(req.body.value);
+
+    if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
+      await refuseFloorAboveMeasured(Number(value), req.logger);
+    }
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;
 

@@ -1,11 +1,14 @@
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
-import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { Construction as ConstructionIcon } from '@mui/icons-material';
+import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
-import ToolIndicators from '../../common/ToolIndicators';
+import ToolIndicators, { hasToolIndicators } from '../../common/ToolIndicators';
+import ActiveDot from '../../common/ActiveDot';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
+import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 
 const fixedHeight = {
   height: '32px !important',
@@ -28,6 +31,8 @@ interface ToolsButtonProps {
   setTools: (tools: B4MLLMTools[]) => void;
   /** The current session's `disabledTools`, hidden from the panel. */
   disabledTools?: readonly string[];
+  /** A square icon button, no label or indicators - the composer is too narrow (useComposerCompact). */
+  iconOnly?: boolean;
 }
 
 const ToolsButton: FC<ToolsButtonProps> = ({
@@ -44,8 +49,11 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   availableMcpServers,
   setTools,
   disabledTools,
+  iconOnly = false,
 }) => {
   const [open, setOpen] = useState(false);
+  const mobileOpen = useAdvancedAISettings(s => s.toolsDropdownOpen);
+  const setMobileOpen = useAdvancedAISettings(s => s.setToolsDropdownOpen);
   const [isDeepResearchModalOpen, setIsDeepResearchModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -61,8 +69,8 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     setShowBottomFade(scrollable && !atBottom);
   }, []);
   useEffect(() => {
-    if (open) updateBottomFade();
-  }, [open, updateBottomFade]);
+    if (mobileOpen) updateBottomFade();
+  }, [mobileOpen, updateBottomFade]);
   const { data: modelInfoRepo } = useModelInfo();
   const modelSupportsTools = useMemo(() => {
     const info = modelInfoRepo?.find(m => m.id === model);
@@ -74,6 +82,23 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     return info ? !!info.supportsTools : true;
   }, [model, modelInfoRepo]);
 
+  // Fast mode and a model without tool support send nothing, so nothing reads as active (see the
+  // indicators below).
+  const toolsLive = toolMode !== 'fast' && modelSupportsTools;
+  // Mirrors ToolIndicators: the "+N" badge is its last item whenever it renders.
+  const showsCountBadge = !iconOnly && toolsLive && otherActiveToolsCount > 0;
+  // A square button has no room for the indicators, so a dot says something is on.
+  const showsActiveDot =
+    toolsLive &&
+    hasToolIndicators({
+      activePrimaryTools,
+      isThinkingActive,
+      otherActiveToolsCount,
+      enabledMcpServers,
+      availableMcpServers,
+    });
+  const squareLabel = showsActiveDot ? 'Tools, some on' : 'Tools';
+
   const toolsSectionProps = {
     tools,
     setTools,
@@ -81,7 +106,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     onRollDice,
     columns: 1 as const,
     onModalOpenChange: setIsDeepResearchModalOpen,
-    onClose: () => setOpen(false),
+    onClose: () => (isMobile ? setMobileOpen(false) : setOpen(false)),
     // Only the padding differs from the default now; the surface colour and the absence of a
     // hover state both come from ToolContainer.
     toolContainerSx: { padding: '12px' },
@@ -91,64 +116,44 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     disabledTools,
   };
 
+  // Phones have no button in the row: the plus menu opens this panel (AttachFileButton).
   if (isMobile) {
     return (
-      <>
-        <IconButton
-          data-testid="session-tools-dropdown-toggle"
-          variant="outlined"
-          size="sm"
-          onClick={() => setOpen(true)}
+      <Modal open={mobileOpen} onClose={() => !isDeepResearchModalOpen && setMobileOpen(false)}>
+        <ModalDialog
           sx={{
-            borderRadius: '6px',
-            ...fixedHeight,
-            width: '32px',
+            p: 0,
+            width: '90dvw',
+            height: '90dvh',
+            border: 'none',
+            backgroundColor: 'background.body',
+            overflow: 'hidden',
+            position: 'relative',
           }}
         >
-          <ConstructionIcon
+          <Box
+            ref={mobileScrollRef}
+            onScroll={updateBottomFade}
+            sx={{ height: '100%', overflow: 'auto', p: 1, ...scrollbarStyles }}
+          >
+            <ToolsSection {...toolsSectionProps} />
+          </Box>
+          {/* Scroll affordance: fades content at the bottom edge while more is below. */}
+          <Box
             sx={{
-              color: 'text.primary',
-              width: '14px',
-              height: '14px',
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: '48px',
+              pointerEvents: 'none',
+              opacity: showBottomFade ? 1 : 0,
+              transition: 'opacity 0.2s',
+              background: theme => `linear-gradient(to bottom, transparent, ${theme.vars.palette.background.body})`,
             }}
           />
-        </IconButton>
-        <Modal open={open} onClose={() => !isDeepResearchModalOpen && setOpen(false)}>
-          <ModalDialog
-            sx={{
-              p: 0,
-              width: '90dvw',
-              height: '90dvh',
-              border: 'none',
-              backgroundColor: 'background.body',
-              overflow: 'hidden',
-              position: 'relative',
-            }}
-          >
-            <Box
-              ref={mobileScrollRef}
-              onScroll={updateBottomFade}
-              sx={{ height: '100%', overflow: 'auto', p: 1, ...scrollbarStyles }}
-            >
-              <ToolsSection {...toolsSectionProps} />
-            </Box>
-            {/* Scroll affordance: fades content at the bottom edge while more is below. */}
-            <Box
-              sx={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: '48px',
-                pointerEvents: 'none',
-                opacity: showBottomFade ? 1 : 0,
-                transition: 'opacity 0.2s',
-                background: theme => `linear-gradient(to bottom, transparent, ${theme.vars.palette.background.body})`,
-              }}
-            />
-          </ModalDialog>
-        </Modal>
-      </>
+        </ModalDialog>
+      </Modal>
     );
   }
 
@@ -166,29 +171,32 @@ const ToolsButton: FC<ToolsButtonProps> = ({
       <MenuButton
         data-testid="session-tools-dropdown-toggle"
         variant="outlined"
+        aria-label={iconOnly ? squareLabel : undefined}
         sx={{
           display: 'flex',
+          position: 'relative',
           borderRadius: '6px',
+          // globals.css sets `min-width: 0` everywhere; without this the label squeezes under the indicators
+          // instead of the row overflowing into icons (useOverflowCompact). Same as InspectableSettingsButton.
+          flexShrink: 0,
           ...fixedHeight,
           px: 1,
+          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
+          // When the count badge ends the button, give it the same 6px to the edge as above and
+          // below it (5px padding + the 1px border).
+          ...(showsCountBadge && { pr: '5px' }),
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <ConstructionIcon
-              sx={{
-                color: 'text.primary',
-                width: '14px',
-                height: '14px',
-              }}
-            />
-            {!isTablet && (
+            <HandymanIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
+            {!isTablet && !iconOnly && (
               <Typography
                 level="body-sm"
                 sx={{
                   color: 'text.primary',
                   fontWeight: '400',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 {toolMode === 'smart' ? 'Tools' : 'Fast Tools'}
@@ -199,7 +207,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               icons, count, and thinking): Fast mode sends no tools, and a model that cannot run
               them has its selection stripped at dispatch (resolveTools in useLLMSettingsAssembly).
               Selections persist either way and reappear on a Smart, tool-capable model. */}
-          {toolMode !== 'fast' && modelSupportsTools && (
+          {!iconOnly && toolsLive && (
             <ToolIndicators
               activePrimaryTools={activePrimaryTools}
               isThinkingActive={isThinkingActive}
@@ -209,6 +217,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
             />
           )}
         </Box>
+        {iconOnly && showsActiveDot && <ActiveDot />}
       </MenuButton>
 
       <Menu

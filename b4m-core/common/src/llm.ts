@@ -6,6 +6,7 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -108,6 +109,7 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
 }).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
+  organizationId: BillingOrganizationIdSchema,
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
   prompt_resolution: ImagePromptResolutionSchema.optional().describe(
@@ -165,7 +167,7 @@ export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSche
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
+  organizationId: BillingOrganizationIdSchema,
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
@@ -400,6 +402,11 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ t
    * is absent; ignored when an existing session is resolved.
    */
   agentIds: z.array(z.string()).optional(),
+  /**
+   * The subset of `messageFileIds` the user scoped to this message only. Every other notebook-scope
+   * message attachment is pinned to the session so it stays in context on later turns.
+   */
+  messageOnlyFileIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

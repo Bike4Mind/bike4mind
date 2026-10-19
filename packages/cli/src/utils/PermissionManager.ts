@@ -1,4 +1,5 @@
-import { getToolCategory, canTrustTool, type ToolCategory } from '../config/toolSafety';
+import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
+import type { ToolCategory } from '../tools/gateway/toolDescriptor.js';
 import type { SandboxMode } from '../sandbox/types.js';
 
 /**
@@ -10,19 +11,24 @@ import type { SandboxMode } from '../sandbox/types.js';
  * - Check if a tool needs permission based on its category
  * - Persist trusted tools across sessions
  * - Support sandbox auto-allow mode (sandboxed commands skip permission)
+ *
+ * A tool's category comes from its descriptor in the injected catalog, which the permission
+ * gateway (tools/gateway) also reads through `catalog`.
  */
 export class PermissionManager {
   private trustedTools: Set<string> = new Set();
   private sessionTrustedTools: Set<string> = new Set();
   private deniedTools: Set<string> = new Set();
-  private customCategories: Map<string, ToolCategory>;
   private _sandboxMode: SandboxMode = 'disabled';
   private _sandboxActive = false;
 
-  constructor(trustedTools: string[] = [], customCategories?: Record<string, ToolCategory>, deniedTools?: string[]) {
+  constructor(
+    readonly catalog: ToolCatalog,
+    trustedTools: string[] = [],
+    deniedTools: string[] = []
+  ) {
     this.trustedTools = new Set(trustedTools);
-    this.customCategories = new Map(Object.entries(customCategories || {}));
-    this.deniedTools = new Set(deniedTools || []);
+    this.deniedTools = new Set(deniedTools);
   }
 
   /** Update sandbox state from the orchestrator */
@@ -53,8 +59,7 @@ export class PermissionManager {
    *   because the sandbox provides the security boundary.
    */
   needsPermission(toolName: string, options?: { isSandboxed?: boolean }): boolean {
-    const categoryMap = Object.fromEntries(this.customCategories);
-    const category = getToolCategory(toolName, categoryMap);
+    const category = this.catalog.category(toolName);
 
     // Denied tools from project config ALWAYS need permission
     if (this.deniedTools.has(toolName)) {
@@ -92,15 +97,13 @@ export class PermissionManager {
    * Returns false if the tool cannot be trusted (prompt_always category or denied by project)
    */
   trustTool(toolName: string): boolean {
-    const categoryMap = Object.fromEntries(this.customCategories);
-
     // Cannot trust denied tools from project config
     if (this.deniedTools.has(toolName)) {
       return false;
     }
 
     // Check if tool can be trusted based on category
-    if (!canTrustTool(toolName, categoryMap)) {
+    if (!this.catalog.canTrust(toolName)) {
       return false;
     }
 
@@ -133,22 +136,19 @@ export class PermissionManager {
    * Get the category for a tool
    */
   getCategory(toolName: string): ToolCategory {
-    const categoryMap = Object.fromEntries(this.customCategories);
-    return getToolCategory(toolName, categoryMap);
+    return this.catalog.category(toolName);
   }
 
   /**
    * Check if a tool can be trusted (not in prompt_always category or denied by project)
    */
   canBeTrusted(toolName: string): boolean {
-    const categoryMap = Object.fromEntries(this.customCategories);
-
     // Cannot trust denied tools from project config
     if (this.deniedTools.has(toolName)) {
       return false;
     }
 
-    return canTrustTool(toolName, categoryMap);
+    return this.catalog.canTrust(toolName);
   }
 
   /**

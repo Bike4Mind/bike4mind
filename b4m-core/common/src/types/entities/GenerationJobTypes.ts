@@ -222,15 +222,23 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
    * the previous one has expired, so a newer lease always carries a later token than the one it replaced.
    */
   acquireLease(id: string, now: Date, leaseUntil: Date): Promise<IGenerationJobDocument | null>;
-  markSubmitAttempted(id: string, at: Date): Promise<void>;
+  /**
+   * Records that a submit is about to reach the provider, and with `markRunning` (a sync kind, whose submit is the
+   * whole provider call) moves the job to running. Null when a cancel was requested first: the provider must not
+   * be called. Pairs with requestCancel's `beforeSubmitOnly` so a racing cancel and submit cannot both win.
+   */
+  markSubmitAttempted(id: string, at: Date, options: { markRunning: boolean }): Promise<IGenerationJobDocument | null>;
   /** Applies the update and releases the lease. Null when the guard no longer holds (or the job is gone). */
   commit(
     id: string,
     update: GenerationJobCommit,
     guard: GenerationJobCommitGuard
   ): Promise<IGenerationJobDocument | null>;
-  /** Only a pending or running job can be cancelled; storing output is already paid for. */
-  requestCancel(id: string): Promise<IGenerationJobDocument | null>;
+  /**
+   * Only a pending or running job can be cancelled; storing output is already paid for. With `beforeSubmitOnly`
+   * (a sync kind, billed from the moment its provider call starts) only a pending job not yet submitted can be.
+   */
+  requestCancel(id: string, options: { beforeSubmitOnly: boolean }): Promise<IGenerationJobDocument | null>;
   claimTerminalHandling(id: string, at: Date): Promise<boolean>;
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;

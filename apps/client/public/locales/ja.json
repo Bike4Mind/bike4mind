@@ -30,7 +30,8 @@
     "title": "変更履歴"
   },
   "feedback": {
-    "send": "フィードバックを送信"
+    "send": "フィードバックを送信",
+    "rollupTitle": "あなたのフィードバック"
   },
   "terms_policies": "利用規約とポリシー",
   "login": "ログイン",
@@ -166,7 +167,8 @@
     "messages": "メッセージ",
     "invites": "招待",
     "sendMessage": "メッセージを送る",
-    "noMessages": "メッセージはありません"
+    "noMessages": "メッセージはありません",
+    "title_unread": "受信トレイ、未読あり"
   },
   "addSomething": "{{ name }} を追加",
   "deleteAllSomething": "すべての {{ name }} を削除",
@@ -286,7 +288,30 @@
     "renews_on": "{{ date }} に更新"
   },
   "billing": {
-    "title": "請求"
+    "title": "請求",
+    "balance": "残高",
+    "credits_heading": "クレジットを追加",
+    "credits_sub": "残高に加算される単発パックです。サブスクリプションは不要です。",
+    "credits_sub_with_plan": "毎月の付与分に上乗せされる単発パックです。",
+    "free_plan": "無料",
+    "free_plan_detail": "クレジットパックで使った分だけ支払い",
+    "low_org": "組織の管理者がこのアカウントにクレジットを追加できます。",
+    "low_with_plan": "付与分が更新されるまで作業を続けるにはクレジットを追加してください。",
+    "low_without_plan": "プランなら毎月クレジットが付与され、パックならすぐに追加できます。",
+    "payment_failed": "支払いに失敗しました",
+    "plan": "プラン",
+    "plan_fallback": "サブスクリプション",
+    "plan_unavailable": "利用できません",
+    "plan_unavailable_detail": "プランを読み込めませんでした。",
+    "plans_change": "現在のプラン",
+    "plans_change_sub": "サブスクリプションの管理、変更、解約ができます。",
+    "plans_heading": "プラン",
+    "plans_heading_sub": "毎月クレジットが付与される月額プランです。",
+    "plans_upgrade": "アップグレード",
+    "plans_upgrade_sub": "手動で追加する代わりに、毎月クレジットが付与されます。",
+    "retry": "再試行",
+    "see_plans": "プランを見る",
+    "top_up": "追加する"
   },
   "credits": {
     "title": "クレジット",
@@ -314,7 +339,8 @@
     "usage_pattern": "過去{{days}}日間の使用パターンに基づく",
     "credits_used": "使用したクレジット",
     "credits_purchased": "購入したクレジット",
-    "net_credits": "純クレジット"
+    "net_credits": "純クレジット",
+    "unit": "クレジット"
   },
   "time": {
     "last_7_days": "過去7日間",
@@ -362,7 +388,15 @@
       "completed": "完了",
       "pending": "保留中",
       "failed": "失敗"
-    }
+    },
+    "buy_pack": "{{credits}} クレジットを {{price}} で購入",
+    "choose_pack": "クレジットパックを選択",
+    "history_usage_hint": "ここには購入のみが表示されます。",
+    "organization_credits_active": "組織のクレジットが有効です",
+    "rate_per_thousand": "1,000 クレジットあたり {{rate}}",
+    "see_usage": "使用状況を見る",
+    "shared_rate": "すべてのパックは同じ単価です: 1,000 クレジットあたり {{rate}}。",
+    "switch_to_personal": "個人用のクレジットを購入するには、個人アカウントに切り替えてください。"
   },
   "settings": {
     "title": "設定",
@@ -543,7 +577,9 @@
     "personal": "個人",
     "business": "ビジネス",
     "team": "チーム",
-    "enterprise": "エンタープライズ"
+    "enterprise": "エンタープライズ",
+    "audience_label": "プランの種類",
+    "includes": "含まれるもの"
   },
   "agents": {
     "title": "エージェント",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "スキル",
     "command_palette_description": "再利用可能な指示テンプレートを管理する"
+  },
+  "apiKeys": {
+    "title": "APIキー"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive や Slack などの連携と、独自コード用の API キー",
+    "sections": "接続のセクション",
+    "title": "接続"
   }
 }

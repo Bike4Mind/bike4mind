@@ -1,19 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { rmSync, realpathSync } from 'fs';
-import path from 'path';
 import { Logger } from '@bike4mind/observability';
 import { BaseStorage } from '@bike4mind/fab-pipeline';
 import type { ICompletionOptionTools, ICompletionBackend } from '@bike4mind/llm-adapters';
-import { PermissionDeniedError, type IUserDocument, type IChatHistoryItemDocument } from '@bike4mind/common';
+import type { IUserDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import {
   cliSharedTools,
   generateTools,
   getCliOnlyTools,
-  isPathAllowed,
   setShowUserQuestionFn,
-  resolveEditLocalFile,
-  isFuzzyEditConfirmationRequired,
-  type EditPlan,
   type LlmTools,
   type UserQuestionPayload,
   type UserQuestionResponse,
@@ -21,49 +15,14 @@ import {
 import type { PermissionManager } from './PermissionManager';
 import type { PermissionResponse } from '../components/PermissionPrompt';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { generateFileDiffPreview, generateFileDeletePreview, generateEditLocalFilePreview } from './diffPreview';
-import { executeTool } from '../llm/ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
 import type { ShellCommandPermissionDeps } from './commandPermission';
 import type { AgentHooks } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
-import { isReadOnlyTool } from '../config/toolSafety.js';
-import { classifyCommandRisk } from '../config/commandRisk.js';
-import { SHELL_LIKE_TOOL_COMMAND_FIELDS } from '../config/shellCommandFields.js';
-import { getPlanModeFileDir, isWriteTargetingPlanFile } from './planMode.js';
-import { matchesAnyPattern } from '../agents/toolFilter.js';
-import { getProcessHooks } from './processHooks.js';
-import { clampInteractionMode } from '../agents/interactionModeClamp.js';
 import type { InteractionMode } from '../bootstrap/types.js';
-
-/**
- * What a permission prompt is asking about. 'tool' is a normal tool-call gate;
- * 'directory-grant' is a request to widen the filesystem allow-list, which is a
- * separate decision (deny-by-default in headless, never inheriting the tool's
- * own verdict). Passed as an optional 4th arg so existing 3-arg prompt callbacks
- * remain valid; a headless callback reads it to fail closed on scope widening.
- */
-export type PermissionPromptKind = 'tool' | 'directory-grant';
-
-/**
- * Tool-name patterns auto-approved without a permission prompt, from `--allowedTools`
- * (claude-compat; e.g. `mcp__manifold__*`). Parsed once from B4M_ALLOWED_TOOLS - set by
- * bin/bike4mind-cli.mjs. Returns [] when unset so behaviour is unchanged off-host.
- */
-let cachedAllowedTools: string[] | undefined;
-function getAllowedToolPatterns(): string[] {
-  if (cachedAllowedTools === undefined) {
-    try {
-      const raw = process.env.B4M_ALLOWED_TOOLS;
-      cachedAllowedTools = raw ? (JSON.parse(raw) as string[]) : [];
-    } catch {
-      cachedAllowedTools = [];
-    }
-  }
-  return cachedAllowedTools;
-}
+import { wrapTools, type AgentContext, type WrapToolDeps } from '../tools/gateway/index.js';
 
 /**
  * Simple CLI-friendly storage adapter
@@ -123,729 +82,57 @@ class CliLogger extends Logger {
 }
 
 /**
- * Shared context for agent observation tracking
- * This allows tool wrappers to add observations to the current agent
+ * The CLI-built tools in the order they are offered to the model. Each entry point passes
+ * only what it built, so an optional group is absent when its config gate is off or when
+ * that entry point does not build it at all (the decision / blocker / review tools are
+ * interactive-only).
  */
-interface AgentContext {
-  currentAgent: any | null; // ReActAgent instance
-  observationQueue: Array<{ toolName: string; result: unknown }>; // Queue observations to add after actions
-  /** Called (synchronously, must not block) after a file-writing tool succeeds, with the path as the tool received it. */
-  onFileChanged?: (filePath: string) => void;
-}
-
-// Must stay in sync with the success strings returned by the core editLocalFile
-// and createFile tools; a denial or failure returns a different string.
-const FILE_WRITE_SUCCESS = /^File (edited|created|overwritten) successfully: /;
-const FILE_WRITE_TOOLS = new Set(['edit_local_file', 'create_file']);
-
-function notifyFileChanged(
-  agentContext: AgentContext,
-  toolName: string,
-  args: Record<string, unknown>,
-  result: string
-): void {
-  if (!agentContext.onFileChanged || !FILE_WRITE_TOOLS.has(toolName)) return;
-  if (typeof args.path !== 'string' || !FILE_WRITE_SUCCESS.test(result)) return;
-  agentContext.onFileChanged(args.path);
-}
-
-/**
- * Wrap a tool with permission checking, server routing, and observation tracking.
- */
-export function wrapToolWithPermission(
-  tool: ICompletionOptionTools,
-  permissionManager: PermissionManager,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
-  agentContext: AgentContext,
-  configStore: any,
-  apiClient: ApiClient,
-  sandboxOrchestrator?: SandboxOrchestrator,
-  /** Live, mutable allow-list shared with the core tool context. The path
-   *  access-grant flow pushes onto this in place so grants take effect on the
-   *  next call without rebuilding tools. */
-  allowedDirectories?: string[],
-  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at
-   *  the less-permissive of this and the live store mode, so a subagent can never
-   *  exceed its parent's authority yet still tightens if the user switches to plan
-   *  mode mid-run. Undefined for the main agent (uses the live store mode). */
-  interactionModeOverride?: InteractionMode
-): ICompletionOptionTools {
-  const originalFn = tool.toolFn;
-  const toolName = tool.toolSchema.name;
-
-  return {
-    ...tool,
-    toolFn: async (args: any) => {
-      // --- Sandbox wrapping for bash_execute ---
-      let isSandboxed = false;
-      let sandboxedArgs = args;
-
-      if (toolName === 'bash_execute' && args?.command && sandboxOrchestrator) {
-        let cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
-        // Resolve symlinks up front so the confinement check (isPathAllowed resolves
-        // internally) and the sandbox's writable bind (built from the string we pass)
-        // use the SAME real path - otherwise a symlinked cwd could validate while the
-        // bind points elsewhere.
-        try {
-          cwd = realpathSync(cwd);
-        } catch {
-          // Not-yet-resolvable path: keep the lexical resolution.
-        }
-        const decision = sandboxOrchestrator.shouldSandbox(args.command, cwd);
-
-        // Record + report a blocked command and return the model-facing message.
-        const blockCommand = (reason: string): string => {
-          sandboxOrchestrator.recordBlocked();
-          sandboxOrchestrator
-            .recordViolation({
-              type: 'filesystem',
-              command: args.command,
-              blockedBy: 'config',
-              timestamp: new Date(),
-              detail: reason,
-            })
-            .catch(() => {});
-          console.error(`\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${reason}\n`);
-          return `Command blocked by sandbox: ${reason}`;
-        };
-
-        if (decision.type === 'blocked') {
-          return blockCommand(decision.reason);
-        }
-
-        if (decision.type === 'sandbox') {
-          // Confine the writable root to the same allow-list the core file tools
-          // honor. A model-supplied cwd outside the workspace would otherwise
-          // become the sandbox's read-write bind; reject it (and drop the temp
-          // sandbox profile shouldSandbox already built) before it can execute.
-          if (!isPathAllowed(cwd, allowedDirectories).allowed) {
-            cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
-            return blockCommand(
-              `working directory ${cwd} is outside the sandbox writable root ` +
-                `(grant it with '/add-dir ${cwd}' or run from within the workspace)`
-            );
-          }
-          sandboxOrchestrator.recordSandboxed();
-          isSandboxed = true;
-          sandboxedArgs = {
-            ...args,
-            // Hand execution the SAME realpath-resolved cwd used for the confinement
-            // check and the writable bind. Bubblewrap bakes --chdir into its command,
-            // but Seatbelt's process cwd is whatever spawn() sets, so without this the
-            // sandboxed process would run in the unresolved (symlinked) path - a silent
-            // divergence from the profile's baked writable root.
-            cwd,
-            command: decision.wrappedCommand.commandString,
-            _sandboxCleanup: decision.wrappedCommand.cleanupPaths,
-          };
-        } else if (decision.type === 'unsandboxed') {
-          sandboxOrchestrator.recordUnsandboxed();
-        }
-      }
-
-      const effectiveArgs = isSandboxed ? sandboxedArgs : args;
-      // Args actually handed to execution. Defaults to effectiveArgs, minus any
-      // gateSnapshot or confirmedFuzzyHash present in the raw args - only the
-      // edit_local_file gate below (once it actually resolves) may set these fields,
-      // plus executeWithFuzzyConfirmation for confirmedFuzzyHash. Stripping them here
-      // unconditionally, rather than only when the gate resolves, closes the path
-      // where an externally supplied gateSnapshot would otherwise survive untouched
-      // whenever resolveEditLocalFile() throws (an ambiguous or no-match old_string,
-      // not just an auth/IO error) and let editLocalFile() trust an unverified span.
-      // confirmedFuzzyHash also survives an exact-match gate (no fuzzy prompt), so a
-      // model-supplied hash could pre-confirm a fuzzy edit the file drifted into.
-      const {
-        gateSnapshot: _modelSuppliedGateSnapshot,
-        confirmedFuzzyHash: _modelSuppliedFuzzyHash,
-        ...effectiveArgsSansGateFields
-      } = effectiveArgs ?? {};
-      let execArgs: Record<string, unknown> = effectiveArgsSansGateFields;
-      // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
-      // Cleaned once in the finally below: after the awaited command completes on
-      // the success path, and on any early-return path (plan-mode block, permission
-      // deny) that skips executeAndRecord. The success-path returns MUST `await`
-      // executeAndRecord() - a bare `return <promise>` inside try/finally runs the
-      // finally synchronously at the return, rmSync'ing this profile before the
-      // spawned sandbox-exec ever opens it (every sandboxed command would then fail).
-      // Only paths THIS wrapper set - a model-supplied `_sandboxCleanup` on the
-      // raw (unsandboxed) args must never reach rmSync(recursive, force).
-      const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
-
-      /**
-       * Shared execution flow: run tool, capture violations, offer retry on
-       * sandbox failure, and record observation.
-       */
-      async function executeAndRecord(): Promise<string> {
-        let result: string;
-        try {
-          result = await executeWithFuzzyConfirmation(toolName, execArgs, apiClient, originalFn, showPermissionPrompt);
-        } catch (err) {
-          // grep_search / glob_files re-throw path-validation errors instead
-          // of returning them as a string. Normalize a denial to a string so
-          // the grant flow below handles both tool shapes uniformly; re-throw
-          // anything that isn't a path denial.
-          const msg = err instanceof Error ? err.message : String(err);
-          if (!isPathAccessDenial(msg)) throw err;
-          result = msg;
-        }
-        await captureViolations(isSandboxed, result, args?.command, sandboxOrchestrator);
-        result = await retrySandboxFailure(
-          isSandboxed,
-          result,
-          toolName,
-          args,
-          apiClient,
-          originalFn,
-          showPermissionPrompt
-        );
-        // Offer to grant access when the tool was blocked by the filesystem
-        // allow-list, then retry - the runtime equivalent of `/add-dir`.
-        result = await retryPathAccessDenial(
-          result,
-          toolName,
-          execArgs,
-          allowedDirectories,
-          configStore,
-          apiClient,
-          originalFn,
-          showPermissionPrompt
-        );
-        agentContext.observationQueue.push({ toolName, result });
-        notifyFileChanged(agentContext, toolName, execArgs, result);
-        // Process-hook (host action_required signal): a tool finished - clear the
-        // block sentinel (matcher "*").
-        void getProcessHooks()?.firePostToolUse(toolName);
-        return result;
-      }
-
-      try {
-        // Plan mode: block tools that would mutate state (everything that's not read-only),
-        // except writes targeting the plan file. Plan-mode block runs BEFORE the
-        // permission/trust check so it overrides previously trusted tools.
-        const { useCliStore } = await import('../store/index.js');
-        const liveInteractionMode = useCliStore.getState().interactionMode;
-        // Subagents carry a ceiling; clamp to the less-permissive of it and the live
-        // mode so they never exceed the parent but still honor a mid-run plan switch.
-        const interactionMode = interactionModeOverride
-          ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
-          : liveInteractionMode;
-        if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
-          agentContext.observationQueue.push({ toolName, result });
-          return result;
-        }
-
-        // Command-level risk gate: inspect the actual command text (not just the
-        // tool name) so a destructive command hidden behind a wrapper
-        // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
-        // silently auto-run. A high-risk command ALWAYS requires an explicit
-        // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
-        // auto-accept short-circuits below. It only ever tightens: benign commands
-        // keep their existing (possibly auto-approved) behavior.
-        const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
-        const commandText = commandField ? args?.[commandField] : undefined;
-        // `classifyCommandRisk` is documented never to throw, but this call sits on the
-        // security boundary for every shell command - if it ever does, treat that as a
-        // high-risk command (force the prompt) rather than letting the error escape the
-        // permission gate and skip classification entirely.
-        let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
-        if (typeof commandText === 'string') {
-          try {
-            commandRisk = classifyCommandRisk(commandText);
-          } catch {
-            commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
-          }
-        }
-        const forcePromptForRisk = commandRisk?.level === 'high';
-
-        // Fuzzy-edit gate: resolve the edit ONCE, through the SAME path
-        // authorization the tool itself enforces (no raw model-supplied path is
-        // ever read here), to learn whether it resolves via the fuzzy fallback -
-        // which can write a wider span than old_string names. Such an edit is
-        // re-confirmed even under trust / auto-accept (mirroring forcePromptForRisk)
-        // so the human sees the real span. Any resolve error (auth denial, missing
-        // file, no match) leaves editPlan null: the gate forces no prompt and the
-        // real error surfaces at execution. edit_local_file is never shell-like, so
-        // this and forcePromptForRisk are mutually exclusive.
-        let editPlan: EditPlan | null = null;
-        if (
-          toolName === 'edit_local_file' &&
-          typeof args?.path === 'string' &&
-          typeof args?.old_string === 'string' &&
-          typeof args?.new_string === 'string'
-        ) {
-          try {
-            editPlan = await resolveEditLocalFile(
-              args as { path: string; old_string: string; new_string: string },
-              allowedDirectories
-            );
-          } catch {
-            editPlan = null;
-          }
-        }
-        const forcePromptForFuzzyEdit = editPlan?.strategy != null;
-        const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
-
-        // Bind the fuzzy edit's execution to the snapshot the gate just approved, so
-        // the bytes written are the ones the human confirmed. The tool refuses to
-        // apply a fuzzy edit whose content-hash no longer matches, forcing a fresh
-        // prompt (see executeWithFuzzyConfirmation). Exact edits are deterministic
-        // and need no binding.
-        if (forcePromptForFuzzyEdit && editPlan) {
-          execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
-        }
-
-        // Hand the write path the gate's already-resolved span, so it can skip its own
-        // resolveEdit() pass when the file still hashes to what the gate saw. The write
-        // path still always reads the file fresh - the read itself can't be skipped,
-        // since the file can change between the gate and the write with no permission
-        // prompt involved at all (another tool call, a formatter, a watcher).
-        if (toolName === 'edit_local_file' && editPlan) {
-          execArgs = {
-            ...execArgs,
-            gateSnapshot: { contentHash: editPlan.contentHash, resolvedEdit: editPlan.resolvedEdit },
-          };
-        }
-
-        // Host allowlist (claude --allowedTools): auto-approve tools matching an
-        // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
-        const allowedPatterns = getAllowedToolPatterns();
-        if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
-          return await executeAndRecord();
-        }
-
-        // Auto-approved, trusted, or sandbox auto-allowed
-        if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
-          return await executeAndRecord();
-        }
-
-        // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-        if (!forcePrompt && interactionMode === 'auto-accept') {
-          return await executeAndRecord();
-        }
-
-        // Generate preview for dangerous operations. For edit_local_file the gate
-        // already resolved the real span through the authorized preflight, so reuse
-        // that (one resolve, no extra raw-path read) instead of resolving again in
-        // generateToolPreview; fall back to the generic preview only when the edit
-        // did not resolve (auth denied, missing file, no match).
-        const basePreview =
-          toolName === 'edit_local_file' && editPlan
-            ? editPlan.diffPreview
-            : await generateToolPreview(toolName, args, isSandboxed, allowedDirectories);
-        const preview =
-          forcePromptForRisk && commandRisk
-            ? prependRiskBanner(basePreview, commandRisk.reasons)
-            : forcePromptForFuzzyEdit
-              ? prependFuzzyEditBanner(basePreview)
-              : basePreview;
-
-        // Show permission prompt and wait indefinitely for response
-        const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
-
-        if (response.action === 'deny') {
-          throw new PermissionDeniedError(toolName, args);
-        }
-
-        if (response.action === 'allow-session') {
-          permissionManager.trustToolForSession(toolName);
-        }
-
-        if (response.action === 'allow-always') {
-          await persistToolTrust(toolName, permissionManager, configStore);
-        }
-
-        return await executeAndRecord();
-      } finally {
-        cleanupSandboxFiles(sandboxCleanupPaths);
-      }
-    },
-  };
+export interface CliToolListInput {
+  /** `tool_search`, when deferred tool schemas exist. Offered ahead of the rest of the list. */
+  toolSearchTool?: ICompletionOptionTools | null;
+  agentDelegateTool: ICompletionOptionTools;
+  backgroundTools: ICompletionOptionTools[];
+  resumeAgentTool: ICompletionOptionTools;
+  writeTodosTool: ICompletionOptionTools;
+  /** Durable decision / blocker / review-gate tools (interactive only). */
+  decisionLogTool?: ICompletionOptionTools | null;
+  blockerTools?: ICompletionOptionTools[];
+  reviewGateTool?: ICompletionOptionTools | null;
+  findDefinitionTool: ICompletionOptionTools;
+  getFileStructureTool: ICompletionOptionTools;
+  /** Persistent work-item tools, off unless the config opts in. */
+  workItemTools?: ICompletionOptionTools[];
+  skillTool?: ICompletionOptionTools | null;
+  dynamicAgentTool?: ICompletionOptionTools | null;
+  /** `coordinate_task`, when coordinator mode is on. */
+  coordinateTaskTool?: ICompletionOptionTools | null;
 }
 
 /**
- * Collaborators the permission wrapper needs. Bundled so the several entrypoints
- * that build raw tool lists (MCP tools, skill, get_file_structure, find_definition)
- * can route them through the ONE wrapper without repeating its long argument list.
+ * Assemble the CLI-built tool list and route it through the ONE permission wrapper (plan-mode
+ * gate, deny list, output redaction and cap). Every entry point - interactive, headless and ACP
+ * - builds its list here so no CLI-built tool, `tool_search` included, can skip the gate.
  */
-export interface WrapToolDeps {
-  permissionManager: PermissionManager;
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
-  agentContext: AgentContext;
-  configStore: any; // ConfigStore instance (no shared interface)
-  apiClient: ApiClient;
-  sandboxOrchestrator?: SandboxOrchestrator;
-  /** Live, mutable allow-list shared with the core tool context (see wrapToolWithPermission). */
-  allowedDirectories?: string[];
-  interactionModeOverride?: InteractionMode;
-}
-
-/**
- * Route a set of otherwise-raw tools through the permission wrapper. This is the
- * single choke-point every tool the model can call must pass through; anything
- * constructed outside generateCliTools is wrapped here before it reaches the agent.
- */
-export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
-  return tools.map(tool =>
-    wrapToolWithPermission(
-      tool,
-      deps.permissionManager,
-      deps.showPermissionPrompt,
-      deps.agentContext,
-      deps.configStore,
-      deps.apiClient,
-      deps.sandboxOrchestrator,
-      deps.allowedDirectories,
-      deps.interactionModeOverride
-    )
+export function buildCliToolList(input: CliToolListInput, wrapDeps: WrapToolDeps): ICompletionOptionTools[] {
+  return wrapTools(
+    [
+      ...(input.toolSearchTool ? [input.toolSearchTool] : []),
+      input.agentDelegateTool,
+      ...input.backgroundTools,
+      input.resumeAgentTool,
+      input.writeTodosTool,
+      ...(input.decisionLogTool ? [input.decisionLogTool] : []),
+      ...(input.blockerTools ?? []),
+      ...(input.reviewGateTool ? [input.reviewGateTool] : []),
+      input.findDefinitionTool,
+      input.getFileStructureTool,
+      ...(input.workItemTools ?? []),
+      ...(input.skillTool ? [input.skillTool] : []),
+      ...(input.dynamicAgentTool ? [input.dynamicAgentTool] : []),
+      ...(input.coordinateTaskTool ? [input.coordinateTaskTool] : []),
+    ],
+    wrapDeps
   );
-}
-
-/**
- * Detect whether a tool result indicates a sandbox-specific runtime failure
- * worth offering an unsandboxed retry for. Matches the sandbox markers
- * (`sandbox-exec:`, `bwrap:`) AND a bare "Operation not permitted": on macOS a
- * real Seatbelt denial is the denied syscall's own EPERM, printed by the tool
- * that hit it with NO `sandbox-exec:` prefix (that prefix only appears when the
- * profile fails to load) - a write denial reads `touch: <path>: Operation not
- * permitted`, and a blocked connect surfaces the same EPERM. Matching only the
- * markers would never fire for those, silently dropping the recovery offer and
- * the `/sandbox:network on` tip. The known false positive (e.g. `kill` on a
- * foreign pid) is accepted: it only costs a deniable retry prompt, whereas a
- * false negative removes the recovery path entirely. Exported for unit testing.
- */
-export function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
-  if (!isSandboxed) return false;
-  return result.includes('sandbox-exec:') || result.includes('bwrap:') || result.includes('Operation not permitted');
-}
-
-/**
- * If the result looks like a sandbox runtime failure, prompt the user to retry
- * the command unsandboxed. Returns the retry result or the original result.
- */
-async function retrySandboxFailure(
-  isSandboxed: boolean,
-  result: string,
-  toolName: string,
-  originalArgs: Record<string, unknown>,
-  apiClient: ApiClient,
-  originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
-): Promise<string> {
-  if (!isSandboxFailure(isSandboxed, result)) return result;
-
-  const errorSnippet = result.slice(0, 200);
-  const retryResponse = await showPermissionPrompt(
-    toolName,
-    originalArgs,
-    `🛑 SANDBOX BLOCKED - This command was denied by the OS sandbox.\n\n` +
-      `- The sandbox prevented this operation because it violates filesystem or network restrictions.\n` +
-      `- If this was a network call, prefer '/sandbox:network on' to allow filtered egress instead of full access.\n` +
-      `- You can retry without the sandbox, but the command will run with full system access.\n\n` +
-      `@@Error Details@@\n${errorSnippet}`
-  );
-
-  if (retryResponse.action !== 'deny') {
-    return executeTool(toolName, originalArgs, apiClient, originalFn);
-  }
-
-  return result;
-}
-
-/**
- * Matches the three shapes of filesystem allow-list denial emitted by core:
- *  - file tools:  `Access denied: Cannot <op> files outside allowed directories.`
- *  - glob_files:  `Access denied: Cannot search outside allowed directories.` (no "files")
- *  - grep_search: `Path validation failed: "<p>" resolves outside allowed directories.`
- * The `files` token is optional so glob_files' wording is covered too.
- */
-const PATH_ACCESS_DENIAL_RE =
-  /Access denied: Cannot \w+ (?:files )?outside allowed directories|Path validation failed: .* resolves outside allowed directories/;
-
-export function isPathAccessDenial(text: string): boolean {
-  return PATH_ACCESS_DENIAL_RE.test(text);
-}
-
-/**
- * Derive the directory to grant so the blocked operation can succeed on retry.
- * File tools (`file_read`, `create_file`, `edit_local_file`, `delete_file`)
- * target a file -> grant its containing directory. `grep_search` / `glob_files`
- * target a directory -> grant it directly. Returns an absolute path, or null if
- * no path argument is present.
- */
-export function deriveGrantDirectory(toolName: string, args: Record<string, unknown>): string | null {
-  const raw = (args?.path ?? args?.dir_path) as unknown;
-  if (typeof raw !== 'string' || raw.length === 0) return null;
-  const resolved = path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
-  const dirArgTools = new Set(['grep_search', 'glob_files']);
-  return dirArgTools.has(toolName) ? resolved : path.dirname(resolved);
-}
-
-/**
- * If a tool result indicates the operation was blocked by the filesystem
- * allow-list, prompt the user to grant access to the relevant directory.
- * On approval the directory is pushed onto the live allow-list (so the very
- * next core tool call sees it - same array reference held by the tool
- * context), persisted to config on "Always allow", and the tool is retried.
- *
- * This is the runtime, on-demand equivalent of `/add-dir`: instead of failing
- * hard when the agent reaches outside the workspace, it asks - like Claude
- * Code does - and continues once the user says yes.
- */
-async function retryPathAccessDenial(
-  result: string,
-  toolName: string,
-  args: Record<string, unknown>,
-  allowedDirectories: string[] | undefined,
-  configStore: any,
-  apiClient: ApiClient,
-  originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: (
-    toolName: string,
-    args: unknown,
-    preview?: string,
-    kind?: PermissionPromptKind
-  ) => Promise<{ action: PermissionResponse }>
-): Promise<string> {
-  if (!allowedDirectories || !isPathAccessDenial(result)) return result;
-
-  const grantDir = deriveGrantDirectory(toolName, args);
-  if (!grantDir) return result;
-  // Grant the realpath, not the lexical string: the core validator resolves
-  // symlinks (realpathSync) before matching, so a lexical entry for a symlinked
-  // dir would never match and the grant would silently fail to unblock.
-  let resolvedGrantDir = grantDir;
-  try {
-    resolvedGrantDir = realpathSync(grantDir);
-  } catch {
-    // Not-yet-resolvable path: fall back to the lexical dir.
-  }
-  // Already granted - return the result rather than re-prompting in a loop.
-  if (allowedDirectories.includes(resolvedGrantDir)) return result;
-
-  const preview =
-    `🔒 DIRECTORY ACCESS — "${toolName}" needs a path outside the current workspace.\n\n` +
-    `- Grant access to this directory:\n` +
-    `  ${resolvedGrantDir}\n` +
-    `- "Allow for this session" grants access until the CLI exits.\n` +
-    `- "Always allow" also saves it to your config so it persists across sessions.`;
-
-  // Prompt as a 'directory-grant', NOT as the originating tool: widening the
-  // filesystem allow-list is its own decision. In headless this must be
-  // deny-by-default rather than inheriting the tool's policy verdict (a policy
-  // allowing `file_read` must not silently widen scope to any directory).
-  const response = await showPermissionPrompt(toolName, args, preview, 'directory-grant');
-  if (response.action === 'deny') return result;
-
-  // Grant into the live allow-list the core tool context reads on each call.
-  // `allow-once` is a one-shot grant - it unblocks this single retry only and
-  // is reverted afterward, matching the PermissionPrompt's first option / `y`
-  // shortcut. `allow-session` and `allow-always` keep the grant for the rest
-  // of the run; `allow-always` also persists it to config.
-  const oneShot = response.action === 'allow-once';
-  allowedDirectories.push(resolvedGrantDir);
-
-  if (response.action === 'allow-always') {
-    try {
-      await configStore.addDirectory(resolvedGrantDir);
-    } catch {
-      // Best-effort persistence - the session grant above is already applied.
-    }
-  }
-
-  // Retry now that the directory is allowed. Route back through the fuzzy-edit
-  // confirmation so a granted edit that resolves fuzzily is re-prompted, not
-  // silently applied - a directory grant must never double as a confirmation
-  // bypass. A failure here (including another denial for a different path) is
-  // returned as-is - no recursion, no loop.
-  try {
-    return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  } finally {
-    // Revert a one-shot grant so it doesn't silently widen filesystem scope
-    // for the rest of the session. Only remove the entry we added (guard
-    // against a concurrent grant of the same dir having persisted it).
-    if (oneShot) {
-      const idx = allowedDirectories.lastIndexOf(resolvedGrantDir);
-      if (idx !== -1) allowedDirectories.splice(idx, 1);
-    }
-  }
-}
-
-/**
- * Clean up temporary sandbox files (e.g., Seatbelt profiles).
- * Fails silently - cleanup is best-effort.
- */
-function cleanupSandboxFiles(paths?: string[]): void {
-  if (!paths || paths.length === 0) return;
-  for (const p of paths) {
-    try {
-      rmSync(p, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup
-    }
-  }
-}
-
-/**
- * Parse sandbox runtime stderr for violations and record them.
- * Fire-and-forget - errors are silently swallowed.
- */
-async function captureViolations(
-  isSandboxed: boolean,
-  result: string,
-  command: string | undefined,
-  orchestrator?: SandboxOrchestrator
-): Promise<void> {
-  if (!isSandboxed || !orchestrator || !command) return;
-  const { parseSandboxStderr, toSandboxViolations } = await import('../sandbox/logging/StderrViolationParser.js');
-  const parsed = parseSandboxStderr(result);
-  if (parsed.length > 0) {
-    const violations = toSandboxViolations(parsed, command);
-    for (const v of violations) {
-      await orchestrator.recordViolation(v).catch(() => {});
-    }
-  }
-}
-
-/**
- * Prepend a high-risk warning banner (with the classifier's reasons) to a tool
- * preview shown in the permission prompt. Explains WHY a normally auto-approved
- * command is being surfaced for explicit confirmation.
- */
-function prependRiskBanner(basePreview: string | undefined, reasons: string[]): string {
-  const details =
-    reasons.length > 0 ? reasons.map(reason => `- ${reason}`).join('\n') : '- flagged by command analysis';
-  const banner = `🛑 HIGH-RISK COMMAND — flagged by static command analysis:\n\n${details}`;
-  return basePreview ? `${banner}\n\n${basePreview}` : banner;
-}
-
-/**
- * Prepend a banner to an edit_local_file preview whose old_string was not an
- * exact match. The diff passed in is the resolved fuzzy span (from the tool's own
- * authorized resolve), so the banner just explains why this edit is re-prompted
- * despite trust / auto-accept.
- */
-function prependFuzzyEditBanner(basePreview: string | undefined): string {
-  const banner = '[!] old_string was not an exact match; the diff below is the actual span that will be written.';
-  return basePreview ? `${banner}\n\n${basePreview}` : banner;
-}
-
-/**
- * Execute a tool, and when the core edit_local_file tool refuses a fuzzy edit that
- * is not bound to the current file snapshot - the gate saw an exact match but the
- * file changed before the write, or a directory grant re-entered here - force ONE
- * permission prompt showing the REAL resolved span, then retry bound to the hash
- * the tool reported so the write matches what the human approved. A further
- * concurrent change makes the tool refuse again; that is surfaced rather than
- * looped - fail safe, never a silent wider-than-named write.
- */
-async function executeWithFuzzyConfirmation(
-  toolName: string,
-  args: Record<string, unknown>,
-  apiClient: ApiClient,
-  originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
-): Promise<string> {
-  try {
-    return await executeTool(toolName, args, apiClient, originalFn);
-  } catch (err) {
-    if (!isFuzzyEditConfirmationRequired(err)) throw err;
-    const response = await showPermissionPrompt(toolName, args, prependFuzzyEditBanner(err.diffPreview));
-    if (response.action === 'deny') throw new PermissionDeniedError(toolName, args);
-    return executeTool(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
-  }
-}
-
-/**
- * Generate a human-readable preview string for a tool invocation.
- * Used in the permission prompt to show what the tool will do.
- */
-async function generateToolPreview(
-  toolName: string,
-  args: Record<string, unknown>,
-  isSandboxed: boolean,
-  allowedDirectories?: string[]
-): Promise<string | undefined> {
-  try {
-    // Any preview that reads a file must go through the SAME authorization as
-    // execution: never open a raw model-supplied path the tool would itself
-    // reject. Without this, previewing an out-of-bounds path reads it anyway, and
-    // a special file such as /dev/zero hangs or exhausts memory in the preflight
-    // rather than failing at the allowlist.
-    const pathArg = typeof args?.path === 'string' ? (args.path as string) : undefined;
-    const readsFile = toolName === 'edit_local_file' || toolName === 'create_file' || toolName === 'delete_file';
-    if (readsFile && pathArg && !isPathAllowed(pathArg, allowedDirectories).allowed) {
-      return `[Path outside allowed directories: ${pathArg}]`;
-    }
-
-    if (toolName === 'edit_local_file' && args?.path && args?.old_string && typeof args?.new_string === 'string') {
-      return await generateEditLocalFilePreview({
-        path: args.path as string,
-        old_string: args.old_string as string,
-        new_string: args.new_string,
-      });
-    }
-
-    if (toolName === 'create_file' && args?.path && args?.content) {
-      return await generateFileDiffPreview({
-        path: args.path as string,
-        content: args.content as string,
-      });
-    }
-
-    if (toolName === 'delete_file' && args?.path) {
-      return await generateFileDeletePreview({
-        path: args.path as string,
-      });
-    }
-
-    if (toolName === 'bash_execute' && args?.command) {
-      const cwd = args.cwd ? ` (in ${args.cwd})` : '';
-      const timeout = args.timeout ? ` [timeout: ${args.timeout}ms]` : '';
-      const sandboxLabel = isSandboxed ? ' [sandboxed]' : '';
-      return `$ ${args.command}${cwd}${timeout}${sandboxLabel}`;
-    }
-  } catch (error) {
-    return `[Could not generate preview: ${error instanceof Error ? error.message : 'Unknown error'}]`;
-  }
-
-  return undefined;
-}
-
-/**
- * Persist an "allow-always" trust decision to project-local or global config.
- *
- * Only writes the repo's project-local layer when the folder is TRUSTED. An
- * untrusted root never re-reads those layers (computeMerged gates on trust), so
- * persisting there would silently lose the decision on the next launch AND drop a
- * .bike4mind/local.json into a repo the user just declined to trust. Untrusted
- * (the default) falls back to the global layer, which is always honored.
- */
-export async function persistToolTrust(
-  toolName: string,
-  permissionManager: PermissionManager,
-  configStore: any // any: ConfigStore has dynamic shape, no shared interface
-): Promise<void> {
-  const canTrust = permissionManager.trustTool(toolName);
-  if (!canTrust) return;
-
-  const projectDir = configStore.getProjectConfigDir();
-  if (projectDir && configStore.isProjectTrusted()) {
-    try {
-      await configStore.initProjectConfig();
-      const existingLocal = (await configStore.loadRawProjectLocalConfig()) || {};
-      await configStore.saveProjectLocalConfig({
-        ...existingLocal,
-        trustedTools: [...(existingLocal.trustedTools || []), toolName],
-      });
-      return;
-    } catch {
-      // Fall back to global if local persistence fails.
-    }
-  }
-  await configStore.trustTool(toolName);
 }
 
 /**
@@ -969,49 +256,6 @@ export function wrapToolWithHooks(
 }
 
 /**
- * Tools that modify files and should trigger automatic checkpointing
- */
-const CHECKPOINT_TOOLS = new Set(['create_file', 'edit_local_file', 'delete_file']);
-
-/**
- * Wrap a tool with automatic checkpointing before file modifications
- *
- * Creates a snapshot of target files in the shadow git repo BEFORE
- * the tool executes, enabling undo/restore functionality.
- *
- * Checkpoint failures are caught silently and never block tool execution.
- */
-function wrapToolWithCheckpointing(
-  tool: ICompletionOptionTools,
-  checkpointStore: CheckpointStore | null
-): ICompletionOptionTools {
-  if (!checkpointStore || !CHECKPOINT_TOOLS.has(tool.toolSchema.name)) {
-    return tool;
-  }
-
-  const originalFn = tool.toolFn;
-  const toolName = tool.toolSchema.name;
-
-  return {
-    ...tool,
-
-    toolFn: async (args: any) => {
-      const filePath = (args as Record<string, unknown>)?.path as string | undefined;
-
-      if (filePath) {
-        try {
-          await checkpointStore.createCheckpoint(toolName, [filePath], `before-${toolName}-${path.basename(filePath)}`);
-        } catch {
-          // Checkpoint failure should NEVER block tool execution
-        }
-      }
-
-      return originalFn(args);
-    },
-  };
-}
-
-/**
  * Tool name mapping for Claude Code compatibility
  * Maps between Claude Code tool names and B4M tool names
  */
@@ -1058,7 +302,7 @@ export interface ToolFilter {
 }
 
 /**
- * Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
+ * Generate CLI-friendly tools with permission wrapping and server routing
  * Disables tools that require web app context
  *
  * @param toolFilter - Optional filter to restrict tool access (for subagents)
@@ -1194,21 +438,19 @@ export async function generateCliTools(
     codeMinifier
   );
 
-  // Convert to array and wrap with permission checks, checkpointing, server routing, and observation tracking
-  let tools = Object.entries(toolsMap).map(([_, tool]) => {
-    const permissionWrapped = wrapToolWithPermission(
-      tool,
-      permissionManager,
-      showPermissionPrompt,
-      agentContext,
-      configStore,
-      apiClient,
-      sandboxOrchestrator,
-      liveAllowedDirectories,
-      interactionModeOverride
-    );
-    return wrapToolWithCheckpointing(permissionWrapped, checkpointStore ?? null);
-  });
+  // Convert to array and route every tool through the permission wrapper
+  const wrapDeps: WrapToolDeps = {
+    permissionManager,
+    showPermissionPrompt,
+    agentContext,
+    configStore,
+    apiClient,
+    sandboxOrchestrator,
+    allowedDirectories: liveAllowedDirectories,
+    interactionModeOverride,
+    checkpointStore,
+  };
+  let tools = wrapTools(Object.values(toolsMap), wrapDeps);
 
   // Apply tool filter if provided (for subagents)
   if (toolFilter) {
@@ -1239,7 +481,7 @@ export async function generateCliTools(
   return { tools, agentContext };
 }
 
-// Export AgentContext type for use in other modules
+// generateCliTools takes and returns the gateway's per-agent context.
 export type { AgentContext };
 
 // Re-export user question types for CLI consumers

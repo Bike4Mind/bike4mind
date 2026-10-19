@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from desktop_release_version import bump_level, release_notes, select_version
+from desktop_release_version import bump_level, release_notes, select_version, with_reservations
 
 
 class DesktopVersionTest(unittest.TestCase):
@@ -53,7 +53,7 @@ class DesktopVersionTest(unittest.TestCase):
         self.assertEqual((version, publish), ('0.2.0', True))
         self.assertEqual(previous, self.git('rev-parse', 'HEAD'))
         self.assertNotIn('desktop-v0.2.0', self.git('tag', '--list').splitlines())
-        self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo'))
+        self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo', 'example/dist'))
         self.commit('fix(desktop): another fix')
         with self.assertRaises(ValueError):
             select_version(self.releases, '0.1.0')
@@ -65,7 +65,66 @@ class DesktopVersionTest(unittest.TestCase):
         version, publish, previous = select_version(releases, '0.1.0')
         self.assertEqual((version, publish), ('0.1.0', True))
         self.assertEqual(self.git('tag', '--list'), '')
-        self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo'))
+        self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo', 'example/dist'))
+
+    def test_distribution_draft_wins_over_source_tag_reservation(self):
+        self.releases.append({'tag_name': 'desktop-v0.1.0', 'prerelease': False,
+                              'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
+        self.commit('fix(desktop): next change')
+        with self.assertRaises(ValueError):
+            select_version(self.releases, '0.1.0')
+
+    def test_source_reservation_without_destination_release_blocks_next_commit(self):
+        self.commit('fix(desktop): reserved build')
+        self.git('tag', 'desktop-v0.1.1')
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.1', True))
+        self.commit('fix(desktop): next commit')
+        with self.assertRaises(ValueError):
+            select_version(releases, '0.1.0')
+
+    def test_known_prerelease_tag_does_not_become_stable_reservation(self):
+        self.git('tag', 'desktop-v9.0.0')
+        self.releases.append({'tag_name': 'desktop-v9.0.0', 'prerelease': True})
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v9.0.0'])
+        self.commit('fix(desktop): next commit')
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.1', True))
+
+    def test_deleted_historical_releases_preserve_beta_baseline(self):
+        self.commit('feat(desktop): historical release')
+        self.git('tag', 'desktop-v0.4.0')
+        self.commit('feat(desktop): next historical release')
+        self.git('tag', 'desktop-v0.5.0')
+        tags = ['desktop-v0.4.0', 'desktop-v0.5.0']
+        releases = with_reservations(self.releases, tags)
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.5.0', False))
+        self.commit('feat(desktop): recovery feature')
+        self.git('tag', 'desktop-v1.0.0')
+        releases = with_reservations(releases, tags + ['desktop-v1.0.0'])
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.6.0', True))
+        self.git('tag', 'desktop-v0.6.0')
+        releases = with_reservations(releases, ['desktop-v0.6.0'])
+        self.commit('fix(desktop): later change')
+        with self.assertRaises(ValueError):
+            select_version(releases, '0.1.0')
+
+    def test_real_destination_draft_still_blocks_at_withdrawn_version(self):
+        self.git('tag', 'desktop-v0.5.0')
+        releases = with_reservations(self.releases, ['desktop-v0.5.0'])
+        releases.append({'tag_name': 'desktop-v0.5.0', 'prerelease': False,
+                         'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
+        self.commit('feat(desktop): next feature')
+        with self.assertRaises(ValueError):
+            select_version(releases, '0.1.0')
+
+    def test_withdrawn_release_version_is_not_reused(self):
+        self.commit('fix(desktop): broken build')
+        self.git('tag', 'desktop-v0.1.1')
+        # The rollback procedure marks a broken stable release as a prerelease.
+        self.releases.append({'tag_name': 'desktop-v0.1.1', 'prerelease': True})
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        self.commit('fix(desktop): repair broken build')
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.2', True))
 
     def test_dependency_update_is_patch(self):
         self.commit('chore(deps): update dependencies', 'pnpm-lock.yaml')
@@ -76,9 +135,29 @@ class DesktopVersionTest(unittest.TestCase):
         self.commit('fix(desktop): correct feature')
         self.assertEqual(select_version(self.releases, '0.1.0')[0], '0.2.0')
 
-    def test_explicit_breaking_change_is_major_before_one(self):
+    def test_explicit_breaking_change_is_minor_during_beta(self):
         self.commit('feat(desktop)!: change contract')
-        self.assertEqual(select_version(self.releases, '0.1.0')[0], '1.0.0')
+        self.assertEqual(select_version(self.releases, '0.1.0')[0], '0.2.0')
+
+    def test_accidental_major_is_excluded_but_tag_preserved(self):
+        self.git('tag', 'desktop-v0.5.0')
+        self.releases.append({'tag_name': 'desktop-v0.5.0', 'prerelease': False})
+        self.commit('feat(desktop)!: beta change')
+        self.git('tag', 'desktop-v1.0.0')
+        self.releases.append({'tag_name': 'desktop-v1.0.0', 'prerelease': False})
+        releases = with_reservations(self.releases, ['desktop-v1.0.0'])
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.6.0', True))
+        self.assertIn('desktop-v1.0.0', self.git('tag', '--list'))
+        self.releases[-1] = {'tag_name': 'desktop-v1.0.0', 'prerelease': False,
+                             'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')}
+        self.assertEqual(select_version(self.releases, '0.1.0')[0], '0.6.0')
+
+    def test_other_stable_majors_and_major_baseline_fail_closed(self):
+        with self.assertRaises(ValueError):
+            select_version([], '1.0.0')
+        self.releases.append({'tag_name': 'desktop-v2.0.0', 'prerelease': False})
+        with self.assertRaises(ValueError):
+            select_version(self.releases, '0.1.0')
 
     def test_unrelated_breaking_change_is_ignored(self):
         self.commit('feat(web)!: change web contract', 'apps/client/app.ts')
@@ -136,8 +215,9 @@ class DesktopVersionTest(unittest.TestCase):
     def test_release_notes_are_scoped_and_explain_bump(self):
         self.commit('feat(web): unrelated', 'apps/client/page.tsx')
         self.commit('feat(desktop): add feature')
-        notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo')
+        notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo', 'example/dist')
         self.assertIn('Version selection: minor', notes)
+        self.assertIn('https://github.com/example/dist/releases/latest/download/install.sh', notes)
         self.assertIn('feat(desktop): add feature', notes)
         self.assertNotIn('feat(web): unrelated', notes)
         self.assertIn('https://github.com/example/repo/commit/', notes)

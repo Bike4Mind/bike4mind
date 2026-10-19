@@ -45,6 +45,12 @@ describe('resolveLakeSourceAvailability', () => {
     });
   });
 
+  it('gives an existing personal lake a reason with no switch-account hint', () => {
+    const result = availability('github', { organizationId: null, isCreator: true });
+    expect(result).toMatchObject({ status: 'disabled' });
+    expect('reason' in result && result.reason).not.toMatch(/switch/i);
+  });
+
   it('keeps Drive on a personal lake for its creator only', () => {
     expect(availability('googleDrive', { organizationId: null, isCreator: true })).toEqual({ status: 'available' });
     expect(availability('googleDrive', { organizationId: null, isCreator: false })).toEqual({

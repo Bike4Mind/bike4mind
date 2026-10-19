@@ -14,17 +14,10 @@ import type { Session } from '../storage';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
-import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import {
-  generateCliTools,
-  wrapTools,
-  PermissionManager,
-  type AgentContext,
-  type PermissionPromptKind,
-  requireApiUrl,
-} from '../utils';
+import { generateCliTools, buildCliToolList, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
+import { ToolCatalog, wrapTools, type PermissionPromptKind } from '../tools/gateway/index.js';
 import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -257,7 +250,11 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     await logger.initialize(session.id);
 
     // Initialize permission manager
-    const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled);
+    const permissionManager = new PermissionManager(
+      new ToolCatalog(),
+      config.trustedTools ?? [],
+      config.tools.disabled
+    );
 
     // NDJSON emitter, stamped with schemaVersion + runId (see headlessProtocol.ts).
     // Shared by the permission protocol below and the step stream further down.
@@ -276,7 +273,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       _preview?: string,
       kind?: PermissionPromptKind
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
+      const risk = classifyToolRisk(permissionManager.catalog.resolve(toolName), args);
       if (streaming) {
         emit({ type: 'permission_request', toolName, risk });
       }
@@ -330,10 +327,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       log: headlessSandboxLog,
     });
 
-    // Agent context for observation tracking
+    // Per-agent state shared with the tool wrappers
     const agentContext: AgentContext = {
       currentAgent: null,
-      observationQueue: [],
     };
 
     // Generate tools
@@ -413,8 +409,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
-    const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-    const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
     // Off by default - see the matching note in index.tsx.
     const workItemTools = config.preferences.enableWorkItemTools
       ? createWorkItemTools(new WorkItemsClient(apiClient))
@@ -422,36 +416,33 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
-      ? wrapTools(
-          [
-            createSkillTool({
-              customCommandStore,
-              subagentOrchestrator: orchestrator,
-              sessionId: session.id,
-              permission: { permissionManager, promptFn },
-              allowedDirectories: additionalDirectories,
-            }),
-          ],
-          cliWrapDeps
-        )[0]
+      ? createSkillTool({
+          customCommandStore,
+          subagentOrchestrator: orchestrator,
+          sessionId: session.id,
+          permission: { permissionManager, promptFn },
+          allowedDirectories: additionalDirectories,
+        })
       : null;
 
-    const cliTools = [
-      agentDelegateTool,
-      ...backgroundTools,
-      resumeAgentTool,
-      writeTodosTool,
-      findDefinitionTool,
-      getFileStructureTool,
-      ...workItemTools,
-    ];
-    if (skillTool) cliTools.push(skillTool);
-
-    // Add coordinate_task tool (gated by config flag)
-    if (config.preferences.enableCoordinatorMode === true) {
-      const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, session.id);
-      cliTools.push(coordinateTaskTool);
-    }
+    // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
+    const cliTools = buildCliToolList(
+      {
+        agentDelegateTool,
+        backgroundTools,
+        resumeAgentTool,
+        writeTodosTool,
+        findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+        getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+        workItemTools,
+        skillTool,
+        coordinateTaskTool:
+          config.preferences.enableCoordinatorMode === true
+            ? createCoordinateTaskTool(orchestrator, agentStore, session.id)
+            : null,
+      },
+      cliWrapDeps
+    );
 
     const allTools = [...b4mTools, ...mcpTools, ...cliTools];
 
@@ -483,8 +474,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     agentContext.currentAgent = agent;
 
-    (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
-
     // Set up step streaming for stream-json format (emitter created above).
     if (streaming) {
       agent.on('thought', (step: AgentStep) => {
@@ -513,7 +502,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     try {
       result = await agent.run(fullPrompt, {
         parallelExecution: config.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => permissionManager.catalog.isReadOnly(toolName),
         maxHistoryIterations: 4,
       });
     } finally {

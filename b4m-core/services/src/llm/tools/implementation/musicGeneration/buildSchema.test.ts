@@ -33,6 +33,8 @@ describe('buildMusicToolSchema', () => {
     expect(description).toContain('lyria-3.5 (Lyria 3.5): lyrics up to 10000 chars; 30-180, default 120, approximate');
     expect(description).toContain('always 30');
     expect(description).toMatch(/Never name a real artist/);
+    const prompt = z.toJSONSchema(buildMusicToolSchema(['test-music']).schema).properties?.prompt;
+    expect(JSON.stringify(prompt)).toMatch(/Never name a real artist or band.*Good:.*Bad:/);
   });
 
   it('converts to a JSON Schema without transforms', () => {

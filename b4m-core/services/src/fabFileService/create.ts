@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
+import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -170,7 +171,8 @@ export const prepareFabFile = async (
   parameters: CreateFabFileParameters,
   { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
 ) => {
-  const params = secureParameters(parameters, createFabFileSchema);
+  // `organizationId` from the request is only the org whose limit to check; ownership is derived below.
+  const { organizationId: limitOrganizationId, ...params } = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
 
@@ -182,7 +184,8 @@ export const prepareFabFile = async (
   const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
-  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it
@@ -220,12 +223,20 @@ export const prepareFabFile = async (
     });
   }
 
-  // Check storage limit - use organization limit if organizationId is provided
-  await checkStorageLimitForFile(user, params.fileSize, params.organizationId, db.organizations?.findById);
+  // Check storage limit - use organization limit if organizationId is provided. Wrapped, not passed
+  // as db.organizations.findById: a repository method detached from its instance loses `this`.
+  const organizations = db.organizations;
+  await checkStorageLimitForFile(
+    user,
+    params.fileSize,
+    limitOrganizationId,
+    organizations && (id => organizations.findById(id))
+  );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
     ...(provenance && {
       sourceType: provenance.sourceType,

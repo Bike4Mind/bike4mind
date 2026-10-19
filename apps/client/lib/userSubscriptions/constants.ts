@@ -1,4 +1,5 @@
 import { LIBREONCOLOGY_PRO_PRICE_ID } from '@client/lib/entitlements/registry';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { SubscriptionPlanDetail, SubscriptionPlanInterval, UserSubscriptionTier } from './types';
 
 const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
@@ -92,3 +93,15 @@ export const SUBSCRIPTION_PLANS_MAP = SUBSCRIPTION_PLANS.reduce(
   },
   {} as Record<string, SubscriptionPlanDetail>
 );
+
+/**
+ * The Team (org seat) plan, as the tier and plan resolvers see it. Kept out of SUBSCRIPTION_PLANS
+ * because that list drives the individual checkout, plan-change and credit-granting flows, which
+ * Team billing does not go through. Seat members reach it via getActiveSubscriptionsForUser.
+ */
+export const TEAM_PLAN: Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'interval' | 'tier'> = {
+  priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+  name: 'Team',
+  interval: SubscriptionPlanInterval.Monthly,
+  tier: UserSubscriptionTier.Pro,
+};

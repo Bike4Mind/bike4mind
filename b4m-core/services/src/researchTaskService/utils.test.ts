@@ -15,6 +15,8 @@ import {
   IResearchData,
   IResearchTaskScrape,
   IUserDocument,
+  BadRequestError,
+  NotFoundError,
   ResearchTaskType,
   ResearchTaskExecutionType,
   ResearchTaskStatus,
@@ -62,6 +64,8 @@ describe('findExistingResearchData utils', () => {
 
   const mockFabFile = {
     id: 'file-123',
+    userId: 'test-user-123',
+    storageChargedAt: new Date('2026-01-01T00:00:00Z'),
     filePath: 'test/path/file.md',
     fileName: 'test-file.md',
     fileSize: 1024,
@@ -78,7 +82,8 @@ describe('findExistingResearchData utils', () => {
   let mockResearchDataRepo: any;
   let mockFabFilesRepo: any;
   let mockStorage: any;
-  let mockLogger: { info: Mock; error: Mock };
+  let mockUsersRepo: { findById: Mock; incrementCurrentStorage: Mock };
+  let mockLogger: { info: Mock; error: Mock; warn: Mock };
   let adapters: any;
 
   beforeEach(() => {
@@ -105,7 +110,10 @@ describe('findExistingResearchData utils', () => {
     mockFabFilesRepo = {
       findById: vi.fn(),
       update: vi.fn(),
+      commitContentRewrite: vi.fn(),
+      findChargeState: vi.fn((id: string) => mockFabFilesRepo.findById(id)),
     };
+    mockUsersRepo = { findById: vi.fn(), incrementCurrentStorage: vi.fn() };
 
     mockStorage = {
       upload: vi.fn(),
@@ -115,12 +123,14 @@ describe('findExistingResearchData utils', () => {
     mockLogger = {
       info: vi.fn(),
       error: vi.fn(),
+      warn: vi.fn(),
     };
 
     adapters = {
       db: {
         researchDatas: mockResearchDataRepo,
         fabFiles: mockFabFilesRepo,
+        users: mockUsersRepo,
       },
       storage: mockStorage,
     };
@@ -248,6 +258,120 @@ describe('findExistingResearchData utils', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         '🗃️ [RESEARCH_DATA_EXISTS] Research data already exists for https://example.com'
       );
+    });
+
+    describe('storage accounting on re-crawl', () => {
+      it('records the new size and charges the owner the delta', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        mockFabFilesRepo.commitContentRewrite.mockResolvedValue({
+          userId: 'test-user-123',
+          fileSize: 10,
+          storageChargedAt: file.storageChargedAt,
+        });
+
+        const result = await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(25),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          mockUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(mockFabFilesRepo.commitContentRewrite).toHaveBeenCalledWith('file-123', { fileSize: 25 }, undefined);
+        expect(mockUsersRepo.incrementCurrentStorage).toHaveBeenCalledWith('test-user-123', 15);
+        expect(result!.file.fileSize).toBe(25);
+        expect(result!.storageLimitReached).toBe(false);
+      });
+
+      it('warns when the rewrite commit matches no live row', async () => {
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue({ ...mockFabFile, fileSize: 10 });
+        mockFabFilesRepo.commitContentRewrite.mockResolvedValue(null);
+
+        await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(25),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          mockUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(mockUsersRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('matched no live row'));
+      });
+
+      it('keeps the previous crawl, with a warning, when the growth would exceed the quota', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        const fullUser = { ...mockUser, storageLimit: 1, currentStorageSize: 999_990 } as IUserDocument;
+
+        const result = await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(100),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          fullUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(result).toEqual({ file, researchData: mockResearchData, storageLimitReached: true });
+        expect(result!.file.fileSize).toBe(10);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
+        expect(mockFabFilesRepo.commitContentRewrite).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit'));
+        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', expect.any(Number), 'get');
+        expect(mockFabFilesRepo.update).toHaveBeenCalledWith(expect.objectContaining({ id: file.id }));
+      });
+
+      it('fails the re-crawl, without uploading, when the file owner is gone', async () => {
+        const file = { ...mockFabFile, userId: 'deleted-owner', fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        mockUsersRepo.findById.mockResolvedValue(null);
+
+        await expect(
+          findOrUpdateExistingResearchData(
+            'https://example.com',
+            'x'.repeat(100),
+            'text/markdown',
+            mockResearchTaskWithOrganization,
+            mockUser,
+            adapters,
+            mockLogger
+          )
+        ).rejects.toThrow(NotFoundError);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
+      });
+
+      it('fails the re-crawl on a non-quota error from the gate rather than keeping the old crawl', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        // Only a storage refusal means "over quota, keep the previous crawl"; anything else must
+        // surface, so the whole task fails and retries instead of silently reporting success.
+        mockFabFilesRepo.findChargeState.mockRejectedValue(new BadRequestError('gate failed'));
+
+        await expect(
+          findOrUpdateExistingResearchData(
+            'https://example.com',
+            'x'.repeat(100),
+            'text/markdown',
+            mockResearchTaskWithOrganization,
+            mockUser,
+            adapters,
+            mockLogger
+          )
+        ).rejects.toThrow(BadRequestError);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
+      });
     });
 
     it('should handle Buffer content correctly', async () => {

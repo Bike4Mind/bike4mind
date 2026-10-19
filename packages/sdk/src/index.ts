@@ -17,6 +17,6 @@ export {
   type Schemas,
   type TtsResult,
 } from './client';
-export { B4mApiError, B4mQuestError, parseRetryAfterSeconds } from './errors';
+export { B4mApiError, B4mQuestError, B4mStreamEndedError, parseRetryAfterSeconds } from './errors';
 export type { components, operations as Operations, paths } from './generated/openapi';
 export { operations } from './generated/operations';

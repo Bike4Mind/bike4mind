@@ -5,7 +5,7 @@ import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository } from '@bike4mind/database';
 import { IAgent, IAgentCapabilities, groupShareSchema, userShareSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
+import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
 import { deleteAgent } from '@server/agents/deleteAgent';
 import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { z } from 'zod';
@@ -143,13 +143,6 @@ const updateBodySchema = z.object({
     ])
     .optional(),
   useOwnCredits: z.boolean().optional(),
-  // Kept writable only because `AgentForm` sends it on every save. It is a plain Number path here
-  // with no accounting: the debit from the owner's balance lives in
-  // `POST /api/agents/[id]/transfer-credits`, not in this route, so a PUT moves the agent's
-  // balance without a matching user debit or a `creditTransaction` row. Typing it is all this
-  // guard can do -- closing the gap means routing the form's credit field through
-  // transfer-credits, which changes the form's contract and is not a cast-safety fix.
-  currentCredits: z.number().optional(),
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
   // The seven fields below keep the imperative validators in `agentValidation.ts`, which already
@@ -214,7 +207,8 @@ const updateBodySchema = z.object({
     )
     .optional(),
   conversationCooldowns: z.array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema })).optional(),
-  tavernSessionId: z.string().optional(),
+  // `tavernSessionId` is deliberately absent: it must name the owner's own session, so only
+  // `AgentRepository.updateTavernSessionId` sets it. See `presentAgentsForViewer`.
   currentFloorId: z.string().optional(),
   tavernStats: z
     .object({
@@ -251,10 +245,9 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'view');
 
-    // Refresh avatar URL before returning
-    const [agentWithRefreshedAvatar] = await refreshAgentAvatarUrls([agent], req.user!.id);
+    const [presented] = await presentAgentsForViewer([agent], req.user!.id);
 
-    res.json(agentWithRefreshedAvatar);
+    res.json(presented);
   })
   .put(async (req, res) => {
     assertAgentsWriteScope(req);

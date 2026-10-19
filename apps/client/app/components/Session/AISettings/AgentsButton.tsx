@@ -1,9 +1,10 @@
 import { FC, useRef, useState } from 'react';
 import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { SmartToy as SmartToyIcon } from '@mui/icons-material';
+import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
 import AgentsSection from './AgentsSection';
 import AgentsCountBadge from '../../common/AgentsCountBadge';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 const fixedHeight = {
   height: '32px !important',
@@ -15,9 +16,11 @@ interface AgentsButtonProps {
   isMobile: boolean;
   isTablet: boolean;
   activeAgentsCount: number;
+  /** A square icon button, no label or count - the composer is too narrow (useComposerCompact). */
+  iconOnly?: boolean;
 }
 
-const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsCount }) => {
+const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsCount, iconOnly = false }) => {
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [isAgentSettingsModalOpen, setIsAgentSettingsModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -56,37 +59,39 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
       }}
     >
       <MenuButton
+        data-testid="session-agents-dropdown-toggle"
         variant="outlined"
+        aria-label={iconOnly ? 'Agents' : undefined}
         sx={{
           display: 'flex',
           borderRadius: '6px',
+          // Holds its width so the row overflows and collapses to icons rather than squeezing the
+          // label under the count (see ToolsButton).
+          flexShrink: 0,
           px: 1,
           ...fixedHeight,
+          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <SmartToyIcon
-              sx={{
-                color: 'text.primary',
-                width: '14px',
-                height: '14px',
-              }}
-            />
-            {!isTablet && (
+            <SmartToyIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
+            {!isTablet && !iconOnly && (
               <Typography
                 level="body-sm"
                 sx={{
                   color: 'text.primary',
                   fontWeight: '400',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 Agents
               </Typography>
             )}
           </Box>
-          <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
+          {!iconOnly && (
+            <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
+          )}
         </Box>
       </MenuButton>
       <Menu

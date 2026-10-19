@@ -247,6 +247,22 @@ describe('shouldOfferDelegation', () => {
   ])('vetoes delegation on a disableUserIntegrations surface despite %s', (_label, override) => {
     expect(shouldOfferDelegation({ ...base, ...override, disableUserIntegrations: true })).toBe(false);
   });
+
+  // The denylist is either hard veto: the tool is removed in the final build pass, so offering the
+  // delegation section would name a tool the model does not have.
+  it.each([
+    ['an allowlist', { allowedAgents: ['researcher'] }],
+    ['a session agent', { sessionAgentIds: ['agent-id'] }],
+    ['a store-agent mention', { message: '@researcher help' }],
+  ])('vetoes delegation when the denylist names it despite %s', (_label, override) => {
+    expect(shouldOfferDelegation({ ...base, ...override, deniedTools: ['delegate_to_agent'] })).toBe(false);
+  });
+
+  it('does not veto delegation for a denylist naming some other tool', () => {
+    expect(
+      shouldOfferDelegation({ ...base, message: '@researcher help', deniedTools: ['web_search', 'image_generation'] })
+    ).toBe(true);
+  });
 });
 
 describe('mentionsDataLakeSave', () => {

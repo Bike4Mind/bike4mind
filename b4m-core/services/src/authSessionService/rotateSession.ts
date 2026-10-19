@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { IAuthSessionDocument, IAuthSessionRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IAuthSessionDocument,
+  IAuthSessionRepository,
+  IRealtimeConnectionRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import {
   ABSOLUTE_SESSION_MAX_MS,
@@ -8,6 +14,7 @@ import {
   MAX_SESSION_RECOVERIES,
   REFRESH_REPLAY_WINDOW_MS,
 } from './constants';
+import { endRealtimeConnections } from './endRealtimeConnections';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
 
 /**
@@ -28,6 +35,7 @@ export interface RotateSessionAdapters {
       'findBySid' | 'rotateHash' | 'recoverRotateHash' | 'registerReplayUse' | 'revokeBySid'
     >;
     users: Pick<IUserRepository, 'findById'>;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   signAccessToken: (id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>) => string;
   /** Replay tolerance for the just-superseded secret; defaults to REFRESH_REPLAY_WINDOW_MS. */
@@ -180,7 +188,9 @@ export const rotateSession = async (
   // flushed; everyone else drops the promise.
   const emit = (type: RotateSessionAuditEvent['type'], extraMetadata?: Record<string, unknown>): Promise<void> => {
     try {
-      return Promise.resolve(audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })).catch(() => {});
+      return Promise.resolve(
+        audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })
+      ).catch(() => {});
     } catch {
       return Promise.resolve();
     }
@@ -191,6 +201,7 @@ export const rotateSession = async (
     // least two generations stale. Revoke the whole session: if it is theft the attacker is
     // locked out; the (rare) benign holder of such a token re-authenticates.
     await db.authSessions.revokeBySid(sid);
+    await endRealtimeConnections({ sid }, { db, logger });
     // Awaited: this path throws on the next line, and `session_reuse_revoked` is the one event a
     // post-mortem cannot do without. Cannot fail the request - see emit.
     await emit('session_reuse_revoked');

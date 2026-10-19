@@ -61,6 +61,7 @@ import {
   branchExists,
   checkoutBranch,
   currentBranch,
+  defaultBaseBranch,
   isGitDirectory,
   listWorktrees,
   projectDisplayName,
@@ -75,6 +76,7 @@ import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
+import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
@@ -127,7 +129,8 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits } from './tools/riskAssessment';
+import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
+import { MCP_TOOL_PREFIX } from './mcp/names';
 import {
   capOutput,
   outputCapFor,
@@ -341,6 +344,8 @@ export interface ChatServiceDeps {
    * is known; the approval gate feeds it the other half.
    */
   activity?: SessionActivity;
+  /** The user's sidebar sections, which drop a deleted session. Absent in tests that do not exercise them. */
+  sidebarSections?: Pick<SidebarSectionStore, 'forgetSession'>;
   /**
    * Messages typed during a live turn. Absent in tests that never send one mid-reply, which
    * then get the old behaviour: a send during a reply is refused outright.
@@ -377,6 +382,13 @@ export interface ChatServiceDeps {
    * sidebar in a window that has the conversation closed. Absent in tests.
    */
   summaryChanged?(summary: ChatSessionSummary): void;
+  /**
+   * A session was archived or deleted, by any path - the sidebar, the agent's host tools, or a
+   * spawned child being cleaned up. A notification only: it is how the user's terminals
+   * (main/terminal) end with their session without the service, and so the agent, ever holding
+   * them.
+   */
+  sessionClosed?(sessionId: string): void;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -641,6 +653,7 @@ export class ChatService {
     this.webSearches.forget(sessionId);
     // Its tabs are live renderer processes; nothing is lost, since tabs never outlive the app either.
     void this.deps.browser?.closeSession(sessionId).catch(() => undefined);
+    this.deps.sessionClosed?.(sessionId);
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -657,6 +670,21 @@ export class ChatService {
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
     return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
+  }
+
+  /**
+   * The base a workspace session is cut from: the picked branch, else the repository's default.
+   * Only a repository with nothing to base on is refused.
+   */
+  private async resolveWorkspaceBase(
+    directory: string,
+    branch: string,
+    workspace: boolean
+  ): Promise<{ branch: string } | { error: string }> {
+    if (!workspace || branch) return { branch };
+    const base = await defaultBaseBranch(directory);
+    if (base) return { branch: base };
+    return { error: 'This repository has no commits yet, so there is no branch to start a workspace from.' };
   }
 
   /**
@@ -682,10 +710,10 @@ export class ChatService {
     const directory = resolve(request.directory);
     const unusable = await unusableProjectReason(directory);
     if (unusable) return { ok: false, error: unusable };
-    const branch = (request.branch ?? '').trim();
-
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
-    if (request.workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+    const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -746,8 +774,14 @@ export class ChatService {
     const movedProject = directory !== current?.directory;
     // A branch name means nothing in a repository it does not belong to, so moving the project
     // without naming a branch drops the old one rather than carrying it across.
-    const branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
     const workspace = request.workspace ?? current?.workspace ?? false;
+    const base = await this.resolveWorkspaceBase(
+      directory,
+      (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim(),
+      workspace
+    );
+    if ('error' in base) return { ok: false, error: base.error };
+    const branch = base.branch;
 
     // The session's own branch is carried forward only while the base it was cut from is still
     // the one chosen: re-resolving must land in the worktree this session already has, while
@@ -764,7 +798,6 @@ export class ChatService {
       ? (current?.workspaceBranch ?? (alreadyRelocated ? current?.branch : undefined))
       : undefined;
 
-    if (workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
     // No worktree is created here: a session that already has its worktree keeps it, and one
     // that does not gets it on its first turn - see `ensureWorkspace`.
     // A worktree the session stops claiming is left registered and unharmed where it is.
@@ -1142,6 +1175,7 @@ export class ChatService {
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     await this.deps.background?.killSession(sessionId);
+    this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
     // The generated media goes with it: nothing else references those files once the
@@ -1152,6 +1186,11 @@ export class ChatService {
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
+    await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
+      this.deps.logger.warn(
+        `CHAT: could not drop ${sessionId} from the sidebar sections: ${err instanceof Error ? err.message : err}`
+      );
+    });
     this.promoted.delete(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
@@ -1809,7 +1848,14 @@ export class ChatService {
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
     const deadline = turnStartedAt + limits.wallClockMs;
-    this.emit({ type: 'start', sessionId, messageId: replyId });
+    // Where the interrupted run had got to, so a consumer can report the resumed run's totals as
+    // only what they add; see ChatStreamEvent's `start`.
+    this.emit({
+      type: 'start',
+      sessionId,
+      messageId: replyId,
+      ...(resume?.usage ? { baseUsage: resume.usage } : {}),
+    });
 
     // Seeded from the interrupted run on a resume, so `done` carries the whole reply: the
     // renderer replaces the message's text with it rather than extending what it already shows.
@@ -1909,7 +1955,14 @@ export class ChatService {
           mcpServers: !!this.deps.mcp,
         });
       let tools = toolsFor(roots);
-      const directoryTurn: DirectoryTurn = { declined: [], granted: false };
+      // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
+      // text it had already read is still in front of it: it starts out as tainted as the turn
+      // it carries on.
+      const directoryTurn: DirectoryTurn = {
+        declined: [],
+        granted: false,
+        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+      };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
@@ -2661,6 +2714,12 @@ export class ChatService {
           });
         }
 
+        // A failed call is not a quiet one: an MCP server puts its error in the result body, and
+        // `toolResultContent` sends that text to the model like any other, so only a call the
+        // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
+        if (!abandoned && scope.directories && !scope.directories.untrusted && readsUntrusted(request.name)) {
+          scope.directories.untrusted = request.name;
+        }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -3380,11 +3439,15 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
+    // Once this reply has read web, MCP or skill content, an injected instruction may be steering
+    // it, so a call that can send data out is asked whatever "always" was answered before.
+    const tainted = mode === 'auto' && sendsOut(call.name) ? directories.untrusted : undefined;
+    if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck) {
+    if (!prompt.irreversible && !stuck && !tainted) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3409,7 +3472,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck)) {
+    if (this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
@@ -3736,8 +3799,9 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, or a
-   * path outside the project that the user has not already allowed.
+   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
+   * command that can send data out, an outbound call after the reply read untrusted content
+   * (see DirectoryTurn.untrusted), or a path outside the project the user has not allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -4633,6 +4697,33 @@ interface ApprovalOutcome {
 interface DirectoryTurn {
   declined: string[];
   granted: boolean;
+  /**
+   * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
+   * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.
+   */
+  untrusted?: string;
+}
+
+/**
+ * The first untrusted source a turn that ran out of budget had read. The reply that carries it
+ * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
+ */
+function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
+  const source = calls.find(call => call.status !== 'denied' && readsUntrusted(call.name));
+  return source ? { untrusted: source.name } : {};
+}
+
+function untrustedReason(tool: string): string {
+  const source = tool.startsWith('browser_')
+    ? 'a web page in the browser'
+    : tool.startsWith(MCP_TOOL_PREFIX)
+      ? 'an MCP server'
+      : tool === 'skill'
+        ? 'a skill'
+        : tool === 'session_read'
+          ? 'another conversation'
+          : 'the web';
+  return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
 /** `first`, then whatever of `second` it does not already hold, in order. */

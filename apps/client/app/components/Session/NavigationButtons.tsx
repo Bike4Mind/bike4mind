@@ -1,6 +1,7 @@
 import { FC, ReactNode } from 'react';
 import { Box, Button, Stack, Tooltip, Typography } from '@mui/joy';
 import { useNavigationExecutor } from '@client/app/hooks/useNavigationExecutor';
+import { useIsIntentHidden } from '@client/app/utils/navigationIntentSurface';
 import { compactButtonSx } from '@client/app/utils/buttonStyles';
 import type { NavigationIntent } from '@bike4mind/common';
 
@@ -22,8 +23,11 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({
   label = 'Suggested Navigation',
 }) => {
   const execute = useNavigationExecutor();
+  const isIntentHidden = useIsIntentHidden();
+  // A suggestion into a workspace the user hid gets no button.
+  const visibleIntents = (navigationIntents ?? []).filter(intent => !isIntentHidden(intent));
 
-  if (!leading && (!navigationIntents || navigationIntents.length === 0)) return null;
+  if (!leading && visibleIntents.length === 0) return null;
 
   return (
     <Box
@@ -44,7 +48,7 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({
       </Typography>
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap role="group" aria-label="Suggested next steps">
         {leading}
-        {navigationIntents.map(intent => (
+        {visibleIntents.map(intent => (
           // The app's secondary action, at the same metrics as the ones in a brief
           // card: a suggestion is not the reply's own call to action.
           <Tooltip key={intent.viewId} title={intent.reason} placement="top" arrow>

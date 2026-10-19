@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
 
+// Non-hex on purpose: the store writes random UUID ids into the same file the not.toContain checks scan.
+const SECRET = 'tok-secret-zz';
+
 /** Reversible stand-in for safeStorage: readable in a test, opaque in the file. */
 function cipher(available = true): SecretCipher {
   return {
@@ -42,37 +45,37 @@ describe('McpServerStore', () => {
       name: 'gh',
       transport: 'stdio',
       command: 'node',
-      env: { TOKEN: 'abc' },
+      env: { TOKEN: SECRET },
     });
 
     const reopened = new McpServerStore(cipher(), file, logger);
-    expect((await reopened.list())[0].env).toEqual({ TOKEN: 'abc' });
+    expect((await reopened.list())[0].env).toEqual({ TOKEN: SECRET });
   });
 
   it('keeps secrets in memory and off disk when there is no keychain', async () => {
     const file = memoryFile();
     const store = new McpServerStore(cipher(false), file, logger);
-    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: 'abc' } });
+    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: SECRET } });
 
-    expect(added.env).toEqual({ TOKEN: 'abc' });
+    expect(added.env).toEqual({ TOKEN: SECRET });
     expect(store.secretsPersisted()).toBe(false);
-    expect(file.contents).not.toContain('abc');
+    expect(file.contents).not.toContain(SECRET);
     // Gone on the next launch rather than written in the clear.
     expect((await new McpServerStore(cipher(false), file, logger).list())[0].env).toEqual({});
   });
 
   it('keeps stored secrets when an update omits them', async () => {
     const store = new McpServerStore(cipher(), memoryFile(), logger);
-    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: 'abc' } });
+    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: SECRET } });
 
     const updated = await store.update(added.id, { name: 'github', transport: 'stdio', command: 'node' });
     expect(updated.name).toBe('github');
-    expect(updated.env).toEqual({ TOKEN: 'abc' });
+    expect(updated.env).toEqual({ TOKEN: SECRET });
   });
 
   it('replaces stored secrets when an update sends them', async () => {
     const store = new McpServerStore(cipher(), memoryFile(), logger);
-    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: 'abc' } });
+    const added = await store.add({ name: 'gh', transport: 'stdio', command: 'node', env: { TOKEN: SECRET } });
 
     const updated = await store.update(added.id, {
       name: 'gh',
@@ -89,7 +92,7 @@ describe('McpServerStore', () => {
       name: 'gh',
       transport: 'stdio',
       command: 'node',
-      env: { TOKEN: 'abc' },
+      env: { TOKEN: SECRET },
     });
 
     const broken: SecretCipher = {

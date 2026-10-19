@@ -6,7 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
-import { DATA_LAKES } from '@bike4mind/common';
+import { DATA_LAKES, REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 
 // LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
@@ -16,6 +16,10 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+// The sync-time line has its own suite (LakeSyncStatus.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({
+  default: () => <span data-testid="lake-sync-status-stub" />,
+}));
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
 
@@ -63,6 +67,7 @@ type RebuildStatusMock =
   | {
       underChunkedCount: number;
       failedCount: number;
+      rebuildingCount?: number;
       staleEmbeddingSpaceCount: number | null;
       // Optional here on purpose: the cases that omit it are the ones that must stay silent.
       embeddingSpaceResolved?: boolean | null;
@@ -458,6 +463,51 @@ describe('LakeInfoPanel - re-embed for search', () => {
   });
 });
 
+// A reset file has no passages and no error until its rebuild commits or finally fails, so the
+// under-chunked and failed chips are both silent for it.
+describe('LakeInfoPanel - files mid-rebuild', () => {
+  const REBUILDING = 'datalake-manager-rebuilding-chip-lake-1';
+
+  it('shows how many files are mid-rebuild when nothing else is outstanding', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.getByTestId(REBUILDING)).toHaveTextContent('1 rebuilding');
+  });
+
+  it('names the stale window the rebuild door re-offers a stranded file after', async () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.hover(screen.getByTestId(REBUILDING));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      `within ${REBUILD_PENDING_STALE_MS / 3_600_000} hours`
+    );
+  });
+
+  it('stays hidden when the server does not report the count', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
+  });
+
+  it('stays hidden for a caller who can neither rebuild nor manage the lake', () => {
+    // The same gate the sibling "to rebuild" and "failed" chips carry: the panel is reachable by a
+    // member who can do neither, and the count comes from the rebuild-status query, so without the
+    // gate they would see progress they cannot act on.
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 3, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel({ ...baseLake, canRebuild: false, canManage: false });
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
+  });
+});
+
 describe('LakeInfoPanel - unresolvable embedding space', () => {
   const CHIP = 'datalake-embedding-space-unknown-chip-lake-1';
 
@@ -566,6 +616,25 @@ describe('LakeInfoPanel - origin chip', () => {
     renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
 
     expect(screen.getByTestId('datalake-origin-chip-lake-1')).toHaveTextContent('Connector-fed');
+  });
+
+  it('hides the generated gh- prefix chip on a GitHub connector lake but keeps a typed prefix', () => {
+    renderPanel({ ...baseLake, origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.queryByTestId('datalake-manager-prefix-chip-lake-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('gh-1a2b3c4d:')).not.toBeInTheDocument();
+  });
+
+  it('keeps the prefix chip on a curated lake whose prefix looks generated', () => {
+    renderPanel({ ...baseLake, origin: 'curated', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.getByTestId('datalake-manager-prefix-chip-lake-1')).toHaveTextContent('gh-1a2b3c4d:');
+  });
+
+  it('mounts the sync-time line only for a connector-fed lake', () => {
+    const { unmount } = renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
+    expect(screen.getByTestId('lake-sync-status-stub')).toBeInTheDocument();
+    unmount();
+    renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
+    expect(screen.queryByTestId('lake-sync-status-stub')).not.toBeInTheDocument();
   });
 
   it('shows no origin chip for a curated lake', () => {

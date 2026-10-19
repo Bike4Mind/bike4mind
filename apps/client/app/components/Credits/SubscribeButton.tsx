@@ -85,7 +85,7 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions, planName }: Subscr
         : `Change subscription to ${planName}`
     : undefined;
   const buttonProps: ComponentProps<typeof Button> = {
-    color: type === 'subscribe' ? 'neutral' : type === 'cancel' ? 'neutral' : 'primary',
+    color: type === 'cancel' ? 'neutral' : 'primary',
     variant: type === 'subscribe' ? 'solid' : type === 'cancel' ? 'outlined' : 'solid',
   };
 

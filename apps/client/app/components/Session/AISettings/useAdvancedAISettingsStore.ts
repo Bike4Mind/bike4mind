@@ -18,6 +18,9 @@ interface State {
   activeTab: 'ai-settings' | 'research-mode' | 'audio';
   setActiveTab: (tab: 'ai-settings' | 'research-mode' | 'audio') => void;
   openModal: (tab: 'ai-settings' | 'research-mode' | 'audio') => void;
+  /** Phones open the Tools and Agents panels from the plus menu (AttachFileButton). */
+  toolsDropdownOpen: boolean;
+  setToolsDropdownOpen: (open: boolean) => void;
   agentsDropdownOpen: boolean;
   setAgentsDropdownOpen: (open: boolean) => void;
   sessionFilesOpen: boolean;
@@ -38,6 +41,8 @@ export const useAdvancedAISettings = create<State>(set => ({
   activeTab: 'ai-settings',
   setActiveTab: activeTab => set({ activeTab }),
   openModal: (tab: 'ai-settings' | 'research-mode' | 'audio') => set({ activeTab: tab, showAdvancedSettings: true }),
+  toolsDropdownOpen: false,
+  setToolsDropdownOpen: (toolsDropdownOpen: boolean) => set({ toolsDropdownOpen }),
   agentsDropdownOpen: false,
   setAgentsDropdownOpen: (agentsDropdownOpen: boolean) => set({ agentsDropdownOpen }),
   sessionFilesOpen: false,

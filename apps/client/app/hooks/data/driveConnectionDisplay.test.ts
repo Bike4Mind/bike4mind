@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { describeDriveConnection } from './driveConnectionDisplay';
 
 const conn = (over: Partial<Parameters<typeof describeDriveConnection>[0]> = {}) => ({
@@ -9,11 +9,30 @@ const conn = (over: Partial<Parameters<typeof describeDriveConnection>[0]> = {})
   ...over,
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe('describeDriveConnection', () => {
+  it('appends the last-synced time to the idle connected tooltip', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T12:00:00Z') });
+    const { title } = describeDriveConnection(conn({ lastPolledAt: '2026-01-01T11:42:00Z' }));
+    expect(title).toBe('Kept in sync with the Google Drive folder "Handbook" - last synced 18 minutes ago');
+  });
+
+  it('says never synced for a null lastPolledAt rather than printing an invalid date', () => {
+    const { title } = describeDriveConnection(conn({ lastPolledAt: null }));
+    expect(title).toBe('Kept in sync with the Google Drive folder "Handbook" - not synced yet');
+    expect(title).not.toContain('Invalid');
+  });
+
+  it('keeps the time out of tooltips that are not the idle connected state', () => {
+    const { title } = describeDriveConnection(conn({ status: 'syncing', lastPolledAt: '2026-01-01T11:42:00Z' }));
+    expect(title).not.toContain('last synced');
+  });
+
   it('reads a clean connected sync as healthy', () => {
     expect(describeDriveConnection(conn())).toEqual({
       label: 'Connected',
-      title: 'Syncing the Google Drive folder "Handbook"',
+      title: 'Kept in sync with the Google Drive folder "Handbook"',
       color: 'success',
     });
   });
@@ -29,7 +48,7 @@ describe('describeDriveConnection', () => {
     expect(label).toBe('Stopped short');
     expect(title).toContain('last sync stopped short');
     expect(title).toContain('rate-limiting');
-    expect(title).not.toContain('Syncing the Google Drive folder');
+    expect(title).not.toContain('Kept in sync with the Google Drive folder');
   });
 
   it('keeps the badge wording and severity for a genuinely broken connection', () => {

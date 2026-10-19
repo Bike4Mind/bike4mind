@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import GenerationDetails, { formatSecondsClock, readGenerationMetadata } from './GenerationDetails';
+import GenerationDetails, { readGenerationMetadata } from './GenerationDetails';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -34,14 +34,6 @@ describe('readGenerationMetadata', () => {
   });
 });
 
-describe('formatSecondsClock', () => {
-  it('formats minutes and zero-padded seconds', () => {
-    expect(formatSecondsClock(125.4)).toBe('2:05');
-    expect(formatSecondsClock(9.6)).toBe('0:10');
-    expect(formatSecondsClock(59.6)).toBe('1:00');
-  });
-});
-
 describe('GenerationDetails', () => {
   it('shows model, length, prompt and lyrics of a generated song', () => {
     render(<GenerationDetails file={{ sourceMetadata: { generation: song } }} />, { wrapper: Wrapper });
@@ -49,6 +41,16 @@ describe('GenerationDetails', () => {
     expect(screen.getByTestId('generation-details-duration').textContent).toBe('2:05');
     expect(screen.getByTestId('generation-details-prompt').textContent).toBe(song.prompt);
     expect(screen.getByTestId('generation-details-lyrics').textContent).toBe(song.lyrics);
+  });
+
+  it('shows lyrics without the provider timestamps', () => {
+    render(
+      <GenerationDetails
+        file={{ sourceMetadata: { generation: { ...song, lyrics: '[Verse]\n[3.4:6.9] windows down' } } }}
+      />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.getByTestId('generation-details-lyrics').textContent).toBe('[Verse]\nwindows down');
   });
 
   it('falls back to the provider when no model was reported, and omits absent fields', () => {

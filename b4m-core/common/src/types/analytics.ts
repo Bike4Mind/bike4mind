@@ -13,16 +13,17 @@ export interface IBaseEvent {
  *
  * - `web`:    User-driven action in the browser (web chat, image gen UI, etc.)
  * - `cli`:    Request from the B4M CLI (identified by `b4m-cli/<ver>` User-Agent)
- * - `api`:    Third-party API key holder hitting public endpoints (no CLI UA)
+ * - `desktop`: Request from B4M Desktop (identified by `b4m-desktop/<ver>` User-Agent)
+ * - `api`:    Third-party API key holder hitting public endpoints (no first-party client UA)
  * - `agent`:  Server-side agent execution (Quest agents, automation)
  * - `system`: Background/cron jobs, internal scripts
  */
-export type CompletionSource = 'web' | 'cli' | 'api' | 'agent' | 'system';
+export type CompletionSource = 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'system';
 
-export const COMPLETION_SOURCES = ['web', 'cli', 'api', 'agent', 'system'] as const;
+export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'api', 'agent', 'system'] as const;
 
 /** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
-export const API_KEY_COMPLETION_SOURCES = ['api', 'cli'] as const satisfies readonly CompletionSource[];
+export const API_KEY_COMPLETION_SOURCES = ['api', 'cli', 'desktop'] as const satisfies readonly CompletionSource[];
 
 export type ApiKeyCompletionSource = (typeof API_KEY_COMPLETION_SOURCES)[number];
 
@@ -160,11 +161,11 @@ export function resolveRequestClient(headers: Record<string, string | undefined>
 }
 
 /**
- * Resolves source for the /api/ai/v1/completions endpoint. This endpoint is
- * called only by CLI and 3rd-party API users (never by web chat - that uses a
- * different pipeline). We distinguish CLI from raw API by the `b4m-cli/`
- * User-Agent header set by the CLI's HTTP client.
+ * First-party HTTP client attribution, not an authorization signal. Only new
+ * writes use this classifier; stored source values are never inferred again.
  */
 export function resolveApiCompletionSource(headers: Record<string, string | undefined>): ApiKeyCompletionSource {
-  return /^b4m-cli\//i.test(resolveRequestClient(headers) ?? '') ? 'cli' : 'api';
+  const client = resolveRequestClient(headers) ?? '';
+  if (/^b4m-desktop\/\S+$/i.test(client)) return 'desktop';
+  return /^b4m-cli\//i.test(client) ? 'cli' : 'api';
 }

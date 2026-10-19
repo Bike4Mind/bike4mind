@@ -8,7 +8,7 @@ import {
   UnauthorizedError,
   UnprocessableEntityError,
   buildMetaEvent,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   createCompletionContract,
   formatSSEError,
   normalizeCompletionRequest,
@@ -169,7 +169,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     logger.updateMetadata({ requestId });
     res.setHeader(REQUEST_ID_HEADER, requestId);
 
-    // Distinguish CLI from 3rd-party API by the `b4m-cli/<version>` UA the CLI sets.
+    // Distinguish CLI and Desktop from 3rd-party API by the `b4m-cli/` / `b4m-desktop/` client signal.
     // Used for both the credit transaction and analytics so usage breaks down by surface.
     const source: CompletionSource = resolveApiCompletionSource(headers);
 
@@ -300,7 +300,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
-          write(serializeSSEEvent(buildSSEEvent(text, info)));
+          write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
         },
       });
 

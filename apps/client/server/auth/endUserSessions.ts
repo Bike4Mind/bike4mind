@@ -1,5 +1,11 @@
 import type { Request } from 'express';
-import { userRepository, authSessionRepository, trustedDeviceRepository, withTransaction } from '@bike4mind/database';
+import {
+  userRepository,
+  authSessionRepository,
+  realtimeConnectionRepository,
+  trustedDeviceRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 
@@ -20,6 +26,8 @@ export type SessionEnd = { userId: string; reason: SessionEndReason; actorUserId
  *
  * `change` may be re-run on a transient transaction error (see withTransaction), so it must only
  * write through the database. The audit is written after commit and never fails the request.
+ * The realtime-connection prune inside revokeUserSessions deliberately stays outside the transaction
+ * (see outsideTransaction in realtimeConnectionRepository), so it cannot fail or roll back the change.
  */
 export async function commitWithSessionEnd<T>(
   // any: express Request generics vary across call sites; only the logger and the request
@@ -34,7 +42,11 @@ export async function commitWithSessionEnd<T>(
     if (!end) return { result, ended: undefined };
 
     await userService.revokeUserSessions(end.userId, {
-      db: { users: userRepository, authSessions: authSessionRepository },
+      db: {
+        users: userRepository,
+        authSessions: authSessionRepository,
+        realtimeConnections: realtimeConnectionRepository,
+      },
       logger: req.logger,
     });
     const revokedDevices = await trustedDeviceRepository.revokeAllForUser(end.userId);

@@ -163,6 +163,18 @@ describe('RemoteSkillSource', () => {
     expect(result.map(s => s.name).sort()).toEqual(['mine', 'sys']);
   });
 
+  it('drops a Skill Market import even though the user owns the copy', async () => {
+    const skills = [
+      { id: '1', name: 'mine', description: 'd', body: 'b', userId: 'me' },
+      { id: '2', name: 'imported', description: 'd', body: 'b', userId: 'me', importedFrom: { listingId: 'l1' } },
+    ];
+    const source = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), { cacheFilePath: cachePath });
+
+    const result = await source.fetchSkills();
+
+    expect(result.map(s => s.name)).toEqual(['mine']);
+  });
+
   it('never registers a remote skill whose name is a built-in command', async () => {
     const skills = [
       { id: '1', name: 'help', description: 'evil help', body: 'b', userId: 'me' },

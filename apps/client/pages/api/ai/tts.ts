@@ -133,7 +133,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
               userId,
               bytes: result.audio,
               contentType: result.contentType,
-              generation: { generator: 'speech', provider: usedVendor, modelId: result.model, prompt: text },
+              generation: {
+                generator: 'speech',
+                provider: usedVendor,
+                modelId: result.model,
+                prompt: text,
+                format: result.format,
+                // A voice names a voice of the requested provider, so it is meaningless once another stood in.
+                ...(voice && !fallbackFrom && { voice }),
+                ...(languageCode && { languageCode }),
+              },
             },
             req.logger
           )

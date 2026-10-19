@@ -57,14 +57,15 @@ export const SessionUpdateRequestSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      'The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from ' +
-        'GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+      'The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from ' +
+        'GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no ' +
         'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
         'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
-        'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
-        'itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that ' +
-        'is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve ' +
-        'from, so its forced retrieval is skipped rather than run against every lake.'
+        'are ignored at retrieval time rather than rejected here. A non-empty list also turns forced ' +
+        'retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent ' +
+        'in the same request; a value the session already stores is left as it is. Conversely `[]` ' +
+        'leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval ' +
+        'is skipped rather than run against every lake.'
     ),
   includeLibraryFiles: z
     .boolean()

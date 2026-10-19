@@ -24,6 +24,8 @@ import {
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   STORAGE_CHARGED_FILTER,
+  LAKE_INGEST_SOURCE_TYPES,
+  type StorageUsageGroup,
   UNCATEGORIZED_TAG_SUFFIX,
   chargedBytes,
   type CitableFabFileFields,
@@ -844,6 +846,23 @@ const failedFileFields = (errorMessage: string): { error: string; isVectorizing:
   isVectorizing: false,
 });
 
+/**
+ * One arm of "a rebuild was stamped and has not committed": `in-flight`, for a stamp inside
+ * REBUILD_PENDING_STALE_MS (countRebuildingFilesByScope), and `stale`, for an older one
+ * (findConvergencePausedFilesByScope's STALE-PENDING arm). Both also require an empty `error`, which
+ * is what splits them from countFailedFilesByScope. One predicate because the two arms are
+ * complements by construction, and that complementarity is the whole reason the three counts can be
+ * read side by side: two hand-written copies 150 lines apart are free to drift.
+ *
+ * Each caller computes its own `cutoff`, so the arms are cut at slightly different instants - a file
+ * landing in the milliseconds between them is counted by both once, and by the stale arm alone on
+ * every read after that.
+ */
+const rebuildPendingArm = (cutoff: Date, arm: 'in-flight' | 'stale') => ({
+  chunkRebuildRequestedAt: arm === 'in-flight' ? { $gte: cutoff } : { $lt: cutoff },
+  error: { $in: [null, ''] },
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -1209,6 +1228,95 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $project: { _id: 0, total: 1 } },
     ]);
     return row?.total ?? 0;
+  }
+
+  /**
+   * sumFileSizeByUserId's rows, grouped for the storage breakdown - the groups sum to exactly what
+   * it returns. Bounded by the `{ userId, deletedAt, archivedAt, _id }` index's equality prefix.
+   * Lake ids are kept only for the lake-ingest sources and mime types only for generated files, so
+   * the group count does not grow with the user's file count.
+   */
+  async summarizeChargedStorageByUserId(
+    userId: string,
+    options: { maxTimeMS?: number } = {}
+  ): Promise<StorageUsageGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<StorageUsageGroup>([
+      { $match: { userId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      {
+        $group: {
+          _id: {
+            sourceType: { $ifNull: ['$sourceType', null] },
+            sourceLakeId: {
+              $cond: [{ $in: ['$sourceType', LAKE_INGEST_SOURCE_TYPES] }, { $ifNull: ['$sourceLakeId', null] }, null],
+            },
+            mimeType: {
+              $cond: [
+                { $eq: ['$sourceType', FabFileSourceType.TOOL_GENERATED] },
+                { $ifNull: ['$mimeType', null] },
+                null,
+              ],
+            },
+            archived: { $ne: [{ $ifNull: ['$archivedAt', null] }, null] },
+          },
+          bytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          fileCount: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          sourceType: '$_id.sourceType',
+          sourceLakeId: '$_id.sourceLakeId',
+          mimeType: '$_id.mimeType',
+          archived: '$_id.archived',
+          bytes: 1,
+          fileCount: 1,
+        },
+      },
+    ]);
+    if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
+  }
+
+  async findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+    const row = await this.fabFileModel
+      .findOne({ _id: id, deletedAt: null }, { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 })
+      .lean();
+    return row
+      ? {
+          userId: String(row.userId),
+          fileSize: row.fileSize,
+          storageChargedAt: row.storageChargedAt,
+          status: row.status,
+          createdAt: row.createdAt,
+        }
+      : null;
+  }
+
+  async commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter: Record<string, unknown> = {}
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+    // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
+    const pre = await this.fabFileModel
+      .findOneAndUpdate(
+        { ...filter, _id: id, deletedAt: null },
+        { $set: { ...set, storageChargedAt: new Date() } },
+        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 } }
+      )
+      .lean();
+    return pre
+      ? {
+          userId: String(pre.userId),
+          fileSize: pre.fileSize,
+          storageChargedAt: pre.storageChargedAt,
+          status: pre.status,
+          createdAt: pre.createdAt,
+        }
+      : null;
   }
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
@@ -2741,6 +2849,28 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  // Unindexed on embeddingModel; callers reach it only when a keyless substitution fires.
+  async hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean> {
+    const hit = await this.fabFileModel.exists({
+      embeddingModel,
+      vectorizedChunkCount: { $gt: 0 },
+      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with an
+      // explicit null stamp, and a non-final vectorize message raises the count while leaving the
+      // label and the stamp alone - so an in-flight file (explicit null stamp) must not match its own
+      // substitution, or it would refuse every later message on the keyless stage the fallback exists
+      // for. A file completed before the stamp field existed carries NO stamp at all, yet its label
+      // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
+      // excludes. The completion stamp writes the real label and this timestamp in one transaction,
+      // and re-chunking rewrites the label to the requested model and clears the stamp.
+      $or: [
+        { chunkEmbeddingModelStampedAt: { $ne: null } },
+        { chunkEmbeddingModelStampedAt: { $exists: false } },
+      ],
+      deletedAt: null,
+    });
+    return hit !== null;
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
@@ -2782,10 +2912,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
-            {
-              chunkRebuildRequestedAt: { $lt: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
-              error: { $in: [null, ''] },
-            },
+            rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'stale'),
           ],
           // Keeps a REPAIRED file out of the wave. `$not: {$gt: 0}` deliberately also matches a null
           // or absent count, so a legacy file carrying the marker is offered the repair rather than
@@ -2933,6 +3060,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       status: { $ne: 'pending' },
       chunkCount: { $lte: 0 },
       error: { $nin: [null, ''] },
+    });
+  }
+
+  async countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
+    // Reset, not yet committed, and not past REBUILD_PENDING_STALE_MS: older stamps are reported by
+    // findConvergencePausedFilesByScope and errored ones by countFailedFilesByScope, so the three
+    // counts never overlap.
+    return this.fabFileModel.countDocuments({
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: null,
+      archivedAt: null,
+      ...rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'in-flight'),
     });
   }
 
@@ -3672,6 +3811,8 @@ const DispatchedNotificationSchema = new Schema<{ channel: string; at: Date }>(
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
+    // Owning org (see IFabFile.organizationId); absent = personal, owned by userId.
+    organizationId: { type: String },
     fileName: { type: String, required: true },
     fileSize: { type: Number },
     // Extracted TEXT length, not bytes; see IFabFile. Absent until something extracts the file.

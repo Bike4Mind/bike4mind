@@ -3,7 +3,7 @@ import { Box, Tooltip, Typography } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import CheckIcon from '@mui/icons-material/Check';
-import ConstructionIcon from '@mui/icons-material/Construction';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import SpeedIcon from '@mui/icons-material/Speed';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import type { ModelInfo } from '@bike4mind/common';
@@ -320,7 +320,7 @@ export const CapabilityIndicators: React.FC<{ model: ModelInfo; size?: number; f
 
     {model.supportsTools && (
       <MetricIcon label="Tools" tooltip="Able to use a growing list of tools" size={size} filled={filled}>
-        <ConstructionIcon sx={{ fontSize: glyphPx(size), color: 'text.tertiary' }} />
+        <HandymanIcon sx={{ fontSize: glyphPx(size), color: 'text.tertiary' }} />
       </MetricIcon>
     )}
   </>
