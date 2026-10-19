@@ -262,12 +262,21 @@ export function registerQuestCitables(
   userId: string
 ): CitableSource[] {
   const existingCitables = quest.promptMeta?.citables ?? [];
+  // Positions ARE the numbers here, so numbering only holds while every existing entry carries
+  // the stamp of its own index. A legacy/named-style prefix (or an earlier mixed batch) leaves
+  // the turn unnumbered: return the input untouched so tools keep their legacy labels instead of
+  // advertising [N] markers the client will render as plain text.
+  if (existingCitables.some((source, index) => source.metadata?.citationIndex !== index + 1)) {
+    return citables;
+  }
   const indices = new Map(
     existingCitables.map((source, index) => [source.id || source.url || source.title, index + 1])
   );
   const registered = citables.map(source => {
     const key = source.id || source.url || source.title;
-    if (!key) throw new Error('A citable source must have an identity');
+    // A source with no identity cannot be deduped or looked up later. Leave it unstamped rather
+    // than failing the whole tool call; the status merge drops it without reserving a number.
+    if (!key) return source;
     const citationIndex = indices.get(key) ?? indices.size + 1;
     indices.set(key, citationIndex);
     return { ...source, metadata: { ...source.metadata, citationIndex } };
@@ -379,7 +388,12 @@ export function applyQuestStatusChanges(
       {
         ...existingPromptMeta,
         ...changedPromptMeta,
-        citables: finalCitables,
+        // Omit the key entirely when neither side has citables, so an untouched quest is not
+        // given an empty array it never had (same reason as warnings below). An incoming write
+        // always overrides: the merge drops identity-less entries, and the raw spread would keep them.
+        ...(finalCitables.length || existingPromptMeta.citables?.length || changedPromptMeta.citables
+          ? { citables: finalCitables }
+          : {}),
         // Omit the key entirely when neither side has warnings, so an untouched quest is not
         // given an empty array it never had.
         ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),

@@ -61,6 +61,27 @@ describe('registerQuestCitables', () => {
     ).toEqual([1, 2, 1]);
     expect(registerQuestCitables(second, [source('b')], 'user-1')[0].metadata?.citationIndex).toBe(1);
   });
+
+  it('leaves an identity-less source unstamped rather than failing the tool call', () => {
+    const quest = makeQuest();
+    const keyless: CitableSource = { id: '', type: 'document', title: '' };
+
+    expect(registerQuestCitables(quest, [keyless], 'user-1')).toEqual([keyless]);
+    expect(quest.promptMeta?.citables ?? []).toEqual([]);
+    // It reserved nothing, so the next real source still starts at 1.
+    expect(registerQuestCitables(quest, [source('a')], 'user-1')[0].metadata?.citationIndex).toBe(1);
+  });
+
+  it('returns sources unstamped once an existing entry no longer holds its position number', () => {
+    const quest = makeQuest({
+      promptMeta: { citables: [{ ...source('forced'), metadata: { citationIndex: 7 } }] },
+    });
+
+    const registered = registerQuestCitables(quest, [source('a')], 'user-1');
+
+    expect(registered[0].metadata?.citationIndex).toBeUndefined();
+    expect(quest.promptMeta?.citables?.[0].metadata?.citationIndex).toBe(7);
+  });
 });
 
 describe('applyQuestStatusChanges', () => {
@@ -146,6 +167,26 @@ describe('applyQuestStatusChanges', () => {
       const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1), stamped('f2', 2)] } });
       applyQuestStatusChanges(quest, { promptMeta: { warnings: ['w'] } }, 'user-1');
       expect(quest.promptMeta?.citables?.map(c => c.metadata?.citationIndex)).toEqual([1, 2]);
+    });
+
+    it('strips every stamp when an incoming batch mixes stamped and unstamped sources', () => {
+      const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1)] } });
+      applyQuestStatusChanges(
+        quest,
+        { promptMeta: { citables: [stamped('f2', 2), { id: 'f3', url: 'u-f3', title: 'f3' }] } },
+        'user-1'
+      );
+      expect(quest.promptMeta?.citables?.map(c => c.metadata?.citationIndex)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it('does not materialize an empty citables array on a first metadata write', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['w'] } }, 'user-1');
+      expect(quest.promptMeta).not.toHaveProperty('citables');
     });
 
     it('merges and dedupes citables by stable identity', () => {
