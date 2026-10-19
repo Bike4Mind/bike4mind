@@ -69,14 +69,12 @@ import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
 import { adminTabFromSlug } from './adminTabSlugs';
+import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
 export { AdminTab } from './adminSidebarConfig';
-
-// Legacy AdminTab values with neither a panel nor a sidebar entry.
-const PANEL_LESS_TABS: ReadonlySet<AdminTab> = new Set([AdminTab.Accounts, AdminTab.Analysts, AdminTab.BulkImport]);
 
 const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
   ssr: false,
@@ -326,12 +324,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
   // treats it as unknown and corrects the store instead.
   const isAdminTabRenderable = useCallback(
-    (tab: AdminTab) => {
-      if (tab === AdminTab.Migrate) return !!enableUserMigration;
-      // Undefined until the visibility query answers; keep a deep link that arrived first.
-      if (tab === AdminTab.LiveOpsTriage) return liveopsEnvData?.showTab ?? true;
-      return !PANEL_LESS_TABS.has(tab);
-    },
+    (tab: AdminTab) => canRenderAdminTab(tab, { enableUserMigration, liveOpsTriage: liveopsEnvData?.showTab }),
     [enableUserMigration, liveopsEnvData]
   );
 
