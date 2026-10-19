@@ -5,6 +5,9 @@ import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from '@server/utils/ip';
 
+// Typed routes pass Request<unknown, ...>; this accepts those as well as the express default.
+type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;
+
 export type RecordAdminActionFromRequestInput = Omit<adminAuditService.RecordAdminActionInput, 'actor' | 'context'> & {
   actorScope?: AuditActor['scope'];
 };
@@ -20,7 +23,7 @@ const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActo
   wasAdmin: user.isAdmin,
 });
 
-const lookUpImpersonator = async (req: Request, impersonatedBy: string) => {
+const lookUpImpersonator = async (req: AuditRequest, impersonatedBy: string) => {
   try {
     return await userRepository.findById(impersonatedBy);
   } catch (error) {
@@ -32,7 +35,7 @@ const lookUpImpersonator = async (req: Request, impersonatedBy: string) => {
   }
 };
 
-const resolveActor = async (req: Request, scope: AuditActor['scope']): Promise<AuditActor> => {
+const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Promise<AuditActor> => {
   const { user, apiKeyInfo } = req;
   if (!user) throw new Error('recordAdminActionFromRequest requires an authenticated request');
 
@@ -51,7 +54,7 @@ const resolveActor = async (req: Request, scope: AuditActor['scope']): Promise<A
   return apiKeyInfo ? { ...base, kind: 'apiKey', apiKeyId: apiKeyInfo.keyId } : base;
 };
 
-const buildContext = (req: Request): AuditContext => ({
+const buildContext = (req: AuditRequest): AuditContext => ({
   ip: getClientIp(req),
   userAgent: req.headers['user-agent'],
   requestId: req.requestId,
@@ -60,7 +63,7 @@ const buildContext = (req: Request): AuditContext => ({
 });
 
 export const recordAdminActionFromRequest = async (
-  req: Request,
+  req: AuditRequest,
   { actorScope, ...input }: RecordAdminActionFromRequestInput
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
