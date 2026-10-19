@@ -329,6 +329,26 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(expected).toBeGreaterThan(expectedHold);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
+
+    it('counts a server-executed tool flagged defer_loading on a model that does not serve tool search', async () => {
+      const serverTool = {
+        toolSchema: {
+          name: 'search',
+          description: 'x'.repeat(100_000),
+          parameters: { type: 'object' },
+          defer_loading: true,
+        },
+        toolFn: async () => '',
+      } as unknown as NonNullable<Parameters<typeof executeCompletion>[0]['serverTools']>[number];
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, serverTools: [serverTool] });
+
+      // serverTools skip prepareWireTools, so the flag reaches the provider and the tool is sent in full.
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(serverTool as unknown as CompletionTool));
+      expect(expected).toBeGreaterThan(expectedHold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
   });
 
   describe('cached conversation context', () => {
