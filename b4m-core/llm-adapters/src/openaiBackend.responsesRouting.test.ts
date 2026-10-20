@@ -21,7 +21,9 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ChatModels, type ICompletionOptions, type ICompletionOptionTools } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { OpenAIBackend } from './openaiBackend';
+import { TOOL_ROUND_LOG_PREFIX, type ToolRoundEntry } from './toolRoundTiming';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -399,5 +401,30 @@ describe('OpenAIBackend /v1/responses routing for GPT-5 narrator family + tools'
     });
 
     expect((emits.at(-1)!.info as { reasoningTokens?: number }).reasoningTokens).toBe(6);
+  });
+});
+
+describe('OpenAIBackend per-round tool timing log (Responses + chat synthesis)', () => {
+  it('logs one ToolRound line per round, in order, with the tool name and result size', async () => {
+    const logger = new Logger();
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const { backend } = buildBackend({
+      responses: [functionCallResponse('optihashi_formulate', { description: 'x' })],
+    });
+    (backend as unknown as { logger: Logger }).logger = logger;
+    const executingTool: ICompletionOptionTools = { ...sampleTool, toolFn: async () => 'FORMULATED_OK' };
+
+    await run(backend, ChatModels.GPT5, { tools: [executingTool] });
+
+    const rounds = info.mock.calls
+      .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+      .map(([, metadata]) => metadata as ToolRoundEntry);
+
+    expect(rounds.map(r => r.round)).toEqual([0, 1]);
+    expect(rounds[0].tools).toEqual([{ name: 'optihashi_formulate', resultChars: 'FORMULATED_OK'.length }]);
+    expect(rounds[0].msToFirstChunk).not.toBeNull();
+    expect(rounds[1].tools).toEqual([]);
+    expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+    for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
   });
 });

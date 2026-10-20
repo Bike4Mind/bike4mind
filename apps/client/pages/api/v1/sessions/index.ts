@@ -40,6 +40,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activityType';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 /**
  * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
@@ -207,6 +208,7 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
         (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+      workspaceSessionSettings: premiumWorkspaceSessionSettings,
     },
     { origin: resolveSessionOrigin(req) }
   );

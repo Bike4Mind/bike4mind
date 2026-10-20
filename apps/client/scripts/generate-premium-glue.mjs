@@ -19,6 +19,7 @@
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -44,7 +45,16 @@
  * are unaffected because both link states typecheck clean.
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  rmSync,
+  renameSync,
+  realpathSync,
+} from 'node:fs';
 import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,9 +124,7 @@ function isLinkedIntoClient(pkgName) {
   const segments = pkgName.split('/');
   // Check for package.json, not just the dir: an empty/broken dir would satisfy
   // existsSync while still failing real module resolution.
-  return [CLIENT_ROOT, REPO_ROOT].some(root =>
-    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
-  );
+  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments, 'package.json')));
 }
 
 // --- Generate helpers ---
@@ -275,9 +283,7 @@ function generateRouteIndexing(packages) {
   const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
 
   const contributors = packages.filter(p => p.contributions.routeIndexingExport);
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport'));
 
   if (contributors.length === 0) {
     writeFile(
@@ -288,9 +294,7 @@ function generateRouteIndexing(packages) {
   }
 
   const imports = contributors
-    .map(
-      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
-    )
+    .map((p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`)
     .join('\n');
 
   const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
@@ -338,7 +342,11 @@ const LEGACY_SIDENAV_PATH = '/opti';
 const ROUTE_PATH_RE = /^\/[a-z0-9._-]+(\/[a-z0-9._-]+)*$/;
 
 function assertRoutePath(value, pkgName, field) {
-  if (typeof value !== 'string' || !ROUTE_PATH_RE.test(value) || value.split('/').some(seg => seg === '..' || seg === '.')) {
+  if (
+    typeof value !== 'string' ||
+    !ROUTE_PATH_RE.test(value) ||
+    value.split('/').some(seg => seg === '..' || seg === '.')
+  ) {
     throw new Error(
       `[codegen] invalid ${field} path from package "${pkgName}": ` +
         `${JSON.stringify(value)} is not an origin-relative route path of lower-case [a-z0-9/._-]`
@@ -373,9 +381,7 @@ function generateNotebookSidenavs(packages) {
   rmSync(join(GENERATED_DIR, 'premiumNotebookSidenav.generated.ts'), { force: true });
   const typeImport = `import type { PremiumNotebookSidenavEntry } from '../premiumContract';`;
 
-  const contributors = packages
-    .map(p => ({ pkg: p, sidenav: readSidenavContribution(p) }))
-    .filter(c => c.sidenav);
+  const contributors = packages.map(p => ({ pkg: p, sidenav: readSidenavContribution(p) })).filter(c => c.sidenav);
 
   if (contributors.length === 0) {
     writeFile(
@@ -405,8 +411,9 @@ function generateNotebookSidenavs(packages) {
   }
 
   const imports = chosen
-    .map(({ sidenav }, i) =>
-      `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
+    .map(
+      ({ sidenav }, i) =>
+        `const Sidenav${i} = dynamic(() => import('${sidenav.spec}').then(m => ({ default: m.default })), { ssr: false });`
     )
     .join('\n');
 
@@ -1092,9 +1099,7 @@ function generateSystemPrompts(packages) {
     return;
   }
 
-  contributors.forEach(p =>
-    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
-  );
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
     .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
@@ -1142,6 +1147,70 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// Session fields a workspace owns, resolved at read time (b4mContributions.workspaceSessionSettingsExport,
+// `{ "<workspace id>": "<module specifier>" }`, each module exporting `workspaceSessionSettings:
+// WorkspaceSessionSettingsEntry`). Ids are declared in package.json rather than read off the module so
+// they can be validated here. Like the partner signup hooks it must exist in BOTH forms.
+function generateWorkspaceSessionSettings(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
+  const field = 'workspaceSessionSettingsExport';
+
+  const merged = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions[field];
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) {
+      throw new Error(
+        `[codegen] invalid ${field} from package "${pkg.name}": ` +
+          `expected an object of workspace id -> module specifier, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const [workspaceId, specifier] of Object.entries(declared)) {
+      if (
+        !WORKSPACE_ID_RE.test(workspaceId) ||
+        workspaceId !== workspaceId.toLowerCase() ||
+        RESERVED_OBJECT_KEYS.has(workspaceId)
+      ) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase [a-z0-9_-], because surface ids are matched exactly`
+        );
+      }
+      if (merged.has(workspaceId)) {
+        throw new Error(
+          `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
+            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+        );
+      }
+      assertModuleSpecifier(specifier, pkg.name, field);
+      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+    }
+  }
+
+  if (merged.size === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};\n`
+    );
+    return;
+  }
+
+  const contributions = [...merged];
+  const imports = contributions
+    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .join('\n');
+  const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\nimport { defineWorkspaceSessionSettingsTable } from '@bike4mind/common';\n${imports}\n\n` +
+      `export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = defineWorkspaceSessionSettingsTable({\n${entries}\n});\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1165,10 +1234,7 @@ function generateMigrations(packages) {
   const contributors = packages.filter(p => p.contributions.migrationsExport);
 
   if (contributors.length === 0) {
-    writeFile(
-      outPath,
-      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
-    );
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`);
     return;
   }
 
@@ -1201,9 +1267,7 @@ function generateMigrations(packages) {
     return rel;
   });
 
-  const imports = relSpecs
-    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
-    .join('\n');
+  const imports = relSpecs.map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`).join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
 
@@ -1356,8 +1420,8 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
     if (!expectedDirs.includes(dir)) {
       console.warn(
         `[codegen] WARNING: packages/premium/${dir} declares b4mContributions.infra ` +
-        `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
-        `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
+          `but sst.config.ts has no matching import — infra contributions will not be wired. ` +
+          `Add: await import('./infra/premium-generated/${dir}-infra.generated')`
       );
     }
   }
@@ -1366,14 +1430,19 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 // --- Main ---
 
 const packages = discoverPremiumPackages();
-console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
+console.log(
+  `[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`
+);
 
 // Bare-specifier glue only for packages that will actually resolve. Unlinked
 // packages get the absent form so a hydrated-but-unlinked tree still typechecks,
 // instead of failing every build with cannot-find-module errors.
 const linkedPackages = [];
 for (const pkg of packages) {
-  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  if (isLinkedIntoClient(pkg.name)) {
+    linkedPackages.push(pkg);
+    continue;
+  }
   console.warn(
     `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
       `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
@@ -1403,6 +1472,7 @@ generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
+generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);

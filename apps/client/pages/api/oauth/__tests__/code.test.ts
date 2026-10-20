@@ -238,3 +238,52 @@ describe('POST /api/oauth/code relying-party consent gate', () => {
     expect(h.decideConsent).toHaveBeenCalledWith(expect.objectContaining({ forceConsent: false }));
   });
 });
+
+describe('POST /api/oauth/code error logging', () => {
+  const registered = { tokenEndpointAuthMethod: 'none', allowedScopes: ['openid', 'email', 'profile'] };
+  const pkceBody = { ...baseBody, code_challenge: VALID_CHALLENGE, code_challenge_method: 'S256' };
+
+  const callLogged = async (body: Record<string, unknown>, user: unknown = { id: 'u1' }) => {
+    const res = mockRes();
+    const logger = { warn: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body, user, logger }, res);
+    return {
+      res,
+      lines: logger.warn.mock.calls.map(c => String(c[0])).filter(l => l.startsWith('[OAUTH_ERROR]')),
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.generateAuthCode as Mock).mockResolvedValue('the-code');
+    (h.validateClient as Mock).mockResolvedValue(registered);
+  });
+
+  it.each<[string, Record<string, unknown>, unknown, string, number]>([
+    ['no user', pkceBody, null, 'Unauthorized', 401],
+    ['schema failure', { ...pkceBody, redirect_uri: 'not-a-url' }, undefined, 'invalid_request', 400],
+    ['challenge without S256', { ...baseBody, code_challenge: VALID_CHALLENGE }, undefined, 'invalid_request', 400],
+    ['unknown client', { ...pkceBody, client_id: 'nope' }, undefined, 'unauthorized_client', 400],
+    ['PKCE required', baseBody, undefined, 'invalid_request', 400],
+    ['disallowed scope', { ...pkceBody, scope: 'openid admin' }, undefined, 'invalid_scope', 400],
+  ])('%s logs one [OAUTH_ERROR] line', async (_name, body, user, error, status) => {
+    if (body.client_id === 'nope') (h.validateClient as Mock).mockResolvedValue(null);
+    const { res, lines } = await callLogged(body, user === undefined ? { id: 'u1' } : user);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.body?.error).toBe(error);
+    expect(lines).toEqual([`[OAUTH_ERROR] route=oauth/code client=${body.client_id} error=${error} status=${status}`]);
+    expect(lines[0]).not.toContain(VALID_CHALLENGE);
+  });
+
+  it('logs nothing when consent is required (not an error)', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ ...registered, clientType: 'relying-party' });
+    (h.findGrant as Mock).mockResolvedValue(null);
+    (h.decideConsent as Mock).mockReturnValue('consent_required');
+
+    const { res, lines } = await callLogged(pkceBody);
+
+    expect(res.statusCode).toBe(200);
+    expect(lines).toEqual([]);
+  });
+});

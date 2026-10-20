@@ -57,6 +57,19 @@ const createSpy = (...args: unknown[]) => {
   handlers.created = args[0];
   return found();
 };
+// The mcp-servers routes parse what they send through mcpServerResponseSchema and the PUT merges
+// against the stored envVariables, so their mocks return a whole document rather than `{ id }`.
+const mcpServerDoc = () => ({ id: 'x', userId: 'u1', name: 'github', enabled: true, tools: [], envVariables: [] });
+const mcpRepositoryWrite =
+  (spy: (...args: unknown[]) => unknown) =>
+  (...args: unknown[]) => {
+    spy(...args);
+    return Promise.resolve(mcpServerDoc());
+  };
+const mcpModelWrite = (...args: unknown[]) => {
+  writeSpy(...args);
+  return Promise.resolve({ ...mcpServerDoc(), toJSON: mcpServerDoc });
+};
 
 // The mcp-servers write methods check the MCP admin flag; on here so body validation decides.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: () => Promise.resolve() }));
@@ -71,7 +84,11 @@ vi.mock('@bike4mind/database', () => ({
   // `userId` matches the request user below, so the ownership check passes and the body
   // validation is what decides the outcome.
   agentRepository: { findById: () => found({ userId: 'u1', triggerWords: [] }), update: writeSpy },
-  mcpServerRepository: { findOne: () => Promise.resolve(null), create: createSpy, update: writeSpy },
+  mcpServerRepository: {
+    findOne: () => Promise.resolve(null),
+    create: mcpRepositoryWrite(createSpy),
+    update: mcpRepositoryWrite(writeSpy),
+  },
   fabFileRepository: { findById: () => Promise.resolve(null) },
   userRepository: { findById: () => found() },
   creditTransactionRepository: { create: () => found() },
@@ -94,8 +111,8 @@ vi.mock('@bike4mind/database/ai', () => ({
   // still passes because the mapping write happened before the audit call.
   rapidReplyAuditLogRepository: { createLog: () => found() },
   McpServer: {
-    findById: () => found({ userId: 'u1' }),
-    findOneAndUpdate: writeSpy,
+    findById: () => found({ userId: 'u1', envVariables: [] }),
+    findOneAndUpdate: mcpModelWrite,
     findOneAndDelete: () => found(),
     findOne: () => found({ userId: 'u1' }),
   },

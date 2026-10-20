@@ -109,6 +109,7 @@ const RECEIPT = {
   storageObjectDeleted: true,
   storageObjectsTotal: 1,
   storageObjectsRemaining: 0,
+  heldForModeration: false,
   retrievalIndexOutcome: 'collocated',
   verified: true,
   purgedAt: '2026-01-01T00:00:00.000Z',

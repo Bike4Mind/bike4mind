@@ -127,7 +127,7 @@ test.describe('Projects - CRUD & Management', () => {
       await chatPage.sendMessageAndWaitForResponse('What is the recipe for Sinigang?');
 
       await verifyAnswers(['tamarind', 'sinigang', 'pork'], {
-        selector: '[data-testid="ai-response"]',
+        selector: '[data-testid="ai-response-body"]',
         logic: 'or',
       });
     });

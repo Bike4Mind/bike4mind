@@ -6,6 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { PlansSection } from './PlansSection';
 
@@ -29,6 +30,11 @@ const USER_ID = 'user_1';
 let subscriptions: IUserSubscription[] = [];
 let teamPriceActive = true;
 let teamUnitAmount = 3000;
+let answerCost: ModelAnswerCost | null = null;
+
+beforeEach(() => {
+  answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
+});
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptions: () => ({ data: subscriptions, isPending: false }),
@@ -65,11 +71,8 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
   useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: vi.fn() }),
 }));
 
-vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
-  useAnswerCostReference: () => ({
-    premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-    budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-  }),
+vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
+  useSelectedModelAnswerCost: () => answerCost,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -228,7 +231,7 @@ describe('PlansSection - Team tab', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 37 to 130 answers, depending on the model/
+      /^Estimate: about 37 answers on Claude Sonnet 5\.5\./
     );
   });
 });
@@ -263,12 +266,44 @@ describe('PlansSection', () => {
     expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
-  it('estimates how far the Professional credits go as a range across models', () => {
+  it('estimates how far the Professional credits go on the selected model', () => {
     renderSection();
 
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 920 to 3,300 answers, depending on the model \(Claude Sonnet 5\.5 to GPT-5\.4 Mini\)/
+      /^Estimate: about 920 answers on Claude Sonnet 5\.5\./
     );
+  });
+
+  it('updates, hides and restores estimates on both plan tabs', async () => {
+    settingValues = { enableTeamPlan: true, teamPlanCreditsPerSeat: 1000 };
+    const { rerender } = renderSection();
+    const refresh = () =>
+      rerender(
+        <TestWrapper>
+          <PlansSection />
+        </TestWrapper>
+      );
+
+    for (const audience of ['personal', 'business']) {
+      await userEvent.setup({ delay: null }).click(screen.getByTestId(`subscription-modal-${audience}-tab`));
+      answerCost = { modelName: 'Mini', creditsPerAnswer: 15 };
+      refresh();
+      expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(/answers on Mini\./);
+
+      answerCost = null;
+      refresh();
+      expect(screen.queryByTestId('plan-card-answers-estimate')).not.toBeInTheDocument();
+      expect(screen.getByTestId('plan-card')).toBeInTheDocument();
+      if (audience === 'personal') {
+        expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
+      } else {
+        expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+      }
+
+      answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
+      refresh();
+      expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(/answers on Claude Sonnet 5\.5\./);
+    }
   });
 
   it('lists only Professional features a user can find in the app', () => {

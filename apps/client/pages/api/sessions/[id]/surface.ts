@@ -6,6 +6,7 @@ import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { BadRequestError } from '@server/utils/errors';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 import { Request } from 'express';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 /**
  * PATCH /api/sessions/[id]/surface - move the caller's own session into another registered
@@ -27,6 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.WRITE_NOTEBOOKS] }).patch
       {
         db: { sessions: sessionRepository },
         resolveSurfaceAccess: surfaceAccessForRequest(req),
+        workspaceSessionSettings: premiumWorkspaceSessionSettings,
       }
     );
 

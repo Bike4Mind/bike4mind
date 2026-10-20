@@ -1,4 +1,4 @@
-import { findForbiddenMcpEnvKeys, type McpEnvVariable } from '@bike4mind/mcp';
+import { findForbiddenMcpEnvKeys } from '@bike4mind/mcp';
 import { BadRequestError } from '@server/utils/errors';
 
 /**
@@ -13,7 +13,7 @@ import { BadRequestError } from '@server/utils/errors';
  *
  * @throws BadRequestError naming the offending keys, never their values.
  */
-export function assertNoForbiddenMcpEnvKeys(envVariables: readonly McpEnvVariable[]): void {
+export function assertNoForbiddenMcpEnvKeys(envVariables: readonly { key: string }[]): void {
   const forbidden = findForbiddenMcpEnvKeys(envVariables);
   if (forbidden.length === 0) {
     return;

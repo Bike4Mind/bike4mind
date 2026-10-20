@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processAttachments } from './processAttachments';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { resolveSupportedMimeType } from '@bike4mind/utils';
 import type { ParsedEmailObject, EmailIngestionAdapters } from './types';
 
 vi.mock('../fabFileService/create', () => ({
@@ -290,6 +291,43 @@ describe('emailIngestionService - processAttachments', () => {
         // No fabFileId when upload fails
       },
     ]);
+  });
+
+  it('passes a binary claim through unchanged, so an extensionless executable is refused', async () => {
+    const email = {
+      ...mockParsedEmail,
+      attachments: [
+        {
+          filename: 'payload',
+          contentType: 'application/x-msdownload',
+          size: 5000,
+          content: Buffer.from('MZ'),
+        },
+      ],
+    };
+
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
+
+    const { mimeType } = vi.mocked(createFabFile).mock.calls[0][1] as { mimeType: string };
+    expect(mimeType).toBe('application/x-msdownload');
+    // createFabFile's own check (the real one) refuses it rather than storing it as text.
+    expect(
+      resolveSupportedMimeType('payload', mimeType, { extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN })
+        .supported
+    ).toBe(false);
+  });
+
+  it('does not relabel an octet-stream claim as text/plain', async () => {
+    const email = {
+      ...mockParsedEmail,
+      attachments: [
+        { filename: 'blob', contentType: 'application/octet-stream', size: 5000, content: Buffer.from('x') },
+      ],
+    };
+
+    await processAttachments(email, 'user123', 'Test Email', mockAdapters);
+
+    expect(vi.mocked(createFabFile).mock.calls[0][1]).toMatchObject({ mimeType: 'application/octet-stream' });
   });
 
   it('should process attachments with proper MIME types', async () => {

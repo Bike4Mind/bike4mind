@@ -145,7 +145,7 @@ describe('voiceSessionEnded on a real replica set', () => {
 
   it('a failed response debit leaves the ledger, billed total and balance unchanged, so a retry bills it once', async () => {
     const call = await seedCall();
-    vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('balance write failed'));
+    vi.spyOn(userRepository, 'decrementCreditsFloored').mockRejectedValueOnce(new Error('balance write failed'));
 
     await expect(send(call, 130, 'resp-1')).rejects.toThrow('balance write failed');
     expect(await ledger(call.sessionId)).toHaveLength(0);
@@ -155,6 +155,32 @@ describe('voiceSessionEnded on a real replica set', () => {
     await send(call, 130, 'resp-1');
     expect(await charged(call.userId)).toBe(130);
     expect(await ledger(call.sessionId)).toHaveLength(1);
+  });
+
+  it('never takes the balance below zero inside the transaction when usage outruns it', async () => {
+    const call = await seedCall();
+    await User.updateOne({ _id: call.userId }, { $set: { currentCredits: 10 } });
+
+    await send(call, HOLD + 50, 'resp-1');
+
+    expect((await User.findById(call.userId).lean())?.currentCredits).toBe(0);
+    expect(await ledger(call.sessionId)).toHaveLength(1);
+  });
+
+  it('persists a fully unpaid closing shortfall once with a zero debit', async () => {
+    const call = await seedCall();
+    await send(call, HOLD, 'resp-1');
+    await User.updateOne({ _id: call.userId }, { $set: { currentCredits: 0 } });
+
+    await send(call, 30);
+    await send(call, 30);
+
+    const rows = await ledger(call.sessionId);
+    const closingRow = rows.find(row => row.transactionId?.startsWith('realtime-voice-close:'));
+    expect(rows).toHaveLength(2);
+    expect(closingRow).toMatchObject({ credits: -0, metadata: { shortfallCredits: 30 } });
+    expect((await User.findById(call.userId).lean())?.currentCredits).toBe(0);
+    expect((await hold(call.sessionId))?.voiceSessionStartedAt ?? null).toBeNull();
   });
 
   it('closing the session settles the hold exactly once', async () => {

@@ -185,17 +185,33 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
 }
 
+// Headroom for thinking tokens, which count against Gemini's maxOutputTokens.
+export const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
 /**
- * True when the adapter sends no output cap for this model, so a requested maxTokens bounds
- * nothing: Gemini thinking models (geminiBackend getGenerationConfig) omit maxOutputTokens,
- * because thinking counts against it and a caller's small cap would starve the reply. A credit
- * hold for such a call must cover the model's own output cap, not the requested budget.
+ * True when geminiBackend sizes this model's output cap with geminiThinkingOutputCap instead of
+ * sending the requested maxTokens as-is.
  */
-export function ignoresRequestedOutputCap(modelInfo: ModelInfo): boolean {
+export function usesGeminiThinkingOutputCap(modelInfo: ModelInfo): boolean {
   const servedByGemini = modelInfo.adapterFamily
     ? modelInfo.adapterFamily === 'gemini'
     : modelInfo.backend === ModelBackend.Gemini;
   return servedByGemini && modelInfo.can_think === true;
+}
+
+/**
+ * The maxOutputTokens geminiBackend sends for a thinking model: the caller's cap plus thinking
+ * headroom, clamped to the declared cap. callerCapBinds is false when the declared cap is the
+ * tighter bound. completionMeter holds this same number, so both must call this one function.
+ */
+export function geminiThinkingOutputCap(
+  modelInfo: ModelInfo,
+  callerCap: number
+): { maxOutputTokens: number; callerCapBinds: boolean } {
+  const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+  // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
+  const ceiling = (modelInfo.maxOutputTokensDerived ? undefined : usableTokenCount(modelInfo.max_tokens)) ?? Infinity;
+  return { maxOutputTokens: Math.min(ceiling, wanted), callerCapBinds: wanted < ceiling };
 }
 
 /**
@@ -208,6 +224,8 @@ export function ignoresRequestedOutputCap(modelInfo: ModelInfo): boolean {
  * credit pre-reservation and shrinks the usable input window, so a "harmless"
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
+ *
+ * Thinking Gemini models with a declared cap default to that cap when unset.
  *
  * Models that reason inside the output budget default to
  * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
@@ -238,9 +256,18 @@ export function resolveOutputMaxTokens({
   modelMaxOutputTokens: number | undefined;
 }): number {
   const reasonsWithinBudget = reasonsWithinOutputBudget(modelInfo);
-  const preferred =
-    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   const cap = usableTokenCount(modelMaxOutputTokens);
+  // Gemini counts thinking inside maxOutputTokens; keep in sync with geminiBackend.getGenerationConfig,
+  // which only bounds thinking when the cap binds. The web client sends the model max too.
+  const unsetDefault =
+    modelInfo.backend === ModelBackend.Gemini &&
+    modelInfo.can_think === true &&
+    cap !== undefined &&
+    modelInfo.maxOutputTokensDerived !== true
+      ? cap
+      : fallback;
+  const preferred =
+    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : unsetDefault);
   // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
   // a credit reservation downstream, so the resolver has to be total or a malformed catalog
   // row puts NaN on a money path. Substituting `fallback` instead would be a sizing decision
@@ -471,6 +498,13 @@ export function planReasoningEffort(
   };
 }
 
+/** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
+export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
 /**
  * The effort an adaptive model runs at when the caller named none, from the auto-classified
  * query complexity. An adaptive model that thinks unasked does so on every request (and every
@@ -484,7 +518,6 @@ export function effortForComplexity(
   modelInfo: ModelInfo,
   complexity: QueryComplexityType | undefined
 ): ReasoningEffort | undefined {
-  if (!modelInfo.can_think || modelInfo.thinkingStyle !== 'adaptive') return undefined;
-  if (!ADAPTIVE_THINKING_BY_DEFAULT.has(model)) return undefined;
+  if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
   return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
 }

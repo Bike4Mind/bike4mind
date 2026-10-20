@@ -39,11 +39,13 @@ const handler = baseApi().post(
 
       // Bind ContentType into the signature so the caller cannot PUT bytes under a different
       // (e.g. executable) content type than the one validated above. The browser PUT sends a
-      // matching Content-Type header (see uploadFileToUrl).
+      // matching Content-Type header (see uploadFileToUrl). ContentLength binds the declared size
+      // the same way: S3 refuses an upload of any other length.
       const command = new PutObjectCommand({
         Bucket: Resource.appFilesBucket.name,
         Key: fileKey,
         ContentType: data.mimeType,
+        ContentLength: data.fileSize,
       });
 
       const file = await AppFile.create({
@@ -58,6 +60,7 @@ const handler = baseApi().post(
 
       const presignedUrl = await getSignedUrl(s3Client, command, {
         expiresIn: 600, // 10 minutes
+        signableHeaders: new Set(['content-type', 'content-length']),
       });
 
       await logEvent(

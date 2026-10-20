@@ -92,9 +92,9 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
   beforeEach(() => {
     vi.clearAllMocks();
     mockHandlePackage.mockResolvedValue({
-      amount: 1000,
+      amount: 2000,
       description: 'credits package',
-      metadata: { credits: 10000, packageId: CreditPackageId.A },
+      metadata: { credits: 33333, packageId: CreditPackageId.Usd20 },
     });
     mockHandlePerCredit.mockResolvedValue({
       amount: 500,
@@ -106,7 +106,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
   });
 
   it('creates a payment intent for a non-subscribed user buying a package', async () => {
-    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
 
     await (handler as HandlerFn)(req, res);
 
@@ -132,7 +132,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
   it('creates a Stripe customer on the fly when the user has none', async () => {
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
     const { req, res } = makeReq(
-      { transactionType: TransactionType.Package, packageId: CreditPackageId.A },
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
       { stripeCustomerId: null }
     );
 
@@ -150,7 +150,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
     mockPaymentIntentsCreate.mockRejectedValue(new Error('stripe down'));
     const { req, res } = makeReq(
-      { transactionType: TransactionType.Package, packageId: CreditPackageId.A },
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
       { stripeCustomerId: null }
     );
 
@@ -162,7 +162,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
 
   it('never deletes an existing customer when the payment intent cannot be created', async () => {
     mockPaymentIntentsCreate.mockRejectedValue(new Error('stripe down'));
-    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
 
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow('stripe down');
     expect(mockCustomersDel).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
   });
 
   it('records a PII-free checkout-started marker keyed by the payment intent id', async () => {
-    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.A });
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
 
     await (handler as HandlerFn)(req, res);
 
@@ -225,9 +225,9 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       metadata: {
         paymentIntentId: 'pi_1',
         transactionType: TransactionType.Package,
-        amount: 1000,
-        credits: 10000,
-        packageId: CreditPackageId.A,
+        amount: 2000,
+        credits: 33333,
+        packageId: CreditPackageId.Usd20,
       },
     });
     expect(JSON.stringify(event)).not.toContain('buyer@example.com');
@@ -236,7 +236,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
 
   it('blocks a user with an open payment dispute before creating any payment intent', async () => {
     const { req, res } = makeReq(
-      { transactionType: TransactionType.Package, packageId: CreditPackageId.A },
+      { transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 },
       { disputePending: true }
     );
 
@@ -250,4 +250,15 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     await expect((handler as HandlerFn)(req, res)).rejects.toBeTruthy();
     expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
   });
+
+  it.each(['package_10k', 'package_50k', 'package_unknown'])(
+    'rejects the retired or unknown pack id %s',
+    async packageId => {
+      const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId });
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toBeTruthy();
+      expect(mockHandlePackage).not.toHaveBeenCalled();
+      expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -38,6 +38,7 @@ import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@server/utils/ip';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS / 1000;
@@ -69,8 +70,12 @@ const handler = baseApi({ auth: false })
   // control is the in-handler check below.
   .use(rateLimit({ limit: PER_CLIENT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'oauth-ai-token' }))
   .post(async (req, res) => {
+    const logError = (error: string, status: number) =>
+      logOAuthError(req.logger, { route: 'oauth/ai-token', clientId: req.body?.client_id, error, status });
+
     const parsed = AiTokenRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
+      logError('invalid_request', 400);
       return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
     }
 
@@ -80,6 +85,7 @@ const handler = baseApi({ auth: false })
     //    no redirect_uri, so we skip validateClientSecret (which also demands one).
     const client = await oauthClientRepository.verifyClientSecret(client_id, client_secret);
     if (!client) {
+      logError('invalid_client', 401);
       return res
         .status(401)
         .json({ error: 'invalid_client', error_description: 'Unknown client or invalid client_secret' });
@@ -88,6 +94,7 @@ const handler = baseApi({ auth: false })
     // 2. Federation gate - only clients with a populated federated trust config may mint AI keys.
     const federatedIdp = client.federatedIdp;
     if (!federatedIdp) {
+      logError('access_denied', 403);
       return res.status(403).json({
         error: 'access_denied',
         error_description: 'Client is not configured for federated AI-token exchange',
@@ -98,6 +105,7 @@ const handler = baseApi({ auth: false })
       ...new Set((scope ?? ApiKeyScope.AI_GENERATE).split(' ').filter(Boolean)),
     ]);
     if (!parsedScopes.success) {
+      logError('invalid_scope', 403);
       return res.status(403).json({
         error: 'invalid_scope',
         error_description: 'This exchange supports only ai:generate and me:read scopes',
@@ -117,6 +125,7 @@ const handler = baseApi({ auth: false })
     //        db.oauthclients.find({ 'federatedIdp': { $exists: true }, allowedScopes: { $nin: ['ai:generate'] } })
     const disallowedScopes = requestedScopes.filter(s => !(client.allowedScopes ?? []).includes(s));
     if (disallowedScopes.length > 0) {
+      logError('invalid_scope', 403);
       return res.status(403).json({
         error: 'invalid_scope',
         error_description: `Scopes not registered for this client: ${disallowedScopes.join(' ')}`,
@@ -133,6 +142,7 @@ const handler = baseApi({ auth: false })
     if (!rl.success) {
       const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
       res.setHeader('Retry-After', retryAfter);
+      logError('temporarily_unavailable', 429);
       return res.status(429).json({
         error: 'temporarily_unavailable',
         error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
@@ -148,6 +158,7 @@ const handler = baseApi({ auth: false })
     } catch (err) {
       if (err instanceof FederatedIdTokenError) {
         req.logger.warn(`[OAUTH_AI_TOKEN] ID token rejected for client ${client_id}: ${err.message}`);
+        logError('invalid_grant', 401);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }
       throw err;
@@ -162,6 +173,7 @@ const handler = baseApi({ auth: false })
     // 5. Load the user; a sub that resolves to no B4M user is an invalid grant.
     const user = await userRepository.findById(b4mUserId);
     if (!user) {
+      logError('invalid_grant', 401);
       return res
         .status(401)
         .json({ error: 'invalid_grant', error_description: 'Token subject does not resolve to a B4M user' });
@@ -178,12 +190,14 @@ const handler = baseApi({ auth: false })
     });
     if (grantRejection) {
       const { status, ...body } = grantRejection;
+      logError(body.error, status);
       return res.status(status).json(body);
     }
 
     // 6. Consent gate (SECURITY-CRITICAL). This endpoint mints outside the gated REST
     //    surface, so it must enforce the AUP/ToS acceptance invariant itself.
     if (!hasAcceptedPolicy(user)) {
+      logError('access_denied', 403);
       return res.status(403).json({ error: 'access_denied', error_description: 'Policy acceptance required' });
     }
 
@@ -242,6 +256,7 @@ const handler = baseApi({ auth: false })
         req.logger.warn(
           `[OAUTH_AI_TOKEN] per-user active API key cap reached for user ${b4mUserId} via client ${client_id}`
         );
+        logError('invalid_request', 400);
         return res.status(400).json({ error: 'invalid_request', error_description: err.message });
       }
       throw err;

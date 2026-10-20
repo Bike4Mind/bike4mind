@@ -15,6 +15,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const handler = nextRouteForContract(sessionCloneContract, {
   rateLimit: rateLimit({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' }),
@@ -57,6 +58,7 @@ const handler = nextRouteForContract(sessionCloneContract, {
         resolveLakeAccess: async () =>
           (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
         resolveSurfaceAccess: copySurfaceAccessForRequest(req),
+        workspaceSessionSettings: premiumWorkspaceSessionSettings,
       }
     )
   );

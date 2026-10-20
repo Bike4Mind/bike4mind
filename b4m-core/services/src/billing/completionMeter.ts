@@ -1,9 +1,9 @@
 import type { IMessage, ModelInfo } from '@bike4mind/common';
 import {
   DEFAULT_MAX_TOOL_CALLS,
-  ignoresRequestedOutputCap,
+  geminiThinkingOutputCap,
   resolveOutputMaxTokens,
-  usableTokenCount,
+  usesGeminiThinkingOutputCap,
   type CompletionInfo,
   type ICompletionBackend,
   type ICompletionOptions,
@@ -114,9 +114,9 @@ export function meterCompletionBackend<T extends Pick<ICompletionBackend, 'compl
       modelInfo: callModel,
       modelMaxOutputTokens: callModel.max_tokens,
     });
-    // An adapter that sends no cap for this model can return up to the model's own limit.
-    const heldMaxTokens = ignoresRequestedOutputCap(callModel)
-      ? Math.max(maxTokens, usableTokenCount(callModel.max_tokens) ?? maxTokens)
+    // Gemini thinking models are sent more than maxTokens (thinking headroom), so hold what is sent.
+    const heldMaxTokens = usesGeminiThinkingOutputCap(callModel)
+      ? geminiThinkingOutputCap(callModel, maxTokens).maxOutputTokens
       : maxTokens;
     const metered = await meter(callModel, messages, heldMaxTokens, models, providerTurns(options));
     const usage: CompletionUsage = {};

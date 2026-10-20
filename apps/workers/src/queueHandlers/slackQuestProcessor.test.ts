@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -116,5 +117,6 @@ describe('slackQuestProcessor getStaticOptions', () => {
     const { getStaticOptions } = await import('./slackQuestProcessor');
 
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
+    expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
 });

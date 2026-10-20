@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
+import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
@@ -39,6 +40,9 @@ interface BedrockOptions {
   region: string;
   stream: boolean;
 }
+
+// Bedrock rewords context overflow per model family; Llama says "maximum context length".
+const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
 
 // Harden Bedrock retries for transient 503 (ServiceUnavailableException) and
 // throttling. The AWS SDK default is maxAttempts:3 with sub-second standard backoff -
@@ -243,6 +247,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
+    if (options._internal?.requestStartedAt === undefined) {
+      options = { ...options, _internal: { ...options._internal, requestStartedAt } };
+    }
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
 
     // Multi-turn token accumulators. Each Bedrock InvokeModel call (every
@@ -319,7 +327,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
@@ -472,6 +480,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
       if (options.stream) {
         let response;
+        const roundStart = Date.now();
+        let firstChunkAt: number | null = null;
         try {
           response = await this.invokeModelStream(input, options.abortSignal);
         } catch (err: unknown) {
@@ -492,6 +502,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
+          firstChunkAt ??= Date.now();
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
             const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
@@ -537,6 +548,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
+        const modelDoneAt = Date.now();
 
         // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
         // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
@@ -602,6 +614,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           const toolArgumentChars = func.reduce((n, f) => n + (f?.parameters?.length ?? 0), 0);
           outputTokens = estimateStreamedOutputTokens(emittedTextChars + toolArgumentChars, model);
           await callback([], buildCompletionInfo());
+        }
+
+        if (!func.some(f => f.name)) {
+          logToolRound(Logger.globalInstance, {
+            model,
+            round: toolCallCount,
+            msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+            modelMs: modelDoneAt - roundStart,
+            roundMs: Date.now() - roundStart,
+            sinceRequestMs: Date.now() - requestStartedAt,
+            stopReason: stopReason ?? null,
+            tools: [],
+          });
         }
 
         // If there is a tool being used, then
@@ -758,6 +783,17 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 );
               }
             }
+
+            logToolRound(Logger.globalInstance, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              modelMs: modelDoneAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: stopReason ?? null,
+              tools: summarizeToolOutcomes(outcomes),
+            });
 
             if (
               shouldEndTurnAfterTools(
@@ -1085,7 +1121,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   private handleBedrockError(err: unknown): never {
     const errName = (err as { name?: string })?.name;
     const errMsg = (err as { message?: string })?.message ?? '';
-    if (errName === 'ValidationException' && errMsg.includes('Input is too long')) {
+    if (errName === 'ValidationException' && CONTEXT_OVERFLOW_MESSAGES.some(m => errMsg.includes(m))) {
       Logger.globalInstance.warn(
         '[ContextOverflow] Bedrock ValidationException: input too long — surfacing user-friendly error'
       );
@@ -1111,6 +1147,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected getModelContextWindow(_model: string): number {
     return 0;
+  }
+
+  /** Output reservation must match any provider-specific limit applied to the payload. */
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
   }
 
   /**

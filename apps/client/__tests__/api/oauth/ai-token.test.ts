@@ -692,3 +692,102 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     });
   });
 });
+
+describe('POST /api/oauth/ai-token error logging', () => {
+  const SECRET_BODY = { client_id: 'client-1', client_secret: 'top-secret-value', id_token: 'header.payload.sig' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);
+    mockVerifyIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: {} });
+    mockUserFindById.mockResolvedValue(CONSENTED_USER);
+    mockFindByUserId.mockResolvedValue([]);
+    mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
+    mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid', 'ai:generate'] });
+  });
+
+  afterEach(() => {
+    delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
+  });
+
+  it.each<[string, () => void, Record<string, unknown>, string, number]>([
+    ['schema failure', () => {}, { ...SECRET_BODY, id_token: '' }, 'invalid_request', 400],
+    ['bad client secret', () => mockVerifyClientSecret.mockResolvedValue(null), SECRET_BODY, 'invalid_client', 401],
+    [
+      'client not federated',
+      () => mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, federatedIdp: undefined }),
+      SECRET_BODY,
+      'access_denied',
+      403,
+    ],
+    ['unsupported scope', () => {}, { ...SECRET_BODY, scope: 'admin' }, 'invalid_scope', 403],
+    [
+      'scope not registered',
+      () => mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, allowedScopes: ['openid'] }),
+      SECRET_BODY,
+      'invalid_scope',
+      403,
+    ],
+    [
+      'per-client rate limit',
+      () => mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 5_000) }),
+      SECRET_BODY,
+      'temporarily_unavailable',
+      429,
+    ],
+    [
+      'bad ID token',
+      () => mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('bad signature')),
+      SECRET_BODY,
+      'invalid_grant',
+      401,
+    ],
+    ['subject has no user', () => mockUserFindById.mockResolvedValue(null), SECRET_BODY, 'invalid_grant', 401],
+    ['grant gate: no grant', () => mockFindGrant.mockResolvedValue(null), SECRET_BODY, 'access_denied', 403],
+    [
+      'grant gate: lookup failed',
+      () => mockFindGrant.mockRejectedValue(new Error('db down')),
+      SECRET_BODY,
+      'temporarily_unavailable',
+      503,
+    ],
+    [
+      'policy not accepted',
+      () => mockUserFindById.mockResolvedValue({ id: 'b4m-user-1' }),
+      SECRET_BODY,
+      'access_denied',
+      403,
+    ],
+    [
+      'per-user key cap',
+      () =>
+        mockCreateUserApiKey.mockRejectedValue(new BadRequestError('cap', { errorCode: API_KEY_USER_CAP_ERROR_CODE })),
+      SECRET_BODY,
+      'invalid_request',
+      400,
+    ],
+  ])('%s logs one [OAUTH_ERROR] line', async (_name, setup, body, error, status) => {
+    setup();
+    const { req, res } = makeReq(body);
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(status);
+    expect(res._getJSONData().error).toBe(error);
+    const lines = (req as any).logger.warn.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((l: string) => l.startsWith('[OAUTH_ERROR]'));
+    expect(lines).toEqual([`[OAUTH_ERROR] route=oauth/ai-token client=client-1 error=${error} status=${status}`]);
+    expect(lines[0]).not.toContain(SECRET_BODY.client_secret);
+    expect(lines[0]).not.toContain(SECRET_BODY.id_token);
+  });
+
+  it('logs nothing on a successful mint', async () => {
+    const { req, res } = makeReq(SECRET_BODY);
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('[OAUTH_ERROR]'));
+  });
+});

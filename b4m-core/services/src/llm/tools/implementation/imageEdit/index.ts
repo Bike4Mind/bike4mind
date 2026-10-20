@@ -33,7 +33,7 @@ import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
-import { NotFoundError } from '@bike4mind/utils';
+import { ImageModerationBlockedError, NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
@@ -567,7 +567,13 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           // Handle clarification response (TypeScript knows it must be clarification after success check)
           return `Error: ${'question' in editResponse ? editResponse.question : 'Failed to edit image'}`;
         } catch (error) {
-          Logger.globalInstance.error('[ERROR] OpenAI image editing failed:', error);
+          if (error instanceof ImageModerationBlockedError) {
+            Logger.globalInstance.warn('[WARN] OpenAI image editing blocked by content policy:', {
+              requestId: error.requestId,
+            });
+          } else {
+            Logger.globalInstance.error('[ERROR] OpenAI image editing failed:', error);
+          }
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
           if (axios.isAxiosError(error)) {

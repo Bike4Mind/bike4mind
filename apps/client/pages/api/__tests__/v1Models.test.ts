@@ -112,6 +112,18 @@ describe('GET /api/v1/models', () => {
     expect(getCallerModelList).toHaveBeenCalledWith('u1', logger);
   });
 
+  it('omits speech-to-text models, which no public endpoint can serve', async () => {
+    const transcribe: ModelInfo = {
+      ...textModel('transcribe'),
+      type: 'speech-to-text',
+      backend: ModelBackend.AWS,
+    };
+    getCallerModelList.mockResolvedValue({ models: [transcribe, textModel('model-a')], supersededModels: [] });
+    const { req, res } = get();
+    await run(req, res);
+    expect(res._getJSONData().data.map((model: { id: string }) => model.id)).toEqual(['model-a']);
+  });
+
   it('never publishes internal catalog fields', async () => {
     const { req, res } = get();
 

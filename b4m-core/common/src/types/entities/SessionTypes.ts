@@ -793,6 +793,13 @@ export interface ISession {
    */
   maxToolCalls?: number;
   /**
+   * Fields the user set explicitly that a contributed workspace may own. On that workspace its resolver
+   * still decides them; moving or copying off it keeps them (see `WorkspaceSessionSettingsTable` in
+   * surfaces.ts). Recorded at
+   * create for each such field set where the session's workspace does not own it; copies carry it.
+   */
+  userSetFields?: string[];
+  /**
    * The placeholder name a product surface stamped on this session at create
    * time. Generic capability - auto-naming treats a session still bearing its
    * placeholder as rename-eligible (bypassing the recent-update duplicate
@@ -871,13 +878,12 @@ export interface ISession {
    * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
    */
   voiceBilledCredits?: number;
-}
 
-/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
-export interface VoiceHoldMarkers {
-  voiceConnectedAt?: Date | null;
-  voiceLastActivityAt?: Date | null;
-  voiceBilledCredits?: number | null;
+  /**
+   * Who paid the open voice hold's reserve, set when it opens and cleared when it settles. Every
+   * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
+   */
+  voiceHoldUserId?: string | null;
 }
 
 ///////////
@@ -1218,7 +1224,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     sessionId: string,
     startedAt: Date,
     options?: { realtimeOnly?: boolean }
-  ) => Promise<{ billedCredits: number | null } | null>;
+  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
 
   /**
    * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
@@ -1228,18 +1234,6 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   openVoiceHold: (
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
-  ) => Promise<boolean>;
-
-  /**
-   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
-   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
-   * already holds a newer call.
-   */
-  restoreVoiceHold: (
-    sessionId: string,
-    voiceReservedCredits: number,
-    startedAt: Date,
-    markers?: VoiceHoldMarkers
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
   ) => Promise<boolean>;
 }

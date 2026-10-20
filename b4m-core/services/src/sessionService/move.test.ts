@@ -11,7 +11,7 @@ const makeAdapters = (session: Record<string, unknown> | null, resolveSurfaceAcc
     update: vi.fn(async (data: Record<string, unknown>) => ({ ...session, ...data })),
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
-  return { db: { sessions } as any, resolveSurfaceAccess, sessions };
+  return { db: { sessions } as any, resolveSurfaceAccess, workspaceSessionSettings: {}, sessions };
 };
 
 describe('moveSession', () => {
@@ -82,9 +82,9 @@ describe('moveSession', () => {
   it('fails closed with a 403 when no access resolver is supplied', async () => {
     const { sessions, db } = makeAdapters({ id: 's1', userId: 'u1' });
 
-    await expect(moveSession('u1', { id: 's1', targetSurface: OPTI_SURFACE }, { db })).rejects.toBeInstanceOf(
-      ForbiddenError
-    );
+    await expect(
+      moveSession('u1', { id: 's1', targetSurface: OPTI_SURFACE }, { db, workspaceSessionSettings: {} })
+    ).rejects.toBeInstanceOf(ForbiddenError);
     expect(sessions.update).not.toHaveBeenCalled();
   });
 });

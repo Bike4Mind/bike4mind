@@ -38,7 +38,10 @@ vi.mock('@bike4mind/mcp', () => ({}));
 // The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
-vi.mock('@server/utils/errors', () => ({ BadRequestError: class extends Error {} }));
+vi.mock('@server/utils/errors', () => ({
+  BadRequestError: class extends Error {},
+  NotFoundError: class extends Error {},
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({ EnableMCPServer: true })),
   getSettingsValue: (key: string, map: Record<string, unknown>) => map[key],
@@ -66,6 +69,33 @@ const server = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+// A stored server carrying both withheld secrets: an env value and the GitHub webhook HMAC secret.
+const serverWithSecrets = () =>
+  server({
+    envVariables: [{ key: 'NOTION_ACCESS_TOKEN', value: 'enc:stored-token' }],
+    toolSchemasFetchedAt: new Date(),
+    metadata: {
+      githubLogin: 'octocat',
+      webhooks: {
+        github: {
+          routingToken: 'route-token',
+          secret: 'enc:webhook-secret',
+          subscribedEvents: ['push'],
+          repos: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    },
+  });
+
+const expectSecretsWithheld = (body: Record<string, unknown>) => {
+  expect(body.envVariables).toEqual([{ key: 'NOTION_ACCESS_TOKEN' }]);
+  const webhook = (body.metadata as { webhooks: { github: Record<string, unknown> } }).webhooks.github;
+  expect(webhook).not.toHaveProperty('secret');
+  expect(webhook.routingToken).toBe('route-token');
+  expect(JSON.stringify(body)).not.toContain('enc:');
+};
+
 const run = async () => {
   const { req, res } = createMocks({ method: 'GET' });
   (req as unknown as { user: { id: string } }).user = { id: 'u1' };
@@ -79,6 +109,16 @@ beforeEach(() => {
 });
 
 describe('GET /api/mcp-servers', () => {
+  it('withholds env variable values and the webhook secret', async () => {
+    mockFind.mockResolvedValue([serverWithSecrets()]);
+
+    const res = await run();
+
+    const [body] = res._getJSONData();
+    expectSecretsWithheld(body);
+    expect(body).toMatchObject({ id: 's1', name: 'notion', enabled: true });
+  });
+
   it('does not live-fetch a confirmed-empty server whose marker is fresh', async () => {
     mockFind.mockResolvedValue([server({ toolSchemasFetchedAt: new Date() })]);
 
@@ -124,6 +164,31 @@ describe('GET /api/mcp-servers', () => {
 
     expect(mockInvoke).not.toHaveBeenCalled();
   });
+
+  // A legacy row must not turn the whole list into a 500: one bad row used to fail respond().
+  it('serves a legacy row with a null envVariables array and null metadata', async () => {
+    mockFind.mockResolvedValue([server({ envVariables: null, metadata: null, toolSchemasFetchedAt: new Date() })]);
+
+    const res = await run();
+
+    const [body] = res._getJSONData();
+    expect(body.envVariables).toEqual([]);
+    expect(body.metadata).toBeNull();
+  });
+
+  it('drops legacy env items without a string key instead of failing the list', async () => {
+    mockFind.mockResolvedValue([
+      server({
+        envVariables: [{ key: 'NOTION_ACCESS_TOKEN' }, null, { value: 'orphan-value' }],
+        toolSchemasFetchedAt: new Date(),
+      }),
+    ]);
+
+    const res = await run();
+
+    const [body] = res._getJSONData();
+    expect(body.envVariables).toEqual([{ key: 'NOTION_ACCESS_TOKEN' }]);
+  });
 });
 
 describe('POST /api/mcp-servers', () => {
@@ -136,6 +201,7 @@ describe('POST /api/mcp-servers', () => {
 
   it('clears the confirmed-empty marker when reconnecting an existing server', async () => {
     mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(server());
     mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
 
     await runPost();
@@ -143,5 +209,24 @@ describe('POST /api/mcp-servers', () => {
     expect(mockUpdate).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 's1', enabled: true }), {
       unset: ['toolSchemasFetchedAt'],
     });
+  });
+
+  it('withholds env variable values and the webhook secret', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(serverWithSecrets());
+    mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
+
+    const res = await runPost();
+
+    expectSecretsWithheld(res._getJSONData());
+  });
+
+  // The server was deleted between the findOne and the update; respond() cannot parse null.
+  it('returns 404 when the update finds no server', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(null);
+    mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
+
+    await expect(runPost()).rejects.toThrow('MCP Server not found');
   });
 });

@@ -94,6 +94,14 @@ describe('tokenEncryption', () => {
       expect(encrypted[1].key).toBe('TOKEN');
       expect(encrypted[1].value).not.toBe('secret-token');
     });
+
+    // PUT sends stored values back through this function, so a second pass must not encrypt the
+    // ciphertext again - that would leave a credential nothing can decrypt.
+    it('should leave already-encrypted values unchanged', () => {
+      const once = encryptEnvVariables([{ key: 'API_KEY', value: 'secret-key' }]);
+
+      expect(encryptEnvVariables(once)).toEqual(once);
+    });
   });
 
   describe('decryptEnvVariables', () => {

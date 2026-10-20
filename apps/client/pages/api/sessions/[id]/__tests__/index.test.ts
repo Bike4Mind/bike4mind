@@ -30,6 +30,7 @@ const {
   mockLogEvent,
   mockWithTransaction,
   mockCreateLakeAccess,
+  mockResolveWorkspaceSettings,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -40,6 +41,7 @@ const {
   mockLogEvent: vi.fn(),
   mockWithTransaction: vi.fn(),
   mockCreateLakeAccess: vi.fn(),
+  mockResolveWorkspaceSettings: vi.fn(async () => ({ enabledTools: ['tool_w'] })),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -96,6 +98,15 @@ vi.mock('@bike4mind/database', async orig => {
 
 vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
+}));
+
+vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+  premiumWorkspaceSessionSettings: {
+    'example-workspace': {
+      ownedFields: ['enabledTools', 'temperature'],
+      resolve: (...a: unknown[]) => mockResolveWorkspaceSettings(...a),
+    },
+  },
 }));
 
 import handler from '../index';
@@ -178,6 +189,49 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');
     });
+
+    it("returns the workspace's effective settings rather than the stored ones", async () => {
+      mockGetSession.mockResolvedValue({
+        id: 'sess-1',
+        name: 'Untitled',
+        userId: 'user-1',
+        surface: 'example-workspace',
+        enabledTools: ['stale_tool'],
+        temperature: 0.9,
+        maxToolCalls: 4,
+      });
+      const { req, res } = fire({ method: 'GET' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.enabledTools).toEqual(['tool_w']);
+      expect(body).not.toHaveProperty('temperature');
+      expect(body.maxToolCalls).toBe(4);
+    });
+
+    it.each([[undefined], [['enabledTools', 'temperature']]])(
+      'removes owned fields when workspace settings fail to resolve with userSetFields=%j',
+      async userSetFields => {
+        mockResolveWorkspaceSettings.mockRejectedValueOnce(new Error('lookup failed'));
+        mockGetSession.mockResolvedValue({
+          id: 'sess-1',
+          name: 'Untitled',
+          userId: 'user-1',
+          surface: 'example-workspace',
+          userSetFields,
+          enabledTools: ['stale_tool'],
+          temperature: 0.9,
+          maxToolCalls: 4,
+        });
+        const { req, res } = fire({ method: 'GET' });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        const body = res._getJSONData();
+        expect(body).not.toHaveProperty('enabledTools');
+        expect(body).not.toHaveProperty('temperature');
+        expect(body.maxToolCalls).toBe(4);
+      }
+    );
 
     it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS]])(
       'admits a key holding only %s',

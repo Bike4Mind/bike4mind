@@ -1,3 +1,5 @@
+import { applyWorkspaceSessionSettings, type SurfaceSettingsSession } from '@bike4mind/common';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { loadSystemPromptContent } from '@server/utils/systemPrompts/loader';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 
@@ -50,13 +52,18 @@ export const loadSystemPromptById = async (promptId: string): Promise<string | n
  * membership alone would then suppress the identity AND inject nothing, leaving the session with no
  * system prompt at all. Resolving here closes that: an unresolvable id reports false, so the caller
  * injects the generic identity instead. Raw `systemPromptText` is authored by definition and needs
- * no resolution (whitespace-only does not count, matching how the completion path reads it).
+ * no resolution (whitespace-only does not count, matching how the completion path reads it). Both read
+ * the session as its workspace sees it (`applyWorkspaceSessionSettings`).
  */
-export const sessionWillInjectAuthoredPrompt = async (session: {
-  systemPromptText?: string;
-  systemPromptId?: string;
-}): Promise<boolean> => {
-  if (session.systemPromptText?.trim()) return true;
-  if (!session.systemPromptId) return false;
-  return (await loadSystemPromptById(session.systemPromptId)) !== null;
+export const sessionWillInjectAuthoredPrompt = async (
+  session: SurfaceSettingsSession & { systemPromptId?: string; toJSON?: () => unknown },
+  ctx: { user: unknown; logger?: { warn: (...args: unknown[]) => void } }
+): Promise<boolean> => {
+  // applyWorkspaceSessionSettings flattens a live document only on its owned-fields path; flatten here
+  // too so the identity path also hands back a plain object.
+  const plain = (typeof session.toJSON === 'function' ? session.toJSON() : session) as typeof session;
+  const effective = await applyWorkspaceSessionSettings(plain, ctx, premiumWorkspaceSessionSettings);
+  if (effective.systemPromptText?.trim()) return true;
+  if (!effective.systemPromptId) return false;
+  return (await loadSystemPromptById(effective.systemPromptId)) !== null;
 };

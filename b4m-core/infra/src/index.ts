@@ -80,3 +80,5 @@ export {
 } from './tier1Secrets.js';
 export type { QuestMetricName } from './questMetricSpecs.js';
 export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';
+export type { VoiceMetricName } from './voiceMetricSpecs.js';
+export { VOICE_NAMESPACE, VOICE_METRICS } from './voiceMetricSpecs.js';

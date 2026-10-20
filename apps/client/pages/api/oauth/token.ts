@@ -16,6 +16,7 @@ import { PKCE_CODE_VERIFIER_RE } from '@server/auth/pkce';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -37,10 +38,13 @@ const handler = baseApi({ auth: false })
   .use(rateLimit({ limit: 20, windowMs: 60 * 1000 }))
   .post(async (req, res) => {
     const { grant_type } = req.body;
+    const logError = (error: string, status: number) =>
+      logOAuthError(req.logger, { route: 'oauth/token', clientId: req.body?.client_id, error, status });
 
     if (grant_type === 'authorization_code') {
       const parsed = AuthCodeRequestSchema.safeParse(req.body);
       if (!parsed.success) {
+        logError('invalid_request', 400);
         return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
       }
 
@@ -49,6 +53,7 @@ const handler = baseApi({ auth: false })
       // Load the client and validate the redirect_uri (RFC 6749 3.1.2.3).
       const client = await validateClient(client_id, redirect_uri);
       if (!client) {
+        logError('unauthorized_client', 401);
         return res
           .status(401)
           .json({ error: 'unauthorized_client', error_description: 'Invalid client_id or redirect_uri' });
@@ -62,6 +67,7 @@ const handler = baseApi({ auth: false })
       if (isConfidential) {
         const authed = client_secret ? await validateClientSecret(client_id, client_secret, redirect_uri) : null;
         if (!authed) {
+          logError('invalid_client', 401);
           return res.status(401).json({ error: 'invalid_client', error_description: 'Client authentication required' });
         }
       }
@@ -72,6 +78,7 @@ const handler = baseApi({ auth: false })
       // the atomic step after validation passes.
       const authCode = await oauthAuthorizationCodeRepository.findValidCode(code);
       if (!authCode) {
+        logError('invalid_grant', 400);
         return res
           .status(400)
           .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
@@ -79,6 +86,7 @@ const handler = baseApi({ auth: false })
 
       // must match what was used during authorization
       if (authCode.clientId !== client_id || authCode.redirectUri !== redirect_uri) {
+        logError('invalid_grant', 400);
         return res
           .status(400)
           .json({ error: 'invalid_grant', error_description: 'client_id or redirect_uri mismatch' });
@@ -90,6 +98,7 @@ const handler = baseApi({ auth: false })
       // Whenever a challenge was recorded the verifier must match - confidential
       // clients included.
       if (!isConfidential && !authCode.codeChallenge) {
+        logError('invalid_grant', 400);
         return res.status(400).json({
           error: 'invalid_grant',
           error_description: 'PKCE required: no code_challenge was provided at authorization',
@@ -97,6 +106,7 @@ const handler = baseApi({ auth: false })
       }
       if (authCode.codeChallenge) {
         if (!code_verifier || !verifyPkce(code_verifier, authCode.codeChallenge)) {
+          logError('invalid_grant', 400);
           return res
             .status(400)
             .json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' });
@@ -109,6 +119,7 @@ const handler = baseApi({ auth: false })
       // preserved, while a validation failure above left the code live for a corrected retry.
       const consumed = await oauthAuthorizationCodeRepository.consumeValidCode(code);
       if (!consumed) {
+        logError('invalid_grant', 400);
         return res
           .status(400)
           .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
@@ -116,6 +127,7 @@ const handler = baseApi({ auth: false })
 
       const user = await userRepository.findById(authCode.userId);
       if (!user) {
+        logError('invalid_grant', 400);
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
 
@@ -141,6 +153,7 @@ const handler = baseApi({ auth: false })
       if (client.clientType === 'relying-party') {
         const grant = await oauthGrantRepository.findGrant(user.id, client_id);
         if (!grant || !grantCovers(grant.scopes, authCode.scopes)) {
+          logError('access_denied', 400);
           return res.status(400).json({ error: 'access_denied', error_description: 'User consent required' });
         }
 
@@ -169,6 +182,7 @@ const handler = baseApi({ auth: false })
       const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
         createdVia: 'oauth-token',
         tokenVersion: user.tokenVersion ?? 0,
+        clientId: client_id,
       });
 
       return res.json({
@@ -180,6 +194,7 @@ const handler = baseApi({ auth: false })
       });
     }
 
+    logError('unsupported_grant_type', 400);
     return res.status(400).json({ error: 'unsupported_grant_type' });
   });
 

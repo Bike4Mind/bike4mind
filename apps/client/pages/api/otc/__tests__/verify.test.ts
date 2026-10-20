@@ -61,6 +61,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
 const mockFindByEmail = vi.fn();
+const mockFindSetting = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
@@ -83,7 +84,7 @@ vi.mock('@bike4mind/database', () => ({
     decrementCounter: (...a: any[]) => mockDecrement(...a),
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
-  adminSettingsRepository: { findBySettingName: vi.fn() },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
   organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
@@ -126,6 +127,11 @@ import { authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
+
+beforeEach(() => {
+  mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
+  mockFindSetting.mockResolvedValue(null);
+});
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
 // registry confers optihashi:pro -> its signup-credit total for this address.
@@ -833,5 +839,147 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockPartnerGrant).not.toHaveBeenCalled();
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/otc/verify - partner-domain invite bypass', () => {
+  const PARTNER_EMAIL = 'new.person@partner.example';
+  const matchedGrant = {
+    matched: true,
+    ruleId: 'rule-1',
+    domain: 'partner.example',
+    entitlements: new Set(),
+    signupCredits: 0,
+    organizationId: null,
+    tags: [],
+    subscription: null,
+  };
+  const noGrant = { matched: false, entitlements: new Set(), signupCredits: 0, tags: [] };
+  const skipInviteCheckArg = () => mockRegisterViaOTC.mock.calls[0][1].skipInviteCheck;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue('hash');
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue(null);
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
+    mockPartnerGrant.mockResolvedValue(noGrant);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('skips the invite check once the code proves an email on an enabled partner rule', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(skipInviteCheckArg()).toBe(true);
+  });
+
+  it('checks the normalized email, not the raw input', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+    req.body.email = '  New.Person@PARTNER.example ';
+
+    await handler(req, res);
+
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(skipInviteCheckArg()).toBe(true);
+  });
+
+  it('admits a verified partner email to username entry on an invite-only instance', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const { req, res } = makeReqRes('  New.Person@PARTNER.example ');
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({
+      registrationRequired: true,
+      registrationAllowed: true,
+      email: PARTNER_EMAIL,
+      pendingToken: 'signed-token',
+    });
+    expect(mockPartnerGrant).toHaveBeenCalledWith(PARTNER_EMAIL, true);
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'reports registrationAllowed=%s for a non-partner using the open-registration setting',
+    async open => {
+      mockFindSetting.mockResolvedValue({ settingValue: open });
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      req.body.username = undefined;
+
+      await handler(req, res);
+
+      expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: open });
+      expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    }
+  );
+
+  it('admits the self-host bootstrap user to username entry without a partner rule', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(0);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.username = undefined;
+
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ registrationRequired: true, registrationAllowed: true });
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+  });
+
+  it('keeps the invite check for a domain with no enabled rule even if the client claims admission', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.registrationAllowed = true;
+
+    await handler(req, res);
+
+    expect(skipInviteCheckArg()).toBe(false);
+  });
+
+  it('rechecks partner admission when creating the account after the username step', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    const first = makeReqRes(PARTNER_EMAIL);
+    first.req.body.username = undefined;
+    await handler(first.req, first.res);
+    expect(first.res._getJSONData().registrationAllowed).toBe(true);
+
+    mockPartnerGrant.mockResolvedValue(noGrant);
+    const second = makeReqRes(PARTNER_EMAIL);
+    await handler(second.req, second.res);
+
+    expect(skipInviteCheckArg()).toBe(false);
+  });
+
+  it('never consults the rules before the code is proven', async () => {
+    mockPartnerGrant.mockResolvedValue(matchedGrant);
+    mockVerifyPendingOTC.mockResolvedValue(false);
+    const { req, res } = makeReqRes(PARTNER_EMAIL);
+
+    await handler(req, res).catch(() => undefined);
+
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+  });
+
+  it('leaves the self-host bootstrap bypass unchanged', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const { userRepository } = await import('@bike4mind/database');
+    vi.mocked(userRepository.count).mockResolvedValue(0);
+    mockUserUpdate.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0, isAdmin: true });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(skipInviteCheckArg()).toBe(true);
   });
 });

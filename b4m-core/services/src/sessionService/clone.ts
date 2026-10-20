@@ -6,8 +6,11 @@ import {
   PromptMeta,
   rebindPromptMetaSession,
   redactPromptMetaForViewer,
+  stripSurfaceOwnedFields,
+  userSetSessionFields,
   toPersistedSummaryTrigger,
   MAX_TOOL_CALLS_CEILING,
+  type WorkspaceSessionSettingsTable,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -35,6 +38,8 @@ type CloneSessionAdapters = {
   };
   /** Required to honor `targetSurface`; without it a targeted clone is refused. */
   resolveSurfaceAccess?: ResolveSurfaceAccess;
+  /** Fields the source's workspace owns, dropped from the copy. */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
 } & CreateSessionAdapters;
 
 export const cloneSession = async (
@@ -131,8 +136,16 @@ export const cloneSession = async (
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
   // reach. fork/snip already forwarded; this brings clone in line.
-  const clonedSession = await createSession(user, buildCloneSession, adapters, {
+  // A share holder's copy drops every owned field: the owner's explicit settings are not theirs to keep.
+  const ownedFieldsSource = isOwner ? session : { surface: session.surface };
+  const cloneParams = stripSurfaceOwnedFields(buildCloneSession, adapters.workspaceSessionSettings, ownedFieldsSource);
+  const clonedSession = await createSession(user, cloneParams, adapters, {
     knowledgeIdsFromSourceSession: true,
+    userSetFields: userSetSessionFields(
+      session,
+      adapters.workspaceSessionSettings,
+      isOwner ? session.userSetFields : undefined
+    ),
   });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);

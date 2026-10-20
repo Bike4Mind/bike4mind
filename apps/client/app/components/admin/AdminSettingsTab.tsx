@@ -8,6 +8,7 @@ import {
   CATEGORY_ICONS,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
+import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
 import {
   Checkbox,
   FormControl,
@@ -26,8 +27,6 @@ import {
   Divider,
   SvgIcon,
   type SvgIconProps,
-  Button,
-  FormLabel,
   Tooltip,
 } from '@mui/joy';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -39,7 +38,6 @@ import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
-import { McpServerName } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -147,139 +145,9 @@ const settingConfigs = Object.values(settingsMap);
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
 const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails']);
 
-interface EnvVariable {
-  key: string;
-  value: string;
-}
-
-interface McpServerFormData {
-  name: McpServerName;
-  envVariables: EnvVariable[];
-  enabled: boolean;
-}
-
-const McpServerForm = () => {
-  const [formData, setFormData] = useState<McpServerFormData>({
-    name: '' as McpServerName,
-    envVariables: [{ key: '', value: '' }],
-    enabled: true,
-  });
-
-  const handleAddEnvVariable = () => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: [...prev.envVariables, { key: '', value: '' }],
-    }));
-  };
-
-  const handleRemoveEnvVariable = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: prev.envVariables.filter((_, i) => i !== index),
-    }));
-  };
-
-  const handleEnvVariableChange = (index: number, field: 'key' | 'value', value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      envVariables: prev.envVariables.map((envVar, i) => (i === index ? { ...envVar, [field]: value } : envVar)),
-    }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const response = await fetch('/api/mcp-servers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to save MCP server');
-      }
-
-      const result = await response.json();
-      console.log('Server saved:', result);
-
-      setFormData({
-        name: '' as McpServerName,
-        envVariables: [{ key: '', value: '' }],
-        enabled: true,
-      });
-    } catch (error) {
-      console.error('Error saving MCP server:', error);
-    }
-  };
-
-  return (
-    <Card variant="outlined">
-      <CardContent>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
-            <Typography level="h4">MCP Server Configuration</Typography>
-
-            <FormControl>
-              <FormLabel>Server Name</FormLabel>
-              <Input
-                value={formData.name}
-                onChange={e => setFormData(prev => ({ ...prev, name: e.target.value as McpServerName }))}
-                required
-              />
-            </FormControl>
-
-            <FormControl>
-              <FormLabel>Enabled</FormLabel>
-              <Checkbox
-                checked={formData.enabled}
-                onChange={e => setFormData(prev => ({ ...prev, enabled: e.target.checked }))}
-              />
-            </FormControl>
-
-            <Typography level="title-md">Environment Variables</Typography>
-            {formData.envVariables.map((envVar, index) => (
-              <Stack key={index} direction="row" spacing={2} alignItems="center">
-                <FormControl>
-                  <FormLabel>Key</FormLabel>
-                  <Input
-                    value={envVar.key}
-                    onChange={e => handleEnvVariableChange(index, 'key', e.target.value)}
-                    required
-                  />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Value</FormLabel>
-                  <Input
-                    value={envVar.value}
-                    onChange={e => handleEnvVariableChange(index, 'value', e.target.value)}
-                    required
-                  />
-                </FormControl>
-                <Button color="danger" variant="soft" onClick={() => handleRemoveEnvVariable(index)} sx={{ mt: 2 }}>
-                  Remove
-                </Button>
-              </Stack>
-            ))}
-
-            <Button variant="outlined" color="neutral" onClick={handleAddEnvVariable} type="button">
-              Add Environment Variable
-            </Button>
-
-            <Button type="submit" color="primary">
-              Create Server
-            </Button>
-          </Stack>
-        </form>
-      </CardContent>
-    </Card>
-  );
-};
-
 const AdminSettingsTab: React.FC = () => {
-  const [searchTerm, setSearchTerm] = useState('');
+  const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
   const [allTabs, setAllTabs] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>(Object.keys(SETTING_TABS)[0]);
   const settingsFromServer = useSettingsFromServer();
 
   // Index server values by setting name once, so the hot search/filter paths
@@ -631,19 +499,6 @@ const AdminSettingsTab: React.FC = () => {
     );
   };
 
-  const renderMcpContent = () => {
-    if (activeTab !== 'MCP') return null;
-
-    return (
-      <Stack spacing={2}>
-        <Typography level="h2" color="primary">
-          MCP Servers
-        </Typography>
-        <McpServerForm />
-      </Stack>
-    );
-  };
-
   return (
     <Sheet sx={{ width: '100%' }}>
       {settingsFromServer.isLoading ? (
@@ -671,6 +526,7 @@ const AdminSettingsTab: React.FC = () => {
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
+                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
               />
             </FormControl>
             {searchTerm && (
@@ -702,16 +558,14 @@ const AdminSettingsTab: React.FC = () => {
               sx={{ overflowY: 'auto', height: `calc(100vh - ${HEADER_HEIGHT} - 100px)`, p: '1rem' }}
               data-testid="admin-settings-all-tabs-results"
             >
-              {Object.entries(groupedSettings).flatMap(([tabId, tabCategories]) =>
-                tabId === 'MCP'
-                  ? []
-                  : Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))
+              {Object.values(groupedSettings).flatMap(tabCategories =>
+                Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))
               )}
             </Stack>
           ) : (
             <Tabs
-              value={activeTab}
-              onChange={(_, value) => setActiveTab(value as string)}
+              value={section}
+              onChange={(_, value) => setSection(value as SettingSectionKey)}
               sx={{ bgcolor: 'background.body' }}
             >
               <TabList
@@ -731,7 +585,8 @@ const AdminSettingsTab: React.FC = () => {
                     <Tab
                       key={tabId}
                       value={tabId}
-                      variant={activeTab === tabId ? 'soft' : 'plain'}
+                      variant={section === tabId ? 'soft' : 'plain'}
+                      data-testid={`admin-settings-section-tab-${tabInfo.id}`}
                       sx={{
                         borderRadius: 0,
                         minWidth: { xs: 'auto', md: 'unset' },
@@ -756,9 +611,7 @@ const AdminSettingsTab: React.FC = () => {
                       p: '1rem',
                     }}
                   >
-                    {tabId === 'MCP'
-                      ? renderMcpContent()
-                      : Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))}
+                    {Object.entries(tabCategories).map(([category, data]) => renderCategory(category, data))}
                   </Stack>
                 </TabPanel>
               ))}

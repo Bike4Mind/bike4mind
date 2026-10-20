@@ -58,12 +58,32 @@ describe('meterCompletionBackend', () => {
     expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: reserved });
   });
 
-  it('holds the model output cap for a model whose adapter sends no cap', async () => {
+  it('holds the cap the Gemini adapter sends for a thinking model, not the requested budget', async () => {
     const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 65_536 } as ModelInfo;
     const { llm, meter, metered } = setup(async () => {}, [thinking]);
     await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
-    expect(meter.mock.calls[0][2]).toBe(65_536);
+    expect(meter.mock.calls[0][2]).toBe(18_000);
     expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 2000 });
+  });
+
+  it('clamps the Gemini thinking hold to a declared model cap', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 10_000 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(10_000);
+  });
+
+  it('holds the full thinking headroom when the Gemini model cap is derived', async () => {
+    const thinking = {
+      id: 'g',
+      backend: 'gemini',
+      can_think: true,
+      max_tokens: 8192,
+      maxOutputTokensDerived: true,
+    } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(18_000);
   });
 
   it('keeps the requested budget for a Gemini model that honors the cap', async () => {

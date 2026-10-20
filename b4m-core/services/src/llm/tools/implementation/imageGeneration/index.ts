@@ -27,7 +27,7 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
-import { BFLImageService, downloadImageAsBuffer } from '@bike4mind/utils';
+import { BFLImageService, ImageModerationBlockedError, downloadImageAsBuffer } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -389,7 +389,13 @@ export const imageGenerationTool: ToolDefinition = {
           // messages; return them as the tool result so the model can relay a clear reason instead
           // of the run dying with a generic "Agent execution failed".
           const message = openaiError instanceof Error ? openaiError.message : 'Unknown error';
-          console.error(`[ERROR] OpenAI image generation failed (model: ${model}): ${message}`);
+          if (openaiError instanceof ImageModerationBlockedError) {
+            Logger.globalInstance.warn(`[WARN] OpenAI image generation blocked by content policy (model: ${model})`, {
+              requestId: openaiError.requestId,
+            });
+          } else {
+            console.error(`[ERROR] OpenAI image generation failed (model: ${model}): ${message}`);
+          }
           return `Error: ${message}`;
         }
 

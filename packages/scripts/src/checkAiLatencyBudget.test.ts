@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import {
   assertBudgetConfig,
   completedResult,
+  describeStall,
   gatedAverageSec,
   incompleteResult,
   isLatencyObservation,
+  isStreamComplete,
   latencyBreach,
   mergeResults,
   msToSec,
@@ -366,5 +368,68 @@ describe('latencyBreach', () => {
     ).toBeNull();
     expect(latencyBreach([slowImage], 10)).toBeNull();
     expect(latencyBreach([], 10)).toBeNull();
+  });
+});
+
+describe('isStreamComplete', () => {
+  const PREVIOUS = 'Brazil, Argentina';
+  // A bare list renders <ol><li> with no markdown <p>, so it carries no `ai-response` test id.
+  // Reading only that id saw '' here, and the old wait sat out its whole budget (~152s) on a
+  // reply that had already arrived.
+  const LIST_ONLY_REPLY = 'Mercury\nVenus\nEarth\nMars\nJupiter';
+
+  it('completes a list-only reply whose stop button flashed by unseen', () => {
+    expect(isStreamComplete({ stopVisible: false, text: LIST_ONLY_REPLY }, PREVIOUS, false)).toBe(true);
+  });
+
+  it('completes once a seen stop button hides, even with no new text (image-only reply)', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, true)).toBe(true);
+  });
+
+  it('never completes while the stop button is visible, however stable the text', () => {
+    expect(isStreamComplete({ stopVisible: true, text: LIST_ONLY_REPLY }, PREVIOUS, true)).toBe(false);
+  });
+
+  it('does not mistake the prior turn for this one before anything streamed', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, '', false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, false)).toBe(false);
+  });
+
+  it('completes once a seen stop button hides, even if no reply text was read', () => {
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, true)).toBe(true);
+  });
+});
+
+describe('describeStall', () => {
+  it('names the stage the wait ran out in', () => {
+    expect(describeStall({ stopVisible: true, text: '' })).toMatch(/no text streamed/);
+    expect(describeStall({ stopVisible: true, text: 'partial' })).toMatch(/stop button never hid/);
+    expect(describeStall({ stopVisible: false, text: '' })).toMatch(/never appeared/);
+    expect(describeStall({ stopVisible: false, text: 'Brazil, Argentina' })).toMatch(/never appeared/);
+  });
+});
+
+describe('ChatPage reply reader', () => {
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+  const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
+
+  it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
+    // text. Reverting to `ai-response` brings back the list-only-reply stall above.
+    const source = fs.readFileSync(CHAT_PAGE, 'utf8');
+    // Strip comment lines: the doc comment names both ids, so it must satisfy neither half.
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    expect(code).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
+    expect(code).not.toMatch(/data-testid=['"]?ai-response['"\]]/);
+    expect(code).toMatch(/getByTestId\(\s*['"`]ai-response-body['"`]/);
+    expect(code).toMatch(/isStreamComplete\(/);
+    // The reader falls back to the whole root when the body id is absent, so renaming the test id
+    // would silently put reasoning text back into the returned string.
+    expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
   });
 });
