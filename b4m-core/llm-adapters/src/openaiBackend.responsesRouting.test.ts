@@ -417,9 +417,8 @@ describe('OpenAIBackend per-round tool timing log (Responses + chat synthesis)',
     await run(backend, ChatModels.GPT5, { tools: [executingTool] });
 
     const rounds = info.mock.calls
-      .map(([line]) => String(line))
-      .filter(line => line.startsWith(TOOL_ROUND_LOG_PREFIX))
-      .map(line => JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1)) as ToolRoundEntry);
+      .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+      .map(([, metadata]) => metadata as ToolRoundEntry);
 
     expect(rounds.map(r => r.round)).toEqual([0, 1]);
     expect(rounds[0].tools).toEqual([{ name: 'optihashi_formulate', resultChars: 'FORMULATED_OK'.length }]);

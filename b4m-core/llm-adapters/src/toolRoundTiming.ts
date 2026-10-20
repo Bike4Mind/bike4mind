@@ -39,7 +39,7 @@ export const summarizeToolOutcomes = (outcomes: readonly ToolRoundOutcome[]): To
 export const logToolRound = (logger: Pick<Logger, 'info' | 'warn'>, entry: ToolRoundEntry): void => {
   // The one deliberate swallow: observability must never break a chat turn.
   try {
-    logger.info(`${TOOL_ROUND_LOG_PREFIX} ${JSON.stringify(entry)}`);
+    logger.info(TOOL_ROUND_LOG_PREFIX, entry);
   } catch (error) {
     try {
       logger.warn(

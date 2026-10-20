@@ -212,9 +212,8 @@ describe('AnthropicBackend - per-round tool timing log', () => {
     );
 
     const rounds = info.mock.calls
-      .map(([line]) => String(line))
-      .filter(line => line.startsWith(TOOL_ROUND_LOG_PREFIX))
-      .map(line => JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1)) as ToolRoundEntry);
+      .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+      .map(([, metadata]) => metadata as ToolRoundEntry);
 
     expect(rounds.map(r => r.round)).toEqual([0, 1]);
     expect(rounds[0].tools).toEqual([{ name: 'get_weather', resultChars: 'sunny'.length }]);
@@ -254,9 +253,8 @@ describe('AnthropicBackend - per-round tool timing log', () => {
     );
 
     const rounds = info.mock.calls
-      .map(([line]) => String(line))
-      .filter(line => line.startsWith(TOOL_ROUND_LOG_PREFIX))
-      .map(line => JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1)) as ToolRoundEntry);
+      .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+      .map(([, metadata]) => metadata as ToolRoundEntry);
 
     expect(rounds.map(r => r.round)).toEqual([0, 1]);
     expect(rounds[1].tools).toEqual([{ name: 'show_card', resultChars: 'card rendered'.length }]);

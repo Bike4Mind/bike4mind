@@ -15,15 +15,13 @@ const entry: ToolRoundEntry = {
 const createLogger = () => ({ info: vi.fn(), warn: vi.fn() });
 
 describe('logToolRound', () => {
-  it('emits exactly one prefixed line carrying the entry as JSON', () => {
+  it('emits exactly one prefixed line carrying the entry as structured metadata', () => {
     const logger = createLogger();
 
     logToolRound(logger, entry);
 
     expect(logger.info).toHaveBeenCalledTimes(1);
-    const line = String(logger.info.mock.calls[0][0]);
-    expect(line.startsWith(`${TOOL_ROUND_LOG_PREFIX} `)).toBe(true);
-    expect(JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1))).toEqual(entry);
+    expect(logger.info).toHaveBeenCalledWith(TOOL_ROUND_LOG_PREFIX, entry);
   });
 
   it('logs only names and sizes, never tool arguments or result content', () => {
@@ -36,8 +34,8 @@ describe('logToolRound', () => {
 
     logToolRound(logger, { ...entry, tools });
 
-    const line = String(logger.info.mock.calls[0][0]);
-    expect(line).not.toContain(secret);
+    const logged = JSON.stringify(logger.info.mock.calls[0]);
+    expect(logged).not.toContain(secret);
     expect(tools).toEqual([
       { name: 'lookup', resultChars: `token=${secret}`.length },
       { name: 'broken', resultChars: 0 },
