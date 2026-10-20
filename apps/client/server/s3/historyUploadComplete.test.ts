@@ -115,6 +115,5 @@ describe('historyUploadComplete completion counts', () => {
 
     const stats = h.markImportComplete.mock.calls[0][2] as { processedItems: number; totalItems: number };
     expect(stats).toEqual({ processedItems: 1, totalItems: 1, skippedItems: 0 });
-    expect(stats.processedItems).toBe(stats.totalItems);
   });
 });
