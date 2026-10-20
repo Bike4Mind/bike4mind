@@ -545,6 +545,17 @@ describe('useSubscribeChatCompletion - reply UI side effects', () => {
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('treats effects a later refetch adds as a replay when the stream finished without any', async () => {
+    mount('session-live-3');
+    const { claimLiveDispatch, claimReplayDispatch } = await import('../utils/uiSideEffectDispatcher');
+
+    await stream(effectFrame('live-q3', 'session-live-3', 'running', false));
+    await stream(effectFrame('live-q3', 'session-live-3', 'done', false));
+
+    expect(claimLiveDispatch('live-q3', 'session-live-3')).toBe(false);
+    expect(claimReplayDispatch('live-q3', 'session-live-3')).toBe(true);
+  });
 });
 
 describe('useSubscribeChatCompletion - artifact persistence', () => {

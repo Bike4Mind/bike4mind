@@ -475,7 +475,8 @@ describe('reply UI side effects: live only on first arrival', () => {
 
   it('replays, never live, effects that a refetch adds to a reply that finished without any', () => {
     const id = replyId();
-    const { rerender } = render(reply(id, 'done', false));
+    const { rerender } = render(reply(id, 'running'));
+    rerender(reply(id, 'done', false));
     expect(handler).not.toHaveBeenCalled();
     rerender(reply(id, 'done', true));
     expect(liveCalls()).toHaveLength(0);
