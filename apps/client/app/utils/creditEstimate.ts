@@ -40,6 +40,11 @@ export const TYPICAL_PROMPT_TOKENS = 1_000;
 export const TYPICAL_ANSWER_INPUT_TOKENS = APP_PROMPT_TOKENS + TYPICAL_PROMPT_TOKENS;
 export const TYPICAL_ANSWER_OUTPUT_TOKENS = 1_000;
 
+/** Recent context plus the draft; one token per character deliberately rounds the draft up. */
+export function estimateNextInputTokens(previousInputTokens: number | undefined, draft: string): number {
+  return Math.max(previousInputTokens ?? 0, TYPICAL_ANSWER_INPUT_TOKENS) + draft.length;
+}
+
 export interface ModelAnswerCost {
   modelName: string;
   creditsPerAnswer: number;
@@ -97,7 +102,7 @@ export interface AffordableModelOffer {
   affordableCredits: number;
 }
 
-/** Cheapest accessible text model that this balance can admit when the selected model cannot. */
+/** Cheapest accessible text model whose estimated admission hold fits the balance. */
 export function findAffordableModelOffer(
   models: readonly ModelInfo[],
   selectedModelId: string,
@@ -106,6 +111,8 @@ export function findAffordableModelOffer(
   selectedMaxTokens: number,
   thinking?: PreflightThinking
 ): AffordableModelOffer | null {
+  // The composer blocks a zero balance even on free models, so a switch cannot help there.
+  if (!(credits > 0)) return null;
   const selected = models.find(model => model.id === selectedModelId);
   if (!selected || selected.type !== 'text') return null;
   const selectedCredits = preflightAnswerCredits(selected, inputTokens, selectedMaxTokens, thinking);

@@ -14,6 +14,7 @@ import { buildThinkingParams } from '@bike4mind/llm-adapters/model-sizing';
 import {
   APP_PROMPT_TOKENS,
   estimateAnswerCount,
+  estimateNextInputTokens,
   formatAnswersEstimate,
   findAffordableModelOffer,
   preflightAnswerCredits,
@@ -84,6 +85,17 @@ describe('typicalAnswerCredits', () => {
 });
 
 describe('preflight affordability', () => {
+  it('includes a growing draft and uses a context floor before the first completed turn', () => {
+    expect(estimateNextInputTokens(undefined, '')).toBe(TYPICAL_ANSWER_INPUT_TOKENS);
+    expect(estimateNextInputTokens(undefined, 'hello')).toBe(TYPICAL_ANSWER_INPUT_TOKENS + 5);
+    expect(estimateNextInputTokens(INPUT_TOKENS, 'hello')).toBe(INPUT_TOKENS + 5);
+    expect(estimateNextInputTokens(INPUT_TOKENS, 'x'.repeat(40_000))).toBe(INPUT_TOKENS + 40_000);
+  });
+
+  it.each([0, -1])('never offers a free-model switch at a blocked balance of %s', credits => {
+    const free = { ...GPT_MINI, id: 'free-model', freeToRun: true } as ModelInfo;
+    expect(findAffordableModelOffer([SONNET_55, free], SONNET_55.id, credits, INPUT_TOKENS, MAX_TOKENS)).toBeNull();
+  });
   it('matches the server hold for the real input and output ceiling', () => {
     expect(preflightAnswerCredits(SONNET_55, INPUT_TOKENS, MAX_TOKENS)).toBe(
       usdToCredits(getTextModelCost(SONNET_55, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS)))

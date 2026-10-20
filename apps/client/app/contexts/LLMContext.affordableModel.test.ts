@@ -17,7 +17,7 @@ describe('affordable model persistence', () => {
     useLLM.getState().resetSettings();
   });
 
-  it('keeps the normal switch active for a new chat and in the reload snapshot', () => {
+  it('restores the normal model switch after a reload', async () => {
     useLLM.getState().setLLM(buildModelSelectionPatch(affordable));
 
     expect(useLLM.getState()).toMatchObject({ model: affordable.id, lastUsedTextModel: affordable.id });
@@ -25,5 +25,12 @@ describe('affordable model persistence', () => {
       state?: { model?: string; lastUsedTextModel?: string };
     };
     expect(persisted.state).toMatchObject({ model: affordable.id, lastUsedTextModel: affordable.id });
+
+    const snapshot = localStorage.getItem('llm-settings');
+    expect(snapshot).not.toBeNull();
+    useLLM.getState().resetSettings();
+    localStorage.setItem('llm-settings', snapshot!);
+    await useLLM.persist.rehydrate();
+    expect(useLLM.getState()).toMatchObject({ model: affordable.id, lastUsedTextModel: affordable.id });
   });
 });
