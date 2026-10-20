@@ -509,7 +509,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($3 / $15).
         pricing: {
           200000: {
-            input: 3.3 / 1000000, // $3.30 per 1M input tokens
+            input: 3.3e-6, // $3.30 per 1M input tokens
             output: 16.5 / 1000000, // $16.50 per 1M output tokens
           },
         },

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-20T07:12:15.184Z",
+  "generatedAt": "2026-10-20T08:56:18.099Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1145,7 +1145,7 @@
       "unit": "per_token",
       "pricing": {
         "200000": {
-          "input": 0.0000032999999999999997,
+          "input": 0.0000033,
           "output": 0.0000165
         }
       }
