@@ -27,6 +27,7 @@ import {
   recordFirstChatValue,
   recordFirstValue,
   recordSignupAcquisition,
+  recordSyntheticIdentity,
   toUserAcquisition,
 } from './funnel';
 
@@ -140,6 +141,30 @@ describe('recordSignupAcquisition', () => {
       recordSignupAcquisition({ req: reqWith(`${APP_DECISION_COOKIE}=granted; ${TOUCH_COOKIES}`), user, method: 'otc' })
     ).resolves.toEqual({ isSynthetic: false });
   });
+});
+
+describe('recordSyntheticIdentity', () => {
+  it.each([
+    [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
+    [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
+  ])(
+    'persists a synthetic admin-created account and keeps every funnel emit out of Overwatch',
+    async (user, domains) => {
+      mockGetSetting.mockResolvedValue(domains);
+
+      const isSynthetic = await recordSyntheticIdentity(user);
+      await emitSignupFunnelEvents({
+        user: { ...user, isSynthetic },
+        method: 'admin',
+        emailVerified: false,
+        creditsGranted: 50,
+      });
+
+      expect(isSynthetic).toBe(true);
+      expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
+      expect(mockEmit).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('emitFunnelEvent', () => {

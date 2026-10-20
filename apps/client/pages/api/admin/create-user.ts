@@ -10,7 +10,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers
 import { Config } from '@server/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { emitSignupFunnelEvents } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const createUserSchema = z.object({
   username: usernameSchema,
@@ -89,8 +89,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
       );
 
+      const isSynthetic = await recordSyntheticIdentity(newUser);
       await emitSignupFunnelEvents({
-        user: newUser,
+        user: { id: newUser.id, isSynthetic },
         method: 'admin',
         emailVerified: newUser.emailVerified === true,
         creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,

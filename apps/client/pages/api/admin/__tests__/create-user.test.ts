@@ -5,6 +5,7 @@ const mockCreateUser = vi.fn();
 const mockSendOTC = vi.fn();
 const mockStoreNonce = vi.fn();
 const mockEmitSignupFunnelEvents = vi.fn();
+const mockRecordSyntheticIdentity = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   userService: {
@@ -52,6 +53,7 @@ vi.mock('@server/utils/config', () => ({
 }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => mockEmitSignupFunnelEvents(...args),
+  recordSyntheticIdentity: (...args: unknown[]) => mockRecordSyntheticIdentity(...args),
 }));
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
@@ -77,6 +79,7 @@ describe('admin/create-user', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendOTC.mockResolvedValue({ nonce: null });
+    mockRecordSyntheticIdentity.mockResolvedValue(false);
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {
@@ -91,11 +94,24 @@ describe('admin/create-user', () => {
       expect.any(Object)
     );
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith({
-      user: expect.objectContaining({ id: 'u1' }),
+      user: expect.objectContaining({ id: 'u1', isSynthetic: false }),
       method: 'admin',
       emailVerified: false,
       creditsGranted: 0,
     });
+  });
+
+  it('passes a synthetic classification into the signup emitter', async () => {
+    const user = { id: 'u-synthetic', email: 'seed@test.example', username: 'persona-seed', currentCredits: 50 };
+    mockCreateUser.mockResolvedValue(user);
+    mockRecordSyntheticIdentity.mockResolvedValue(true);
+
+    await runHandler(makeReq({ username: 'persona-seed', email: 'seed@test.example', name: 'Seed' }), makeRes());
+
+    expect(mockRecordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-synthetic', isSynthetic: true }) })
+    );
   });
 
   it('stores the supplied password + hasUsablePassword: true when an admin provides one', async () => {

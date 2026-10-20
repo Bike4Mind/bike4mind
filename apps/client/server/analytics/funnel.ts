@@ -41,6 +41,22 @@ async function syntheticTestDomains(): Promise<string[]> {
   }
 }
 
+/** Classify and persist a synthetic account without reading acquisition cookies from its creator. */
+export async function recordSyntheticIdentity(user: {
+  id: string;
+  username?: string | null;
+  email?: string | null;
+}): Promise<boolean> {
+  const isSynthetic = isSyntheticIdentity(user, await syntheticTestDomains());
+  if (!isSynthetic) return false;
+  try {
+    await userRepository.update({ id: user.id, isSynthetic: true });
+  } catch (err) {
+    console.warn('[b4m-analytics] synthetic identity not persisted', err instanceof Error ? err.message : err);
+  }
+  return true;
+}
+
 /** The user-record shape of the touches, or undefined when there is no touch to keep. */
 export function toUserAcquisition(
   touches: AcquisitionTouches,
@@ -130,8 +146,9 @@ export async function emitFunnelEvent(opts: {
 /**
  * The funnel stages of a brand-new account. An unverified signup with nothing granted skips
  * credits_granted: the stable eventId would lock in 0 and drop the grant that arrives at
- * verification (emitEmailVerifiedFunnelEvents). The emits are independent, so they run
- * concurrently to bound the caller's latency at one emit timeout.
+ * verification (emitEmailVerifiedFunnelEvents). An unverified signup granted credits immediately
+ * owns that stable stage, so later verification grants are not separately represented. The emits
+ * are independent, so they run concurrently to bound the caller's latency at one emit timeout.
  */
 export async function emitSignupFunnelEvents(opts: {
   user: FunnelUser;

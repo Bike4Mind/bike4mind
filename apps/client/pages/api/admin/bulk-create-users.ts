@@ -16,7 +16,7 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { emitSignupFunnelEvents } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -87,8 +87,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             }
           );
 
+          const isSynthetic = await recordSyntheticIdentity(newUser);
           await emitSignupFunnelEvents({
-            user: newUser,
+            user: { id: newUser.id, isSynthetic },
             method: 'admin',
             emailVerified: newUser.emailVerified === true,
             creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
