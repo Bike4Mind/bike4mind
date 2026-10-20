@@ -29,6 +29,13 @@ const BLOG_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit'];
 const isDataLakeTool = (name: string): boolean => (DATA_LAKE_TOOL_NAMES as readonly string[]).includes(name);
 
 /**
+ * The non-message gate for a blog tool, shared by the offer gate and the persisted-tool re-check so
+ * a new requirement cannot apply to one path and not the other.
+ */
+const blogToolEligible = (name: string, input: { isAdmin: boolean; hasBlogIntegration: boolean }): boolean =>
+  input.isAdmin && (name === 'blog_draft' || input.hasBlogIntegration);
+
+/**
  * True when an earlier turn in this conversation already used one of `toolNames`. `priorToolNames`
  * comes from `fetchAndProcessPreviousMessages`'s own field of that name, read off each turn's raw
  * `promptMeta.functionCalls` - NOT derived from scanning the reconstructed IMessage history, which
@@ -63,9 +70,9 @@ export function shouldOfferBlogTools(input: {
   const intentOrContinuation =
     BLOG_REQUEST_PATTERN.test(input.message) || hasPriorToolUse(input.priorToolNames, BLOG_TOOL_NAMES);
   return {
-    draft: intentOrContinuation,
-    publish: input.hasBlogIntegration && intentOrContinuation,
-    edit: input.hasBlogIntegration && intentOrContinuation,
+    draft: intentOrContinuation && blogToolEligible('blog_draft', input),
+    publish: intentOrContinuation && blogToolEligible('blog_publish', input),
+    edit: intentOrContinuation && blogToolEligible('blog_edit', input),
   };
 }
 
@@ -176,10 +183,11 @@ export async function resolveStickyAutoAddedTools(input: {
   const needsDataLakes = [...persisted].some(isDataLakeTool);
   const lakesEnabled = needsDataLakes ? await dataLakesEnabled() : false;
   const stillEligible = (name: string): boolean => {
-    if (name === 'blog_draft') return isAdmin;
-    if (BLOG_TOOL_NAMES.includes(name)) return isAdmin && hasBlogIntegration;
+    if (BLOG_TOOL_NAMES.includes(name)) return blogToolEligible(name, { isAdmin, hasBlogIntegration });
     if (isDataLakeTool(name)) return lakesEnabled;
-    return hasSkillRepository;
+    // Explicit, not a catch-all: a future sticky name must state its own gate rather than inherit
+    // the skill repository check.
+    return name === 'skill' && hasSkillRepository;
   };
 
   const tools = new Set<string>(input.triggered);
