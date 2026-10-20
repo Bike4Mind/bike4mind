@@ -24,6 +24,7 @@ import { userService } from '@bike4mind/services';
 import { oauthClientRepository, userRepository } from '@bike4mind/database/auth';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 /** Per-`client_id` budget. A federated app caches the answer per user for minutes. */
 const PER_CLIENT_RATE_LIMIT = 300;
@@ -40,8 +41,12 @@ const handler = baseApi({ auth: false })
   // Coarse per-IP flood backstop; bounds the bcrypt work in verifyClientSecret.
   .use(rateLimit({ limit: PER_CLIENT_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'oauth-federated-admin' }))
   .post(async (req, res) => {
+    const logError = (error: string, status: number) =>
+      logOAuthError(req.logger, { route: 'oauth/federated-admin', clientId: req.body?.client_id, error, status });
+
     const parsed = FederatedAdminRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
+      logError('invalid_request', 400);
       return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
     }
 
@@ -50,6 +55,7 @@ const handler = baseApi({ auth: false })
     // 1. Client auth.
     const client = await oauthClientRepository.verifyClientSecret(client_id, client_secret);
     if (!client) {
+      logError('invalid_client', 401);
       return res
         .status(401)
         .json({ error: 'invalid_client', error_description: 'Unknown client or invalid client_secret' });
@@ -58,6 +64,7 @@ const handler = baseApi({ auth: false })
     // 2. Federation gate - only clients with a federated trust config can present ID tokens.
     const federatedIdp = client.federatedIdp;
     if (!federatedIdp) {
+      logError('access_denied', 403);
       return res.status(403).json({
         error: 'access_denied',
         error_description: 'Client is not configured for federated identity',
@@ -73,6 +80,7 @@ const handler = baseApi({ auth: false })
     if (!rl.success) {
       const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
       res.setHeader('Retry-After', retryAfter);
+      logError('temporarily_unavailable', 429);
       return res.status(429).json({
         error: 'temporarily_unavailable',
         error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
@@ -86,6 +94,7 @@ const handler = baseApi({ auth: false })
     } catch (err) {
       if (err instanceof FederatedIdTokenError) {
         req.logger.warn(`[OAUTH_FEDERATED_ADMIN] ID token rejected for client ${client_id}: ${err.message}`);
+        logError('invalid_grant', 401);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }
       throw err;
@@ -110,6 +119,7 @@ const handler = baseApi({ auth: false })
     });
     if (grantRejection) {
       const { status, ...body } = grantRejection;
+      logError(body.error, status);
       return res.status(status).json(body);
     }
 

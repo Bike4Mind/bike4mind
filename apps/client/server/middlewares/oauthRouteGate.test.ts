@@ -14,8 +14,13 @@ function mockRes() {
 const run = (user: unknown, policy?: { oauthScopes?: string[] }) => {
   const next = vi.fn();
   const res = mockRes();
-  oauthRouteGate(policy)({ user } as never, res as never, next);
-  return { next, res };
+  const logger = { warn: vi.fn() };
+  oauthRouteGate(policy)(
+    { user, logger, originalUrl: '/api/agents/a1?x=1', query: { id: 'a1', x: '1' } } as never,
+    res as never,
+    next
+  );
+  return { next, res, logger };
 };
 
 describe('oauthRouteGate', () => {
@@ -47,6 +52,47 @@ describe('oauthRouteGate', () => {
     const { next, res } = run({ oauthGrant: { scopes: ['openid', 'profile'] } }, { oauthScopes: ['openid'] });
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
+  });
+});
+
+describe('oauthRouteGate error logging', () => {
+  const LINE = '[OAUTH_ERROR] route=/api/agents/[id] client=c1 error=insufficient_scope status=403';
+
+  it('logs the grant client on a first-party-only route', () => {
+    const { logger } = run({ oauthGrant: { scopes: ['openid'], clientId: 'c1' } });
+    expect(logger.warn.mock.calls).toEqual([[LINE]]);
+  });
+
+  it('logs the grant client when a required scope is missing', () => {
+    const { logger } = run({ oauthGrant: { scopes: ['openid'], clientId: 'c1' } }, { oauthScopes: ['profile'] });
+    expect(logger.warn.mock.calls).toEqual([[LINE]]);
+  });
+
+  it('logs nothing for a non-OAuth request or an allowed OAuth request', () => {
+    expect(run({ id: 'u1' }).logger.warn).not.toHaveBeenCalled();
+    expect(
+      run({ oauthGrant: { scopes: ['openid'], clientId: 'c1' } }, { oauthScopes: ['openid'] }).logger.warn
+    ).not.toHaveBeenCalled();
+  });
+
+  it('hides the route when an identical query value makes a path ID ambiguous', () => {
+    const res = mockRes();
+    const logger = { warn: vi.fn() };
+    oauthRouteGate()(
+      {
+        user: { oauthGrant: { scopes: ['openid'], clientId: 'c1' } },
+        logger,
+        originalUrl: '/api/agents/a1?id=a1',
+        query: { id: 'a1' },
+      } as never,
+      res as never,
+      vi.fn()
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(logger.warn.mock.calls).toEqual([
+      ['[OAUTH_ERROR] route=unknown client=c1 error=insufficient_scope status=403'],
+    ]);
   });
 });
 

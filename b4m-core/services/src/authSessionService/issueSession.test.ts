@@ -49,6 +49,21 @@ describe('issueSession', () => {
     expect(signAccessToken).toHaveBeenCalledWith('target', 0, { sid: result.sid, impersonatedBy: 'admin-1' });
   });
 
+  it('persists the minting OAuth clientId, and null when omitted', async () => {
+    const { authSessions, signAccessToken, db } = setup();
+    await issueSession(
+      'user-1',
+      { createdVia: 'oauth-token', tokenVersion: 0, clientId: 'client-1' },
+      { db, signAccessToken }
+    );
+    await issueSession('user-1', { createdVia: 'otc', tokenVersion: 0 }, { db, signAccessToken });
+    const [withClient, without] = authSessions.create.mock.calls.map(c => c[0] as Record<string, unknown>);
+    expect(withClient.clientId).toBe('client-1');
+    expect(without.clientId).toBeNull();
+    // Recorded on the row only, never in the access token.
+    expect(signAccessToken.mock.calls[0][2]).not.toHaveProperty('clientId');
+  });
+
   it('sets expiresAt from the refresh TTL', async () => {
     const { authSessions, signAccessToken, db } = setup();
     await issueSession('user-1', { createdVia: 'otc', tokenVersion: 0, refreshTtlMs: 1000 }, { db, signAccessToken });
