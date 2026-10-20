@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Button from '@mui/joy/Button';
 import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
 import Stack from '@mui/joy/Stack';
@@ -16,6 +17,9 @@ export interface SuggestionPickerRow {
   unavailable: boolean;
 }
 
+type CatalogState =
+  { status: 'loading' } | { status: 'loaded'; models: ChatModelOption[] } | { status: 'error'; message: string };
+
 /**
  * The picker's rows. A saved pick the server no longer offers stays listed and marked, rather
  * than dropped: main declines to suggest on it, and a picker showing "Automatic" instead would
@@ -27,7 +31,7 @@ export function suggestionPickerRows(
 ): SuggestionPickerRow[] {
   const choices = (offered ?? []).map(model => {
     const local = model.backend === 'ollama';
-    return { id: model.id, label: local ? `${model.name} (local)` : model.name, local, unavailable: false };
+    return { id: model.id, label: local ? `${model.name} (Ollama)` : model.name, local, unavailable: false };
   });
   if (saved && !choices.some(choice => choice.id === saved)) {
     const unavailable = offered !== null;
@@ -39,28 +43,37 @@ export function suggestionPickerRows(
 function caption(selected: SuggestionPickerRow | undefined): string {
   if (!selected) return 'The smallest hosted model this server offers. No hint when it offers none.';
   if (selected.unavailable) return 'This server does not offer this model right now, so no hint is shown.';
-  if (selected.local) return 'Runs on this machine through Ollama, so the hint can take a few seconds longer.';
+  if (selected.local) return "Uses the server's configured Ollama endpoint. The hint can take a few seconds longer.";
   return 'Hosted by the server, and billed like any other request.';
 }
 
 /** Which model writes the suggested next prompt. Settings shows it only while the hint is on. */
 export function SuggestionModelPicker() {
   const [saved, setSaved] = usePromptSuggestionModel();
-  const [offered, setOffered] = useState<ChatModelOption[] | null>(null);
+  const [catalog, setCatalog] = useState<CatalogState>({ status: 'loading' });
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     let live = true;
-    window.b4m.chat
-      .listSuggestionModels()
-      // A failed read leaves the list unknown rather than empty, so a saved pick is not
-      // reported unavailable over a network blip.
-      .then(catalog => live && !catalog.error && setOffered(catalog.models))
-      .catch(() => undefined);
+    setCatalog({ status: 'loading' });
+    async function load() {
+      try {
+        const result = await window.b4m.chat.listSuggestionModels();
+        if (!live) return;
+        setCatalog(
+          result.error ? { status: 'error', message: result.error } : { status: 'loaded', models: result.models }
+        );
+      } catch {
+        if (live) setCatalog({ status: 'error', message: 'Could not load suggestion models. Try again.' });
+      }
+    }
+    void load();
     return () => {
       live = false;
     };
-  }, []);
+  }, [refresh]);
 
+  const offered = catalog.status === 'loaded' ? catalog.models : null;
   const choices = suggestionPickerRows(offered, saved);
   const selected = saved ? choices.find(choice => choice.id === saved) : undefined;
 
@@ -86,9 +99,28 @@ export function SuggestionModelPicker() {
           </Option>
         ))}
       </Select>
+      {catalog.status === 'error' && (
+        <Typography level="body-xs" color="danger" role="alert">
+          {catalog.message}
+        </Typography>
+      )}
       <Typography level="body-xs" textColor="text.tertiary">
-        {caption(selected)}
+        {catalog.status === 'loading'
+          ? 'Loading models...'
+          : catalog.status === 'error'
+            ? 'Model availability is unknown.'
+            : caption(selected)}
       </Typography>
+      <Button
+        size="sm"
+        variant="plain"
+        disabled={catalog.status === 'loading'}
+        onClick={() => setRefresh(value => value + 1)}
+        data-testid="settings-suggestions-model-refresh"
+        sx={{ alignSelf: 'flex-start' }}
+      >
+        Refresh models
+      </Button>
     </Stack>
   );
 }

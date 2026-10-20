@@ -36,9 +36,8 @@ export const SUGGESTION_MODELS: readonly string[] = [
  * model this deployment serves through Ollama.
  *
  * Local models are offered here even though the automatic pick skips them. The automatic pick
- * guards a user who never chose; someone who picks their own local model has chosen a free,
- * on-device hint over a well-formatted one, and `sanitizeSuggestion` still drops what it cannot
- * use.
+ * guards a user who never chose; an explicit Ollama pick opts into that backend's formatting
+ * quality, and `sanitizeSuggestion` still drops what it cannot use.
  */
 export function suggestionModelChoices(available: readonly ChatModelOption[]): ChatModelOption[] {
   const hosted = SUGGESTION_MODELS.flatMap(id => available.filter(model => model.id === id));
@@ -53,8 +52,8 @@ export function isLocalModel(model: Pick<ChatModelOption, 'backend'>): boolean {
  * Which model guesses the next prompt, or null to suggest nothing.
  *
  * `preferred` is the user's pick from Settings, and null means automatic. A pick the deployment
- * no longer offers declines rather than falling back: someone who chose a local model so their
- * text stays on the machine must not have it quietly sent to a hosted one when Ollama stops.
+ * no longer offers declines rather than falling back: an Ollama pick must not quietly send
+ * text to a different provider when Ollama stops.
  *
  * Unlike a title, automatic declines rather than falling back to the session's own model. A
  * title is generated once per conversation, so spending the big model on one is defensible;

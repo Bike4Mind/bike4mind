@@ -267,9 +267,7 @@ const TITLE_TIMEOUT_MS = 15_000;
 const SUGGESTION_TIMEOUT_MS = 5_000;
 
 /**
- * The same deadline for a model served by Ollama on this machine. A laptop prefills the excerpt
- * in seconds and may first have to load the model, and a local call costs nothing when it runs
- * long, so the only price of waiting is a hint that lands after the user started typing.
+ * Ollama may first need to load the model and prefill the excerpt on slower hardware.
  */
 const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
 
@@ -698,7 +696,7 @@ export class ChatService {
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
   async listSuggestionModels(): Promise<ChatModelCatalog> {
-    const catalog = await this.listModels();
+    const catalog = await this.listModels(true);
     return { ...catalog, models: suggestionModelChoices(catalog.models) };
   }
 
@@ -4114,7 +4112,8 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const model = pickSuggestionModel(this.deps.models?.cached() ?? [], preferredModel);
+      const available = this.deps.models?.cached() ?? (await this.listModels()).models;
+      const model = pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
       timer = setTimeout(

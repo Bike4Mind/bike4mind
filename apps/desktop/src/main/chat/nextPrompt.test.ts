@@ -41,8 +41,7 @@ describe('pickSuggestionModel', () => {
     expect(pickSuggestionModel(available, SUGGESTION_MODELS[0])?.id).toBe(SUGGESTION_MODELS[0]);
   });
 
-  // A user who pinned a local model so their text stays on the machine must not be routed to a
-  // hosted one when Ollama stops.
+  // A user who pinned Ollama must not be routed to a different provider when it stops.
   it('declines rather than substituting when the pinned model is not offered', () => {
     expect(pickSuggestionModel([option(SUGGESTION_MODELS[0])], 'qwen3:8b')).toBeNull();
   });

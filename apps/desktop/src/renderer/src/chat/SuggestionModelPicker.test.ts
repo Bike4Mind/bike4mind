@@ -10,7 +10,7 @@ describe('suggestionPickerRows', () => {
   it('marks local models so they read apart from hosted ones', () => {
     expect(suggestionPickerRows([haiku, qwen], null).map(row => row.label)).toEqual([
       'Claude 4.5 Haiku',
-      'qwen3:8b (local)',
+      'qwen3:8b (Ollama)',
     ]);
   });
 

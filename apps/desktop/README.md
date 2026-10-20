@@ -43,6 +43,21 @@ Electron against it with HMR.
 | `pnpm test` | vitest |
 | `pnpm package` | Installers for the host platform, into `release/` |
 
+## Suggested next prompt
+
+Settings has a **Suggested next prompt** switch and model picker. **Automatic** uses a small
+hosted model when the server offers one. You can also pin an offered hosted model or an Ollama
+model. Ollama requests use the server's configured endpoint, which may run on a different
+machine from the desktop app.
+
+A saved model that disappears stays marked **unavailable**, and suggestions stop until it
+returns or you choose another model. It never silently falls back to a hosted model. Use
+**Refresh models** after changing the server's model configuration. If the catalog cannot be
+loaded, the picker shows an error; refresh to retry without losing the saved choice. Turning
+the switch off or changing models clears the current hint and discards late answers from the
+previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
+five. Loading the model list can add time before generation starts.
+
 ## Packaging
 
 `electron-builder` assembles what `electron-vite build` put in `out/`; its config is

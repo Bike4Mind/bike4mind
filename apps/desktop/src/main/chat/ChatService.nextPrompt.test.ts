@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatModelOption } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
 import { SUGGESTION_INSTRUCTION, SUGGESTION_MODELS } from './nextPrompt';
@@ -29,6 +29,8 @@ describe('ChatService next-prompt model', () => {
   let service: ChatService;
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
+  let cachedModels: ChatModelOption[] | null;
+  let listModels: ReturnType<typeof vi.fn>;
 
   const indexOf = (instruction: string | null) =>
     post.mock.calls.findIndex(call => {
@@ -59,6 +61,8 @@ describe('ChatService next-prompt model', () => {
   }
 
   beforeEach(async () => {
+    cachedModels = CATALOG;
+    listModels = vi.fn().mockResolvedValue({ models: CATALOG });
     const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-next-prompt-')), SESSION_MODEL);
     const ownStreams: PassThrough[] = (streams = []);
     const ownPost = (post = vi.fn().mockImplementation(() => {
@@ -69,7 +73,7 @@ describe('ChatService next-prompt model', () => {
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
-      models: { list: async () => ({ models: CATALOG }), cached: () => CATALOG } as unknown as ModelCatalog,
+      models: { list: listModels, cached: () => cachedModels } as unknown as ModelCatalog,
       preferredModel: SESSION_MODEL,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
@@ -81,6 +85,10 @@ describe('ChatService next-prompt model', () => {
       emit: () => {},
       summaryChanged: () => {},
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('asks the local model the user pinned in Settings', async () => {
@@ -113,5 +121,45 @@ describe('ChatService next-prompt model', () => {
       SUGGESTION_MODELS[0],
       LOCAL_MODEL,
     ]);
+    expect(listModels).toHaveBeenLastCalledWith(true);
+  });
+
+  it('refreshes an expired catalog before resolving the pinned model', async () => {
+    const id = await settledSession();
+    cachedModels = null;
+    listModels.mockClear();
+    const pending = service.suggestNextPrompt(id, LOCAL_MODEL);
+    expect((await answer(SUGGESTION_INSTRUCTION, 'Add tests')).model).toBe(LOCAL_MODEL);
+    expect(await pending).toBe('Add tests');
+    expect(listModels).toHaveBeenCalledOnce();
+  });
+
+  it('does not send a completion when an expired catalog cannot be read', async () => {
+    const id = await settledSession();
+    cachedModels = null;
+    listModels.mockResolvedValue({ models: [], error: 'Could not load the model list.' });
+    expect(await service.suggestNextPrompt(id, LOCAL_MODEL)).toBeNull();
+    expect(indexOf(SUGGESTION_INSTRUCTION)).toBe(-1);
+  });
+
+  it.each([
+    [LOCAL_MODEL, 30_000],
+    [SUGGESTION_MODELS[0], 5_000],
+  ])('bounds %s at %i ms and drops any partial answer', async (model, deadline) => {
+    const id = await settledSession();
+    const schedule = vi.spyOn(globalThis, 'setTimeout');
+    const pending = service.suggestNextPrompt(id, model);
+    await vi.waitUntil(() => indexOf(SUGGESTION_INSTRUCTION) >= 0);
+    const index = indexOf(SUGGESTION_INSTRUCTION);
+    streams[index].write(frame({ type: 'content', text: 'Add tests' }));
+    const signal = (post.mock.calls[index][2] as { signal: AbortSignal }).signal;
+
+    expect(signal.aborted).toBe(false);
+    const expire = schedule.mock.calls.find(([, delay]) => delay === deadline)?.[0];
+    expect(expire).toBeTypeOf('function');
+    if (typeof expire !== 'function') throw new Error('Suggestion deadline was not scheduled');
+    expire();
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toBeNull();
   });
 });
