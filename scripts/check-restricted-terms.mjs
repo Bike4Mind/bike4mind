@@ -219,18 +219,16 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
 }
 
 // Net diffs miss additions later removed, including merge resolutions. Scan
-// every commit's own diff. A merge is diffed against its merged-in (last)
-// parent, not the first: the first-parent diff of `git merge main` carries all
-// of main's changes, which are not the PR's. What that skips is either already
-// on the base branch or in side-branch commits this loop scans themselves.
-async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
+// every commit's own diff. For merges, compare from the PR/push baseline so
+// GitHub diffs its merge base with the commit. Either parent can carry inherited
+// base-branch content; choosing a parent would charge that content to the PR.
+async function scanCommitDiffs({ commits, base, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
   for (const c of commits) {
     const sha = c.sha.slice(0, 12);
-    const mergedIn = c.parents?.length > 1 ? c.parents.at(-1).sha : null;
     let files;
-    if (mergedIn) {
-      files = (await gh.json(`/repos/${repo}/compare/${mergedIn}...${c.sha}`)).files ?? [];
+    if (c.parents?.length > 1) {
+      files = (await gh.json(`/repos/${repo}/compare/${base}...${c.sha}`)).files ?? [];
       if (files.length >= MAX_COMPARE_FILES) {
         incomplete(
           `merge ${sha} changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`
@@ -265,7 +263,7 @@ async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   }
   const files = await gh.paginate(`/repos/${repo}/pulls/${pr.number}/files`);
   await scanFiles({ files, matcher, gh, repo, ref: pr.head.sha, hit, note: incomplete });
-  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, base: pr.base.sha, matcher, gh, repo, hit, incomplete });
   return `PR #${pr.number}: title, body, branch name, ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
@@ -300,7 +298,7 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     if (matches(matcher, c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
   await scanFiles({ files, matcher, gh, repo, ref: event.after, hit, note: incomplete });
-  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, base: event.before, matcher, gh, repo, hit, incomplete });
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
