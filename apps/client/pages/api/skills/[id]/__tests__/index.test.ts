@@ -100,6 +100,23 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(mockUpdate).toHaveBeenCalled();
   });
 
+  it.each(['', null])('explicitly unsets a cleared argument hint (%j)', async argumentHint => {
+    mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<topic>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { argumentHint });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      { id: 'skill-1', argumentHint: undefined },
+      { new: true, unset: ['argumentHint'] }
+    );
+  });
+
+  it('preserves the argument hint when it is omitted from a partial update', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<topic>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
+  });
+
   it('allows a share-recipient with update permission to edit', async () => {
     const { req, res } = makeReqRes('PUT', SHARED_UPDATE, { description: 'new' });
     await handler(req, res);
@@ -147,6 +164,18 @@ describe('/api/skills/[id] PUT - global skill content changes go through the Ski
     mockUpdateGuarded.mockImplementation(async (patch: Record<string, unknown>) => ({ ...skillDoc(), ...patch }));
     mockRateLimit.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockClassify.mockResolvedValue(classifierPass());
+  });
+
+  it.each(['', null])('scans and unsets a cleared argument hint on a global skill (%j)', async argumentHint => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true, argumentHint: '<topic>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { argumentHint });
+    await handler(req, res);
+    expect(mockClassify).toHaveBeenCalledTimes(1);
+    expect(mockClassify.mock.calls[0][0]).not.toHaveProperty('argumentHint');
+    expect(mockUpdateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'skill-1', argumentHint: undefined }),
+      { new: true, unset: ['argumentHint'] }
+    );
   });
 
   it.each([

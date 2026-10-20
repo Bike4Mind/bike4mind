@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { ISkill } from '@bike4mind/common';
+import type { RepositoryUpdateOptions } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import {
   validateSkillName,
@@ -75,13 +76,19 @@ const handler = baseApi()
     // editors who each passed a scan on different fields can't combine into unscanned content: the
     // second write throws ConcurrencyConflictError (409).
     const isGlobal = Boolean(skill.isGlobalRead || skill.isGlobalWrite);
+    // An undefined $set value is ignored by Mongoose; explicitly unset a cleared hint.
+    const updateOptions: RepositoryUpdateOptions<ISkill> = {
+      new: true,
+      ...(body.argumentHint !== undefined && patch.argumentHint === undefined ? { unset: ['argumentHint'] } : {}),
+    };
 
     try {
       const updated = isGlobal
-        ? await skillRepository.updateGuarded({ __v: (skill as { __v?: number }).__v, ...patch } as Partial<ISkill>, {
-            new: true,
-          })
-        : await skillRepository.update(patch, { new: true });
+        ? await skillRepository.updateGuarded(
+            { __v: (skill as { __v?: number }).__v, ...patch } as Partial<ISkill>,
+            updateOptions
+          )
+        : await skillRepository.update(patch, updateOptions);
       res.json(updated ?? (await skillRepository.findById(id as string)));
     } catch (error) {
       // Rename-to-existing surfaces as a MongoDB duplicate-key error (code 11000)

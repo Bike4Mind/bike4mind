@@ -44,8 +44,7 @@ vi.mock('../storage/RemoteSkillSource.js', () => ({
     clearCache = handlerMocks.clearCache;
   },
 }));
-vi.mock('../utils', async importOriginal => ({
-  ...(await importOriginal<object>()),
+vi.mock('../utils/apiUrl.js', () => ({
   requireApiUrl: () => 'http://localhost',
 }));
 vi.mock('readline', () => ({
@@ -110,6 +109,11 @@ describe('readSkillFile', () => {
     const read = await readSkillFile(file);
     expect(read.payload.name).toBe('review');
     expect(read.extraFiles).toEqual([]);
+  });
+
+  it('accepts an uppercase markdown extension and lowercases its fallback name', async () => {
+    const file = await writeSkill('commands/Review.MD', 'Review a change\n');
+    expect((await readSkillFile(file)).payload.name).toBe('review');
   });
 
   it('lists supporting files next to SKILL.md, skipping dotfiles', async () => {
@@ -222,7 +226,7 @@ describe('pushSkill', () => {
     it('--update sends a PUT', async () => {
       const { api, deps } = makeDeps({ update: true }, rows);
       expect(await pushSkill(file(), deps)).toBe('updated');
-      expect(api.put).toHaveBeenCalledWith('/api/skills/s1', file().payload);
+      expect(api.put).toHaveBeenCalledWith('/api/skills/s1', { ...file().payload, argumentHint: '' });
       expect(api.post).not.toHaveBeenCalled();
     });
 
@@ -230,6 +234,16 @@ describe('pushSkill', () => {
       const { api, deps } = makeDeps({ isTTY: true, confirm: vi.fn().mockResolvedValue(true) }, rows);
       expect(await pushSkill(file(), deps)).toBe('updated');
       expect(api.put).toHaveBeenCalled();
+    });
+
+    it('clears a removed argument hint when updating, but preserves an explicit hint', async () => {
+      const { api, deps } = makeDeps({ update: true }, rows);
+      await pushSkill(file(), deps);
+      expect(api.put).toHaveBeenLastCalledWith('/api/skills/s1', { ...file().payload, argumentHint: '' });
+
+      const withHint = file({ payload: { ...file().payload, argumentHint: '<topic>' } });
+      await pushSkill(withHint, deps);
+      expect(api.put).toHaveBeenLastCalledWith('/api/skills/s1', withHint.payload);
     });
 
     it('TTY prompt no aborts without writing', async () => {
@@ -311,6 +325,21 @@ describe('pushSkill', () => {
     await expect(pushSkill(file(), deps)).rejects.toThrow('Name must be kebab-case');
   });
 
+  it('does not create a skill when the existing-skill lookup fails', async () => {
+    const { api, deps } = makeDeps();
+    api.get.mockRejectedValue(new Error('Skill lookup unavailable'));
+    await expect(pushSkill(file(), deps)).rejects.toThrow('Skill lookup unavailable');
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it('reports an update failure without retrying it as a create', async () => {
+    const { api, deps } = makeDeps({ update: true }, [{ id: 's1', name: 'my-skill', userId: 'u1' }]);
+    api.put.mockRejectedValue(new Error('Update rejected'));
+    await expect(pushSkill(file(), deps)).rejects.toThrow('Update rejected');
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('fails with the login hint when there is no current user', async () => {
     const { api, deps } = makeDeps();
     api.getCurrentUser.mockResolvedValue(null);
@@ -350,6 +379,11 @@ describe('handleSkillsCommand', () => {
     expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
   });
 
+  it('rejects an empty path before reading or making an API call', async () => {
+    await expect(handleSkillsCommand('push', { ...ARGS, path: '' })).rejects.toThrow('Usage: b4m skills push <path>');
+    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+  });
+
   it('clears an expired token and fails with the re-login hint', async () => {
     handlerMocks.tokens = { expiresAt: new Date(Date.now() - 1000).toISOString() };
     await expect(handleSkillsCommand('push', ARGS)).rejects.toThrow('re-authenticate');
@@ -362,6 +396,21 @@ describe('handleSkillsCommand', () => {
     expect(handlerMocks.api.post).toHaveBeenCalled();
     expect(handlerMocks.clearCache).toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith('Created skill /my-skill');
+  });
+
+  it('reports the successful write and warns when clearing the local cache fails', async () => {
+    handlerMocks.clearCache.mockRejectedValueOnce(new Error('Permission denied'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(handleSkillsCommand('push', ARGS)).resolves.toBeUndefined();
+      expect(handlerMocks.api.post).toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith('Created skill /my-skill');
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Skill saved, but the local skills cache could not be cleared: Permission denied'
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('prints Aborted and leaves the cache alone when the user declines', async () => {

@@ -13,7 +13,7 @@ import { parseSkillMd, type SkillMdFields } from '@bike4mind/common/utils/skillM
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { ApiClient } from '../auth/ApiClient.js';
-import { requireApiUrl } from '../utils';
+import { requireApiUrl } from '../utils/apiUrl.js';
 import { isReservedCommandName } from '../config/commands.js';
 
 interface SkillsCommandArgs {
@@ -206,7 +206,8 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
       }
       if (!(await deps.confirm(`A skill named "${payload.name}" already exists. Update it? [y/N] `))) return 'aborted';
     }
-    await api.put(`/api/skills/${existing.id}`, payload);
+    // PUT preserves omitted fields, so explicitly clear a hint removed from the local file.
+    await api.put(`/api/skills/${existing.id}`, { ...payload, argumentHint: payload.argumentHint ?? '' });
     return 'updated';
   } catch (error) {
     throw new Error(serverMessage(error));
@@ -252,6 +253,10 @@ export async function handleSkillsCommand(subcommand: string | undefined, argv: 
     console.log('Aborted');
     return;
   }
-  await new RemoteSkillSource(apiClient).clearCache();
+  try {
+    await new RemoteSkillSource(apiClient).clearCache();
+  } catch (error) {
+    console.warn(`Skill saved, but the local skills cache could not be cleared: ${serverMessage(error)}`);
+  }
   console.log(`${result === 'created' ? 'Created' : 'Updated'} skill /${file.payload.name}`);
 }
