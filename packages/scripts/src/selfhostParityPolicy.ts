@@ -801,6 +801,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   gap(
+    'schedule:infra/cron.ts:signupBaselineReport',
+    '1deaa9dba608b3c27205e4152324a97a02f6ee5526d873aa6011ded23b458a9b'
+  ),
+  gap(
     'schedule:infra/cron.ts:SreStaleDispatchCron',
     '40b5809d38bd8ac7c195c309c64f592d07dfed93c9fad1541765c4d94cc70dbd'
   ),
