@@ -175,15 +175,13 @@ describe('bedrock normalization', () => {
   });
 
   it('treats a null lifecycle date as absent, not as the epoch', () => {
-    const record = normalizeBedrockModels({
-      summaries: [
-        {
-          modelId: 'meta.llama3-70b-instruct-v1:0',
-          modelLifecycle: { status: 'ACTIVE', legacyTime: null, endOfLifeTime: null },
-        } as unknown as BedrockFoundationModelSummary,
-      ],
-    })[0];
+    const summary = {
+      modelId: 'meta.llama3-70b-instruct-v1:0',
+      modelLifecycle: { status: 'ACTIVE', legacyTime: null, endOfLifeTime: null },
+    } as unknown as BedrockFoundationModelSummary;
+    const record = normalizeBedrockModels({ summaries: [summary] })[0];
     expect(record?.patch.lifecycle).toEqual({ status: 'active' });
+    expect(bedrockLifecycleGaps({ summaries: [summary] })).toEqual([]);
   });
 
   describe('inference profile ids', () => {
