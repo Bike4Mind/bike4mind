@@ -1,5 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage } from './constants';
+import { appUrlForLambdaEnv } from './router';
 import { allSecrets, secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
@@ -32,6 +33,8 @@ const seeder = new sst.aws.Function('DatabaseSeeder', {
   link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    // B4M's OIDC issuer: OAuthClientSeeder points the preview federated client at it.
+    APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
   },
   vpc: lambdaVpc,
   permissions: [

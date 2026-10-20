@@ -332,7 +332,7 @@ export const router = routerInstance;
  *   - `oauthServer.ts` uses it as the OIDC issuer, where the exact string is a
  *     spec-level identity rather than a formatting detail.
  *
- * Normalizing once here keeps all four injection sites agreeing on one value, rather
+ * Normalizing once here keeps every injection site agreeing on one value, rather
  * than each deciding for itself.
  */
 export function appUrlForLambdaEnv() {
