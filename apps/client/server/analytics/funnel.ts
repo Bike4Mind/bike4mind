@@ -153,6 +153,27 @@ export async function emitSignupFunnelEvents(opts: {
 }
 
 /**
+ * The funnel stages of an existing account becoming email-verified. Gated to accounts created
+ * after launch: no backfill of earlier accounts, the same rule as first_value.
+ */
+export async function emitEmailVerifiedFunnelEvents(opts: {
+  user: FunnelUser & { createdAt?: Date | string | null };
+  method: string;
+  creditsGranted: number;
+}): Promise<void> {
+  if (!signedUpAfterLaunch(opts.user.createdAt)) return;
+  const metadata = { method: opts.method };
+  await Promise.all([
+    emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    emitFunnelEvent({
+      user: opts.user,
+      event: 'credits_granted',
+      metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+    }),
+  ]);
+}
+
+/**
  * Mark the user's first completed chat answer and emit `first_value` once. The conditional update
  * is what makes it once: only the request that flips firstValueAt from unset emits, so concurrent
  * completions cannot double-count. Callers skip this when the loaded user already has

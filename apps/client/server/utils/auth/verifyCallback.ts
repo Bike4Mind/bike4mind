@@ -11,6 +11,7 @@ import {
   releaseVerifiedPendingFreeCredits,
 } from '@server/auth/emailVerifiedGrants';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { ForbiddenError } from '@server/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
@@ -153,12 +154,17 @@ const authenticateUser = async (
       // emailVerified is set, OTC login no longer releases them and Resend is refused. Promotion
       // implies the provider email matched the local one, so `email` is set; the check narrows it.
       if (promoteEmailVerified && email) {
-        await applyEmailVerifiedGrants({
+        const grants = await applyEmailVerifiedGrants({
           user: { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           verifiedEmail: email,
           trigger: 'oauth-link-verification',
           releaseReason: 'OAuth account link (email verified)',
           logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: strategy,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
         });
       }
 

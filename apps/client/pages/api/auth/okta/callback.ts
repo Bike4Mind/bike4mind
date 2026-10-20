@@ -49,7 +49,11 @@ import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@server/utils/ip';
-import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
+import {
+  emitEmailVerifiedFunnelEvents,
+  emitSignupFunnelEvents,
+  recordSignupAcquisition,
+} from '@server/analytics/funnel';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -426,12 +430,17 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
       // grants here (OTC login and Resend no longer will once emailVerified is set).
       if (promoteEmailVerified) {
-        await applyEmailVerifiedGrants({
+        const grants = await applyEmailVerifiedGrants({
           user: { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           verifiedEmail: email,
           trigger: 'oauth-link-verification',
           releaseReason: 'Okta account link (email verified)',
           logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: AuthStrategy.Okta,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
         });
       }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke

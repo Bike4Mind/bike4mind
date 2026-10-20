@@ -107,6 +107,7 @@ const mockApplyOAuthSignupDomainGrant = vi.fn();
 const mockApplyEmailVerifiedGrants = vi.fn();
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
+const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
   applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
 }));
@@ -116,6 +117,7 @@ vi.mock('@server/auth/emailVerifiedGrants', () => ({
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
   emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
+  emitEmailVerifiedFunnelEvents: (...a: unknown[]) => mockEmitVerifiedFunnel(...a),
 }));
 
 // Import after mocks are registered.
@@ -294,6 +296,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
   });
 
   it('links AND promotes emailVerified when the local account has no password (pure-OAuth shell)', async () => {
+    mockApplyEmailVerifiedGrants.mockResolvedValue({ creditsGranted: 100, subscriptionCreditsGranted: 20 });
     const res = await runCallback({
       user: {
         id: 'u5',
@@ -319,6 +322,11 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
       trigger: 'oauth-link-verification',
       releaseReason: 'Okta account link (email verified)',
       logger: expect.anything(),
+    });
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u5' }),
+      method: 'okta',
+      creditsGranted: 120,
     });
     // Membership re-reads emailVerified, so the grants must follow the write that persists it.
     expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(

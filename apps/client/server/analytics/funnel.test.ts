@@ -19,6 +19,7 @@ import { APP_DECISION_COOKIE } from '@client/lib/consentCookies';
 import { pseudonymize } from './pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
+  emitEmailVerifiedFunnelEvents,
   emitFunnelEvent,
   emitSignupFunnelEvents,
   isSyntheticIdentity,
@@ -194,6 +195,29 @@ describe('emitSignupFunnelEvents', () => {
       ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
       ['signup_completed', { method: 'github' }],
     ]);
+  });
+});
+
+describe('emitEmailVerifiedFunnelEvents', () => {
+  it('emits email_verified and credits_granted for a post-launch account', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'otc',
+      creditsGranted: 70,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'otc' }],
+      ['credits_granted', { amount: 70, source: 'signup', method: 'otc' }],
+    ]);
+  });
+
+  it('skips a pre-launch or undated account', async () => {
+    const early = { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') };
+    await emitEmailVerifiedFunnelEvents({ user: early, method: 'otc', creditsGranted: 70 });
+    await emitEmailVerifiedFunnelEvents({ user: { id: 'u1' }, method: 'otc', creditsGranted: 70 });
+
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 

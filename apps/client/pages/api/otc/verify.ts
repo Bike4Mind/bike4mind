@@ -38,7 +38,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@server/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
-import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
+import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
@@ -210,11 +210,10 @@ const handler = baseApi({ auth: false })
           }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
-          await emitFunnelEvent({ user: existingUser, event: 'email_verified', metadata: { method: 'otc' } });
-          await emitFunnelEvent({
+          await emitEmailVerifiedFunnelEvents({
             user: existingUser,
-            event: 'credits_granted',
-            metadata: { amount: grants.creditsGranted, source: 'signup', method: 'otc' },
+            method: 'otc',
+            creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
           });
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);

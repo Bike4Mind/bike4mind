@@ -30,9 +30,11 @@ vi.mock('@server/analytics/signupEvents', () => ({
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitFunnelEvent = vi.fn().mockResolvedValue(true);
+const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
   emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
+  emitEmailVerifiedFunnelEvents: (...a: any[]) => mockEmitVerifiedFunnel(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
@@ -753,6 +755,27 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });
 
+  it('reports email_verified and the summed credits on the first verifying login', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
+    mockReleasePending.mockResolvedValue({
+      released: true,
+      creditsGranted: 100,
+      currentCredits: 100,
+      patch: { tags: ['Customer'], pendingCreditGrant: null },
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledTimes(1);
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u-existing' }),
+      method: 'otc',
+      creditsGranted: 100,
+    });
+  });
+
   it('leaves an already-verified user untouched', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true }));
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
@@ -760,6 +783,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitVerifiedFunnel).not.toHaveBeenCalled();
     expect(mockReleasePending).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
   });

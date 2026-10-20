@@ -5,7 +5,7 @@ import { userService } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
-import { emitFunnelEvent } from '@server/analytics/funnel';
+import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
@@ -82,7 +82,7 @@ const handler = baseApi({ auth: false })
             logger: req.logger,
           })
         : null;
-      const creditsGranted = grants?.creditsGranted ?? 0;
+      const creditsGranted = grants ? grants.creditsGranted + grants.subscriptionCreditsGranted : 0;
 
       // Audit + analytics for the success path.
       if (userBeforeVerify) {
@@ -109,13 +109,8 @@ const handler = baseApi({ auth: false })
           req.logger.warn('Failed to log email verification event:', error);
         }
 
-        // Funnel floor (server/analytics/funnel.ts); both never throw.
-        await emitFunnelEvent({ user: userBeforeVerify, event: 'email_verified', metadata: { method: 'link' } });
-        await emitFunnelEvent({
-          user: userBeforeVerify,
-          event: 'credits_granted',
-          metadata: { amount: creditsGranted, source: 'signup', method: 'link' },
-        });
+        // Funnel floor (server/analytics/funnel.ts); never throws.
+        await emitEmailVerifiedFunnelEvents({ user: userBeforeVerify, method: 'link', creditsGranted });
       }
 
       return res.json({ message: 'Email verified successfully' });
