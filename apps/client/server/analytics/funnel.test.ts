@@ -181,10 +181,19 @@ describe('emitSignupFunnelEvents', () => {
     ]);
   });
 
-  it('omits only email_verified when the provider did not verify the email', async () => {
+  it('defers a zero-credit grant for an unverified signup but still emits signup_completed', async () => {
     await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: false, creditsGranted: 0 });
 
-    expect(mockEmit.mock.calls.map(([event]) => event.event)).toEqual(['credits_granted', 'signup_completed']);
+    expect(mockEmit.mock.calls.map(([event]) => event.event)).toEqual(['signup_completed']);
+  });
+
+  it('emits credits_granted for an unverified signup that was granted credits', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: false, creditsGranted: 50 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
+      ['signup_completed', { method: 'github' }],
+    ]);
   });
 });
 

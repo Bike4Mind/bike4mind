@@ -127,6 +127,12 @@ export async function emitFunnelEvent(opts: {
   return true;
 }
 
+/**
+ * The funnel stages of a brand-new account. An unverified signup with nothing granted skips
+ * credits_granted: the stable eventId would lock in 0 and drop the grant that arrives at
+ * verification (emitEmailVerifiedFunnelEvents). The emits are independent, so they run
+ * concurrently to bound the caller's latency at one emit timeout.
+ */
 export async function emitSignupFunnelEvents(opts: {
   user: FunnelUser;
   method: string;
@@ -134,15 +140,16 @@ export async function emitSignupFunnelEvents(opts: {
   creditsGranted: number;
 }): Promise<void> {
   const metadata = { method: opts.method };
-  if (opts.emailVerified) {
-    await emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata });
-  }
-  await emitFunnelEvent({
-    user: opts.user,
-    event: 'credits_granted',
-    metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
-  });
-  await emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata });
+  await Promise.all([
+    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    (opts.emailVerified || opts.creditsGranted > 0) &&
+      emitFunnelEvent({
+        user: opts.user,
+        event: 'credits_granted',
+        metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+      }),
+    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata }),
+  ]);
 }
 
 /**
