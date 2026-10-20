@@ -45,7 +45,8 @@ describe('ChatService model selection', () => {
     };
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-model-')), 'preferred-model');
     available = HOSTED;
-    post = vi.fn().mockResolvedValue({ data: new PassThrough(), status: 200 });
+    const boundPost = vi.fn().mockResolvedValue({ data: new PassThrough(), status: 200 });
+    post = boundPost;
 
     const models = {
       list: async () => ({ models: available }),
@@ -62,7 +63,7 @@ describe('ChatService model selection', () => {
       getApiClient: () =>
         ({
           get: async () => ({ sseCompletionsUrl: '' }),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: () => {},

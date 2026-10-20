@@ -44,12 +44,13 @@ describe('ChatService stale tool results', () => {
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
+    const opened: PassThrough[] = [];
+    streams = opened;
     sent = [];
     const post = vi.fn().mockImplementation((_url: string, body: { messages: unknown[] }) => {
       sent.push(JSON.stringify(body.messages));
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
 

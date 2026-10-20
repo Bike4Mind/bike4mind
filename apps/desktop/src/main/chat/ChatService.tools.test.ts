@@ -73,11 +73,12 @@ describe('ChatService tool loop', () => {
 
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
     events = [];
-    streams = [];
+    const opened: PassThrough[] = [];
+    streams = opened;
     // A fresh stream per POST, so each turn of the loop has its own response.
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
 

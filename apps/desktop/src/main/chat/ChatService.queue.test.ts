@@ -63,13 +63,13 @@ describe('ChatService queued messages', () => {
     emit = event => emitted.push(event);
     queueEvents = [];
     streams = [];
-    post = vi
+    const boundPost = vi
       .fn()
-      .mockImplementation(() => Promise.resolve({ data: streamFor(post.mock.calls.length - 1), status: 200 }));
+      .mockImplementation(() => Promise.resolve({ data: streamFor(boundPost.mock.calls.length - 1), status: 200 }));
 
     apiClient = {
       get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
-      getAxiosInstance: () => ({ post }),
+      getAxiosInstance: () => ({ post: boundPost }),
     } as unknown as AuthenticatedApiClient;
 
     queue = new MessageQueue(event => queueEvents.push(event));
@@ -82,6 +82,7 @@ describe('ChatService queued messages', () => {
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit,
     });
+    post = boundPost;
   });
 
   it('queues a message sent during a live reply instead of refusing it', async () => {

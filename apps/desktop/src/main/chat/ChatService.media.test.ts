@@ -32,12 +32,14 @@ describe('ChatService generation tools', () => {
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
-    axiosPost = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    axiosPost = boundPost;
     axiosGet = vi.fn().mockResolvedValue({ data: Buffer.from('png'), headers: { 'content-type': 'image/png' } });
     // The self-host shape: a relative file-proxy base, so a download goes back through the
     // authenticated client rather than out to a CDN.
@@ -49,7 +51,7 @@ describe('ChatService generation tools', () => {
       ({
         get: apiGet,
         post: apiPost,
-        getAxiosInstance: () => ({ post: axiosPost, get: axiosGet }),
+        getAxiosInstance: () => ({ post: boundPost, get: axiosGet }),
       }) as unknown as AuthenticatedApiClient;
 
     service = new ChatService({

@@ -43,7 +43,8 @@ describe('ChatService context boundaries', () => {
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
+    const opened: PassThrough[] = [];
+    streams = opened;
     sent = [];
     failNextRequest = false;
     modelWindow = 1_050_000;
@@ -56,7 +57,7 @@ describe('ChatService context boundaries', () => {
       }
       sent.push(JSON.stringify(body.messages));
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
 

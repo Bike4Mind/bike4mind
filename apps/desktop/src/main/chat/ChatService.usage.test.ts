@@ -47,12 +47,14 @@ describe('ChatService usage reporting', () => {
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
 
     service = new ChatService({
       store,
@@ -70,7 +72,7 @@ describe('ChatService usage reporting', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),

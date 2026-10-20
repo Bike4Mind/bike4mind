@@ -54,12 +54,14 @@ describe('ChatService spawn suggestions', () => {
     // Bound per test: a previous service replying late must not push into this test's events.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     requested = vi.fn<(sessionId: string) => void>();
     approvals = new ApprovalGate({ requested, settled: vi.fn() });
     queueEvents = [];
@@ -76,7 +78,7 @@ describe('ChatService spawn suggestions', () => {
         signedIn
           ? ({
               get: vi.fn().mockResolvedValue({}),
-              getAxiosInstance: () => ({ post }),
+              getAxiosInstance: () => ({ post: boundPost }),
             } as unknown as AuthenticatedApiClient)
           : null,
       getEnvironmentUrl: () => 'http://localhost:3000',
