@@ -57,3 +57,18 @@ export function isAwaitingEmailVerification(
 ): boolean {
   return user?.emailVerified === false && (user.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
 }
+
+export interface ResendVerificationError {
+  response?: { status?: number; data?: { message?: string; isConfigError?: boolean } };
+}
+
+/** What to tell the user when POST /api/email/resend-verification fails. */
+export function resendVerificationErrorMessage(error: ResendVerificationError): string {
+  if (error.response?.status === 429) {
+    return "You've reached the limit for resending verification emails. Please wait 15 minutes before trying again.";
+  }
+  if (error.response?.status === 503 && error.response?.data?.isConfigError) {
+    return error.response.data.message ?? 'Email service is not configured.';
+  }
+  return error.response?.data?.message ?? 'Failed to send verification email. Please try again later.';
+}
