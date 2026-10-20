@@ -38,6 +38,7 @@ export const getClaudeMarketplaceContract = defineEndpoint({
       example: {
         name: 'b4m-acme',
         owner: { name: 'Acme' },
+        forceRemoveDeletedPlugins: true,
         plugins: [
           {
             name: 'review-pr',

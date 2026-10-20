@@ -50,7 +50,8 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skil
     <Stack spacing={2}>
       <Typography level="body-sm">
         Add {org.name}&apos;s approved Skill Market skills to Claude Code as plugins. They update when a new version is
-        approved.
+        approved, and are uninstalled when a skill is removed from the market (applied at the next Claude Code session
+        after the marketplace refreshes).
       </Typography>
 
       <Stack spacing={1}>
@@ -90,6 +91,10 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skil
           {key
             ? ' It is shown only once; revoke it any time under API Keys.'
             : ' Each Create key mints a new key, so revoke any old marketplace keys under API Keys.'}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary">
+          Claude Code does not auto-update third-party marketplaces by default; <code>autoUpdate: true</code> above
+          turns it on. Without it, run <code>/plugin marketplace update {marketplace}</code> to pick up changes.
         </Typography>
       </Stack>
 

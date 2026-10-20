@@ -5271,6 +5271,7 @@ export interface components {
      *       "owner": {
      *         "name": "Acme"
      *       },
+     *       "forceRemoveDeletedPlugins": true,
      *       "plugins": [
      *         {
      *           "name": "review-pr",
@@ -5290,6 +5291,7 @@ export interface components {
       owner: {
         name: string;
       };
+      forceRemoveDeletedPlugins: boolean;
       plugins: {
         name: string;
         description: string;

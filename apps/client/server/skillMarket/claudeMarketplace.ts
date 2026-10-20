@@ -103,5 +103,10 @@ export async function buildClaudeMarketplace(
     });
   }
 
-  return { name: claudeMarketplaceNameFor(org), owner: { name: org.name || 'Bike4Mind' }, plugins };
+  return {
+    name: claudeMarketplaceNameFor(org),
+    owner: { name: org.name || 'Bike4Mind' },
+    forceRemoveDeletedPlugins: true,
+    plugins,
+  };
 }

@@ -132,6 +132,7 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
 
     const body = res._getJSONData();
     expect(body.name).toBe('b4m-acme-labs');
+    expect(body.forceRemoveDeletedPlugins).toBe(true);
     expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr', 'review-pr-000002']);
     expect(body.plugins[0]).toMatchObject({
       version: '3',

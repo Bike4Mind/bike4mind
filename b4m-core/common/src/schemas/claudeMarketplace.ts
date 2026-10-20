@@ -28,6 +28,8 @@ export const ClaudeMarketplacePluginSchema = z.object({
 export const ClaudeMarketplaceSchema = z.object({
   name: z.string(),
   owner: z.object({ name: z.string() }),
+  /** Claude Code uninstalls installed plugins this feed stops listing, at the next session start. */
+  forceRemoveDeletedPlugins: z.boolean(),
   plugins: z.array(ClaudeMarketplacePluginSchema),
 });
 export type ClaudeMarketplace = z.infer<typeof ClaudeMarketplaceSchema>;
