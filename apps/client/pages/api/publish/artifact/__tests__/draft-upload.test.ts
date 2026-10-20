@@ -109,7 +109,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
   });
 
   it('streams the body to storage under the pinned draft key on a valid token', async () => {
-    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html' });
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 26 });
     const { res, promise } = run({
       query: { token: 'good' },
       headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -125,8 +125,20 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
     expect(opts).toEqual({ ContentType: 'text/html' });
   });
 
+  // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it.
+  it.each([
+    ['longer', '<!doctype html><h1>hi</h1>!'],
+    ['shorter', '<!doctype html>'],
+  ])('403s and skips storage when the body is %s than the declared size', async (_label, body) => {
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html', size: 26 });
+    const { res, promise } = run({ query: { token: 'good' }, body });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
   it('413s and skips storage when the body exceeds the per-file cap', async () => {
-    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'big.bin' });
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'big.bin', size: PUBLISH_LIMITS.maxFileBytes + 1 });
     const { res, promise } = run({
       query: { token: 'good' },
       body: Buffer.alloc(PUBLISH_LIMITS.maxFileBytes + 1),

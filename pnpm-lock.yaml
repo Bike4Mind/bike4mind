@@ -1922,6 +1922,9 @@ importers:
       mime-types:
         specifier: ^3.0.2
         version: 3.0.2
+      omggif:
+        specifier: ^1.0.10
+        version: 1.0.10
       openai:
         specifier: ^6.46.0
         version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)

@@ -1726,6 +1726,23 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return res.modifiedCount === 1;
   }
 
+  /** Claim and count a rejected landing together, so redelivery cannot lose or double its failure. */
+  async rejectPendingUpload(batchId: string, fabFileId: string, error: string): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      {
+        _id: batchId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+        files: { $elemMatch: { fabFileId, status: 'pending' } },
+      },
+      {
+        $set: { 'files.$.status': 'failed', 'files.$.failureCounted': true, 'files.$.error': error },
+        $inc: { failedFiles: 1 },
+      },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
   /**
    * Exact inverse of the per-file failure accounting in fabFileChunk.ts's accountFileFailure:
    * pull ONE manifest entry back out of 'failed' into `to`, drop the error text it carries, and

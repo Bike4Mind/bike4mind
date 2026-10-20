@@ -16,6 +16,9 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   changeStorageSize: vi.fn(),
+  admit: vi.fn(),
+  recordRejectedUploadBatch: vi.fn(),
+  recordLandedObject: vi.fn(),
   withTransaction: vi.fn(),
 }));
 
@@ -53,6 +56,8 @@ vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationS
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
+vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
@@ -65,12 +70,17 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://test' }, fabFileChunkQueue: { url: 'http://sqs/chunk' } },
 }));
 
+vi.mock('@server/s3/moderationScan', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  recordLandedObject: h.recordLandedObject,
+}));
+
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
-const run = (key = 'uploads/report.pdf', eventTime?: string) =>
+const run = (key = 'uploads/report.pdf', eventTime?: string, eTag?: string) =>
   (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(
-    { Records: [{ eventTime, s3: { object: { key, size: 10 } } }] },
+    { Records: [{ eventTime, s3: { object: { key, size: 10, eTag } } }] },
     {},
     logger
   );
@@ -95,6 +105,78 @@ beforeEach(() => {
   h.getSettingsValue.mockResolvedValue(false);
   h.claimFileStatus.mockResolvedValue(true);
   h.incrementCounter.mockResolvedValue({ uploadedFiles: 1 });
+  h.admit.mockResolvedValue(true);
+  h.recordLandedObject.mockReset();
+  h.recordLandedObject.mockResolvedValue(undefined);
+});
+
+describe('objectCreated - measured-size gate', () => {
+  it('accounts a rejected batch file without completing or chunking it', async () => {
+    const file = metadata({ status: 'pending', batchId: 'b1' });
+    h.findOne.mockResolvedValue(file);
+    h.admit.mockResolvedValue(false);
+
+    await run();
+
+    expect(h.recordRejectedUploadBatch).toHaveBeenCalledWith(file, logger);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(file.save).not.toHaveBeenCalled();
+  });
+
+  it('includes rejected tombstones in the landing lookup so cleanup can be retried', async () => {
+    h.findOne.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.findOne).toHaveBeenCalledWith(
+      { filePath: 'uploads/report.pdf', $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+      null,
+      { includeDeleted: true }
+    );
+  });
+
+  it('withdraws an upload the gate rejects before completing, scanning or charging it', async () => {
+    h.findOne.mockResolvedValue(metadata({ fileSize: 4, status: 'pending' }));
+    h.admit.mockResolvedValue(false);
+
+    await run();
+
+    expect(h.admit).toHaveBeenCalledWith(
+      expect.objectContaining({ fileSize: 4, status: 'pending' }),
+      10,
+      'uploads/report.pdf',
+      expect.anything()
+    );
+    expect(h.updateOne).not.toHaveBeenCalled();
+    expect(h.moderateUploadedFile).not.toHaveBeenCalled();
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('objectCreated - overwrite of a judged object', () => {
+  it('sends a verdict for another version back to pending before claiming, so the new bytes are scanned', async () => {
+    h.findOne.mockResolvedValue(metadata({ status: 'complete', moderationStatus: 'clean', moderationETag: 'etag-a' }));
+
+    await run('uploads/report.pdf', undefined, 'etag-b');
+
+    expect(h.recordLandedObject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
+    expect(h.recordLandedObject.mock.invocationCallOrder[0]).toBeLessThan(
+      h.findOneAndUpdate.mock.invocationCallOrder[0]
+    );
+    expect(h.moderateUploadedFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('objectCreated - reconciliation failure', () => {
+  it('retries before scanning or charging when current object reconciliation fails', async () => {
+    h.findOne.mockResolvedValue(metadata({ status: 'complete', moderationStatus: 'blocked' }));
+    h.recordLandedObject.mockRejectedValueOnce(new Error('head unavailable'));
+    await expect(run()).rejects.toThrow('head unavailable');
+    expect(h.moderateUploadedFile).not.toHaveBeenCalled();
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
 });
 
 describe('objectCreated - untracked-file skip list', () => {
@@ -114,7 +196,9 @@ describe('objectCreated - untracked-file skip list', () => {
 
       await run(key);
 
-      expect(h.findOne).toHaveBeenCalledWith({ filePath: key });
+      expect(h.findOne).toHaveBeenCalledWith(expect.objectContaining({ filePath: key }), null, {
+        includeDeleted: true,
+      });
     }
   );
 });

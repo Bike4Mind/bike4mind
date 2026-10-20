@@ -3927,6 +3927,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
+    moderationETag: { type: String, required: false },
+    moderationRevision: { type: Number, required: false },
+    // See IFabFile.clientUpload and apps/client/server/s3/uploadSizeGate.ts.
+    clientUpload: { type: Boolean, required: false },
+    uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
     // "never failed" sorts ahead of any attempted row without a backfill.
@@ -4031,6 +4037,8 @@ FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: -1 });
 FabFileSchema.index({ deletedAt: 1, createdAt: -1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, filePath: 1 });
+// Landing events also find rejected tombstones, without a deletedAt equality prefix. Pre-built by 20260921235981_ensure-fabfile-filepath-index.
+FabFileSchema.index({ filePath: 1 });
 
 // Optimize permission and sharing queries
 FabFileSchema.index({ isChunk: 1, 'users.permissions': 1, 'users.userId': 1 });

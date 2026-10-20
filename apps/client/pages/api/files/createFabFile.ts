@@ -22,7 +22,10 @@ import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
-const createFabFileSchema = fabFilesService.createFabFileSchema;
+// No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
+// and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
+// would escape the storage charge, size check and moderation. Server-side callers still set it.
+const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
@@ -119,9 +122,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               });
               return filepath;
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+            generateSignedUrl: (
+              filepath: string,
+              expireInSeconds: number,
+              mode?: 'get' | 'put',
+              options?: { ContentLength?: number }
+            ) =>
               getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
+                ContentLength: options?.ContentLength,
               }),
           },
           // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
