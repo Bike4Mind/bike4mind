@@ -1,8 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { oauthGrantRepository, OAuthGrantModel } from './OAuthGrantModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('OAuthGrantModel repository', () => {
   it('upsertGrant creates then updates a single (user,client) row', async () => {
@@ -69,6 +72,102 @@ describe('OAuthGrantModel repository', () => {
     // A fresh consent clears the revocation and the grant is active again.
     await oauthGrantRepository.upsertGrant({ userId: 'u3', clientId: 'c3', scopes: ['openid'], source: 'authorize' });
     expect((await oauthGrantRepository.findGrant('u3', 'c3'))?.scopes).toEqual(['openid']);
+  });
+
+  it('does not restore revoked spend scopes when the user re-consents to openid only', async () => {
+    const params = { userId: 'u-reconsent', clientId: 'c-reconsent', source: 'authorize' };
+    const original = await oauthGrantRepository.upsertGrant({ ...params, scopes: ['openid', 'ai:generate'] });
+    await oauthGrantRepository.revoke(params.userId, params.clientId);
+
+    const fresh = await oauthGrantRepository.upsertGrant({ ...params, scopes: ['openid', 'openid'] });
+
+    expect(fresh?.id).toBe(original?.id);
+    expect(fresh?.scopes).toEqual(['openid']);
+    expect((await oauthGrantRepository.findGrant(params.userId, params.clientId))?.scopes).toEqual(['openid']);
+    // An active grant still widens, and consenting to a subset never drops active scopes.
+    await oauthGrantRepository.upsertGrant({ ...params, scopes: ['email'] });
+    await oauthGrantRepository.upsertGrant({ ...params, scopes: ['openid'] });
+    expect((await oauthGrantRepository.findGrant(params.userId, params.clientId))?.scopes).toEqual(['openid', 'email']);
+  });
+
+  it('unions concurrent re-consents without restoring scopes from the revoked grant', async () => {
+    await OAuthGrantModel.ensureIndexes();
+    const params = { userId: 'u-concurrent-reconsent', clientId: 'c-concurrent-reconsent', source: 'authorize' };
+    await oauthGrantRepository.upsertGrant({ ...params, scopes: ['ai:generate'] });
+    await oauthGrantRepository.revoke(params.userId, params.clientId);
+
+    const grants = await Promise.all([
+      oauthGrantRepository.upsertGrant({ ...params, scopes: ['openid'] }),
+      oauthGrantRepository.upsertGrant({ ...params, scopes: ['email'] }),
+      oauthGrantRepository.upsertGrant({ ...params, scopes: ['profile'] }),
+    ]);
+
+    expect(new Set(grants.map(grant => grant?.id)).size).toBe(1);
+    const active = await oauthGrantRepository.findGrant(params.userId, params.clientId);
+    expect(active?.scopes).toEqual(expect.arrayContaining(['openid', 'email', 'profile']));
+    expect(active?.scopes).toHaveLength(3);
+    expect(await OAuthGrantModel.countDocuments({ userId: params.userId, clientId: params.clientId })).toBe(1);
+  });
+
+  it('retries the revoked-row guard when revocation races the active upsert', async () => {
+    await OAuthGrantModel.ensureIndexes();
+    const params = { userId: 'u-revoke-race', clientId: 'c-revoke-race', source: 'authorize' };
+    await oauthGrantRepository.upsertGrant({ ...params, scopes: ['ai:generate'] });
+    await oauthGrantRepository.revoke(params.userId, params.clientId);
+    const collision = Object.assign(new Error('duplicate key'), { code: 11000 });
+    // Simulate the first guard observing an active row, then revocation before the upsert.
+    const update = vi.spyOn(OAuthGrantModel, 'findOneAndUpdate');
+    update.mockReturnValueOnce({ exec: async () => null } as ReturnType<typeof OAuthGrantModel.findOneAndUpdate>);
+    update.mockReturnValueOnce({
+      exec: async () => {
+        throw collision;
+      },
+    } as ReturnType<typeof OAuthGrantModel.findOneAndUpdate>);
+
+    const fresh = await oauthGrantRepository.upsertGrant({ ...params, scopes: ['openid'] });
+
+    expect(fresh?.scopes).toEqual(['openid']);
+    expect(update).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops retrying duplicate-key failures and propagates the database error', async () => {
+    const collision = Object.assign(new Error('duplicate key'), { code: 11000 });
+    const update = vi.spyOn(OAuthGrantModel, 'findOneAndUpdate').mockReturnValue({
+      exec: async () => {
+        throw collision;
+      },
+    } as ReturnType<typeof OAuthGrantModel.findOneAndUpdate>);
+
+    await expect(
+      oauthGrantRepository.upsertGrant({
+        userId: 'u-exhausted',
+        clientId: 'c-exhausted',
+        source: 'authorize',
+        scopes: ['openid'],
+      })
+    ).rejects.toBe(collision);
+
+    expect(update).toHaveBeenCalledTimes(3);
+  });
+
+  it('propagates non-duplicate database failures without retrying', async () => {
+    const failure = new Error('database unavailable');
+    const update = vi.spyOn(OAuthGrantModel, 'findOneAndUpdate').mockReturnValue({
+      exec: async () => {
+        throw failure;
+      },
+    } as ReturnType<typeof OAuthGrantModel.findOneAndUpdate>);
+
+    await expect(
+      oauthGrantRepository.upsertGrant({
+        userId: 'u-failure',
+        clientId: 'c-failure',
+        source: 'authorize',
+        scopes: ['openid'],
+      })
+    ).rejects.toBe(failure);
+
+    expect(update).toHaveBeenCalledTimes(1);
   });
 
   it('revoke returns null for an already-revoked grant instead of re-stamping revokedAt', async () => {

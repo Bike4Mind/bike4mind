@@ -4,9 +4,9 @@ import BaseRepository from '@bike4mind/db-core';
 
 /**
  * A remembered user consent for an OAuth client: the (user, client) pair plus the set of scopes
- * the user has approved. One row per pair (unique index below); a re-consent widens `scopes`, a
- * revoke stamps `revokedAt`. The authorize flow upserts it before minting a code, and the token
- * endpoint requires it before issuing a relying-party access token.
+ * the user has approved. One row per pair (unique index below); an active consent widens `scopes`,
+ * and consenting after revocation starts a fresh scope set. The authorize flow upserts it before
+ * minting a code, and the token endpoint requires it before issuing a relying-party access token.
  *
  * Deliberately shared across client-authorization surfaces: the federated ai-token exchange is
  * meant to read the same (user, client) grant. Keep this the single source of truth rather than
@@ -29,7 +29,7 @@ export interface IOAuthGrantRepository extends IBaseRepository<IOAuthGrantDocume
   findGrant(userId: string, clientId: string): Promise<IOAuthGrantDocument | null>;
   /** All active (non-revoked) grants for this user, most-recently approved first. */
   listActiveByUser(userId: string): Promise<IOAuthGrantDocument[]>;
-  /** Create or widen the grant for this pair, clearing any prior revocation. */
+  /** Create or widen an active grant; replace revoked scopes with the newly approved scopes. */
   upsertGrant(params: {
     userId: string;
     clientId: string;
@@ -41,6 +41,7 @@ export interface IOAuthGrantRepository extends IBaseRepository<IOAuthGrantDocume
 }
 
 type IOAuthGrantModel = Model<IOAuthGrantDocument>;
+const MAX_GRANT_UPSERT_ATTEMPTS = 3;
 
 const OAuthGrantSchema = new Schema<IOAuthGrantDocument>(
   {
@@ -73,27 +74,38 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
   }
 
   async upsertGrant(params: { userId: string; clientId: string; scopes: string[]; source: string }) {
-    // Widen atomically: $addToSet unions the requested scopes into whatever the row already holds,
-    // so two tabs approving different scopes cannot lose-update each other (a read-merge-$set in the
-    // caller could). It also means a re-consent for a subset never shrinks the grant.
     const filter = { clientId: params.clientId, userId: params.userId };
-    const update = {
-      $addToSet: { scopes: { $each: params.scopes } },
-      $set: { source: params.source, revokedAt: null },
-    };
-    try {
-      return await this.model
-        .findOneAndUpdate(filter, update, { upsert: true, new: true, setDefaultsOnInsert: true })
-        .exec();
-    } catch (err) {
-      // Two concurrent INITIAL consents race the upsert insert; the unique (clientId, userId) index
-      // lets exactly one win and the loser gets E11000. The row now exists, so retry as a plain
-      // update (no upsert) to fold this consent's scopes in. Requires the index to be built - see
-      // the ensure-oauthgrant-client-user-index migration.
-      if ((err as { code?: number })?.code === 11000) {
-        return await this.model.findOneAndUpdate(filter, update, { new: true }).exec();
+    let attempt = 0;
+    while (true) {
+      attempt += 1;
+      try {
+        // Only one concurrent re-consent can reactivate the row. Discard the revoked scopes;
+        // later consents widen the now-active row rather than overwriting this approval.
+        const reactivated = await this.model
+          .findOneAndUpdate(
+            { ...filter, revokedAt: { $ne: null } },
+            { $set: { scopes: [...new Set(params.scopes)], source: params.source, revokedAt: null } },
+            { new: true }
+          )
+          .exec();
+        if (reactivated) return reactivated;
+
+        return await this.model
+          .findOneAndUpdate(
+            { ...filter, revokedAt: null },
+            {
+              $addToSet: { scopes: { $each: params.scopes } },
+              $set: { source: params.source, revokedAt: null },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          )
+          .exec();
+      } catch (error: unknown) {
+        // An initial insert or a revoke between the guarded writes can race the unique index.
+        // Retry both guards, never an unguarded union that could revive revoked permissions.
+        const duplicateKey = typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;
+        if (!duplicateKey || attempt >= MAX_GRANT_UPSERT_ATTEMPTS) throw error;
       }
-      throw err;
     }
   }
 
