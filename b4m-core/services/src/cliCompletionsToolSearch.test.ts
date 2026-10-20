@@ -226,6 +226,11 @@ describe('prepareWireTools tool changes', () => {
     expect(() => prepareWireTools(tools, [...hi, change('tool_removal', 'a')], DIRECT)).not.toThrow();
   });
 
+  it('accepts a change followed only by a blank message the adapter drops', () => {
+    const messages = [...hi, change('tool_removal', 'a'), { role: 'user', content: '' }] as IMessage[];
+    expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
+  });
+
   it('accepts a change after an assistant turn ending in a tool search result', () => {
     const messages = [
       { role: 'user', content: 'find' },
@@ -286,6 +291,19 @@ describe('prepareWireTools tool changes', () => {
     ['one after an assistant text turn', [...hi, { role: 'assistant', content: 'ok' }, change('tool_addition', 'b')]],
     ['one before a user turn', [...hi, change('tool_addition', 'b'), { role: 'user', content: 'again' }]],
     ['two back to back', [...hi, change('tool_addition', 'b'), change('tool_removal', 'a')]],
+    [
+      'one after a blank user turn the adapter drops',
+      [...hi, { role: 'assistant', content: 'ok' }, { role: 'user', content: '  ' }, change('tool_addition', 'b')],
+    ],
+    [
+      'one after a user turn of only blank text blocks',
+      [
+        ...hi,
+        { role: 'assistant', content: 'ok' },
+        { role: 'user', content: [{ type: 'text', text: '' }] },
+        change('tool_addition', 'b'),
+      ],
+    ],
   ])('refuses %s as invalid_tool_change', (_label, messages) => {
     expect(refusal(() => prepareWireTools(tools, messages as IMessage[], DIRECT)).errorCode).toBe(
       'invalid_tool_change'

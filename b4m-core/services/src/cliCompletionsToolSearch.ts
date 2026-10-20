@@ -72,10 +72,20 @@ function endsInToolSearchResult(message: IMessage): boolean {
   return last?.type === 'tool_search_tool_result';
 }
 
+/** Must stay in sync with AnthropicBackend.sanitizeMessageContent, which drops these before sending. */
+function isBlankMessage(message: IMessage): boolean {
+  if (typeof message.content === 'string') return message.content.trim() === '';
+  if (!Array.isArray(message.content)) return false;
+  return (message.content as Array<{ type?: unknown; text?: unknown }>).every(
+    block => block?.type === 'text' && (typeof block.text !== 'string' || block.text.trim() === '')
+  );
+}
+
 /**
  * Validates the mid-conversation tool changes in `messages` (system messages of tool_addition /
- * tool_removal blocks). Plain system messages are skipped when looking at neighbours: the adapter
- * hoists them into the system prompt, so they are not between turns on the wire.
+ * tool_removal blocks). Plain system messages and blank messages are skipped when looking at
+ * neighbours: the adapter hoists the former into the system prompt and drops the latter, so neither
+ * is between turns on the wire.
  */
 function validateToolChanges(
   messages: IMessage[],
@@ -105,7 +115,7 @@ function validateToolChanges(
     );
   }
 
-  const wire = messages.filter(m => m.role !== 'system' || isToolChangeMessage(m));
+  const wire = messages.filter(m => (m.role !== 'system' || isToolChangeMessage(m)) && !isBlankMessage(m));
   wire.forEach((message, index) => {
     if (!isToolChangeMessage(message)) return;
     const parsed = ToolChangeMessageContentSchema.safeParse(message.content);
