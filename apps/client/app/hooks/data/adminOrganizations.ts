@@ -66,7 +66,7 @@ export function useGrantOrganization() {
 export function useTopUpOrganization() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; credits: number; reason?: string }) => {
+    mutationFn: async (params: { organizationId: string; credits: number; reason: string }) => {
       const { organizationId, ...body } = params;
       // Generate a fresh idempotency key for each mutation so the API can
       // safely no-op on double-clicks / retries.
