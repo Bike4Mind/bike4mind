@@ -453,13 +453,17 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     return () => clearInterval(id);
   }, [probeLiveness]);
 
+  // Exposed to consumers so the composer can say "Connecting" rather than "Reconnecting" on the
+  // first connect. Kept apart from hasOpenedRef below, which must still read false inside the
+  // first-OPEN effect; this state is already true by then.
+  const [hasEverOpened, setHasEverOpened] = useState(false);
+  if (readyState === ReadyState.OPEN && !hasEverOpened) setHasEverOpened(true);
+
   // Catch-up after a reconnect: frames sent while the socket was down are gone for good, so
   // refetch once (see refetchAfterLostFrames). An incomplete turn then
   // resolves from the refreshed cache via useStreamingMessageMerge, which works even for a new
   // notebook's first turn. Skipped for the first connect, which has nothing to catch up.
   const hasOpenedRef = useRef(false);
-  const [hasEverOpened, setHasEverOpened] = useState(false);
-  if (readyState === ReadyState.OPEN && !hasEverOpened) setHasEverOpened(true);
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const isOpen = readyState === ReadyState.OPEN;
