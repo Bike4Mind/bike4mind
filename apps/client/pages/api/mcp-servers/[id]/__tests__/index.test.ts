@@ -36,7 +36,7 @@ vi.mock('@bike4mind/mcp', () => ({}));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ NotFoundError: class extends Error {} }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
   ForbiddenError: class extends Error {},
 }));
@@ -48,7 +48,7 @@ vi.mock('@server/validators/mcpServerValidators', () => ({
   mcpServerUpdateBodySchema: { safeParse: (...a: unknown[]) => mockUpdateBodyParse(...a) },
 }));
 vi.mock('@server/utils/mcpEnvValidation', () => ({ assertNoForbiddenMcpEnvKeys: vi.fn() }));
-vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
+vi.mock('@bike4mind/server-utils/utils/objectId', () => ({ isValidObjectId: () => true }));
 
 import handler from '../index';
 

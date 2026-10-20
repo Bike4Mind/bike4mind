@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 

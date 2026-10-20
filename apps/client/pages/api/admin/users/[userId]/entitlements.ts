@@ -1,6 +1,6 @@
 import { userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
@@ -18,7 +18,7 @@ import {
 } from '@client/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
-import type { EntitlementKey } from '@client/lib/entitlements/types';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
 type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'implied' | 'admin-bypass' | 'developer-bypass';
 

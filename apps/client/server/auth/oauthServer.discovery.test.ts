@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('@server/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: 'not-configured' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: 'not-configured' } }));
 vi.mock('@bike4mind/database', () => ({
   oauthClientRepository: {},
   oauthAuthorizationCodeRepository: {},

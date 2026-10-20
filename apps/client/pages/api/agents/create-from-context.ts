@@ -24,9 +24,9 @@ import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSett
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
-import { isValidObjectId } from '@server/utils/objectId';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';

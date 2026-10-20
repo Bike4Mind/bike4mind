@@ -2,8 +2,8 @@ import { adminSettingsRepository, FabFile, organizationRepository, User } from '
 import { chargedBytes, StorageLimitError, type StorageChargeFields } from '@bike4mind/common';
 import { checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { ILogger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import type { Types } from 'mongoose';
 
 export type LandedUploadRejection = 'larger_than_declared' | 'file_too_large' | 'storage_limit_exceeded';

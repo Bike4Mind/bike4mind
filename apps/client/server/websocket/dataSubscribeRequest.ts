@@ -27,7 +27,7 @@ import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@serv
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';

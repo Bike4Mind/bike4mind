@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
 }));
@@ -156,7 +156,7 @@ describe('settings/update sensitive value handling', () => {
   it('refuses to persist a sensitive value when no valid encryption key is configured', async () => {
     // Fail closed: a misconfigured stage must not silently store a provider key in plaintext.
     vi.stubGlobal('__noop__', undefined);
-    const { Config } = (await import('@server/utils/config')) as unknown as {
+    const { Config } = (await import('@bike4mind/server-utils/utils/config')) as unknown as {
       Config: { SECRET_ENCRYPTION_KEY: string };
     };
     const original = Config.SECRET_ENCRYPTION_KEY;
@@ -172,7 +172,7 @@ describe('settings/update sensitive value handling', () => {
   it('degrades to plaintext (does not fail closed) on self-host without a key, matching ApiKeyModel', async () => {
     // A self-host that has not run the openssl step must still be able to save a sensitive,
     // local-only setting like ollamaBackend, exactly as the per-user provider-key path allows.
-    const { Config } = (await import('@server/utils/config')) as unknown as {
+    const { Config } = (await import('@bike4mind/server-utils/utils/config')) as unknown as {
       Config: { SECRET_ENCRYPTION_KEY: string };
     };
     const originalKey = Config.SECRET_ENCRYPTION_KEY;

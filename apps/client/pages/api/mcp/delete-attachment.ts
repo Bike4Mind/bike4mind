@@ -6,7 +6,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';

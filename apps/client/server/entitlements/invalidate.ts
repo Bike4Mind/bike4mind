@@ -8,7 +8,7 @@
  * pure `getUserEntitlements` path.
  */
 import { sendToClient } from '@server/websocket/utils';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Resource } from 'sst';
 import type { Logger } from '@bike4mind/observability';
 

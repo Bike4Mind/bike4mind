@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   integrationHealthCheckRepository,
   integrationAuditLogRepository,

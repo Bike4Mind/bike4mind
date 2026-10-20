@@ -11,7 +11,9 @@ import { claimModerationScan, recordLandedObject, writeModerationVerdict } from 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const h = vi.hoisted(() => ({ getMetadata: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: h.getMetadata }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getMetadata: h.getMetadata }),
+}));
 beforeEach(() => {
   h.getMetadata.mockReset();
 });

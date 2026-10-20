@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockFindBySid = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ authSessionRepository: { findBySid: mockFindBySid } }));
 vi.mock('@bike4mind/database/social', () => ({ REALTIME_CONNECTION_MAX_LIFETIME_MS: 2 * 60 * 60 * 1000 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { assertRealtimeSessionActive, gatewayCapExpiry } from './realtimeSession';
 
 const HOUR_MS = 60 * 60 * 1000;

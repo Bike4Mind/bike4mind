@@ -2,7 +2,7 @@ import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';

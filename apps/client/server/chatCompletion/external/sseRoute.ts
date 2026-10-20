@@ -42,10 +42,10 @@ import {
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { serializeError } from '@server/utils/serializeError';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';

@@ -1,7 +1,7 @@
 import type { IFabFileDocument } from '@bike4mind/common';
 import { adminSettingsRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 export async function signBrowserFileResponse(file: IFabFileDocument): Promise<IFabFileDocument> {
   const plainFile =

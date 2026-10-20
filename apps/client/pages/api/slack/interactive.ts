@@ -12,7 +12,7 @@ import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config, isDevelopment } from '@server/utils/config';
+import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
@@ -58,7 +58,7 @@ import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

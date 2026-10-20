@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getStepUpUntil, stepUpMethodsFor } from '@server/auth/stepUp';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /** Which proofs this user may step up with, and whether this session is already stepped up. */
 const handler = baseApi({ auth: 'jwtOnly' })

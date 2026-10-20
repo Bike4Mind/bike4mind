@@ -1,7 +1,7 @@
 import { gzipSync } from 'node:zlib';
 import type { Request, Response } from 'express';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 
 /**
  * Send a JSON response, gzip-compressing it in-handler when it's large enough to matter and the

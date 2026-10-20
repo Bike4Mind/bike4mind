@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 
 const { mockFindUser } = vi.hoisted(() => ({ mockFindUser: vi.fn() }));
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: (...a: unknown[]) => mockFindUser(...a) } }));
 
 import { signQaReportToken, verifyQaReportToken } from './reportToken';

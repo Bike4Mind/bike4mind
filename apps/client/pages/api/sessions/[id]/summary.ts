@@ -5,7 +5,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import { SessionEvents } from '@server/utils/eventBus';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 

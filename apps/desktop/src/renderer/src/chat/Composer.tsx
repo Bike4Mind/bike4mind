@@ -78,6 +78,7 @@ export function Composer({
   skills,
   suggestion,
   onSuggestionDismissed,
+  onBrowseSkillMarket,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -119,6 +120,8 @@ export function Composer({
    * and nothing typed here can reach the model through it. See commands.ts.
    */
   onRunCommand?: (name: string, args: string) => void;
+  /** Opens the Skill Market, offered from the `/` menu when there are no skills to pick. */
+  onBrowseSkillMarket?: () => void;
   /** Decides which commands are offered: some act only on a Code session. */
   sessionMode?: ChatSessionMode;
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
@@ -459,6 +462,7 @@ export function Composer({
           onPickCommand={runCommand}
           onPick={skill => pick(skill.name)}
           onTrustProject={() => void skills?.trustProject()}
+          onBrowseMarket={onBrowseSkillMarket}
         />
       )}
 

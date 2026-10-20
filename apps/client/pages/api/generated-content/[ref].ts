@@ -1,8 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { getGeneratedImageStorage } from '@server/utils/storage';
-import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { GENERATED_CONTENT_KEY_RE } from '@bike4mind/common';
 import { z } from 'zod';
 

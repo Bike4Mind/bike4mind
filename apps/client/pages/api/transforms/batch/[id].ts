@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getTextModelCost } from '@bike4mind/common';

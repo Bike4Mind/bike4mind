@@ -203,7 +203,7 @@ export function logSlackAuditFailure(context: SlackAuditContext, errorMessage: s
  *
  * @deprecated Trusts the leftmost (client-supplied) x-forwarded-for token, so the result is
  * spoofable. Apps should use their own deploy-aware resolver; bike4mind's Slack routes use
- * apps/client/server/utils/ip.ts. Kept only for existing external importers.
+ * packages/server-utils/src/utils/ip.ts. Kept only for existing external importers.
  */
 export function getClientIp(req: IncomingMessage): string | undefined {
   const forwardedFor = req.headers['x-forwarded-for'];

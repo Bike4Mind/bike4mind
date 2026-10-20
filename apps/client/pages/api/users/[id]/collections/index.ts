@@ -2,7 +2,7 @@ import { CollectionType } from '@bike4mind/common';
 import { userRepository, sessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const PaginatedCollectionsQuerySchema = z.object({

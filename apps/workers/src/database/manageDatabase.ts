@@ -5,7 +5,7 @@ import { MigrationManager } from '@bike4mind/scripts';
 import { connectDB, getDB } from '@bike4mind/database';
 import { ensureAtlasVectorSearchIndexes } from '@bike4mind/fab-pipeline';
 import { Context } from 'aws-lambda';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { contextToLogs } from '@server/utils/logger';
 

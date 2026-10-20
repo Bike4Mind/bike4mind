@@ -50,7 +50,7 @@ vi.mock('./agentExecutor.subagentToolConfig', async () => {
   return { ...actual, buildSubagentToolConfig: vi.fn().mockReturnValue({}) };
 });
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
 }));
@@ -113,6 +113,13 @@ const childDoc = {
 };
 
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
+
+const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
+vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+  premiumWorkspaceSessionSettings: {
+    'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
+  },
+}));
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -233,6 +240,28 @@ describe('processSubagentDispatch tool deps', () => {
     const deps = await dispatchWithSession(baseSession);
 
     expect(deps.attachedFileIds).toEqual([]);
+  });
+
+  it('fails closed when the workspace settings resolver throws: the child never reaches tool building', async () => {
+    resolveWorkspaceSettings.mockRejectedValue(new Error('workspace lookup failed'));
+    const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(sessionRepository.findById).mockResolvedValue({
+      ...baseSession,
+      surface: 'settings-workspace',
+      disableUserIntegrations: false,
+    } as never);
+    const { handler } = await import('./agentExecutor');
+
+    await expect(handler(dagNodeDispatchEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+    expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
+    expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+      'child-1',
+      expect.objectContaining({
+        message: 'Workspace session settings resolver for "settings-workspace" failed',
+      })
+    );
   });
 });
 

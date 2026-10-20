@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import { ApiKeyScope, type ContextTelemetry } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';

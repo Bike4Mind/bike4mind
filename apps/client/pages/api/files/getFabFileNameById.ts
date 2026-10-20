@@ -1,7 +1,7 @@
 import { fabFileRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { Request } from 'express';
 

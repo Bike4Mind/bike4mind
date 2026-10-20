@@ -3,10 +3,15 @@ import { userRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { EmailEvents } from '@server/utils/eventBus';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
+import {
+  generateVerificationLink,
+  getLogoUrl,
+  buildEmailLogoImg,
+  escapeHtml,
+} from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { userService } from '@bike4mind/services';
 

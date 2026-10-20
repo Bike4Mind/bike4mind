@@ -11,7 +11,7 @@ vi.mock('@server/utils/creditPreflight', () => ({
   InsufficientCreditsPreflightError,
 }));
 
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertTranscriptionCredits,
   estimateTranscriptionCost,

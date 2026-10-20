@@ -18,7 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: { shareable: { findAllAccessibleByIds: h.findAllAccessibleByIds } },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ getMetadata: h.getMetadata, getSignedUrl: h.getSignedUrl }),
 }));
 

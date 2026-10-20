@@ -3,7 +3,7 @@ import type { AuditActor, AuditContext, AuditEntry } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default.
 type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;

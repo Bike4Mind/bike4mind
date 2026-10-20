@@ -50,7 +50,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: () => Promise.resolve(0) }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getGeneratedImageStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getPublishedArtifactsStorage: () => ({ download: vi.fn() }),

@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import type { AttachmentLakeAccess } from '@bike4mind/common';
 import { NotebookExportRequestSchema } from '../../../types/api';

@@ -42,7 +42,7 @@ export function profilePhotoCacheKey(userId: string, source: string): string {
 /**
  * The backend's own file proxy, which serves bucket keys on deployments that front no CDN.
  *
- * Must stay in sync with `LOCAL_FILE_PROXY_BASE` in apps/client/server/utils/appFileProxy.ts,
+ * Must stay in sync with `LOCAL_FILE_PROXY_BASE` in packages/server-utils/src/utils/appFileProxy.ts,
  * the value an operator is expected to put in `NEXT_PUBLIC_CDN_URL` on such a stack.
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';

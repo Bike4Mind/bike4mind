@@ -17,8 +17,8 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeListRetrievalScope';
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
-import { isValidObjectId } from '@server/utils/objectId';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 

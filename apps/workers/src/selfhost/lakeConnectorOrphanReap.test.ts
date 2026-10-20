@@ -3,7 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock('@workers/cron/lakeConnectorOrphanReap', () => ({ runLakeConnectorOrphanReap: run }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
 
 const { SelfHostWorker } = await import('./selfHostWorker');
 const { registerLakeConnectorOrphanReap, LAKE_CONNECTOR_ORPHAN_REAP_INTERVAL_MS } =

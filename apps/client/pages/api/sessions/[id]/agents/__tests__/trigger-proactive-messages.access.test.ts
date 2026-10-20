@@ -43,8 +43,10 @@ vi.mock('@bike4mind/database', () => ({
   sessionAgentConfigRepository: { findBySessionId: (...args: unknown[]) => mockRefs.findBySessionId(...args) },
 }));
 
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args) }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args),
+}));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   assertOwnerCanAfford: (...args: unknown[]) => mockRefs.assertOwnerCanAfford(...args),
 }));

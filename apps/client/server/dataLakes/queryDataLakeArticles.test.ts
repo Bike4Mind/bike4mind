@@ -51,7 +51,9 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
+}));
 
 import { queryDataLakeArticles } from './index';
 import { fabFileRepository, dataLakeRepository } from '@bike4mind/database';

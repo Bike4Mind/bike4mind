@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import { isKnownFlaky, isPlaceholderValue, type IQaRun, type QaRunStatus, type QaTestStatus } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { decideAlarm } from './alarm';
 import { leadingNonPassing, stateKeyFilter } from './streak';
 

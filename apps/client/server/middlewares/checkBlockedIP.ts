@@ -1,6 +1,6 @@
 import { blockedIPRepository } from '@bike4mind/database';
 import { RequestHandler } from 'express';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 /**
  * Middleware to check if the client's IP address is blocked

@@ -35,7 +35,7 @@ import {
   ingestLakeFile,
   settleLakeIngestBatch,
 } from '@workers/queueHandlers/lakeIngestShared';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
@@ -71,7 +71,7 @@ import {
   driveIngestSkipReason,
 } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';

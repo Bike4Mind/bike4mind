@@ -1,7 +1,7 @@
 import { compareMongoIds, friendshipRepository, userRepository } from '@bike4mind/database';
 import { friendshipService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 const handler = baseApi().get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {

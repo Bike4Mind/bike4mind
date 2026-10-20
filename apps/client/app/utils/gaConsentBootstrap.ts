@@ -1,4 +1,4 @@
-import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { DECISION_COOKIE, REGION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { CONSENT_KEY } from './consentRegion';
 
 // Window.__b4mGaConsentDefault is declared in types/gaConsent.d.ts, not here: this module

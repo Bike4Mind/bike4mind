@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
 
 const mockGetSettingsMap = vi.fn(() => Promise.resolve({} as Record<string, string>));
 let allowTrustedDevicesValue: unknown;

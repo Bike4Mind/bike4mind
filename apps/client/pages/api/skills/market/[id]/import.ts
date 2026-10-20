@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/common';
 import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash } from '@server/skillMarket/market';
 import { validateSkillName } from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const bodySchema = z.object({
   token: z.string().max(64).optional(),

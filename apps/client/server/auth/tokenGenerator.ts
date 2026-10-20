@@ -1,5 +1,5 @@
 import { AuthTokenGeneratorService } from '@bike4mind/auth';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
  * Access-token lifetime, in seconds. Exported because OAuth token responses must advertise the

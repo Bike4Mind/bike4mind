@@ -4,7 +4,7 @@ import { resolveConsent } from '@client/app/utils/consentRegion';
 import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@client/app/utils/funnelEvents';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
+import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { type OrgSubscriptionSubscribeRequest } from '@client/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';

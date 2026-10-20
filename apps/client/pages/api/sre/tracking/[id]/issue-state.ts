@@ -5,10 +5,10 @@
  * Used by the UI to show "Issue Closed" chip and disable retry.
  */
 
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository } from '@bike4mind/database';
 import { parseIssueNumberFromUrl } from '@server/integrations/github/sreWebhookDispatch';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';

@@ -33,9 +33,9 @@ vi.mock('@bike4mind/mcp', () => ({}));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ NotFoundError: class extends Error {} }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
-vi.mock('@server/utils/errors', () => ({ BadRequestError: class extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({ BadRequestError: class extends Error {} }));
 vi.mock('@server/security/tokenEncryption', () => ({ decryptEnvVariables: (v: unknown) => v }));
-vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
+vi.mock('@bike4mind/server-utils/utils/objectId', () => ({ isValidObjectId: () => true }));
 
 import handler from '../connect';
 

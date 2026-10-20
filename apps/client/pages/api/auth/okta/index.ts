@@ -21,7 +21,7 @@ import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, setPkceVerifierCookie } from '@server/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { isLocalAppUrl } from '@server/utils/validators';

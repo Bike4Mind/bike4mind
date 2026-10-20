@@ -122,7 +122,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const { chatCompletion, setChatCompletion } = useChatCompletionContext();
 
-  const { readyState, subscribeToAction } = useWebsocket();
+  const { readyState, hasEverOpened: hasSocketEverOpened, subscribeToAction } = useWebsocket();
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const lexicalInputRef = useRef<LexicalChatInputRef>(null);
@@ -348,6 +348,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
+    hasSocketEverOpened,
     hasActiveUploads,
   });
 

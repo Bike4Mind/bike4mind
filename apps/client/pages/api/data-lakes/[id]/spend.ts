@@ -9,7 +9,7 @@ import {
   usageEventRepository,
 } from '@bike4mind/database';
 import type { IDataLakeSpendResponse } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';

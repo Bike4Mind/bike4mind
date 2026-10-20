@@ -7,7 +7,7 @@ import {
   type ISessionAgentModelUsage,
   type ISessionUsageResponse,
 } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { z } from 'zod';

@@ -7,7 +7,7 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import imageLogger from '@server/utils/imageLogger';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import axios from 'axios';
 import {
   computeImageUsdCostPerImage,

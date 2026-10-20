@@ -23,7 +23,7 @@ import {
 } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { decryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
  * Resolve the Slack bot token for a triage config.

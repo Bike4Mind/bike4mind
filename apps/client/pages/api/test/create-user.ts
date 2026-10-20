@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isE2EEnabled } from '@server/utils/config';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';

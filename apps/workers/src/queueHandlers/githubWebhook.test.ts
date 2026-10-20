@@ -68,7 +68,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
       fn(event, ctx, logger),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitWebhookDeliveryMetric: mockEmitWebhookDeliveryMetric,
   WebhookMetrics: {
     DELIVERY_ATTEMPTED: 'DeliveryAttempted',

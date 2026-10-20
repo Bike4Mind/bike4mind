@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // No-op rate limiter: the daily-cap policy itself isn't this test's concern.
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
-vi.mock('@server/utils/config', () => ({ isDevelopment: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => false }));
 vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
   analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
   claimBatchForAnalysis: h.claimBatchForAnalysis,

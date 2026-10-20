@@ -1,7 +1,7 @@
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { connectDB, modelDiscoveryRunRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'modelDiscoveryStaleness' } });

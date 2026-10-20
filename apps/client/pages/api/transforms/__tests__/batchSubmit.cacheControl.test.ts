@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { create: vi.fn(async () => ({ id: 'batch-row' })) },
