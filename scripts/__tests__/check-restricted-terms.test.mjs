@@ -136,6 +136,26 @@ describe('compileTerms', () => {
     }
   });
 
+  it('backtracks to shorter matches without changing anchor or lookbehind context', () => {
+    for (const fragment of ['acme(corp)?', 'acmecorp|acme']) {
+      const matcher = compileTerms(fragment);
+      expect(matcher.test('AcmeCorporation'), fragment).toBe(true);
+      expect(matcher.test('src/AcmeCorporation/client.ts'), fragment).toBe(true);
+      expect(matcher.test('preacmecorporation'), fragment).toBe(false);
+    }
+    expect(compileTerms('(?<=use)acme|(?<=use)acmecorp').test('useAcmecorpClient')).toBe(true);
+    expect(compileTerms('^acme|^acmecorp').test('useAcmecorpClient')).toBe(false);
+    expect(compileTerms('acme$|acmecorp$').test('useAcmecorpClient')).toBe(false);
+  });
+
+  it('rejects contextual zero-width matches instead of reporting them as terms', () => {
+    for (const fragment of ['\\b', '(?=x)', '(?<=x)']) {
+      expect(() => compileTerms(`zorblax\n${fragment}`).test('x')).toThrow(
+        /^Line 2 of the restricted-term list matches an empty string/
+      );
+    }
+  });
+
   it('does not match an astral letter next to a term, and does not hang on one', () => {
     // One astral letter supplied by the text, one by a fragment that can start on it.
     expect(compileTerms('acme').test('\u{10428}acme')).toBe(false);
@@ -156,9 +176,7 @@ describe('compileTerms', () => {
 
   it('folds a term that contains a combining mark the same way as the text', () => {
     // Devi: NFD leaves the vowel signs as combining marks, and NFKC cannot compose them.
-    expect(compileTerms('\u0939\u093F\u0902\u0926\u0940').test('text \u0939\u093F\u0902\u0926\u0940 here')).toBe(
-      true
-    );
+    expect(compileTerms('\u0939\u093F\u0902\u0926\u0940').test('text \u0939\u093F\u0902\u0926\u0940 here')).toBe(true);
     // A halfwidth voiced sound mark only becomes a combining mark at NFKC.
     expect(compileTerms('acmecorp').test('acme\u{FF9E}corp')).toBe(true);
   });
@@ -316,12 +334,41 @@ describe('run', () => {
         extra: {
           ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1,2 @@\n+ok\n+zorblax')]),
           ...commitRoute(b, [file('src/a.ts', '@@ -1,2 +1 @@\n ok\n-zorblax')]),
+          ...commitRoute(m, []),
         },
       }),
     });
     expect(code).toBe(1);
     expect(output).toContain(`Restricted term found in commit ${'a'.repeat(12)} file src/a.ts line 2.`);
     expect(output).not.toContain('e'.repeat(12));
+  });
+
+  it('checks a merge resolution even when a later commit removes its added term', async () => {
+    const [merge, removal] = ['e'.repeat(40), 'b'.repeat(40)];
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [{ ...commit('merge', merge), parents: [{}, {}] }, commit('remove', removal)],
+        extra: {
+          ...commitRoute(merge, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
+        },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Restricted term found in commit ${merge.slice(0, 12)} file src/a.ts line 1.`);
+    expect(output).not.toContain('zorblax');
+  });
+
+  it('reports contextual zero-width configuration errors without echoing the pattern', async () => {
+    const { code, output } = await check({
+      terms: 'zorblax\n(?=widget)',
+      routes: prRoutes({ pull: pr({ title: 'widget' }) }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('Line 2 of the restricted-term list matches an empty string');
+    expect(output).not.toContain('widget');
+    expect(output).not.toContain('Restricted term found');
   });
 
   it('ignores removed lines', async () => {
@@ -377,6 +424,17 @@ describe('run', () => {
     const utf16 = await check({ routes });
     expect(utf16.code).toBe(1);
     expect(utf16.output).toContain('file utf16.bin (binary text)');
+  });
+
+  it('folds Unicode readable text inside binary files', async () => {
+    for (const text of ['\uFF5A\uFF4F\uFF52\uFF42\uFF4C\uFF41\uFF58', 'zor\u200Bblax', 'z\u00F3rblax']) {
+      const routes = prRoutes({ files: [file('data.bin', undefined)] });
+      routes['/repos/acme/widgets/contents/data.bin'] = response(`\0${text}\0`);
+      const { code, output } = await check({ routes });
+      expect(code, text).toBe(1);
+      expect(output).toContain('file data.bin (binary text)');
+      expect(output).not.toContain(text);
+    }
   });
 
   it('checks an added file whose patch is omitted', async () => {
@@ -543,7 +601,7 @@ describe('run', () => {
     expect(output).toContain('already on the branch');
   });
 
-  it('checks the head commit of a new ref without calling compare or reporting a gap', async () => {
+  it('checks the head of a new ref and reports that earlier history was not read', async () => {
     const event = { ref: 'refs/heads/main', before: '0'.repeat(40), after: '2'.repeat(40) };
     const routes = {
       [`/repos/acme/widgets/compare/${event.before}...${event.after}`]: response({}, { status: 500 }),
@@ -556,7 +614,17 @@ describe('run', () => {
     expect(code).toBe(1);
     expect(output).toContain('Restricted term found in file src/a.ts line 1.');
     expect(output).toContain(`Restricted term found in commit ${event.after.slice(0, 12)} message.`);
-    expect(output).not.toContain('Incomplete check');
+    expect(output).toContain('Incomplete check: the new ref history was not listed');
     expect(output).not.toContain('GitHub API 500');
+  });
+
+  it('fails closed for a clean new-ref head whose earlier history was not read', async () => {
+    const event = { ref: 'refs/heads/main', before: '0'.repeat(40), after: '2'.repeat(40) };
+    const routes = {
+      [`/repos/acme/widgets/commits/${event.after}`]: response({ ...commit('clean', event.after), files: [] }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(1);
+    expect(output).toContain('Incomplete check: the new ref history was not listed');
   });
 });

@@ -3,7 +3,7 @@
 //
 // The list comes from the RESTRICTED_TERMS secret: one case-insensitive regex
 // fragment per line, matched on word boundaries (camelCase humps count as
-// boundaries too; see `hasWordEdges`). Blank lines and lines starting with `#` are
+// boundaries too; see `WORD_EDGE`). Blank lines and lines starting with `#` are
 // ignored. Neither the list nor anything it matches is ever printed,
 // because workflow logs on this repo are public: a hit reports only WHERE it was
 // found (PR title, commit sha, file and line), never what. A location that would
@@ -42,52 +42,10 @@ function safeMessage(err) {
   return err instanceof SafeError ? err.message : `unexpected ${err?.name ?? 'error'}.`;
 }
 
-// Letters, digits and the two case classes the boundary check needs. They are
-// deliberately case-sensitive: under /iu, \p{Lu} also matches lowercase letters,
-// so every position would look like a boundary.
-const ALNUM = /[\p{L}\p{N}]/u;
-const LOWER = /\p{Ll}/u;
-const UPPER = /\p{Lu}/u;
-const LETTER = /\p{L}/u;
-
-// Read whole characters, not code units: half of an astral character is a lone
-// surrogate, which `\p{L}` does not match, so indexing would see a word edge
-// where there is none.
-function charAt(text, i) {
-  return i >= text.length ? '' : String.fromCodePoint(text.codePointAt(i));
-}
-
-function charBefore(text, i) {
-  if (i <= 0) return '';
-  const low = text.charCodeAt(i - 1);
-  return low >= 0xdc00 && low <= 0xdfff ? text.slice(i - 2, i) : text.slice(i - 1, i);
-}
-
-/** Whether an identifier changes case or switches between letters and digits between `i - 1` and `i`. */
-function isHump(text, i) {
-  if (i <= 0 || i >= text.length) return false;
-  const before = charBefore(text, i);
-  const at = charAt(text, i);
-  if (!ALNUM.test(before) || !ALNUM.test(at)) return false;
-  if (LOWER.test(before) && UPPER.test(at)) return true; // fooBar
-  if (UPPER.test(before) && UPPER.test(at) && LOWER.test(charAt(text, i + at.length))) return true; // HTTPServer
-  return LETTER.test(before) !== LETTER.test(at); // foo2, 2foo
-}
-
-// Word boundaries are letters and digits only, so `_`, `-`, `/` and `.` separate
-// words, and a case or letter-digit change inside an identifier does too. A
-// fragment that begins or ends with punctuation (`@acme`) supplies its own edge
-// there, so that side is not checked.
-function hasWordEdges(text, start, match) {
-  const end = start + match.length;
-  const first = charAt(match, 0);
-  const last = charBefore(match, match.length);
-  const leftOk =
-    !ALNUM.test(first) || start === 0 || !ALNUM.test(charBefore(text, start)) || isHump(text, start);
-  const rightOk =
-    !ALNUM.test(last) || end === text.length || !ALNUM.test(charAt(text, end)) || isHump(text, end);
-  return leftOk && rightOk;
-}
+// Keep edge assertions case-sensitive while fragments match case-insensitively.
+// Putting the edge inside the regex lets the engine backtrack to shorter OR
+// longer alternatives without slicing away anchors or lookbehind context.
+const WORD_EDGE = String.raw`(?-i:(?<![\p{L}\p{N}])|(?![\p{L}\p{N}])|(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{L})(?=\p{N})|(?<=\p{N})(?=\p{L}))`;
 
 /** Folds text and list lines the same way, so an accent or a format character cannot hide a term. */
 function fold(s) {
@@ -104,7 +62,7 @@ function fold(s) {
 
 /**
  * Compiles the term list into a matcher, or throws a message safe to print.
- * The matcher's `test` is boundary-aware (see `hasWordEdges`), so a term matches
+ * The matcher's `test` is boundary-aware (see `WORD_EDGE`), so a term matches
  * inside `term_helper`, `term-cli` and `useTermClient` but not `termination`.
  * Each line is compiled on its own: joined into one pattern, a shorter line that
  * is a prefix of a longer one hides it, as alternation keeps the first match.
@@ -115,50 +73,25 @@ export function compileTerms(raw) {
     const fragment = fold(line.trim());
     if (!fragment || fragment.startsWith('#')) return;
     let whole;
-    let edges;
+    let bounded;
     try {
-      whole = new RegExp(fragment, 'giu');
-      // The scan below tries one match at a time and cannot backtrack across `|`
-      // alternatives or lazy quantifiers, so also ask the plain pattern, which can.
-      edges = new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragment})(?![\\p{L}\\p{N}])`, 'iu');
+      whole = new RegExp(fragment, 'iu');
+      bounded = new RegExp(`${WORD_EDGE}(?:${fragment})${WORD_EDGE}`, 'iu');
     } catch {
       throw new SafeError(`Line ${i + 1} of the restricted-term list is not a valid regular expression.`);
     }
-    if (whole.test('')) {
-      throw new SafeError(`Line ${i + 1} of the restricted-term list matches an empty string, so it would flag every change.`);
-    }
-    // A longer match at the same start, from `minLength` characters on: the
-    // lookbehind makes the engine backtrack into later alternatives and lazy
-    // quantifiers to satisfy it. Anchored on the remaining text rather than made
-    // sticky, because a sticky match takes the same short branch the caller
-    // already rejected.
-    const longerAt = (text, start, minLength) =>
-      new RegExp(`^(?:${fragment})(?<=[\\s\\S]{${minLength}})`, 'iu').exec(text.slice(start))?.[0];
+    const rejectEmpty = () => {
+      throw new SafeError(
+        `Line ${i + 1} of the restricted-term list matches an empty string, so it would flag every change.`
+      );
+    };
+    if (whole.test('')) rejectEmpty();
     fragments.push(text => {
-      if (edges.test(text)) return true;
-      // Alternation keeps the first branch that completes, so the match the scan
-      // finds can be shorter than the one whose edges hold (`acme|acmecorp` on
-      // `useAcmecorpClient`, `acme\w*?` on the same text). Walk the longer ones
-      // out before giving up on that start.
-      let at = 0;
-      let match;
-      while (at <= text.length) {
-        // The pattern is stateful (`g`): every scan starts from the top.
-        whole.lastIndex = at;
-        match = whole.exec(text);
-        if (!match) break;
-        let found = match[0];
-        for (;;) {
-          if (hasWordEdges(text, match.index, found)) return true;
-          const longer = longerAt(text, match.index, [...found].length + 1);
-          if (!longer) break;
-          found = longer;
-        }
-        // One whole character ahead, so an overlapping match is still seen. Never
-        // behind `at`, so a wrong step cannot stall the scan.
-        at = Math.max(at + 1, match.index + (text.codePointAt(match.index) > 0xffff ? 2 : 1));
-      }
-      return false;
+      const match = bounded.exec(text);
+      // Lookarounds can consume nothing only in particular text, even though
+      // testing the fragment against an empty string at compile time passed.
+      if (match?.[0] === '') rejectEmpty();
+      return match !== null;
     });
   });
   if (fragments.length === 0) return null;
@@ -267,9 +200,10 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
         // printable text rather than skipping it; it has no lines to number. The
         // NUL-stripped view catches UTF-16LE strings, which have a NUL between
         // every character and so never form a printable run on their own.
-        const text = content.toString('latin1');
-        lines = [text, text.replace(/\0/g, '')]
-          .flatMap(view => view.match(/[\x20-\x7e]+/g) ?? [])
+        const views = [content.toString('latin1'), content.toString('utf8')];
+        lines = views
+          .flatMap(text => [text, text.replace(/\0/g, '')])
+          .flatMap(view => view.match(/[^\p{Cc}]+/gu) ?? [])
           .map(run => ({ text: run }));
       } else {
         lines = content
@@ -284,15 +218,11 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
   }
 }
 
-// The net diff misses text one commit adds and a later one removes, yet merge
-// and rebase merges put every commit into the base branch's history. So with
-// more than one commit, each commit's own diff is checked too. Merge commits are
-// skipped: their diff against the first parent is the base branch's history, and
-// what they change in the result is already in the net diff.
+// Net diffs miss additions later removed, including merge resolutions. Scan
+// every commit; merge first-parent diffs can include base changes, so fail closed.
 async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
   for (const c of commits) {
-    if ((c.parents?.length ?? 1) > 1) continue;
     const sha = c.sha.slice(0, 12);
     const files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
     if (files.length >= MAX_PR_FILES) {
@@ -340,13 +270,14 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
       incomplete(`The push changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`);
     }
   } catch (err) {
-    // A force push or a new ref has no usable base; fall back to the head commit.
-    // For a new ref that is the whole push, but after a force push the other
-    // commits go unread, which has to be reported as a gap.
+    // A force push or a new ref has no usable base; check the head commit,
+    // but report the gap because neither path enumerates the earlier history.
     if (err.status !== 404) throw err;
-    if (!ZERO_SHA.test(event.before)) {
-      incomplete('the push base is not comparable; only the head commit was checked.');
-    }
+    incomplete(
+      ZERO_SHA.test(event.before)
+        ? 'the new ref history was not listed; only the head commit was checked.'
+        : 'the push base is not comparable; only the head commit was checked.'
+    );
     const head = await gh.json(`/repos/${repo}/commits/${event.after}`);
     commits = [head];
     files = await gh.paginate(`/repos/${repo}/commits/${event.after}`, body => body.files ?? []);
