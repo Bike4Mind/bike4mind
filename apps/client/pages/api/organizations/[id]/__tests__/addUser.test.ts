@@ -73,8 +73,13 @@ describe('POST /api/organizations/[id]/addUser', () => {
     expect(addMember).toHaveBeenCalledTimes(1);
   });
 
-  it('lets the appointed team manager add a user', async () => {
-    findById.mockResolvedValue({ id: 'org1', userId: 'owner1', managerId: 'manager1' });
+  it('lets an org manager add a user', async () => {
+    findById.mockResolvedValue({
+      id: 'org1',
+      userId: 'owner1',
+      adminUserIds: ['manager1'],
+      users: [{ userId: 'manager1', permissions: ['read'] }],
+    });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
     (req as any).user = { id: 'manager1', isAdmin: false };
     await mockRefs.postHandler!(req, res);

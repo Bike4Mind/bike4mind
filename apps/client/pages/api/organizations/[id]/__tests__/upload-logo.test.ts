@@ -11,7 +11,6 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const ORG_ID = '64b7f0c2a1b2c3d4e5f60718';
 const OWNER = 'owner1';
-const MANAGER = 'manager1';
 const MEMBER = 'member1';
 const APPOINTED_ADMIN = 'appointed1';
 
@@ -74,9 +73,8 @@ import '../upload-logo';
 const ORG = {
   id: ORG_ID,
   userId: OWNER,
-  managerId: MANAGER,
   adminUserIds: [APPOINTED_ADMIN],
-  users: [{ userId: OWNER }, { userId: MANAGER }, { userId: MEMBER }, { userId: APPOINTED_ADMIN }],
+  users: [{ userId: OWNER }, { userId: MEMBER }, { userId: APPOINTED_ADMIN }],
 };
 const sessionChain = () => ({ session: vi.fn(async () => undefined) });
 
@@ -116,7 +114,6 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
 
   it.each([
     ['the owner', { id: OWNER, isAdmin: false }],
-    ['the legacy manager', { id: MANAGER, isAdmin: false }],
     ['a rostered org manager', { id: APPOINTED_ADMIN, isAdmin: false }],
     ['a platform admin', { id: 'admin1', isAdmin: true }],
   ])('lets %s replace the logo', async (_label, user) => {

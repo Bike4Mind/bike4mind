@@ -1,191 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-/**
- * Tests the managerId field in organizationService.create
- * (b4m-core/services/src/organizationService/create.ts).
- */
+/** Org manager (adminUserIds) permissions in organizationService.update and revokeAccess. */
 
 // Import the REAL organizationService functions
 import { organizationService } from '@bike4mind/services';
 import { IUserDocument, IOrganizationDocument } from '@bike4mind/common';
-
-describe('organizationService.create - Team Manager Field', () => {
-  const mockUser: Partial<IUserDocument> = {
-    id: 'user-123',
-    name: 'Test User',
-    email: 'test@example.com',
-  };
-
-  const mockBillingOwner = {
-    id: 'owner-456',
-    name: 'Billing Owner',
-    email: 'owner@example.com',
-  };
-
-  const mockManager = {
-    id: 'manager-789',
-    name: 'Team Manager',
-    email: 'manager@example.com',
-  };
-
-  let mockOrganizationRepository: any;
-  let mockUserRepository: any;
-
-  beforeEach(() => {
-    mockOrganizationRepository = {
-      create: vi.fn().mockImplementation(org => Promise.resolve({ ...org, id: 'org-created-123' })),
-    };
-    // create() now resolves a provided billingOwnerId to a real user (to seed userDetails
-    // from the OWNER) and fails loud if it can't, so findById must return the billing owner.
-    mockUserRepository = {
-      findById: vi.fn().mockResolvedValue(mockBillingOwner),
-      update: vi.fn().mockResolvedValue(null),
-    };
-  });
-
-  describe('managerId parameter support', () => {
-    it('should set managerId when provided', async () => {
-      const result = await organizationService.create(
-        mockUser as IUserDocument,
-        {
-          name: 'Test Org',
-          seats: 5,
-          personal: false,
-          stripeCustomerId: null,
-          billingOwnerId: mockBillingOwner.id,
-          managerId: mockManager.id,
-        },
-        {
-          db: {
-            organizations: mockOrganizationRepository,
-            users: mockUserRepository,
-          },
-        }
-      );
-
-      // Verify the create function was called with managerId
-      expect(mockOrganizationRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          managerId: mockManager.id,
-          userId: mockBillingOwner.id, // billingOwnerId maps to userId
-        })
-      );
-
-      // Verify the returned organization has managerId
-      expect(result.managerId).toBe(mockManager.id);
-    });
-
-    it('should set managerId to null when not provided', async () => {
-      const result = await organizationService.create(
-        mockUser as IUserDocument,
-        {
-          name: 'Test Org',
-          seats: 5,
-          personal: false,
-          stripeCustomerId: null,
-          billingOwnerId: mockBillingOwner.id,
-          // No managerId provided
-        },
-        {
-          db: {
-            organizations: mockOrganizationRepository,
-            users: mockUserRepository,
-          },
-        }
-      );
-
-      // Verify managerId is null when not provided
-      expect(mockOrganizationRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          managerId: null,
-        })
-      );
-
-      expect(result.managerId).toBeNull();
-    });
-
-    it('should default userId to user.id when billingOwnerId not provided', async () => {
-      const result = await organizationService.create(
-        mockUser as IUserDocument,
-        {
-          name: 'Test Org',
-          seats: 5,
-          personal: false,
-          stripeCustomerId: null,
-          managerId: mockManager.id,
-          // No billingOwnerId - should default to mockUser.id
-        },
-        {
-          db: {
-            organizations: mockOrganizationRepository,
-            users: mockUserRepository,
-          },
-        }
-      );
-
-      // Verify userId defaults to the user parameter when billingOwnerId not provided
-      expect(mockOrganizationRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          managerId: mockManager.id,
-        })
-      );
-
-      expect(result.userId).toBe(mockUser.id);
-      expect(result.managerId).toBe(mockManager.id);
-    });
-
-    it('should create organization with both billingOwnerId and managerId', async () => {
-      const result = await organizationService.create(
-        mockUser as IUserDocument,
-        {
-          name: 'Test Org with Manager',
-          seats: 10,
-          personal: false,
-          stripeCustomerId: null,
-          billingOwnerId: mockBillingOwner.id,
-          managerId: mockManager.id,
-        },
-        {
-          db: {
-            organizations: mockOrganizationRepository,
-            users: mockUserRepository,
-          },
-        }
-      );
-
-      // Verify both fields are set correctly
-      expect(result.userId).toBe(mockBillingOwner.id);
-      expect(result.managerId).toBe(mockManager.id);
-      expect(result.name).toBe('Test Org with Manager');
-      expect(result.seats).toBe(10);
-    });
-  });
-
-  describe('Validation rules', () => {
-    it('should validate managerId !== userId (billing owner)', async () => {
-      // Manager cannot be the same as the billing owner
-      await expect(
-        organizationService.create(
-          mockUser as IUserDocument,
-          {
-            name: 'Test Org',
-            seats: 5,
-            personal: false,
-            stripeCustomerId: null,
-            billingOwnerId: mockBillingOwner.id,
-            managerId: mockBillingOwner.id, // Same as owner - should fail
-          },
-          {
-            db: {
-              organizations: mockOrganizationRepository,
-            },
-          }
-        )
-      ).rejects.toThrow('Manager cannot be the same as the billing owner');
-    });
-  });
-});
 
 describe('organizationService.update - Manager Permissions', () => {
   const mockBillingOwner: Partial<IUserDocument> = {
@@ -208,7 +27,8 @@ describe('organizationService.update - Manager Permissions', () => {
     description: 'Test description',
     billingContact: 'billing@example.com',
     userId: mockBillingOwner.id,
-    managerId: mockManager.id,
+    adminUserIds: [mockManager.id!],
+    users: [{ userId: mockManager.id!, permissions: ['read'] as never }],
   };
 
   let mockOrganizationRepository: any;
@@ -327,8 +147,11 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     id: 'org-123',
     name: 'Test Organization',
     userId: mockBillingOwner.id,
-    managerId: mockManager.id,
-    users: [{ userId: mockMember.id!, permissions: [] as any }],
+    adminUserIds: [mockManager.id!],
+    users: [
+      { userId: mockManager.id!, permissions: ['read'] as never },
+      { userId: mockMember.id!, permissions: [] as never },
+    ],
     userDetails: [
       {
         id: mockMember.id!,
@@ -393,7 +216,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     );
 
     expect(mockOrganizationRepository.removeMember).toHaveBeenCalled();
-    expect(result.users).toHaveLength(0);
+    expect(result.users.map(u => u.userId)).toEqual([mockManager.id]);
     expect(result.userDetails).toHaveLength(0);
   });
 
@@ -440,6 +263,6 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     );
 
     expect(mockOrganizationRepository.removeMember).toHaveBeenCalled();
-    expect(result.users).toHaveLength(0);
+    expect(result.users.map(u => u.userId)).toEqual([mockManager.id]);
   });
 });

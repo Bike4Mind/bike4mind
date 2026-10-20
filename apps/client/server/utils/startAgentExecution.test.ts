@@ -228,7 +228,7 @@ describe('startAgentExecution', () => {
   });
 
   it('rejects an organization the caller does not belong to', async () => {
-    mockOrgFindById.mockResolvedValue({ userId: 'owner', managerId: 'mgr', users: [{ userId: 'other' }] });
+    mockOrgFindById.mockResolvedValue({ userId: 'owner', adminUserIds: ['mgr'], users: [{ userId: 'other' }] });
 
     const result = await startAgentExecution(input({ userId: 'outsider', organizationId: 'org1' }), logger);
 

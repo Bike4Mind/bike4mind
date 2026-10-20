@@ -81,8 +81,12 @@ describe('organizationService - get', () => {
     expect(repository.findById).not.toHaveBeenCalled();
   });
 
-  it('admits an appointed manager without a membership row', async () => {
-    const organization = { ...mockOrganization, managerId: 'manager1', users: [] };
+  it('admits an appointed manager when the membership ACL lookup misses', async () => {
+    const organization = {
+      ...mockOrganization,
+      adminUserIds: ['manager1'],
+      users: [{ userId: 'manager1', permissions: ['read'] }],
+    };
     const manager = { id: 'manager1', isAdmin: false } as IUserDocument;
     repository.shareable.findAccessibleById.mockResolvedValue(null);
     repository.findById.mockResolvedValue(organization);
@@ -100,14 +104,6 @@ describe('organizationService - get', () => {
 
     await expect(get(stranger, { id: 'not-an-object-id' }, mockAdapters)).rejects.toThrow(NotFoundError);
     expect(repository.findById).toHaveBeenCalledWith('not-an-object-id');
-  });
-
-  it('does not let an empty managerId admit a caller with an empty id', async () => {
-    repository.shareable.findAccessibleById.mockResolvedValue(null);
-    repository.findById.mockResolvedValue({ ...mockOrganization, managerId: '' });
-    const emptyIdCaller = { id: '', isAdmin: false } as IUserDocument;
-
-    await expect(get(emptyIdCaller, { id: 'org1' }, mockAdapters)).rejects.toThrow(NotFoundError);
   });
 
   it('does not collapse a failed fallback lookup into NotFoundError', async () => {

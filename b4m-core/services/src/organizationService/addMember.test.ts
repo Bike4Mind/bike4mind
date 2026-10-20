@@ -41,7 +41,7 @@ describe('addMember', () => {
     id: 'org-id',
     name: 'Test Organization',
     userId: 'owner-id',
-    managerId: 'manager-id',
+    adminUserIds: ['manager-id'],
     seats: 5,
     users: [],
   };
@@ -157,7 +157,10 @@ describe('addMember', () => {
 
     it('admits the appointed manager', async () => {
       mockAdapters.db.users.findById.mockResolvedValue(mockUser);
-      mockAdapters.db.organizations.findById.mockResolvedValue(cloneDeep(mockOrganization));
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        users: [{ userId: 'manager-id', permissions: ['read'] }],
+      });
 
       await addMember(mockManagerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
 
@@ -168,7 +171,6 @@ describe('addMember', () => {
       mockAdapters.db.users.findById.mockResolvedValue(mockUser);
       mockAdapters.db.organizations.findById.mockResolvedValue({
         ...cloneDeep(mockOrganization),
-        managerId: null,
         adminUserIds: ['appointed-id'],
         users: [{ userId: 'appointed-id', permissions: [Permission.read] }],
       });
@@ -186,7 +188,6 @@ describe('addMember', () => {
       mockAdapters.db.users.findById.mockResolvedValue(mockUser);
       mockAdapters.db.organizations.findById.mockResolvedValue({
         ...cloneDeep(mockOrganization),
-        managerId: null,
         adminUserIds: ['appointed-id'],
         users: [],
       });

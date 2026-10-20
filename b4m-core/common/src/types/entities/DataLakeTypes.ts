@@ -803,8 +803,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    *
    * `ctx.administeredOrgIds` is the org-ADMIN arm and is not interchangeable with
    * `ctx.organizationIds`: it grants no more than the single gate already grants (`canManageLake`
-   * rung 4 admits the same principal, and manage implies read), it exists so the succession roles -
-   * team manager, appointed admin - can DISCOVER the org lakes they may already manage. Absent or
+   * rung 4 admits the same principal, and manage implies read), it exists so the succession role -
+   * an org manager (`adminUserIds`) - can DISCOVER the org lakes they may already manage. Absent or
    * empty simply adds no arm.
    */
   findAccessible(

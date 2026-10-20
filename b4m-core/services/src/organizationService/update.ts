@@ -44,7 +44,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
       : organization
   ) as NonNullable<typeof organization>;
 
-  const isManager = plain.managerId === user.id;
+  const isManager = (plain.adminUserIds ?? []).includes(user.id);
   const isOwner = plain.userId === user.id;
 
   // Persist ONLY the caller-editable fields this request changed, never a spread of
