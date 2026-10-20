@@ -94,7 +94,63 @@ describe('CreditBalanceSyncListener', () => {
     expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
   });
 
-  it('signals after the last pull when the request fails', async () => {
+  describe('a pull still in flight from an earlier turn', () => {
+    // Holds the next api.get open so the pull is mid-request when the next turn ends.
+    const holdNextRequest = () => {
+      let resolve!: (balance: number) => void;
+      vi.mocked(api.get).mockImplementationOnce(
+        () =>
+          new Promise(res => {
+            resolve = balance => res({ data: { currentCredits: balance, expiringSoon: [] } } as never);
+          })
+      );
+      return (balance: number) => resolve(balance);
+    };
+
+    it('does not write its balance once a newer turn has ended', async () => {
+      renderListener();
+      runTurn();
+      const resolveStale = holdNextRequest();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      runTurn();
+
+      await act(async () => {
+        resolveStale(1_234);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(useUser.getState().currentUser?.currentCredits).toBe(10_000);
+    });
+
+    it('does not signal the newer turn as confirmed when its last pull resolves late', async () => {
+      renderListener();
+      runTurn();
+      const before = useCreditSyncSignal.getState().syncCount;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      const resolveStale = holdNextRequest();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1] - BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      runTurn();
+
+      await act(async () => {
+        resolveStale(1_234);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(useCreditSyncSignal.getState().syncCount).toBe(before);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1]);
+      });
+      expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
+    });
+  });
+
+  it('still signals after the last pull when the balance request fails (the failure is swallowed in syncCreditBalance)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.mocked(api.get).mockRejectedValueOnce(new Error('network')).mockRejectedValueOnce(new Error('network'));
     const before = useCreditSyncSignal.getState().syncCount;
