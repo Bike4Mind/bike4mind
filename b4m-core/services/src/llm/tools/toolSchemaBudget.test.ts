@@ -73,6 +73,8 @@ function buildSchemas(enabledTools: string[]) {
     toolCreditsMap: new Map(),
     subagentTelemetryData: [],
     sendStatusUpdate: vi.fn(),
+    // buildSharedTools drops `decide` for a host that injects no seam; the budget measures schemas.
+    decide: vi.fn(),
   } as unknown as ToolBuilderConfig);
 
   return (

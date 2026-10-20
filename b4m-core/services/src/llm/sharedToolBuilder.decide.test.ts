@@ -84,4 +84,12 @@ describe('buildSharedTools: decide host hook', () => {
     const tools = buildSharedTools(deps, callbacks, { enabledTools: ['decide'], toolAvailability: { decide: false } });
     expect(tools?.some(entry => entry.toolSchema.name === 'decide')).toBe(false);
   });
+
+  it('is dropped when the host injects no hook, even with availability wide open', () => {
+    // Hosts that build tools without a decision runner (deep-agent materializer, embed route) must
+    // not offer a tool whose toolFn can only throw.
+    const { decide: _omit, ...hostless } = deps;
+    const tools = buildSharedTools(hostless, callbacks, { enabledTools: ['decide'] });
+    expect(tools?.some(entry => entry.toolSchema.name === 'decide')).toBe(false);
+  });
 });

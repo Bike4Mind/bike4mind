@@ -433,6 +433,9 @@ export function buildSharedTools(
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
     music_generation: isMusicToolConfig(config.music_generation),
+    // `decide` runs on its host's injected seam; a host that omits it must not offer a tool whose
+    // every call would throw. Derived here, not in the deps literals, so no call site can forget.
+    decide: toolAvailability?.decide !== false && deps.decide !== undefined,
   };
 
   // Filter to enabled tools only
