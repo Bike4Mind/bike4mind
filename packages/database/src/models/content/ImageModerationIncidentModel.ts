@@ -50,6 +50,7 @@ const ImageModerationIncidentSchema = new Schema(
     previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
     falsePositiveBy: { type: String, required: false },
     falsePositiveAt: { type: Date, required: false },
+    alertedAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -100,6 +101,11 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async record(input: ImageModerationIncidentData): Promise<IImageModerationIncidentDocument> {
     return this.model.create(input);
+  }
+
+  /** Stamps the time the reviewer alert for this incident was delivered. */
+  async markAlerted(id: string, alertedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */

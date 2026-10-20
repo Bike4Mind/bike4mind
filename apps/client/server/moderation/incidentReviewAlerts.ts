@@ -1,9 +1,9 @@
 import {
   adminModerationIncidentPath,
+  partitionEmailList,
   toAbsoluteUrl,
   type ImageModerationIncident,
   type IncidentSurface,
-  type ModerationLabelHit,
 } from '@bike4mind/common';
 
 /** The fields of a stored incident the alert reads; anything else on the record is never rendered. */
@@ -11,21 +11,25 @@ export interface RecordedIncident {
   id: string;
   createdAt: Date | string;
   surface?: IncidentSurface;
-  labels: ModerationLabelHit[];
   reviewStatus?: ImageModerationIncident['reviewStatus'];
 }
 
 export interface IncidentReviewAlertDeps {
-  incidents: { record(input: ImageModerationIncident): Promise<RecordedIncident> };
-  getRecipients: () => Promise<string[]>;
-  /** Mirrors MailService.sendEmail: resolves false (or rejects) when delivery failed. */
-  sendEmail: (to: string, email: { subject: string; html: string }) => Promise<unknown>;
+  incidents: {
+    record(input: ImageModerationIncident): Promise<RecordedIncident>;
+    markAlerted(id: string): Promise<void>;
+  };
+  /** The stored ImageModerationReviewerEmails value; entries are validated one at a time here. */
+  getRecipients: () => Promise<unknown>;
+  /** Mirrors MailService.sendEmail: one message to every recipient, resolving false when delivery failed. */
+  sendEmail: (to: string[], email: { subject: string; html: string }) => Promise<false | object>;
   appUrl: () => string | undefined;
   logger: { warn(msg: string, meta: unknown): void; error(msg: string, meta: unknown): void };
 }
 
 // Recording sits on the image request path, and the SMTP transport's own timeouts add up to tens
-// of seconds, so the alert gets a short budget and anything slower is logged as undelivered.
+// of seconds, so the alert gets a short budget. A send that misses it is best-effort (it may still
+// land, unstamped) until the send moves onto the email event with its retries.
 export const REVIEW_ALERT_TIMEOUT_MS = 5_000;
 
 const escapeHtml = (value: string) =>
@@ -33,26 +37,23 @@ const escapeHtml = (value: string) =>
 
 /**
  * Renders the reviewer alert from an allowlist of incident metadata. It must never carry the image,
- * a stored-file key or URL, the prompt, or anything identifying the user: it goes to a mailbox and
- * the email-audit Slack mirror, neither of which is an access-controlled review surface.
+ * a stored-file key or URL, the prompt, the detection labels, or anything identifying the user: a
+ * mailbox is not an access-controlled review surface, so the reviewer reads the detail in admin.
  */
 export function renderIncidentReviewAlert(
   incident: RecordedIncident,
   reviewUrl: string
 ): { subject: string; html: string } {
-  const createdAt = new Date(incident.createdAt).toISOString();
-  const categories = [...new Set(incident.labels.map(label => label.name))].join(', ') || 'unspecified';
   const rows: [string, string][] = [
-    ['Incident', incident.id],
-    ['Created', createdAt],
+    ['Incident id', incident.id],
+    ['Created', new Date(incident.createdAt).toISOString()],
     ['Surface', incident.surface ?? 'unknown'],
-    ['Category', categories],
   ];
   const table = rows.map(([k, v]) => `<tr><td><strong>${k}</strong></td><td>${escapeHtml(v)}</td></tr>`).join('');
   return {
-    subject: 'Image moderation incident needs review',
+    subject: 'Moderation review pending',
     html:
-      `<p>An image moderation incident is waiting for review.</p><table>${table}</table>` +
+      `<p>A moderation incident is waiting in the admin console.</p><table>${table}</table>` +
       `<p><a href="${escapeHtml(reviewUrl)}">${escapeHtml(reviewUrl)}</a></p>`,
   };
 }
@@ -62,7 +63,13 @@ const needsReview = (incident: RecordedIncident) =>
 
 async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAlertDeps): Promise<void> {
   const meta = { incidentId: incident.id };
-  const recipients = [...new Set((await deps.getRecipients()).map(to => to.trim().toLowerCase()).filter(Boolean))];
+  const { valid: recipients, invalid } = partitionEmailList(await deps.getRecipients());
+  if (invalid.length > 0) {
+    deps.logger.warn(
+      `[ImageModeration] ignoring ${invalid.length} invalid ImageModerationReviewerEmails entries`,
+      meta
+    );
+  }
   if (recipients.length === 0) {
     deps.logger.warn(
       '[ImageModeration] incident needs review but no reviewer is configured (ImageModerationReviewerEmails)',
@@ -79,18 +86,23 @@ async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAl
   const timedOut = new Promise<'timeout'>(resolve => {
     timer = setTimeout(() => resolve('timeout'), REVIEW_ALERT_TIMEOUT_MS);
   });
-  const sends = Promise.allSettled(recipients.map(to => deps.sendEmail(to, email)));
   try {
-    const outcome = await Promise.race([sends, timedOut]);
+    const outcome = await Promise.race([deps.sendEmail(recipients, email), timedOut]);
     if (outcome === 'timeout') {
       deps.logger.error('[ImageModeration] reviewer alert did not complete in time', meta);
       return;
     }
-    if (outcome.some(result => result.status === 'rejected' || result.value === false)) {
+    if (outcome === false) {
       deps.logger.error('[ImageModeration] reviewer alert failed to send', meta);
+      return;
     }
   } finally {
     clearTimeout(timer);
+  }
+  try {
+    await deps.incidents.markAlerted(incident.id);
+  } catch {
+    deps.logger.error('[ImageModeration] reviewer alert sent but alertedAt was not recorded', meta);
   }
 }
 
@@ -98,9 +110,12 @@ async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAl
  * Wraps the incident store so every incident that needs review alerts the configured reviewers.
  * The alert runs only after `record` resolves, so it is keyed to the one durable write: a failed
  * write alerts nobody, and a retried request that records a second incident alerts for that one.
- * Alert failures are logged with the incident id alone and never reach the caller.
+ * A delivered alert stamps alertedAt. Alert failures are logged with the incident id alone (never a
+ * recipient) and never reach the caller.
  */
-export function withReviewerAlerts(deps: IncidentReviewAlertDeps): IncidentReviewAlertDeps['incidents'] {
+export function withReviewerAlerts(
+  deps: IncidentReviewAlertDeps
+): Pick<IncidentReviewAlertDeps['incidents'], 'record'> {
   return {
     async record(input) {
       const incident = await deps.incidents.record(input);

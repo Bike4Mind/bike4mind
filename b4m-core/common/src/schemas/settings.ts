@@ -2871,9 +2871,12 @@ export const settingsMap = {
     name: 'Image Moderation Reviewer Emails',
     defaultValue: [],
     description:
-      'Email addresses alerted when an image moderation incident needs review. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
+      'Email addresses alerted when an image moderation incident needs review, one per line. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
     category: 'AI Moderation',
-    schema: z.array(z.string().trim().email()),
+    // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
+    // silence every reviewer. The update route refuses invalid entries; readers filter with
+    // partitionEmailList.
+    schema: z.array(z.string()),
   }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',

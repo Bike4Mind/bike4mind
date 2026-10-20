@@ -102,6 +102,7 @@ export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
 export * from './utils/deepLinks';
+export * from './utils/emailList';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
 export * from './utils/internalStaffDomains';

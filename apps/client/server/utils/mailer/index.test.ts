@@ -161,6 +161,31 @@ describe('MailService', () => {
       expect(result).toEqual({ messageId: '<msg-456@example.com>' });
     });
 
+    it('mirrors to the email-audit Slack channel by default', async () => {
+      mockSendMail.mockResolvedValue({ messageId: '<m-1>' });
+      const { postEmailMirrorToSlack } = await import('@server/integrations/slack/slack');
+
+      const mailer = await createMailService();
+      await mailer.sendEmail('user@test.com', { subject: 'Welcome', html: '<p>Hi</p>' });
+
+      expect(postEmailMirrorToSlack).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the Slack mirror and keeps the recipient out of the logs when asked', async () => {
+      const { postEmailMirrorToSlack } = await import('@server/integrations/slack/slack');
+      const { Logger } = await import('@bike4mind/observability');
+      const mailer = await createMailService();
+
+      mockSendMail.mockResolvedValue({ messageId: '<m-2>' });
+      await mailer.sendEmail('quiet@test.com', { subject: 'Alert' }, { mirror: false, logRecipient: false });
+      mockSendMail.mockRejectedValue(new Error('Network timeout'));
+      await mailer.sendEmail('quiet@test.com', { subject: 'Alert' }, { mirror: false, logRecipient: false });
+
+      expect(postEmailMirrorToSlack).not.toHaveBeenCalled();
+      const logged = JSON.stringify([vi.mocked(Logger.info).mock.calls, vi.mocked(Logger.error).mock.calls]);
+      expect(logged).not.toContain('quiet@test.com');
+    });
+
     it('joins array recipients into comma-separated string', async () => {
       mockSendMail.mockResolvedValue({ messageId: '<msg-789>' });
 

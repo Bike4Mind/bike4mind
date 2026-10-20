@@ -26,6 +26,18 @@ describe('ImageModerationIncidentRepository', () => {
     await ImageModerationIncident.deleteMany({});
   });
 
+  describe('markAlerted', () => {
+    it('stamps alertedAt on the incident and leaves it absent until then', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      expect((await ImageModerationIncident.findById(inc._id).lean())?.alertedAt).toBeUndefined();
+
+      const at = new Date('2026-10-19T12:00:00.000Z');
+      await imageModerationIncidentRepository.markAlerted(inc.id, at);
+
+      expect((await ImageModerationIncident.findById(inc._id).lean())?.alertedAt).toEqual(at);
+    });
+  });
+
   describe('findPendingReview', () => {
     it('returns incidents with absent reviewStatus', async () => {
       await imageModerationIncidentRepository.record(baseIncident());

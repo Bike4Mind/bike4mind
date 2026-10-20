@@ -61,6 +61,9 @@ export const ImageModerationIncidentSchema = z.object({
   // Admin user id and time of a 'false_positive' verdict.
   falsePositiveBy: z.string().optional(),
   falsePositiveAt: z.union([z.string(), z.date()]).optional(),
+  // When the reviewer alert was delivered. Absent means no alert went out (none configured, or the
+  // send failed), so a later sweep can find the incidents nobody was told about.
+  alertedAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });
