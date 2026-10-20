@@ -14,6 +14,7 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 vi.mock('@client/app/hooks/data/stripe', () => ({ useGetSubscriptionPlans: () => ({ isLoading: false }) }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useLowCreditsThreshold: () => 10 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 100 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
 vi.mock('./CreditsSection', () => ({ CreditsSection: () => null }));
 vi.mock('./PlansSection', () => ({ PlansSection: () => null, PlansSectionSkeleton: () => null }));
 
