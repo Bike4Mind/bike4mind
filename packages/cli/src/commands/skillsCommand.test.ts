@@ -125,10 +125,22 @@ describe('readSkillFile', () => {
   });
 
   it('expands a leading ~', async () => {
-    vi.spyOn(os, 'homedir').mockReturnValue(dir);
-    await writeSkill('s/SKILL.md', SKILL);
-    expect((await readSkillFile('~/s')).payload.name).toBe('my-skill');
-    vi.restoreAllMocks();
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(dir);
+    try {
+      await writeSkill('s/SKILL.md', SKILL);
+      expect((await readSkillFile('~/s')).payload.name).toBe('my-skill');
+    } finally {
+      homedir.mockRestore();
+    }
+  });
+
+  it('treats a lowercase skill.md as the skill file, not as a supporting file', async () => {
+    const file = await writeSkill('lower/skill.md', '---\nname: from-frontmatter\n---\nb\n');
+    const read = await readSkillFile(file);
+    expect(read.extraFiles).toEqual([]);
+
+    const unnamed = await writeSkill('lower2/skill.md', 'Just a body\n');
+    expect((await readSkillFile(unnamed)).payload.name).toBe('lower2');
   });
 
   it('rejects a missing path, a folder without SKILL.md, and a non-.md file', async () => {
@@ -161,6 +173,11 @@ describe('buildSkillPayload', () => {
     expect(buildSkillPayload({ body: 'x'.repeat(600) }, 'f').description).toHaveLength(500);
     expect(buildSkillPayload({}, 'f').description).toBe('');
   });
+
+  it('falls back to the file name when the frontmatter name is blank', () => {
+    expect(buildSkillPayload({ name: '' }, 'Folder').name).toBe('folder');
+    expect(buildSkillPayload({ name: '   ' }, 'folder').name).toBe('folder');
+  });
 });
 
 const ME = { id: 'u1' };
@@ -179,6 +196,7 @@ function makeDeps(overrides: Partial<PushDeps> = {}, rows: object[] = []) {
     isTTY: false,
     update: false,
     yes: false,
+    apiOrigin: 'https://app.example',
     log: line => lines.push(line),
     ...overrides,
   };
@@ -277,6 +295,15 @@ describe('pushSkill', () => {
       expect(api.post).toHaveBeenCalled();
     });
 
+    it('words a stamp from another origin as unverified', async () => {
+      const { api, deps, lines } = makeDeps();
+      const foreign = file({ source: { url: 'https://evil.example/x', thirdParty: false } });
+      expect(await pushSkill(foreign, deps)).toBe('created');
+      expect(lines).toContain('This file has a Bike4Mind source stamp from another site: https://evil.example/x');
+      expect(lines).not.toContain('This skill came from Bike4Mind: https://evil.example/x');
+      expect(api.post).toHaveBeenCalled();
+    });
+
     it('third-party in a TTY: no aborts with no API call', async () => {
       const { api, deps, lines } = makeDeps({ isTTY: true });
       expect(await pushSkill(thirdParty, deps)).toBe('aborted');
@@ -323,6 +350,21 @@ describe('pushSkill', () => {
       })
     );
     await expect(pushSkill(file(), deps)).rejects.toThrow('Name must be kebab-case');
+  });
+
+  it('falls back to the server message field when the error field is absent', async () => {
+    const { api, deps } = makeDeps({ update: true }, [{ id: 's1', name: 'my-skill', userId: 'u1' }]);
+    api.put.mockRejectedValue({ response: { data: { message: 'Forbidden' } } });
+    await expect(pushSkill(file(), deps)).rejects.toThrow('Forbidden');
+  });
+
+  it('reports a failed current-user lookup without touching skills', async () => {
+    const { api, deps } = makeDeps();
+    api.getCurrentUser.mockRejectedValue(new Error('Authentication expired. Please run `b4m login` again.'));
+    await expect(pushSkill(file(), deps)).rejects.toThrow('Authentication expired');
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.put).not.toHaveBeenCalled();
   });
 
   it('does not create a skill when the existing-skill lookup fails', async () => {
@@ -379,16 +421,30 @@ describe('handleSkillsCommand', () => {
     expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
   });
 
+  it('rejects an unknown or missing subcommand', async () => {
+    await expect(handleSkillsCommand('pull', ARGS)).rejects.toThrow('Unknown skills subcommand: pull');
+    await expect(handleSkillsCommand(undefined, ARGS)).rejects.toThrow('Unknown skills subcommand: (none)');
+    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+  });
+
   it('rejects an empty path before reading or making an API call', async () => {
     await expect(handleSkillsCommand('push', { ...ARGS, path: '' })).rejects.toThrow('Usage: b4m skills push <path>');
     expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
   });
 
-  it('clears an expired token and fails with the re-login hint', async () => {
+  it('lets the API client refresh a stale access token instead of dropping the session', async () => {
     handlerMocks.tokens = { expiresAt: new Date(Date.now() - 1000).toISOString() };
-    await expect(handleSkillsCommand('push', ARGS)).rejects.toThrow('re-authenticate');
-    expect(handlerMocks.clearAuthTokens).toHaveBeenCalled();
-    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+    await handleSkillsCommand('push', ARGS);
+    expect(handlerMocks.clearAuthTokens).not.toHaveBeenCalled();
+    expect(handlerMocks.api.getCurrentUser).toHaveBeenCalled();
+  });
+
+  it('passes --update through and reports the update', async () => {
+    handlerMocks.api.get.mockResolvedValue({ data: [{ id: 'id1', name: 'my-skill', userId: 'u1' }] });
+    await handleSkillsCommand('push', { ...ARGS, update: true });
+    expect(handlerMocks.api.put).toHaveBeenCalledWith('/api/skills/id1', expect.objectContaining({ name: 'my-skill' }));
+    expect(handlerMocks.api.post).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith('Updated skill /my-skill');
   });
 
   it('clears the remote-skills cache after a write', async () => {
