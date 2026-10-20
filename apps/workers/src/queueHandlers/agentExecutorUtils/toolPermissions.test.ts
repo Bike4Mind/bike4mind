@@ -699,7 +699,10 @@ describe('settleGatedCall', () => {
     );
 
     expect(outcome).toBe('denied');
-    expect(deps.markFailed).toHaveBeenCalledWith('exec_1', expect.objectContaining({ callerSafe: true }));
+    expect(deps.markFailed).toHaveBeenCalledWith('exec_1', {
+      message: 'Execution stopped: tool "image_generation" is not permitted.',
+      callerSafe: true,
+    });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', {
       executionId: 'exec_1',
       reason: 'tool_denied',

@@ -481,18 +481,18 @@ export async function settleGatedCall(
 
   if (disposition === 'denied') {
     deps.logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
-    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted.`;
     // `callerSafe`: this string names only a tool the caller already knows about, and
     // the public poll response is documented to name the gated tool - so it is
     // published verbatim rather than collapsed by the sanitizer.
     await deps.markFailed(executionId, { message: deniedMessage, callerSafe: true });
     // The same text the Quest persists below, so the client's prompt bubble does not
     // change wording when the persisted Quest replaces it.
-    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName, message: `${deniedMessage}.` });
+    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName, message: deniedMessage });
     // Settle the dispatch-time Quest so chat history shows the reason instead of a
     // permanently `pending` empty bubble - only `persistRunAsQuest` ever flips it to
     // `done`.
-    await deps.persistRunAsQuest(`${deniedMessage}.`);
+    await deps.persistRunAsQuest(deniedMessage);
     return 'denied';
   }
 
