@@ -1,5 +1,25 @@
 # @bike4mind/client
 
+## 0.1.94
+
+### Patch Changes
+
+- Updated dependencies [[`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58), [`ee518f5`](https://github.com/Bike4Mind/bike4mind/commit/ee518f5a07404395871bb0824b2038c842f51167)]:
+  - @bike4mind/common@17.0.0
+  - @bike4mind/services@19.0.0
+  - @bike4mind/llm-adapters@1.4.0
+  - @bike4mind/agents@1.2.6
+  - @bike4mind/auth@1.1.6
+  - @bike4mind/db-core@0.8.6
+  - @bike4mind/fab-pipeline@2.1.6
+  - @bike4mind/mcp@2.1.6
+  - @bike4mind/slack@4.0.3
+  - @bike4mind/utils@8.1.1
+  - @bike4mind/voice@0.10.6
+  - @bike4mind/database@0.4.17
+  - @bike4mind/scripts@0.1.93
+  - @bike4mind/server-utils@0.0.7
+
 ## 0.1.93
 
 ### Patch Changes

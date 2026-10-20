@@ -1,5 +1,12 @@
 # @bike4mind/db-core
 
+## 0.8.6
+
+### Patch Changes
+
+- Updated dependencies [[`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58)]:
+  - @bike4mind/common@17.0.0
+
 ## 0.8.5
 
 ### Patch Changes
