@@ -16,6 +16,7 @@ describe('useEffectiveCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useStreamingState.setState({ sessions: new Map() });
+    useCreditSyncSignal.setState({ syncCount: 0 });
     useSelectedAccount.setState({ selectedAccount: null });
     mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1500 } });
   });
@@ -134,6 +135,30 @@ describe('useEffectiveCredits', () => {
       expect(result.current).toBe(1500);
     });
 
+    it.each(['completeStreaming', 'cancelStreaming'] as const)(
+      'hides a reservation arriving after %s and releases when it recovers',
+      finishTurn => {
+        const committed: number[] = [];
+        const { result, rerender } = renderHook(() => {
+          const credits = useEffectiveCredits();
+          useEffect(() => {
+            committed.push(credits);
+          });
+          return credits;
+        });
+        act(() => useStreamingState.getState().startStreaming('session-1'));
+        act(() => useStreamingState.getState()[finishTurn]('session-1'));
+        mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+        rerender();
+        expect(result.current).toBe(1500);
+
+        mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+        rerender();
+        expect(result.current).toBe(1421);
+        expect([...new Set(committed)]).toEqual([1500, 1421]);
+      }
+    );
+
     it('goes straight from the pre-turn balance to the settled one with no hold-based value ever committed', () => {
       const committed: number[] = [];
       const { rerender } = renderHook(() => {
@@ -246,6 +271,7 @@ describe('useEffectiveCredits', () => {
       selectAccount(team);
       act(() => useStreamingState.getState().completeStreaming('session-1'));
       act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8800 } }));
+      act(() => useCreditSyncSignal.getState().markSynced());
 
       const switchedAt = committed.indexOf(9000);
       expect(switchedAt).toBeGreaterThan(-1);

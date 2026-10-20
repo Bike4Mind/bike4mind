@@ -156,7 +156,7 @@ describe('CreditBalanceSyncListener', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
       });
-      expect(cancel).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['organizations'] }));
 
       runTurn();
       expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['organizations'] }));
@@ -262,6 +262,69 @@ describe('CreditBalanceSyncListener', () => {
       });
 
       expect(useUser.getState().currentUser?.currentCredits).toBe(10_000);
+    });
+
+    it('does not let a newer pull reuse an older turn pending request', async () => {
+      renderListener();
+      runTurn();
+      const resolveStale = holdNextRequest();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      runTurn();
+      h.balance = 9_800;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      expect(useUser.getState().currentUser?.currentCredits).toBe(9_800);
+
+      await act(async () => {
+        resolveStale(1_234);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(useUser.getState().currentUser?.currentCredits).toBe(9_800);
+    });
+
+    it('starts a fresh last pull even while the first pull of the same turn is pending', async () => {
+      renderListener();
+      runTurn();
+      const resolveFirst = holdNextRequest();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      h.balance = 9_800;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1] - BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      expect(useUser.getState().currentUser?.currentCredits).toBe(9_800);
+
+      await act(async () => {
+        resolveFirst(1_234);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(useUser.getState().currentUser?.currentCredits).toBe(9_800);
+    });
+
+    it('ignores a pending last pull after the listener unmounts and mounts again', async () => {
+      const firstListener = renderListener();
+      runTurn();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      const resolveStale = holdNextRequest();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1] - BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      const before = useCreditSyncSignal.getState().syncCount;
+      firstListener.unmount();
+      renderListener();
+      runTurn();
+      await act(async () => {
+        resolveStale(1_234);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(useUser.getState().currentUser?.currentCredits).toBe(9_903);
+      expect(useCreditSyncSignal.getState().syncCount).toBe(before);
     });
 
     it('does not signal the newer turn as confirmed when its last pull resolves late', async () => {

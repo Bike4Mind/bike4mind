@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { isCancelledError, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from '@client/app/hooks/data/credits';
@@ -43,6 +43,7 @@ export async function syncCreditBalance(queryClient: QueryClient, isStale?: () =
       setCurrentUser({ ...currentUser, currentCredits: balance.currentCredits });
     }
   } catch (error) {
+    if (isStale?.() || isCancelledError(error)) return;
     console.warn('Credit balance sync failed:', error);
   }
 }
@@ -65,27 +66,34 @@ const CreditBalanceSyncListener = () => {
     let turnEnds = 0;
     let pullsInFlight = 0;
 
+    const cancelPendingPulls = () => {
+      void queryClient.cancelQueries({ queryKey: CREDITS_BALANCE_KEY, exact: true });
+      // The old pull may belong to a team even if the account selection has since changed.
+      void queryClient.cancelQueries({
+        queryKey: ['organizations'],
+        predicate: query => query.state.data !== undefined,
+      });
+    };
+
     const unsubscribe = useStreamingState.subscribe(state => {
       const streaming = state.isAnyStreaming();
       if (wasStreaming && !streaming) {
         timers.forEach(clearTimeout);
-        // An org refetch already running would still update the cached org balance, which is what
-        // the chip reads for a team account, and end the new turn's hold early.
-        if (pullsInFlight > 0 && useLLM.getState().organizationId) {
-          // Only queries that hold data: cancelling a first load elsewhere would revert it to pending.
-          void queryClient.cancelQueries({
-            queryKey: ['organizations'],
-            predicate: query => query.state.data !== undefined,
-          });
-        }
         const turn = ++turnEnds;
+        // A newer fetchQuery otherwise shares an older pending promise, bypassing its stale guard.
+        if (pullsInFlight > 0) cancelPendingPulls();
         const isStale = () => turn !== turnEnds;
         timers = BALANCE_SYNC_DELAYS_MS.map((delay, index) =>
           setTimeout(() => {
             pullsInFlight += 1;
             // Only the last pull confirms the balance: an unchanged first pull may just be a slow settle.
             const isLast = index === BALANCE_SYNC_DELAYS_MS.length - 1;
-            void syncCreditBalance(queryClient, isStale).finally(() => {
+            // Each polling point must read a fresh balance, including when the first pull is slow.
+            const pull = async () => {
+              await queryClient.cancelQueries({ queryKey: CREDITS_BALANCE_KEY, exact: true });
+              await syncCreditBalance(queryClient, isStale);
+            };
+            void pull().finally(() => {
               pullsInFlight -= 1;
               if (isLast && !isStale()) markSynced();
             });
@@ -96,7 +104,9 @@ const CreditBalanceSyncListener = () => {
     });
 
     return () => {
+      turnEnds += 1;
       unsubscribe();
+      if (pullsInFlight > 0) cancelPendingPulls();
       timers.forEach(clearTimeout);
     };
   }, [queryClient, markSynced]);

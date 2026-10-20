@@ -4,7 +4,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
-interface UseEffectiveCreditsOptions {
+type UseEffectiveCreditsOptions = {
   /**
    * Bypass the mid-turn freeze below and read the live balance. Used by
    * send-gating checks (exhausted/low-credit warnings, send validation) so a
@@ -12,7 +12,7 @@ interface UseEffectiveCreditsOptions {
    * balance is held.
    */
   live?: boolean;
-}
+};
 
 /**
  * Backstop for the post-turn hold when no sync ever lands (listener unmounted, request lost).
@@ -28,7 +28,7 @@ export const POST_STREAM_HOLD_MAX_MS = 10000;
  * ending (completion, error, or abort all clear `isAnyStreaming()` via
  * `resetStreaming`/`completeStreaming`) does not release it yet: the live value is
  * still the hold-dipped one until the settled balance lands. Release on the first of
- * a live-value change, a finished post-turn sync, or the backstop timeout.
+ * a balance recovery, a finished post-turn sync, or the backstop timeout.
  */
 export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): number {
   const { selectedAccount } = useSelectedAccount();
@@ -50,7 +50,7 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   const [settleBaseline, setSettleBaseline] = useState<{ credits: number; syncCount: number } | null>(null);
   const [heldAccountKey, setHeldAccountKey] = useState(accountKey);
 
-  // After streaming ends the hold releases on a live change, a finished post-turn pull, or the
+  // After streaming ends the hold releases on a balance recovery, a finished post-turn pull, or the
   // backstop. If settlement landed before streaming ended, only the last pull or the backstop can
   // fire, so the chip shows the pre-turn balance meanwhile; deliberate, it avoids flashing the
   // reservation dip.
@@ -74,10 +74,14 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   } else if (
     settleBaseline &&
     !isAnyStreaming &&
-    (liveCredits !== settleBaseline.credits || syncCount !== settleBaseline.syncCount)
+    (liveCredits > settleBaseline.credits || syncCount !== settleBaseline.syncCount)
   ) {
     setFrozenCredits(null);
     setSettleBaseline(null);
+  } else if (settleBaseline && !isAnyStreaming && liveCredits < settleBaseline.credits) {
+    // A reservation push can arrive after a short turn ends. Track its low point without
+    // exposing it, so a subsequent recovery can release the hold before the last pull.
+    setSettleBaseline({ ...settleBaseline, credits: liveCredits });
   }
 
   const awaitingSettlement = settleBaseline !== null;
