@@ -112,7 +112,7 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
   const [isOpen, setIsOpen] = useState(false);
-  const logEvent = useLogEvent();
+  const { mutate: logEvent } = useLogEvent();
 
   if (!enforceCredits) return null;
 
@@ -122,7 +122,7 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
         credits={credits}
         lowCreditsThreshold={lowCreditsThreshold}
         onClick={() => {
-          logEvent.mutate({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
+          logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
           setIsOpen(true);
         }}
         payerNote={payerNote}

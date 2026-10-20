@@ -97,7 +97,7 @@ type Props = {
 
 const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments = true }, ref) => {
   const { t } = useTranslation();
-  const logEvent = useLogEvent();
+  const { mutate: logEvent } = useLogEvent();
   const { currentSession, currentSessionId, setCurrentSession, workBenchAgents } = useSessions();
   // While a new session is being confirmed by the server (optimistic pre-navigation),
   // pass null to all hooks that make real API calls so they don't fire against the
@@ -365,7 +365,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       toastInfo: toast.info,
       t,
       handleSendClick,
-      onBlocked: reason => logEvent.mutate({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
+      onBlocked: reason => logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
     });
   }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick, logEvent]);
 
@@ -384,7 +384,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         toastInfo: toast.info,
         t,
         handleSendClick,
-        onBlocked: reason => logEvent.mutate({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
+        onBlocked: reason => logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
       }),
     [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick, logEvent]
   );

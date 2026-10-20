@@ -49,7 +49,6 @@ import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectPr
 import { useLatestReplySideEffectReplay } from './hooks/useLatestReplySideEffectReplay';
 import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
-import FirstAnswerCreditsAnalytics from './FirstAnswerCreditsAnalytics';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -452,7 +451,6 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
 
   return (
     <>
-      <FirstAnswerCreditsAnalytics userId={currentUser?.id} history={flattenQuests} />
       <Box
         className="session-middle-container"
         sx={{
