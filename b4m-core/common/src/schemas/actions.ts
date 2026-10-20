@@ -1568,6 +1568,7 @@ export const ReconnectResultAction = z.object({
   // to a gate-paused run gets both and can re-render the gate card.
   pendingGate: z
     .object({
+      /** 0-indexed wire convention, matching `ConfidenceGateAction` and `IterationStream`. */
       iteration: z.number(),
       confidence: z.number(),
       reason: z.string(),
