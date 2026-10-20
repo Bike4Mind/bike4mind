@@ -155,6 +155,22 @@ describe('reassignStorageOwner', () => {
     expect(counters.users.get('u1')).toBe(100);
   });
 
+  it.each(['deleted', 'purging'])('ignores a %s lake when picking the owner', async status => {
+    const row = file(['datalake:acme', 'datalake:globex'], { organizationId: 'org-acme' });
+    const { db, raw, counters } = makeDb(row);
+    raw.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      LAKES.filter(lake => tags.includes(lake.datalakeTag)).map(lake =>
+        lake.id === 'lake-acme' ? { ...lake, status } : { ...lake, status: 'active' }
+      )
+    );
+
+    await reassignStorageOwner('f1', db);
+
+    expect(row.organizationId).toBe('org-globex');
+    expect(counters.orgs.get('org-acme')).toBe(-100);
+    expect(counters.orgs.get('org-globex')).toBe(100);
+  });
+
   it('writes nothing when the owner is unchanged', async () => {
     const { db, raw } = makeDb(file(['datalake:acme', 'datalake:mine'], { organizationId: 'org-acme' }));
 

@@ -1,5 +1,6 @@
 import {
   chargedBytes,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   isDataLakeTagName,
   NotFoundError,
   storageOwnerOf,
@@ -70,7 +71,10 @@ export async function resolveStorageOwnerTransfer(
   db: Pick<StorageOwnerTransferDb, 'dataLakes'>
 ): Promise<StorageOwnerTransfer | null> {
   const lakeTags = [...new Set(tagNames.filter(isDataLakeTagName))];
-  const lakes = lakeTags.length ? await db.dataLakes.findByDatalakeTags(lakeTags) : [];
+  // A deleted or purging lake no longer owns anything; a missing status is a legacy live lake.
+  const lakes = (lakeTags.length ? await db.dataLakes.findByDatalakeTags(lakeTags) : []).filter(
+    lake => !(DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(lake.status)
+  );
   const nextOrganizationId = pickOwnerOrganizationId(lakes, file.sourceLakeId || undefined);
   // storageOwnerOf treats any falsy stamp as personal, so '' and undefined are the same owner.
   if ((nextOrganizationId ?? '') === (file.organizationId || '')) return null;
