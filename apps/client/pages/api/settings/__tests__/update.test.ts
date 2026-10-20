@@ -64,6 +64,7 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 import handler from '../update';
 import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
+import { adminAuditService } from '@bike4mind/services';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
 const stageWriteResult = (settingName: string, settingValue: unknown) => {
@@ -437,6 +438,45 @@ describe('settings/update admin audit trail', () => {
     );
     const serialized = JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, entry]) => entry));
     expect(serialized).not.toContain('sk-ant-api03');
+  });
+
+  it('records only the changed sub-keys of an object setting, and the writer redacts secret ones', async () => {
+    stored = {
+      settingName: 'sreAgentConfig',
+      settingValue: { enabled: true, label: 'a', webhookSecret: 'enc:old', callbackToken: 'enc:old' },
+    };
+    const next = { enabled: true, label: 'b', webhookSecret: 'enc:new', callbackToken: 'enc:new' };
+    stageWriteResult('sreAgentConfig', next);
+    await runHandler('sreAgentConfig', next);
+
+    const { changes } = recordAdminActionFromRequest.mock.calls[0][1] as {
+      changes: { field: string; before: unknown; after: unknown }[];
+    };
+    expect(changes.map(change => change.field).sort()).toEqual([
+      'sreAgentConfig.callbackToken',
+      'sreAgentConfig.label',
+      'sreAgentConfig.webhookSecret',
+    ]);
+    expect(changes.find(change => change.field === 'sreAgentConfig.label')).toEqual({
+      field: 'sreAgentConfig.label',
+      before: 'a',
+      after: 'b',
+    });
+    const written = JSON.stringify(changes.map(adminAuditService.redactChange));
+    expect(written).not.toContain('enc:');
+  });
+
+  it('falls back to one whole-value change when no sub-key differs', async () => {
+    stored = { settingName: 'sreAgentConfig', settingValue: { enabled: true } };
+    stageWriteResult('sreAgentConfig', { enabled: true });
+    await runHandler('sreAgentConfig', { enabled: true });
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'sreAgentConfig', before: { enabled: true }, after: { enabled: true } }],
+      })
+    );
   });
 
   it('records a deliberate clear of a sensitive setting as redacted too', async () => {

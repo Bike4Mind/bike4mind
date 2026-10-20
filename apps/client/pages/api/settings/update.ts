@@ -33,6 +33,21 @@ let warnedSelfHostPlaintext = false;
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// Large JSON settings (e.g. sreAgentConfig) record only the top-level keys that differ, one change each.
+const diffChanges = (key: SettingKey, before: unknown, after: unknown) => {
+  if (isPlainRecord(before) && isPlainRecord(after)) {
+    const subKeys = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+    const changed = subKeys.filter(subKey => JSON.stringify(before[subKey]) !== JSON.stringify(after[subKey]));
+    if (changed.length > 0) {
+      return changed.map(subKey => ({ field: `${key}.${subKey}`, before: before[subKey], after: after[subKey] }));
+    }
+  }
+  return [{ field: key, before, after }];
+};
+
 /**
  * Strict entry for an AdminSettings write; call it inside the write's transaction. A sensitive value
  * is never recorded, and sreAgentConfig's nested secrets are dropped by the writer's redactor.
@@ -43,11 +58,9 @@ const recordSettingChange = (req: AuditRequest, key: SettingKey, before: unknown
     action: 'settings.admin_settings.updated',
     target: { kind: 'settings', id: key, displayName: key },
     summary: after === null ? `cleared ${key}` : `updated ${key}`,
-    changes: [
-      hidden
-        ? { field: key, before: adminAuditService.REDACTED_PLACEHOLDER, after: adminAuditService.REDACTED_PLACEHOLDER }
-        : { field: key, before, after },
-    ],
+    changes: hidden
+      ? [{ field: key, before: adminAuditService.REDACTED_PLACEHOLDER, after: adminAuditService.REDACTED_PLACEHOLDER }]
+      : diffChanges(key, before, after),
   });
 };
 
