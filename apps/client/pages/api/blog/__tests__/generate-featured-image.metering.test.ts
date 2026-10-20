@@ -57,7 +57,9 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   ],
 }));
 vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
-vi.mock('@server/utils/imageLogger', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/utils/imageLogger', () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 vi.mock('axios', () => ({
   default: { get: async () => ({ data: Buffer.from('png'), headers: { 'content-type': 'image/png' } }) },
 }));
