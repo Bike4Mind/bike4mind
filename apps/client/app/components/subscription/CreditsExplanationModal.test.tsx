@@ -1,11 +1,19 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
+const { state } = vi.hoisted(() => ({
+  state: { defaultFreeCredits: 100 as number | undefined, organizationId: null as string | null },
+}));
+
 vi.mock('@client/app/contexts/LLMContext', () => ({
-  useLLM: (selector: (state: { model: string }) => unknown) => selector({ model: 'model-a' }),
+  useLLM: (selector: (value: { model: string; organizationId: string | null }) => unknown) =>
+    selector({ model: 'model-a', organizationId: state.organizationId }),
+}));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'defaultFreeCredits' ? state.defaultFreeCredits : undefined),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 1000 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
@@ -30,7 +38,32 @@ import CreditsExplanationModal from './CreditsExplanationModal';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+const renderModal = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <CreditsExplanationModal open onClose={vi.fn()} />
+    </CssVarsProvider>
+  );
+
 describe('CreditsExplanationModal', () => {
+  beforeEach(() => {
+    state.defaultFreeCredits = 100;
+    state.organizationId = null;
+  });
+
+  it('hides the no-card sentence when no free credits are configured', () => {
+    state.defaultFreeCredits = 0;
+    renderModal();
+    expect(screen.queryByText(/require no card/)).toBeNull();
+    expect(screen.getByText(/Your chats and files remain yours/)).toBeInTheDocument();
+  });
+
+  it('hides the no-card sentence when an organization pays', () => {
+    state.organizationId = 'org-1';
+    renderModal();
+    expect(screen.queryByText(/require no card/)).toBeNull();
+  });
+
   it('explains free credits and answers before opening top-up one click deeper', () => {
     render(
       <CssVarsProvider theme={appTheme}>
