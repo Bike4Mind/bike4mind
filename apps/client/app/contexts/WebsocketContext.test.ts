@@ -603,6 +603,42 @@ describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
   });
 });
 
+describe('WebsocketProvider - hasEverOpened tells a first connect from a reconnect', () => {
+  let hasEverOpened: boolean | undefined;
+  const Reader = () => {
+    hasEverOpened = useWebsocket().hasEverOpened;
+    return null;
+  };
+  const element = () =>
+    React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Reader));
+
+  beforeEach(() => {
+    hasEverOpened = undefined;
+    h.accessTokenState.accessToken = 'tok';
+  });
+
+  it('is false while the first connection is still opening', () => {
+    h.readyState = 0;
+    render(element());
+
+    expect(hasEverOpened).toBe(false);
+  });
+
+  it('latches true on the first open and stays true after the socket drops', () => {
+    h.readyState = 0;
+    const { rerender } = render(element());
+    h.readyState = 1;
+    rerender(element());
+    expect(hasEverOpened).toBe(true);
+
+    h.readyState = 3;
+    rerender(element());
+    h.readyState = 0;
+    rerender(element());
+    expect(hasEverOpened).toBe(true);
+  });
+});
+
 describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch', () => {
   const received: unknown[] = [];
   let lastJsonMessage: unknown = null;

@@ -76,6 +76,8 @@ export interface WebsocketContextValue {
   ) => () => void;
   resetLastJsonMessage: () => void;
   readyState: ReadyState;
+  /** Latches true on the first OPEN, telling a first connect apart from a reconnect. */
+  hasEverOpened: boolean;
   activeSubscriptions: ReadonlySet<string>;
   clientId: string;
 }
@@ -456,6 +458,8 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // resolves from the refreshed cache via useStreamingMessageMerge, which works even for a new
   // notebook's first turn. Skipped for the first connect, which has nothing to catch up.
   const hasOpenedRef = useRef(false);
+  const [hasEverOpened, setHasEverOpened] = useState(false);
+  if (readyState === ReadyState.OPEN && !hasEverOpened) setHasEverOpened(true);
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const isOpen = readyState === ReadyState.OPEN;
@@ -575,10 +579,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       subscribeToAction,
       resetLastJsonMessage,
       readyState: readyState,
+      hasEverOpened,
       activeSubscriptions,
       clientId,
     };
-  }, [readyState, trackedSendJsonMessage, subscribeToAction, resetLastJsonMessage, activeSubscriptions, clientId]);
+  }, [
+    readyState,
+    hasEverOpened,
+    trackedSendJsonMessage,
+    subscribeToAction,
+    resetLastJsonMessage,
+    activeSubscriptions,
+    clientId,
+  ]);
 
   // Dev-only: expose `sendJsonMessage` on window for forging messages from
   // the browser console. Used to test cc_agent_register before the bridge
