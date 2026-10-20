@@ -1,7 +1,10 @@
 import {
   BadRequestError,
+  completionsSupportsToolChanges,
   completionsSupportsToolSearch,
   isCompletionServerTool,
+  isToolChangeMessage,
+  isToolChangeBlockType,
   ModelBackend,
   supportsToolSearch,
   TOOL_SEARCH_BLOCK_TYPES,
@@ -9,6 +12,7 @@ import {
   type CompletionTool,
   type CompletionToolErrorCode,
   type CompletionsToolCapabilityModel,
+  ToolChangeMessageContentSchema,
   ToolSearchServerToolSchema,
   type IMessage,
   type ToolSearchServerTool,
@@ -61,6 +65,70 @@ function scanMessages(messages: IMessage[]): { referencedTools: unknown[]; echoe
   return { referencedTools, echoesToolSearchBlocks };
 }
 
+/** Server tool results (tool_search_tool_result, ...) end an assistant turn the provider accepts a change after. */
+function endsInServerToolResult(message: IMessage): boolean {
+  if (message.role !== 'assistant' || !Array.isArray(message.content)) return false;
+  const last = (message.content as ScannedBlock[])[message.content.length - 1];
+  return typeof last?.type === 'string' && last.type !== 'tool_result' && last.type.endsWith('_tool_result');
+}
+
+/**
+ * Validates the mid-conversation tool changes in `messages` (system messages of tool_addition /
+ * tool_removal blocks). Plain system messages are skipped when looking at neighbours: the adapter
+ * hoists them into the system prompt, so they are not between turns on the wire.
+ */
+function validateToolChanges(
+  messages: IMessage[],
+  declared: ReadonlySet<string>,
+  model: CompletionsToolCapabilityModel | undefined
+): void {
+  const misplaced = messages.find(
+    m => m.role !== 'system' && Array.isArray(m.content) && m.content.some(isToolChangeBlockType)
+  );
+  if (misplaced) {
+    throw toolSearchError(
+      `A tool_addition or tool_removal block is only accepted in a system message, not in a ${misplaced.role} message.`,
+      'invalid_tool_change'
+    );
+  }
+
+  const changes = messages.filter(isToolChangeMessage);
+  if (changes.length === 0) return;
+
+  if (!model || !completionsSupportsToolChanges(model)) {
+    throw toolSearchError(
+      `Model '${model?.id ?? 'unknown'}' does not support mid-conversation tool changes on this endpoint (see supports_tool_changes and backend in GET /api/v1/models). Remove the tool_addition and tool_removal messages.`,
+      'tool_changes_unsupported'
+    );
+  }
+
+  const wire = messages.filter(m => m.role !== 'system' || isToolChangeMessage(m));
+  wire.forEach((message, index) => {
+    if (!isToolChangeMessage(message)) return;
+    const parsed = ToolChangeMessageContentSchema.safeParse(message.content);
+    if (!parsed.success) {
+      throw toolSearchError(
+        'A tool change message must hold only { type: "tool_addition" | "tool_removal", tool: { type: "tool_reference", name } } blocks.',
+        'invalid_tool_change'
+      );
+    }
+    const previous = wire[index - 1];
+    const next = wire[index + 1];
+    const followsTurn = previous !== undefined && (previous.role === 'user' || endsInServerToolResult(previous));
+    const precedesTurn = next === undefined || next.role === 'assistant';
+    if (!followsTurn || !precedesTurn) {
+      throw toolSearchError(
+        'A tool change message must follow a user message or an assistant message ending in a server tool result, and be the last message or be followed by an assistant message.',
+        'invalid_tool_change'
+      );
+    }
+    for (const { tool } of parsed.data) {
+      if (declared.has(tool.name)) continue;
+      throw toolSearchError(`A tool change names '${tool.name}', which is not in tools.`, 'unknown_tool_reference');
+    }
+  });
+}
+
 function withoutNativeFields(tool: CompletionCustomTool, keepDeferLoading: boolean): CompletionCustomTool {
   const { cache_control: _cacheControl, defer_loading: deferLoading, ...toolSchema } = tool.toolSchema;
   return {
@@ -95,6 +163,8 @@ export function prepareWireTools(
       serverTools.push(parsed.data);
     } else customTools.push(tool);
   }
+
+  validateToolChanges(messages, new Set(customTools.map(tool => tool.toolSchema.name)), model);
 
   const { referencedTools, echoesToolSearchBlocks } = scanMessages(messages);
   const native = model !== undefined && completionsSupportsToolSearch(model);
