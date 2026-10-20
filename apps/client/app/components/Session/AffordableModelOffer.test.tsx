@@ -13,28 +13,34 @@ const model = (id: string, name: string, output: number): ModelInfo =>
     name,
     type: 'text',
     backend: 'openai',
+    contextWindow: 128_000,
+    max_tokens: 16_384,
     pricing: { 1_000_000: { input: 1 / 1_000_000, output: output / 1_000_000 } },
   }) as unknown as ModelInfo;
 
 const expensive = model('expensive', 'Expensive', 20);
 const affordable = model('affordable', 'Affordable', 1);
+const inputTokens = 20_000;
+const maxTokens = 16_384;
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 describe('AffordableModelOffer', () => {
-  it('appears above the balance gate and applies only the offered model on demand', () => {
+  it('appears above the balance gate and switches to the offered model on demand', () => {
     const onSelect = vi.fn();
     render(
       <CssVarsProvider theme={appTheme}>
         <AffordableModelOffer
           models={[expensive, affordable]}
           selectedModelId={expensive.id}
-          credits={preflightAnswerCredits(affordable)!}
+          credits={preflightAnswerCredits(affordable, inputTokens, maxTokens)!}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
           onSelect={onSelect}
         />
       </CssVarsProvider>
     );
 
-    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('Your default model will not change');
+    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('will become your active model');
     fireEvent.click(screen.getByTestId('affordable-model-use-btn'));
     expect(onSelect).toHaveBeenCalledWith(affordable);
   });
@@ -45,7 +51,9 @@ describe('AffordableModelOffer', () => {
         <AffordableModelOffer
           models={[expensive, affordable]}
           selectedModelId={expensive.id}
-          credits={preflightAnswerCredits(expensive)!}
+          credits={preflightAnswerCredits(expensive, inputTokens, maxTokens)!}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
           onSelect={vi.fn()}
         />
       </CssVarsProvider>

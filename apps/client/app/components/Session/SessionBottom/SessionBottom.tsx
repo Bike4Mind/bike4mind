@@ -86,6 +86,7 @@ import { SlashCommandSuggestions } from '@client/app/components/common/CommandSu
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
 import { AffordableModelOffer } from '../AffordableModelOffer';
 import { useAffordableModelOffer } from '../useAffordableModelOffer';
+import { TYPICAL_ANSWER_INPUT_TOKENS } from '@client/app/utils/creditEstimate';
 
 type Props = {
   /**
@@ -177,6 +178,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // LLM state needed for rendering (send logic reads its own slice internally)
   const model = useLLM(s => s.model);
   const max_tokens = useLLM(s => s.max_tokens);
+  const thinking = useLLM(s => s.thinking);
   const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
@@ -573,6 +575,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             models={accessibleModels ?? []}
             selectedModelId={model}
             credits={effectiveCredits}
+            inputTokens={contextUsage?.actualInputTokens ?? TYPICAL_ANSWER_INPUT_TOKENS}
+            selectedMaxTokens={max_tokens}
+            thinking={thinking}
             onSelect={affordableOffer.onSelect}
             onDismiss={affordableOffer.onDismiss}
           />

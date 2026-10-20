@@ -8,6 +8,9 @@ interface AffordableModelOfferProps {
   models: readonly ModelInfo[];
   selectedModelId: string;
   credits: number;
+  inputTokens: number;
+  selectedMaxTokens: number;
+  thinking?: { enabled?: boolean; budget_tokens?: number };
   onSelect: (model: ModelInfo) => void;
   onDismiss?: () => void;
 }
@@ -16,12 +19,15 @@ export const AffordableModelOffer = ({
   models,
   selectedModelId,
   credits,
+  inputTokens,
+  selectedMaxTokens,
+  thinking,
   onSelect,
   onDismiss = () => {},
 }: AffordableModelOfferProps) => {
   const offer = useMemo(
-    () => findAffordableModelOffer(models, selectedModelId, credits),
-    [models, selectedModelId, credits]
+    () => findAffordableModelOffer(models, selectedModelId, credits, inputTokens, selectedMaxTokens, thinking),
+    [models, selectedModelId, credits, inputTokens, selectedMaxTokens, thinking]
   );
   if (!offer) return null;
 
@@ -35,12 +41,12 @@ export const AffordableModelOffer = ({
       <Typography level="title-sm">This model needs more credits for the next answer</Typography>
       <Typography level="body-sm">
         {offer.current.modelName} needs about {offer.current.creditsPerAnswer.toLocaleString('en-US')} credits up front.{' '}
-        {offer.affordable.name} needs about {offer.affordableCredits.toLocaleString('en-US')}. Your default model will
-        not change.
+        {offer.affordable.name} needs about {offer.affordableCredits.toLocaleString('en-US')} and will become your
+        active model.
       </Typography>
       <Box sx={{ mt: 1 }}>
         <Button size="sm" data-testid="affordable-model-use-btn" onClick={() => onSelect(offer.affordable)}>
-          Use {offer.affordable.name} for this chat
+          Switch to {offer.affordable.name}
         </Button>
       </Box>
     </ComposerNote>

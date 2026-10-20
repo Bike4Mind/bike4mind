@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { ModelInfo } from '@bike4mind/common';
 
-const { setState, updateSessionToServer, toastError } = vi.hoisted(() => ({
-  setState: vi.fn(),
+const { setLLM, updateSessionToServer, toastError } = vi.hoisted(() => ({
+  setLLM: vi.fn(),
   updateSessionToServer: vi.fn(),
   toastError: vi.fn(),
 }));
 
-vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: { setState } }));
+vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: { getState: () => ({ setLLM }) } }));
 vi.mock('@client/app/utils/sessionsAPICalls', () => ({ updateSessionToServer }));
 vi.mock('sonner', () => ({ toast: { error: toastError } }));
 
@@ -33,10 +33,10 @@ describe('useAffordableModelOffer', () => {
     updateSessionToServer.mockResolvedValue(undefined);
   });
 
-  it('persists the chosen model on the session', () => {
+  it('uses the normal persisted model switch and saves it on the session', () => {
     const { result } = setup();
     act(() => result.current.onSelect(cheap));
-    expect(setState).toHaveBeenCalledTimes(1);
+    expect(setLLM).toHaveBeenCalledWith(expect.objectContaining({ model: 'cheap', lastUsedTextModel: 'cheap' }));
     expect(updateSessionToServer).toHaveBeenCalledWith({ id: 'session-1', lastUsedModel: 'cheap' });
     expect(toastError).not.toHaveBeenCalled();
   });
@@ -44,7 +44,7 @@ describe('useAffordableModelOffer', () => {
   it('skips the save when there is no session', () => {
     const { result } = setup({ sessionId: null });
     act(() => result.current.onSelect(cheap));
-    expect(setState).toHaveBeenCalledTimes(1);
+    expect(setLLM).toHaveBeenCalledWith(expect.objectContaining({ model: 'cheap', lastUsedTextModel: 'cheap' }));
     expect(updateSessionToServer).not.toHaveBeenCalled();
   });
 
