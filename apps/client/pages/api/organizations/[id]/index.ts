@@ -12,7 +12,7 @@ import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
 import { MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
