@@ -7,7 +7,7 @@ import { CircularProgress } from '@mui/joy';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import { useTheme } from '@mui/joy/styles';
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
@@ -38,11 +38,6 @@ import PendingApprovalBeacon from '@client/app/components/Session/AgentExecution
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import Typography from '@mui/joy/Typography';
-import {
-  claimReplayDispatch,
-  dispatchUiSideEffects,
-  forgetSessionDispatches,
-} from '@client/app/utils/uiSideEffectDispatcher';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
@@ -51,6 +46,7 @@ import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
+import { useLatestReplySideEffectReplay } from './hooks/useLatestReplySideEffectReplay';
 import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 
@@ -261,41 +257,8 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
 
   useSessionReconnectProbe(sessionId);
 
-  // Scan loaded quests for uiSideEffects and replay them. Handles the
-  // notebook-switch case where quests load from the API - the rendering-based
-  // UiSideEffectDispatcher in PromptReplies has timing issues during pagination
-  // loading. Tracking dispatched quest IDs prevents duplicate dispatches.
-  const dispatchedQuestIds = useRef(new Set<string>());
-  useEffect(() => {
-    // Reset tracking when session changes. On leaving, release the session's replies
-    // in the shared ledger so the next view of it replays them again (handlers may
-    // rebuild per-view state from them); this cleanup runs before the next session's
-    // replies mount.
-    dispatchedQuestIds.current.clear();
-    return () => forgetSessionDispatches(sessionId);
-  }, [sessionId]);
-
-  useEffect(() => {
-    // Find the most recent completed quest with uiSideEffects
-    for (const quest of flattenQuests) {
-      if (
-        quest.id &&
-        quest.status === 'done' &&
-        quest.uiSideEffects &&
-        quest.uiSideEffects.length > 0 &&
-        !dispatchedQuestIds.current.has(quest.id)
-      ) {
-        dispatchedQuestIds.current.add(quest.id);
-        // Replay path (no `live` flag): this scans persisted quests as a session
-        // loads, so it must stay NON-destructive - handlers surface a review step
-        // rather than auto-applying, which would clobber state the user changed after
-        // the reply first arrived. The claim is shared with the PromptReplies render
-        // path, which usually replays the same quest first; a quest is replayed once.
-        if (claimReplayDispatch(quest.id, sessionId)) dispatchUiSideEffects(quest.uiSideEffects);
-        break; // Only dispatch the most recent one
-      }
-    }
-  }, [flattenQuests, sessionId]);
+  // Replay loaded quests' uiSideEffects (see the hook for why rendering alone is not enough).
+  useLatestReplySideEffectReplay(sessionId, flattenQuests);
 
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);
