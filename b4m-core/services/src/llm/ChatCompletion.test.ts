@@ -9191,6 +9191,39 @@ describe('ChatCompletionProcess', () => {
         expect(addAutoAddedTools).not.toHaveBeenCalled();
       });
 
+      // The tool and its prompt section travel together: a carried-over blog_draft whose
+      // content-transform guidance is withheld leaves the model holding a tool it does not know how
+      // to use, on exactly the follow-up turns the stickiness exists for.
+      it('gives a carried-over blog_draft its content-transform prompt section', async () => {
+        (service as any).user.isAdmin = true;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+        try {
+          await service.process({ body: { ...wireTurn(), message: 'thanks' }, logger: mockLogger });
+
+          expect(buildToolPromptSpy.mock.calls.at(-1)?.[0]).toEqual(
+            expect.objectContaining({ hasContentTransform: true })
+          );
+        } finally {
+          buildToolPromptSpy.mockRestore();
+        }
+      });
+
+      // A failed persist costs stickiness on the next turn, never this one.
+      it('completes the turn and still offers the tool when persisting it fails', async () => {
+        (service as any).user.isAdmin = true;
+        mockDb.sessions.addAutoAddedTools = vi.fn().mockRejectedValue(new Error('db down'));
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          '[AutoAddedTools] Failed to persist auto-added tools on the session',
+          expect.objectContaining({ tools: ['blog_draft'] })
+        );
+      });
+
       it('lists the same set in the same order whatever order the session stored it in', async () => {
         (service as any).user.isAdmin = true;
         (service as any).user.blogIntegration = true;
