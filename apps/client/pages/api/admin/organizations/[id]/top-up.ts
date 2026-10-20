@@ -49,16 +49,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const { credits, kind, idempotencyKey } = TopUpSchema.parse(req.body);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const isRefund = kind === 'refund';
-    const dedupeKey = `admin_topup_${id}_${idempotencyKey}`;
+    // The key is scoped to the kind: a top-up dedupes on stripePaymentIntentId and a refund on
+    // transactionId, so a key reused across kinds would slip past both.
+    const dedupeKey = `admin_${kind}_${id}_${idempotencyKey}`;
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
 
     // A generic_add is deduped on transactionId, which createTransaction swallows into a silent
     // no-op rather than the E11000 the subscription path raises. Look the key up first so a
-    // replayed refund answers like a replayed top-up and writes no second audit row. A concurrent
-    // duplicate that slips past this never double-credits, but inside the transaction below the
-    // swallowed E11000 leaves it aborted, so the catch answers it.
+    // replayed refund answers like a replayed top-up and writes no second audit row.
     const idempotentResponse = () =>
       res.status(200).json({
         organizationId: organization.id,
@@ -74,10 +74,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // Atomic credit grant + audit log. Without the transaction, an audit-side
     // failure (analytics outage, etc.) after the credit write would leave a
     // credit-granting action with no audit record - a SOC2 gap on a money
-    // path. Idempotency is enforced by the sparse unique index on
-    // creditTransactions.stripePaymentIntentId: concurrent duplicates raise
-    // E11000, which aborts the transaction (rolling back this attempt's
-    // credit write - the original committed write is preserved).
+    // path. Idempotency is enforced by the sparse unique indexes on
+    // creditTransactions.stripePaymentIntentId (top-up) and transactionId
+    // (refund): a concurrent duplicate aborts the transaction, rolling back
+    // this attempt's credit write while the original committed write stands.
     try {
       await withTransaction(async () => {
         await creditService.addCredits(
@@ -103,11 +103,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
+            // A refund dedupes on transactionId, which createTransaction swallows. Inside the
+            // transaction the duplicate write has already aborted the session, so the duplicate
+            // must be raised here rather than re-read: any further operation on the dead session
+            // raises a transient NoSuchTransaction and the driver retries the callback for minutes.
+            duplicateTransactionId: isRefund ? 'throw' : 'return',
           }
         );
 
         await recordAdminActionFromRequest(req, {
-          action: 'org.credits.topped_up',
+          action: isRefund ? 'org.credits.refunded' : 'org.credits.topped_up',
           target: { kind: 'organization', id: organization.id, displayName: organization.name },
           summary: `${isRefund ? 'refunded' : 'topped up'} ${credits} credits`,
           reason,
@@ -115,14 +120,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         });
       });
     } catch (err: unknown) {
-      if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 11000) {
-        req.logger.info(`Top-up dedup hit for ${dedupeKey}, treating as success`);
+      // The winner's row is what the duplicate write collided with, so it is committed: the
+      // refund is already in place and this request only has to report success.
+      if (err instanceof creditService.DuplicateCreditTransactionError) {
+        req.logger.info(`Refund dedup hit for ${dedupeKey}, treating as success`);
         return idempotentResponse();
       }
-      // A refund that lost the race reaches here as NoSuchTransaction, not 11000: createTransaction
-      // swallowed the E11000 but the server already aborted the transaction. The winner's row settles it.
-      if (isRefund && (await creditTransactionRepository.findOne({ transactionId: dedupeKey }))) {
-        req.logger.info(`Refund dedup hit after aborted transaction for ${dedupeKey}, treating as success`);
+      if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 11000) {
+        req.logger.info(`Top-up dedup hit for ${dedupeKey}, treating as success`);
         return idempotentResponse();
       }
       throw err;

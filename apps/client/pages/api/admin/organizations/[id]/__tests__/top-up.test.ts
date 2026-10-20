@@ -30,7 +30,12 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 
 const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
+  creditService: {
+    addCredits: (...a: unknown[]) => mockAddCredits(...a),
+    // The route distinguishes a replayed key from a real failure by type, so this has to be the
+    // class the route reads, not a stand-in.
+    DuplicateCreditTransactionError: class DuplicateCreditTransactionError extends Error {},
+  },
 }));
 
 let inTransaction = false;
@@ -63,6 +68,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { creditService } from '@bike4mind/services';
 import { creditLotRepository, creditTransactionRepository, organizationRepository } from '@bike4mind/database';
 import handler from '../top-up';
 
@@ -147,7 +153,8 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
 
 describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
   const body = { credits: 100, idempotencyKey: 'idem-key-12345' };
-  const dedupeKey = 'admin_topup_org-1_idem-key-12345';
+  const dedupeKey = 'admin_top_up_org-1_idem-key-12345';
+  const refundKey = 'admin_refund_org-1_idem-key-12345';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -211,15 +218,17 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
       type: 'generic_add',
       reason: 'refund',
       description: 'Admin refund',
-      transactionId: dedupeKey,
+      transactionId: refundKey,
       metadata: { adminUserId: 'admin-1', reason: 'invoice dispute', source: 'admin_refund' },
     });
     expect(adapters.creditHolderMethods).toBe(organizationRepository);
     expect(adapters.db).toEqual({ creditTransactions: creditTransactionRepository, creditLots: creditLotRepository });
+    // A refund must not re-read the aborted session after the swallowed duplicate.
+    expect(adapters.duplicateTransactionId).toBe('throw');
     expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
   });
 
-  it('audits a refund inside the same transaction as the credit write', async () => {
+  it('audits a refund as its own action inside the same transaction as the credit write', async () => {
     insideTransactionAtAudit = undefined;
     const { run } = call({ body: { ...body, kind: 'refund', reason: 'invoice dispute' } });
     await run();
@@ -227,7 +236,7 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        action: 'org.credits.topped_up',
+        action: 'org.credits.refunded',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
         summary: 'refunded 100 credits',
         reason: 'invoice dispute',
@@ -236,38 +245,38 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
     );
   });
 
+  it('keys a refund apart from a top-up submitted with the same idempotency key', async () => {
+    // They dedupe on different fields, so a shared key would be caught by neither index.
+    await call({ body }).run();
+    await call({ body: { ...body, kind: 'refund' } }).run();
+    expect(mockAddCredits.mock.calls[0][0].stripePaymentIntentId).toBe(dedupeKey);
+    expect(mockAddCredits.mock.calls[1][0].transactionId).toBe(refundKey);
+  });
+
   it('answers a replayed refund as idempotent without crediting or auditing twice', async () => {
     mockTxFindOne.mockResolvedValue({ id: 'tx-1' });
     const { res, run } = call({ body: { ...body, kind: 'refund' } });
     await run();
-    expect(mockTxFindOne).toHaveBeenCalledWith({ transactionId: dedupeKey });
+    expect(mockTxFindOne).toHaveBeenCalledWith({ transactionId: refundKey });
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
   });
 
-  it('answers a refund that lost a concurrent race idempotently when the aborted transaction fails with a non-11000 error', async () => {
-    const noSuchTransaction = Object.assign(new Error('Transaction 1 has been aborted'), {
-      code: 251,
-      codeName: 'NoSuchTransaction',
-    });
-    mockAddCredits.mockRejectedValue(noSuchTransaction);
-    mockTxFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'tx-1' });
+  it('answers a refund that lost a concurrent race idempotently instead of failing the request', async () => {
+    mockAddCredits.mockRejectedValue(new creditService.DuplicateCreditTransactionError());
     const { res, run } = call({ body: { ...body, kind: 'refund' } });
     await run();
-    expect(mockTxFindOne).toHaveBeenCalledTimes(2);
-    expect(mockTxFindOne).toHaveBeenLastCalledWith({ transactionId: dedupeKey });
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
   });
 
-  it('rethrows a refund failure when no winning row exists', async () => {
-    const noSuchTransaction = Object.assign(new Error('Transaction 1 has been aborted'), { code: 251 });
-    mockAddCredits.mockRejectedValue(noSuchTransaction);
+  it('rethrows a refund failure that is not a duplicate', async () => {
+    const boom = new Error('boom');
+    mockAddCredits.mockRejectedValue(boom);
     const { res, run } = call({ body: { ...body, kind: 'refund' } });
-    await expect(run()).rejects.toBe(noSuchTransaction);
-    expect(mockTxFindOne).toHaveBeenCalledTimes(2);
+    await expect(run()).rejects.toBe(boom);
     expect(res._isEndCalled()).toBe(false);
   });
 
