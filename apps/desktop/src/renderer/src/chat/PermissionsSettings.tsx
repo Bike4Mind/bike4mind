@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
+import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
@@ -11,6 +12,7 @@ import Switch from '@mui/joy/Switch';
 import Typography from '@mui/joy/Typography';
 import type { RecentFolder } from '@shared/chat';
 import {
+  type ClaudeCodeSourceView,
   PERMISSION_LISTS,
   type PermissionList,
   type PermissionRuleLists,
@@ -18,6 +20,7 @@ import {
   type PermissionScope,
   type PermissionsState,
 } from '@shared/permissions';
+import { ChevronIcon } from './icons';
 
 const LIST_LABEL: Record<PermissionList, string> = { allow: 'Allow', ask: 'Ask', deny: 'Deny' };
 const LIST_COLOR: Record<PermissionList, 'success' | 'warning' | 'danger'> = {
@@ -45,6 +48,36 @@ function toLists(rules: readonly PermissionRuleView[]): PermissionRuleLists {
 function shortPath(path: string): string {
   const parts = path.split('/').filter(Boolean);
   return parts.length > 3 ? `.../${parts.slice(-3).join('/')}` : path;
+}
+
+function ruleCount(count: number): string {
+  return `${count} rule${count === 1 ? '' : 's'}`;
+}
+
+function CollapseToggle({
+  open,
+  onToggle,
+  name,
+  testId,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  name: string;
+  testId: string;
+}) {
+  return (
+    <IconButton
+      size="sm"
+      variant="plain"
+      color="neutral"
+      aria-expanded={open}
+      aria-label={`${open ? 'Hide' : 'Show'} ${name}`}
+      onClick={onToggle}
+      data-testid={testId}
+    >
+      <ChevronIcon open={open} />
+    </IconButton>
+  );
 }
 
 export function usePermissions() {
@@ -182,6 +215,7 @@ export function PermissionsSettings({
   const [draft, setDraft] = useState('');
   const [draftList, setDraftList] = useState<PermissionList>('allow');
   const [error, setError] = useState<string | null>(null);
+  const [desktopOpen, setDesktopOpen] = useState(true);
 
   useEffect(() => {
     window.b4m.chat
@@ -250,8 +284,20 @@ export function PermissionsSettings({
 
       <Stack spacing={1}>
         <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="title-sm" sx={{ flex: 1 }}>
-            Desktop rules
+          <CollapseToggle
+            open={desktopOpen}
+            onToggle={() => setDesktopOpen(open => !open)}
+            name="desktop rules"
+            testId="permissions-desktop-toggle-btn"
+          />
+          <Typography level="title-sm">Desktop rules</Typography>
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            sx={{ flex: 1 }}
+            data-testid="permissions-desktop-count"
+          >
+            {ruleCount(rules.length)}
           </Typography>
           <Select
             size="sm"
@@ -269,7 +315,7 @@ export function PermissionsSettings({
           </Select>
         </Stack>
 
-        {rules.length === 0 ? (
+        {!desktopOpen ? null : rules.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="permissions-empty">
             No rules here yet.
           </Typography>
@@ -336,84 +382,118 @@ export function PermissionsSettings({
         </Typography>
 
         {state.claudeCode.map(source => (
-          <Sheet
+          <SourceCard
             key={source.id}
-            variant="soft"
-            sx={{ borderRadius: 'sm', p: 1, opacity: state.shareClaudeCode ? 1 : 0.55 }}
-            data-testid="permissions-source"
-            data-source={source.id}
-          >
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: source.rules.length > 0 ? 0.75 : 0 }}>
-              <Chip size="sm" variant="outlined" data-testid="permissions-source-badge">
-                {source.label}
-              </Chip>
-              <Typography
-                level="body-xs"
-                fontFamily="monospace"
-                title={source.path}
-                noWrap
-                sx={{ flex: 1, minWidth: 0 }}
-              >
-                {source.path}
-              </Typography>
-              {source.status !== 'loaded' && (
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {source.status === 'missing' ? 'Not found' : 'Could not be read'}
-                </Typography>
-              )}
-            </Stack>
-            {source.note && (
-              <Typography level="body-xs" color="warning" sx={{ mb: 0.5 }} data-testid="permissions-source-note">
-                {source.note}
-              </Typography>
-            )}
-            <Stack spacing={0.5}>
-              {source.rules.map(view => (
-                <Stack
-                  key={`${view.list}:${view.rule}`}
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  sx={{ opacity: view.problem ? 0.5 : 1 }}
-                  data-testid="permissions-shared-rule"
-                  data-unmapped={view.problem ? 'true' : undefined}
-                >
-                  <Chip size="sm" variant="soft" color={LIST_COLOR[view.list]}>
-                    {LIST_LABEL[view.list]}
-                  </Chip>
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography level="body-sm" fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>
-                      {view.rule}
-                    </Typography>
-                    {view.problem && (
-                      <Typography level="body-xs" textColor="text.tertiary">
-                        Ignored: {view.problem}
-                      </Typography>
-                    )}
-                  </Box>
-                  {!view.problem && (
-                    <Button
-                      size="sm"
-                      variant="plain"
-                      color="neutral"
-                      disabled={state.user.some(each => each.rule === view.rule && each.list === view.list)}
-                      onClick={() => void copyToDesktop(view)}
-                      data-testid="permissions-copy-btn"
-                    >
-                      Copy to desktop rules
-                    </Button>
-                  )}
-                </Stack>
-              ))}
-            </Stack>
-            {source.additionalDirectories.length > 0 && (
-              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                Additional directories (not shared here): {source.additionalDirectories.join(', ')}
-              </Typography>
-            )}
-          </Sheet>
+            source={source}
+            shared={state.shareClaudeCode}
+            isCopied={view => state.user.some(each => each.rule === view.rule && each.list === view.list)}
+            onCopy={view => void copyToDesktop(view)}
+          />
         ))}
       </Stack>
     </Stack>
+  );
+}
+
+/** One Claude Code settings file. Closed by default: a long-lived settings file can hold dozens of rules. */
+function SourceCard({
+  source,
+  shared,
+  isCopied,
+  onCopy,
+}: {
+  source: ClaudeCodeSourceView;
+  shared: boolean;
+  isCopied: (view: PermissionRuleView) => boolean;
+  onCopy: (view: PermissionRuleView) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasDetails = source.rules.length > 0 || source.additionalDirectories.length > 0;
+  return (
+    <Sheet
+      variant="soft"
+      sx={{ borderRadius: 'sm', p: 1, opacity: shared ? 1 : 0.55 }}
+      data-testid="permissions-source"
+      data-source={source.id}
+    >
+      <Stack direction="row" spacing={1} alignItems="center">
+        {hasDetails && (
+          <CollapseToggle
+            open={open}
+            onToggle={() => setOpen(current => !current)}
+            name={`rules from ${source.label}`}
+            testId="permissions-source-toggle-btn"
+          />
+        )}
+        <Chip size="sm" variant="outlined" data-testid="permissions-source-badge">
+          {source.label}
+        </Chip>
+        <Typography level="body-xs" fontFamily="monospace" title={source.path} noWrap sx={{ flex: 1, minWidth: 0 }}>
+          {source.path}
+        </Typography>
+        {source.status === 'loaded' ? (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="permissions-source-count">
+            {ruleCount(source.rules.length)}
+          </Typography>
+        ) : (
+          <Typography level="body-xs" textColor="text.tertiary">
+            {source.status === 'missing' ? 'Not found' : 'Could not be read'}
+          </Typography>
+        )}
+      </Stack>
+      {source.note && (
+        <Typography level="body-xs" color="warning" sx={{ mt: 0.5 }} data-testid="permissions-source-note">
+          {source.note}
+        </Typography>
+      )}
+      {open && (
+        <>
+          <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+            {source.rules.map(view => (
+              <Stack
+                key={`${view.list}:${view.rule}`}
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                sx={{ opacity: view.problem ? 0.5 : 1 }}
+                data-testid="permissions-shared-rule"
+                data-unmapped={view.problem ? 'true' : undefined}
+              >
+                <Chip size="sm" variant="soft" color={LIST_COLOR[view.list]}>
+                  {LIST_LABEL[view.list]}
+                </Chip>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm" fontFamily="monospace" sx={{ overflowWrap: 'anywhere' }}>
+                    {view.rule}
+                  </Typography>
+                  {view.problem && (
+                    <Typography level="body-xs" textColor="text.tertiary">
+                      Ignored: {view.problem}
+                    </Typography>
+                  )}
+                </Box>
+                {!view.problem && (
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    disabled={isCopied(view)}
+                    onClick={() => onCopy(view)}
+                    data-testid="permissions-copy-btn"
+                  >
+                    Copy to desktop rules
+                  </Button>
+                )}
+              </Stack>
+            ))}
+          </Stack>
+          {source.additionalDirectories.length > 0 && (
+            <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+              Additional directories (not shared here): {source.additionalDirectories.join(', ')}
+            </Typography>
+          )}
+        </>
+      )}
+    </Sheet>
   );
 }
