@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
-import { ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { adminSearchForTab } from './adminTabParams';
 
 /** The admin tab store holds non-member strings too, written by other surfaces. */
 type AdminTabValue = AdminTab | string | null;
@@ -75,13 +75,8 @@ export function useAdminTabUrlSync(
     if (slug === undefined || slug === requestedTabSlug) return;
     navigate({
       to: '/admin',
-      // Rebuilt rather than spread so stray params (e.g. a leftover login redirectTo) don't stick
-      search: previous => ({
-        emergency_access: previous.emergency_access,
-        tab: slug,
-        // feedbackId only means something on the Feedback tab
-        feedbackId: slug === ADMIN_FEEDBACK_TAB_SLUG ? previous.feedbackId : undefined,
-      }),
+      // Rebuilt from the param registry, so the new tab's own params survive and nothing else does
+      search: previous => adminSearchForTab(previous, slug),
       replace: true,
     });
   }, [activeTab, isOnAdminRoute, navigate, requestedTabSlug, resolveRequestedTab]);

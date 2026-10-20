@@ -8,6 +8,7 @@ import {
   CATEGORY_ICONS,
 } from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
+import { useAdminSettingsSearchParams, type SettingSectionKey } from './useAdminSettingsSearchParams';
 import {
   Checkbox,
   FormControl,
@@ -277,9 +278,10 @@ const McpServerForm = () => {
 };
 
 const AdminSettingsTab: React.FC = () => {
-  const [searchTerm, setSearchTerm] = useState('');
+  const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
+  // Widened so the MCP pseudo-tab checks below still type-check against the SETTING_TABS keys.
+  const activeTab: string = section;
   const [allTabs, setAllTabs] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>(Object.keys(SETTING_TABS)[0]);
   const settingsFromServer = useSettingsFromServer();
 
   // Index server values by setting name once, so the hot search/filter paths
@@ -671,6 +673,7 @@ const AdminSettingsTab: React.FC = () => {
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
+                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
               />
             </FormControl>
             {searchTerm && (
@@ -711,7 +714,7 @@ const AdminSettingsTab: React.FC = () => {
           ) : (
             <Tabs
               value={activeTab}
-              onChange={(_, value) => setActiveTab(value as string)}
+              onChange={(_, value) => setSection(value as SettingSectionKey)}
               sx={{ bgcolor: 'background.body' }}
             >
               <TabList
@@ -732,6 +735,7 @@ const AdminSettingsTab: React.FC = () => {
                       key={tabId}
                       value={tabId}
                       variant={activeTab === tabId ? 'soft' : 'plain'}
+                      data-testid={`admin-settings-section-tab-${tabInfo.id}`}
                       sx={{
                         borderRadius: 0,
                         minWidth: { xs: 'auto', md: 'unset' },

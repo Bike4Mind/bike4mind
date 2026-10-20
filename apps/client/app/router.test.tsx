@@ -10,6 +10,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import {
+  adminRoute,
   billingRoute,
   feedbackRollupRoute,
   dataLakesRoute,
@@ -20,7 +21,48 @@ import {
   studioRoute,
   subscriptionsIndexRoute,
 } from './router';
+import { AuditLogFiltersSchema } from '@bike4mind/common';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+
+describe('adminRoute validateSearch', () => {
+  const validate = (search: Record<string, unknown>) => adminRoute.options.validateSearch(search);
+
+  it("keeps the console-wide params and every tab's registered params", () => {
+    expect(
+      validate({
+        emergency_access: 'true',
+        tab: 'audit-log',
+        feedbackId: 'f1',
+        category: 'credits',
+        entryId: 'e1',
+        section: 'security',
+        q: 'slack',
+      })
+    ).toEqual({
+      emergency_access: 'true',
+      tab: 'audit-log',
+      feedbackId: 'f1',
+      category: 'credits',
+      entryId: 'e1',
+      section: 'security',
+      q: 'slack',
+    });
+  });
+
+  it('declares every Audit Log filter key', () => {
+    const declared = Object.keys(validate({}));
+    expect(declared).toEqual(expect.arrayContaining([...Object.keys(AuditLogFiltersSchema.shape), 'entryId']));
+  });
+
+  // TanStack's default parser JSON-decodes values, so ?targetId=123 arrives as a number.
+  it('coerces non-string values to strings and drops empty ones', () => {
+    expect(validate({ targetId: 123, q: '', tab: undefined })).toEqual({ targetId: '123' });
+  });
+
+  it('does not declare unregistered params', () => {
+    expect(validate({ tab: 'users', redirectTo: '/x' })).not.toHaveProperty('redirectTo');
+  });
+});
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
 // comment) - rollup.test.tsx mocks '@client/app/router' wholesale, so this is the only place the

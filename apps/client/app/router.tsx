@@ -34,6 +34,7 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { parseAdminSearch } from './components/admin/adminTabParams';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
@@ -1168,7 +1169,7 @@ const activateRoute = createRoute({
 });
 
 // Admin route (replaces /admin/index.tsx)
-const adminRoute = createRoute({
+export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
   beforeLoad: ({ location }) => enforceConsentRedirect(location),
@@ -1182,18 +1183,10 @@ const adminRoute = createRoute({
       </ProviderBundle>
     </RestrictedPage>
   ),
-  // `tab` and `feedbackId` make the console addressable: a feedback deep link opens the Feedback
-  // tab focused on one record. `tab` is a stable slug, never the positional AdminTab enum value -
-  // see common/utils/deepLinks for why, and adminTabSlugs.ts for the slug <-> enum mapping.
-  validateSearch: (
-    search: Record<string, unknown>
-  ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
-    return {
-      emergency_access: optionalStringParam(search, 'emergency_access'),
-      tab: optionalStringParam(search, 'tab'),
-      feedbackId: optionalStringParam(search, 'feedbackId'),
-    };
-  },
+  // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
+  // makes the console addressable, and each tab's own params come from the registry in
+  // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
+  validateSearch: parseAdminSearch,
 });
 
 // Email unsubscribe route - public page for managing email preferences

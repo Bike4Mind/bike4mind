@@ -31,7 +31,33 @@ vi.mock('./AdminStringListSettingField', () => ({
   ),
 }));
 
+type SearchRecord = Record<string, unknown>;
+const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => router.search,
+  useNavigate: () => router.navigate,
+}));
+
 import AdminSettingsTab from './AdminSettingsTab';
+
+/** The search the component's most recent navigate would produce from `previous`. */
+const lastWrittenSearch = (previous: SearchRecord) => {
+  const call = router.navigate.mock.calls.at(-1)?.[0] as {
+    to: string;
+    replace: boolean;
+    search: (previous: SearchRecord) => SearchRecord;
+  };
+  expect(call.to).toBe('/admin');
+  expect(call.replace).toBe(true);
+  return call.search(previous);
+};
+
+const renderSettings = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <AdminSettingsTab />
+    </CssVarsProvider>
+  );
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -56,6 +82,55 @@ const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
   serverSettings = [];
+  router.search = {};
+  router.navigate.mockReset();
+});
+
+describe('AdminSettingsTab URL state', () => {
+  const sections = Object.values(SETTING_TABS);
+  const [firstSection, secondSection] = sections;
+  const isSelected = (id: string) =>
+    screen.getByTestId(`admin-settings-section-tab-${id}`).getAttribute('aria-selected') === 'true';
+
+  it('opens the section named by ?section=', () => {
+    router.search = { tab: 'admin-settings', section: secondSection.id };
+    renderSettings();
+    expect(isSelected(secondSection.id)).toBe(true);
+    expect(isSelected(firstSection.id)).toBe(false);
+  });
+
+  it('falls back to the first section for an unknown ?section=', () => {
+    router.search = { tab: 'admin-settings', section: 'constructor' };
+    renderSettings();
+    expect(isSelected(firstSection.id)).toBe(true);
+  });
+
+  it('writes the section id to the URL, keeping the other params', () => {
+    renderSettings();
+    fireEvent.click(screen.getByTestId(`admin-settings-section-tab-${secondSection.id}`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({
+      tab: 'admin-settings',
+      q: 'slack',
+      section: secondSection.id,
+    });
+  });
+
+  it('seeds the search box from ?q= and writes edits back, removing q once cleared', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+    const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+    expect(input.value).toBe('slack');
+
+    fireEvent.change(input, { target: { value: 'slack bot' } });
+    expect(input.value).toBe('slack bot');
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({ tab: 'admin-settings', q: 'slack bot' });
+
+    fireEvent.change(input, { target: { value: '' } });
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack bot' })).toEqual({
+      tab: 'admin-settings',
+      q: undefined,
+    });
+  });
 });
 
 describe('AdminSettingsTab generation models setting', () => {
