@@ -5,6 +5,7 @@ import {
   type ImageModerationIncident,
   type IncidentSurface,
 } from '@bike4mind/common';
+import { escapeHtml } from '@server/utils/mailer/emailHelpers';
 
 /** The fields of a stored incident the alert reads; anything else on the record is never rendered. */
 export interface RecordedIncident {
@@ -31,9 +32,6 @@ export interface IncidentReviewAlertDeps {
 // of seconds, so the alert gets a short budget. A send that misses it is best-effort (it may still
 // land, unstamped) until the send moves onto the email event with its retries.
 export const REVIEW_ALERT_TIMEOUT_MS = 5_000;
-
-const escapeHtml = (value: string) =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /**
  * Renders the reviewer alert from an allowlist of incident metadata. It must never carry the image,
