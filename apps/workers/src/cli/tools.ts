@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { userRepository } from '@bike4mind/database';
 import type { ServerToolExecutors } from '@bike4mind/services';
-import type { DecisionRunBody } from '@server/decisions/runDecision';
+import { runDecision, type DecisionRunBody } from '@server/decisions/runDecision';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
@@ -13,9 +13,6 @@ import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
  */
 const buildExecutors = (logger: Logger): ServerToolExecutors => ({
   decide: async request => {
-    // Loaded on demand: the runner pulls the file-access and entitlement graph, which the
-    // weather/search/fetch tools on this same endpoint never touch.
-    const { runDecision } = await import('@server/decisions/runDecision');
     const user = await userRepository.findById(request.userId);
     if (!user) throw new Error('No such user');
     const result = await runDecision({

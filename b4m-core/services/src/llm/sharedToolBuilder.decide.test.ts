@@ -79,4 +79,9 @@ describe('buildSharedTools: decide host hook', () => {
     expect(payload).toEqual({ id: 'dec_1', model: 'test-decisions', answers: answer.answers });
     expect(payload.answers.map((entry: { name: string }) => entry.name)).toEqual(['is_urgent', 'team']);
   });
+
+  it('is dropped from the built list when availability says no model can answer', () => {
+    const tools = buildSharedTools(deps, callbacks, { enabledTools: ['decide'], toolAvailability: { decide: false } });
+    expect(tools?.some(entry => entry.toolSchema.name === 'decide')).toBe(false);
+  });
 });
