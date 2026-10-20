@@ -21,8 +21,8 @@ export interface IncidentReviewAlertDeps {
   };
   /** The stored ImageModerationReviewerEmails value; entries are validated one at a time here. */
   getRecipients: () => Promise<unknown>;
-  /** Mirrors MailService.sendEmail: one message to every recipient, resolving false when delivery failed. */
-  sendEmail: (to: string[], email: { subject: string; html: string }) => Promise<false | object>;
+  /** Mirrors MailService.sendEmail for a single recipient, resolving false when delivery failed. */
+  sendEmail: (to: string, email: { subject: string; html: string }) => Promise<false | object>;
   appUrl: () => string | undefined;
   logger: { warn(msg: string, meta: unknown): void; error(msg: string, meta: unknown): void };
 }
@@ -86,8 +86,13 @@ async function alertReviewers(incident: RecordedIncident, deps: IncidentReviewAl
   const timedOut = new Promise<'timeout'>(resolve => {
     timer = setTimeout(() => resolve('timeout'), REVIEW_ALERT_TIMEOUT_MS);
   });
+  // One message per reviewer: a shared To header would show each reviewer the others' addresses.
+  const deliver = async () =>
+    (await Promise.all(recipients.map(recipient => deps.sendEmail(recipient, email)))).every(
+      result => result !== false
+    );
   try {
-    const outcome = await Promise.race([deps.sendEmail(recipients, email), timedOut]);
+    const outcome = await Promise.race([deliver(), timedOut]);
     if (outcome === 'timeout') {
       deps.logger.error('[ImageModeration] reviewer alert did not complete in time', meta);
       return;

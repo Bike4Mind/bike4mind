@@ -17,6 +17,9 @@ export function resolveAdminAppUrl(env: Record<string, string | undefined> = pro
   return domain ? `https://app.${domain}` : undefined;
 }
 
+// Loaded once, on the first alert.
+let mailerModule: Promise<typeof import('@server/utils/mailer')> | undefined;
+
 /**
  * The incident store every image moderation gate records through (generation, edit, avatar and
  * upload paths, in apps/client and apps/workers). Wire this, not the bare repository, so a new
@@ -42,7 +45,7 @@ export const imageModerationIncidents = withReviewerAlerts({
     }
   },
   sendEmail: async (to, email) => {
-    const { default: mailer } = await import('@server/utils/mailer');
+    const { default: mailer } = await (mailerModule ??= import('@server/utils/mailer'));
     return mailer.sendEmail(to, email, { mirror: false, logRecipient: false });
   },
   appUrl: () => resolveAdminAppUrl(),

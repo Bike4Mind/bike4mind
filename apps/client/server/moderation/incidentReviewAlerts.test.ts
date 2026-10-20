@@ -37,8 +37,7 @@ describe('withReviewerAlerts', () => {
 
     await incidents.record(INPUT);
 
-    expect(deps.sendEmail).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(deps.sendEmail).mock.calls[0][0]).toEqual([
+    expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[0])).toEqual([
       'reviewer-one@example.com',
       'reviewer-two@example.com',
     ]);
@@ -49,6 +48,19 @@ describe('withReviewerAlerts', () => {
     expect(email.html).toContain(CREATED_AT.toISOString());
     expect(email.html).toContain('upload');
     expect(email.html).toContain(REVIEW_LINK);
+  });
+
+  it('also alerts for an incident recorded as pending review', async () => {
+    const { deps, incidents } = setup();
+    vi.mocked(deps.incidents.record).mockResolvedValue({
+      id: 'incident-123',
+      createdAt: CREATED_AT,
+      reviewStatus: 'pending_review',
+    });
+
+    await incidents.record(INPUT);
+
+    expect(deps.sendEmail).toHaveBeenCalledTimes(2);
   });
 
   it('records alertedAt only after the alert is delivered', async () => {
@@ -171,7 +183,7 @@ describe('withReviewerAlerts', () => {
 
     await incidents.record(INPUT);
     expect(deps.sendEmail).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(deps.sendEmail).mock.calls[0][0]).toEqual(['reviewer-one@example.com']);
+    expect(vi.mocked(deps.sendEmail).mock.calls[0][0]).toBe('reviewer-one@example.com');
 
     // A failed write created no incident, so there is nothing to alert on.
     vi.mocked(deps.incidents.record).mockRejectedValueOnce(new Error('write failed'));
@@ -186,7 +198,7 @@ describe('withReviewerAlerts', () => {
 
     await incidents.record(INPUT);
 
-    expect(vi.mocked(deps.sendEmail).mock.calls[0][0]).toEqual(['reviewer-one@example.com']);
+    expect(vi.mocked(deps.sendEmail).mock.calls[0][0]).toBe('reviewer-one@example.com');
     expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining('invalid'), { incidentId: 'incident-123' });
   });
 
@@ -207,5 +219,17 @@ describe('withReviewerAlerts', () => {
     await incidents.record(INPUT);
 
     expect(sentEmail(deps).html).toContain('/admin?tab=users&amp;incidentId=incident-123');
+  });
+
+  it('renders an unknown surface and escapes the incident id', async () => {
+    const { deps, incidents } = setup();
+    vi.mocked(deps.incidents.record).mockResolvedValue({ id: 'incident-<script>&', createdAt: CREATED_AT });
+
+    await incidents.record(INPUT);
+
+    const html = sentEmail(deps).html;
+    expect(html).toContain('unknown');
+    expect(html).toContain('incident-&lt;script&gt;&amp;');
+    expect(html).not.toContain('<script>');
   });
 });
