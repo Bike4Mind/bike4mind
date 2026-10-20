@@ -27,10 +27,11 @@ describe('sendPromptViaComposer', () => {
     expect(onBlocked).toHaveBeenCalledWith('uploading');
   });
 
-  it('does not toast a second time within the gate window', async () => {
+  it('does not toast or report the block a second time within the gate window', async () => {
     const handleSendClick = vi.fn();
     const toastInfo = vi.fn();
     const shouldToastBlockedSend = vi.fn().mockReturnValue(false);
+    const onBlocked = vi.fn();
 
     await sendPromptViaComposer({
       sendBlockedReason: 'reconnecting',
@@ -38,9 +39,11 @@ describe('sendPromptViaComposer', () => {
       toastInfo,
       t,
       handleSendClick,
+      onBlocked,
     });
 
     expect(toastInfo).not.toHaveBeenCalled();
+    expect(onBlocked).not.toHaveBeenCalled();
     expect(handleSendClick).not.toHaveBeenCalled();
   });
 
