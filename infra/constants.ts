@@ -1,5 +1,13 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
+
+/**
+ * Whether this stage creates its scheduled crons at all. Other stages (PR previews) skip them
+ * outright rather than deploying them disabled: a disabled EventBridge rule still counts against
+ * the default bus's per-account rule quota, which every preview in the account shares.
+ * Crons that should also run on previews (infra/cron.ts) are created unconditionally.
+ */
+export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
 /** Stages that run at full production scale (reserved concurrency, full memory, etc.).
  * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
