@@ -11,6 +11,10 @@ import {
   CompletionStreamEventSchema,
   CompletionToolSchema,
   isCompletionServerTool,
+  isToolChangeBlockType,
+  isToolChangeMessage,
+  ToolChangeBlockSchema,
+  ToolChangeMessageContentSchema,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
@@ -547,5 +551,49 @@ describe('CompletionRequestSchema thinking budget', () => {
       options: { thinking: { enabled: true, budget_tokens: 10_000_000 } },
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe('ToolChangeBlockSchema', () => {
+  const ref = { type: 'tool_reference', name: 'get_weather' };
+
+  it('accepts a tool_addition and a tool_removal naming a tool', () => {
+    expect(ToolChangeBlockSchema.safeParse({ type: 'tool_addition', tool: ref }).success).toBe(true);
+    expect(ToolChangeBlockSchema.safeParse({ type: 'tool_removal', tool: ref }).success).toBe(true);
+  });
+
+  it.each([
+    ['an inline definition', { type: 'tool_addition', tool: { ...ref, description: 'x', input_schema: {} } }],
+    ['an MCP reference', { type: 'tool_addition', tool: { type: 'mcp_tool_reference', name: 'get_weather' } }],
+    ['an empty name', { type: 'tool_addition', tool: { type: 'tool_reference', name: '' } }],
+    ['the tool_search tool_name spelling', { type: 'tool_addition', tool: { type: 'tool_reference', tool_name: 'a' } }],
+    ['an unknown block type', { type: 'tool_swap', tool: ref }],
+    ['an extra block key', { type: 'tool_addition', tool: ref, cache_control: { type: 'ephemeral' } }],
+  ])('rejects %s', (_label, block) => {
+    expect(ToolChangeBlockSchema.safeParse(block).success).toBe(false);
+  });
+
+  it('requires a non-empty array of blocks for a message', () => {
+    expect(ToolChangeMessageContentSchema.safeParse([]).success).toBe(false);
+    expect(ToolChangeMessageContentSchema.safeParse([{ type: 'text', text: 'hi' }]).success).toBe(false);
+    expect(ToolChangeMessageContentSchema.safeParse([{ type: 'tool_removal', tool: ref }]).success).toBe(true);
+  });
+
+  it('recognises a tool change block by type alone', () => {
+    expect(isToolChangeBlockType({ type: 'tool_addition' })).toBe(true);
+    expect(isToolChangeBlockType({ type: 'text' })).toBe(false);
+    expect(isToolChangeBlockType(null)).toBe(false);
+    expect(isToolChangeBlockType('tool_addition')).toBe(false);
+  });
+});
+
+describe('isToolChangeMessage', () => {
+  const content = [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'get_weather' } }];
+
+  it('is true only for a system message holding tool change blocks', () => {
+    expect(isToolChangeMessage({ role: 'system', content })).toBe(true);
+    expect(isToolChangeMessage({ role: 'user', content })).toBe(false);
+    expect(isToolChangeMessage({ role: 'system', content: 'be brief' })).toBe(false);
+    expect(isToolChangeMessage({ role: 'system', content: [{ type: 'text', text: 'be brief' }] })).toBe(false);
   });
 });
