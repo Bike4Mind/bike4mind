@@ -9,6 +9,8 @@ tags: [organizations, teams, collaboration]
 
 A Team is a shared workspace for a group of people. Everyone on a Team draws from one shared pool of credits, and the Team owner manages the subscription, the seats and the members.
 
+Before subscribing, [preview Team administration](./team-admin-preview.md) with fictional members, monthly limits and usage examples. You do not need an account or a paid Team to read the preview.
+
 ## Open the Teams page
 
 Open the account menu in the sidebar and choose **Teams**. The page lists every Team you belong to. Each card shows the Team name, whether it is a personal or shared team, the number of seats, the number of members, the credits, and the subscription status (Active Subscription, No Subscription or Payment Issue). Use **View Details** to open a Team, or the search box to filter the list.
@@ -40,15 +42,15 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and the Team manager. The **Billing** tab is visible to the owner only. A Team manager who is not a member still finds the Team in the Teams list, marked with a **Manager** badge, and can open it from there.
+Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager who is not a member still finds the Team in the Teams list, marked with a **Manager** badge, and can open it from there.
 
 On the **Members** tab:
 
 - The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
-- The Team owner and appointed Team admins can invite people and cancel pending invites. The Team owner, the Team manager and platform admins can remove people. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
+- The Team owner, appointed Team admins with membership access, and platform admins can invite people and cancel pending invites. The Team owner, appointed Team admins, the Team manager and platform admins can remove ordinary members. Only the owner and platform admins can remove an appointed Team admin or Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
-- The Team owner and appointed Team admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
+- The Team owner, appointed Team admins and platform admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
 
 ## Roles
 
