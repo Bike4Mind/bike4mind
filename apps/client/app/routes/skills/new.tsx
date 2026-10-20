@@ -33,6 +33,7 @@ const NewSkillPage: FC = () => {
 
         <SkillForm
           submitLabel="Create skill"
+          enableSkillMdImport
           submitting={createSkill.isPending}
           onCancel={() => navigate({ to: '/skills' })}
           onSubmit={async input => {

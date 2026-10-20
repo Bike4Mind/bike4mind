@@ -1,5 +1,6 @@
-import React, { FC, useState } from 'react';
+import React, { FC, useRef, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -7,10 +8,12 @@ import {
   FormHelperText,
   FormLabel,
   Input,
+  Link,
   Stack,
   Textarea,
   Typography,
 } from '@mui/joy';
+import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -19,6 +22,8 @@ export interface SkillFormProps {
   submitLabel: string;
   onSubmit: (input: SkillFormInput) => void;
   onCancel: () => void;
+  /** Show the "Import SKILL.md" strip (create mode only; it prefills the fields). */
+  enableSkillMdImport?: boolean;
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -34,12 +39,40 @@ export const SkillForm: FC<SkillFormProps> = ({
   submitLabel,
   onSubmit,
   onCancel,
+  enableSkillMdImport = false,
 }) => {
   const [name, setName] = useState(initialValue?.name ?? '');
   const [description, setDescription] = useState(initialValue?.description ?? '');
   const [body, setBody] = useState(initialValue?.body ?? '');
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
+  const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Overwrites only the fields the file sets; a malformed file touches nothing.
+  const applySkillMd = (text: string) => {
+    const result = parseSkillMd(text);
+    setImportResult(result);
+    if (!result.ok) return;
+    const { fields } = result;
+    if (fields.name !== undefined) setName(fields.name);
+    if (fields.description !== undefined) setDescription(fields.description);
+    if (fields.argumentHint !== undefined) setArgumentHint(fields.argumentHint);
+    if (fields.body !== undefined) setBody(fields.body);
+    if (fields.disableModelInvocation !== undefined) setDisableModelInvocation(fields.disableModelInvocation);
+    setPasteOpen(false);
+    setPasteText('');
+  };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) void file.text().then(applySkillMd);
+  };
+
+  const source = importResult?.ok ? importResult.source : undefined;
 
   const nameError =
     name.length === 0
@@ -81,6 +114,85 @@ export const SkillForm: FC<SkillFormProps> = ({
   return (
     <Box component="form" onSubmit={handleSubmit} data-testid="skill-form">
       <Stack spacing={3}>
+        {enableSkillMdImport ? (
+          <Stack spacing={1.5} data-testid="skill-form-import-skillmd">
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography level="title-sm">Import SKILL.md</Typography>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".md,text/markdown"
+                hidden
+                onChange={handleFile}
+                data-testid="skill-form-import-file"
+              />
+              <Button size="sm" variant="outlined" onClick={() => fileInputRef.current?.click()} disabled={submitting}>
+                Choose file
+              </Button>
+              <Button
+                size="sm"
+                variant="plain"
+                onClick={() => setPasteOpen(open => !open)}
+                disabled={submitting}
+                data-testid="skill-form-import-paste-toggle"
+              >
+                Paste
+              </Button>
+            </Stack>
+            {pasteOpen ? (
+              <Stack spacing={1}>
+                <Textarea
+                  value={pasteText}
+                  onChange={e => setPasteText(e.target.value)}
+                  placeholder={'---\nname: my-skill\ndescription: ...\n---\n\nInstructions'}
+                  minRows={4}
+                  slotProps={{ textarea: { 'data-testid': 'skill-form-import-paste-input' } }}
+                />
+                <Button
+                  size="sm"
+                  sx={{ alignSelf: 'flex-start' }}
+                  onClick={() => applySkillMd(pasteText)}
+                  disabled={!pasteText.trim()}
+                  data-testid="skill-form-import-paste-apply"
+                >
+                  Apply
+                </Button>
+              </Stack>
+            ) : null}
+            {importResult && !importResult.ok ? (
+              <Alert color="danger" variant="soft" data-testid="skill-form-import-error">
+                Couldn&apos;t read that SKILL.md: {importResult.error}
+              </Alert>
+            ) : null}
+            {source ? (
+              <Alert
+                color={source.thirdParty ? 'warning' : 'primary'}
+                variant="soft"
+                data-testid="skill-form-import-from-b4m"
+              >
+                <span>
+                  {source.thirdParty
+                    ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
+                    : 'This skill came from Bike4Mind - open the original instead of making a copy: '}
+                  {/^https?:\/\//.test(source.url) ? (
+                    <Link href={source.url} target="_blank" rel="noopener noreferrer">
+                      {source.url}
+                    </Link>
+                  ) : (
+                    source.url
+                  )}
+                </span>
+              </Alert>
+            ) : null}
+            {importResult?.ok && importResult.dropped.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-import-dropped">
+                Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored, and supporting
+                files next to SKILL.md aren&apos;t imported.
+              </Alert>
+            ) : null}
+          </Stack>
+        ) : null}
+
         <FormControl error={Boolean(nameError && name.length > 0)} required>
           <FormLabel>Name</FormLabel>
           <Input
