@@ -28,7 +28,7 @@ const service = vi.hoisted(() => ({
   getConfig: vi.fn(),
   restoreFromHistory: vi.fn(),
 }));
-vi.mock('@client/services/whatsNewConfigService', () => ({ WhatsNewConfigService: service }));
+vi.mock('@bike4mind/server-utils/services/whatsNewConfigService', () => ({ WhatsNewConfigService: service }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 

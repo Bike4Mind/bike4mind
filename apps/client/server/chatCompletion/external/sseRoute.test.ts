@@ -90,7 +90,9 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));

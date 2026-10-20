@@ -53,9 +53,11 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }),
+}));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));

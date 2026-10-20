@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     STRIPE_WEBHOOK_SECRET: 'whsec_test123',
     STRIPE_PUBLISHABLE_KEY: 'pk_test_123',
@@ -9,7 +9,7 @@ vi.mock('@server/utils/config', () => ({
   isDevelopment: vi.fn(),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   InternalServerError: class InternalServerError extends Error {
     constructor(message: string) {
       super(message);
@@ -18,7 +18,7 @@ vi.mock('@server/utils/errors', () => ({
   },
 }));
 
-import { Config, isDevelopment } from '@server/utils/config';
+import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { requireStripeWebhook } from '../requireStripeWebhook';
 
 describe('requireStripeWebhook middleware', () => {

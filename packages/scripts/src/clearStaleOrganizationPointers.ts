@@ -74,7 +74,7 @@ export function parseRepairArgs(argv: string[]): { apply: boolean; reportPath: s
 
 /**
  * Grade one org's pointers: the ids pointing at it that it no longer admits. Keep-predicate mirrored
- * from apps/client/server/utils/resolveActiveOrg.ts; change both together.
+ * from packages/server-utils/src/utils/resolveActiveOrg.ts; change both together.
  */
 async function gradeOrg(organizationId: string): Promise<{ reason: StalePointerReason; stale: string[] }> {
   // Pointers before membership, so a user who joins mid-scan is read as a member, not graded stale.

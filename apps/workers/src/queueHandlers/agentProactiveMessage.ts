@@ -18,7 +18,7 @@ import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/services';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { canAccessSession } from '@server/utils/sessionAccess';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 

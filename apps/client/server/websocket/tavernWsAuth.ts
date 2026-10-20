@@ -3,7 +3,7 @@ import { canAccessTavern } from '@bike4mind/common';
 
 /**
  * Tavern access gate for WebSocket action handlers - the WS-layer counterpart
- * to the HTTP-side `ensureTavernAccess` (apps/client/server/utils/errors.ts).
+ * to the HTTP-side `ensureTavernAccess` (packages/server-utils/src/utils/errors.ts).
  *
  * The `$connect` handler authenticates *identity* (JWT or API key) but does not
  * check Tavern access, and the per-action bridge/identity checks only prove who

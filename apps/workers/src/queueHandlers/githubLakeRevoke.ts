@@ -1,6 +1,6 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { revokeGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { z, ZodError } from 'zod';
 
 // installationId lets a retry finish an uninstall whose connection row is already gone.

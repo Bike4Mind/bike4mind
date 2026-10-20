@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';

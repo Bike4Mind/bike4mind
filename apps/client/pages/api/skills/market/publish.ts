@@ -13,7 +13,7 @@ import {
 } from '@server/skillMarket/market';
 import { submitListingVersion } from '@server/skillMarket/submitVersion';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const bodySchema = z.object({
   skillId: z.string().min(1),

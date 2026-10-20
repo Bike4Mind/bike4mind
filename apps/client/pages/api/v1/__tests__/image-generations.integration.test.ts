@@ -112,7 +112,7 @@ vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));
 
-vi.mock('@server/utils/ssrfProtection', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
 }));

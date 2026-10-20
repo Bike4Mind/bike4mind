@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   ghFindByDataLakeIdAny: vi.fn(),

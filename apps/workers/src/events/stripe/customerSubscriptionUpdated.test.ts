@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { organizationRepository } from '@bike4mind/database';
 import { setSeats } from '@server/services/organizationService';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { sendToClient } from '@server/websocket/utils';
@@ -51,13 +51,13 @@ vi.mock('@server/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Fixtures below set metadata.stage: 'test'; pin the current stage to match so
 // the stage guard falls through for same-stage events (and trips on mismatch).
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 

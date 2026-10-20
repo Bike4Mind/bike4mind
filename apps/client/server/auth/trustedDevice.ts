@@ -7,7 +7,7 @@ import {
   type ITrustedDeviceDocument,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // "Remember this device": lets a returning user skip the SECOND factor (TOTP) for
 // TRUSTED_DEVICE_TTL_MS. The emailed OTC is still required on every fresh login -

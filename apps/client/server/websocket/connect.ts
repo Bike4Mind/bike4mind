@@ -5,7 +5,7 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';

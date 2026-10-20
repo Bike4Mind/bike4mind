@@ -1,7 +1,7 @@
 import { addMessageToSession, getMessagesFromSession } from '@server/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import qs from 'qs';
 import { secureParameters } from '@bike4mind/utils';

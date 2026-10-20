@@ -47,12 +47,12 @@ vi.mock('@server/analytics/pseudonymize', () => ({
   pseudonymizeUserId: (id: string) => `pseudo:${id}`,
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' },
 }));
 
 import handler from '../backfill-first-seen';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 function makeReq(body: Record<string, unknown> = {}, user: Record<string, unknown> = { id: 'admin-1', isAdmin: true }) {
   const { req, res } = createMocks({ method: 'POST', body });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the repository picker's list route. The connect lib (which has its own dedicated
 // unit tests) is mocked; the route itself only wires the request/nonce/config through.

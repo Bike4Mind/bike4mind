@@ -35,7 +35,7 @@ vi.mock('@bike4mind/services', () => ({
 
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
     upload: h.storageUpload,
     getSignedUrl: h.storageGetSignedUrl,

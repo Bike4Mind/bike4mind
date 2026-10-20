@@ -2,7 +2,7 @@ import passport from 'passport';
 import { identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { setupSamlStrategy } from '@server/auth/auth';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { AuthenticateOptions } from '@node-saml/passport-saml/lib/types';
 
 const handler = baseApi({ auth: false }).get(async (req, res) => {

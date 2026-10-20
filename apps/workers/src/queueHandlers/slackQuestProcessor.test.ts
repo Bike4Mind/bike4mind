@@ -27,7 +27,7 @@ vi.mock('@server/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({} as Record<string, unknown>, {
     get: (_, key) => `mock-${String(key)}`,
   }),
@@ -41,7 +41,7 @@ vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: { AutoName: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));

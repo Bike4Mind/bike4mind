@@ -6,9 +6,9 @@ import { createRegInvite, generateCode } from '@server/managers/regInviteManager
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { Request } from 'express';
 import { z } from 'zod';

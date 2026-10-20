@@ -6,7 +6,7 @@ import {
   OVERWATCH_VISIT_EVENT,
 } from '@bike4mind/common';
 import type { OverwatchUtm } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { pseudonymizeUserId } from './pseudonymize';
 
 const NOT_CONFIGURED = 'not-configured';

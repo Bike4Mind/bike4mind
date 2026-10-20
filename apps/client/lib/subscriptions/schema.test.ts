@@ -1,5 +1,5 @@
 import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
-import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema } from '@client/lib/subscriptions/schema';
 import { describe, expect, it } from 'vitest';
 

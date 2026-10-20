@@ -13,7 +13,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
 }));
 
 import { dispatch } from './githubLakeRevoke';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const run = (body: Record<string, unknown>) =>

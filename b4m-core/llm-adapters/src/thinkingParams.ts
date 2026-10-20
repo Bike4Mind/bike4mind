@@ -469,6 +469,13 @@ export function planReasoningEffort(
   };
 }
 
+/** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
+export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
 /**
  * The effort an adaptive model runs at when the caller named none, from the auto-classified
  * query complexity. An adaptive model that thinks unasked does so on every request (and every
@@ -482,7 +489,6 @@ export function effortForComplexity(
   modelInfo: ModelInfo,
   complexity: QueryComplexityType | undefined
 ): ReasoningEffort | undefined {
-  if (!modelInfo.can_think || modelInfo.thinkingStyle !== 'adaptive') return undefined;
-  if (!ADAPTIVE_THINKING_BY_DEFAULT.has(model)) return undefined;
+  if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
   return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
 }

@@ -42,7 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {
     constructor(message: string) {
       super(message);
@@ -68,9 +68,11 @@ vi.mock('@server/utils/eventBus', () => ({
 // Mutable logo URL so a test can exercise the empty-LOGO_URL (fork) path, where
 // getLogoUrl() returns '' and buildEmailLogoImg() therefore omits the <img> entirely.
 const { mockLogo } = vi.hoisted(() => ({ mockLogo: { url: 'https://example.com/logo.png' } }));
-vi.mock('@server/utils/mailer/emailHelpers', async () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async () => ({
   escapeHtml: (
-    await vi.importActual<typeof import('@server/utils/mailer/emailHelpers')>('@server/utils/mailer/emailHelpers')
+    await vi.importActual<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>(
+      '@bike4mind/server-utils/utils/mailer/emailHelpers'
+    )
   ).escapeHtml,
   getLogoUrl: () => mockLogo.url,
   buildEmailLogoImg: (brand: string, logoUrl = mockLogo.url) =>

@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { passkeyCredentialRepository } from '@bike4mind/database';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { stepUpGate } from '@server/auth/stepUp';
 
 /**

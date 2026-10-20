@@ -91,7 +91,7 @@ vi.mock('@server/auth/auth', async orig => ({
 
 import { ApiKeyScope, StorageLimitErrorSchema, storageLimitToBytes } from '@bike4mind/common';
 import { Resource } from 'sst';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import listOrCreate from '../index';
 
 const STORAGE_LIMIT_MB = 10;

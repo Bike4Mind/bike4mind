@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { AdminSettings } from '@bike4mind/database';

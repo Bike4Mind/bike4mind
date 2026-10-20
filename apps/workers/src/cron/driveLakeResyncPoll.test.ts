@@ -19,8 +19,8 @@ vi.mock('@bike4mind/observability', () => ({
     error = vi.fn();
   },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'dev' }, driveLakeIngestQueue: { url: 'ingest-queue-url' } },
 }));

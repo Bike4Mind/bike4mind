@@ -12,8 +12,8 @@ import {
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl } from '@server/utils/mailer/emailHelpers';
-import { Config, isE2EEnabled } from '@server/utils/config';
+import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 
 const handler = baseApi({ auth: false })

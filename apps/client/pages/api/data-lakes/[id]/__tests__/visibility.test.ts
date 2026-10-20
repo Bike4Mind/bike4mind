@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: h.resolveActiveOrg }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: h.resolveActiveOrg }));
 
 import handler from '../visibility';
 

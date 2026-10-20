@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { providerInvoiceRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin surface for monthly provider invoice reconciliation. An admin enters

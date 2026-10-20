@@ -24,7 +24,7 @@ import {
   listArtifactsContract,
   updateArtifactContract,
 } from '@bike4mind/common';
-import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { encodeCursor } from '@server/utils/cursorPagination';
 
 const {

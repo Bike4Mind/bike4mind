@@ -11,7 +11,7 @@
 
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 

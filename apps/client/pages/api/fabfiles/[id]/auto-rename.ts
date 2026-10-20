@@ -2,9 +2,9 @@ import { Permission } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, NotFoundError, InternalServerError } from '@bike4mind/utils';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 const handler = baseApi()

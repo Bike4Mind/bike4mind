@@ -72,7 +72,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { CREDITS_PER_USD_COST } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { estimateTranscriptionCost, transcriptionUsdPerMinute } from '@server/utils/transcriptionCost';
 import handler from '../index';
 

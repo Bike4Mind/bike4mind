@@ -1,9 +1,9 @@
 import { PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createS3Client } from '@bike4mind/fab-pipeline';
-import { getQaArtifactsStorage } from '@server/utils/storage';
+import { getQaArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 
-export { getQaArtifactsBucketName } from '@server/utils/storage';
+export { getQaArtifactsBucketName } from '@bike4mind/server-utils/utils/storage/index';
 
 export const QA_PUT_EXPIRY_SECONDS = 900;
 export const QA_GET_EXPIRY_SECONDS = 3600;

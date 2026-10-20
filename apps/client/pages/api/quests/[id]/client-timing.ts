@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import type { Request } from 'express';
 import { z } from 'zod';

@@ -1,7 +1,7 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailSendStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 // Timeout threshold in minutes - emails stuck in pending/processing longer than this are considered timed out
 const TIMEOUT_THRESHOLD_MINUTES = 30;

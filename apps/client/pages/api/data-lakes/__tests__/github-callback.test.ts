@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the authorize-first callback: exchanges GitHub's code and holds the user token for
 // the picker, binding nothing yet. The state/nonce plumbing and the connect-completion lib (each

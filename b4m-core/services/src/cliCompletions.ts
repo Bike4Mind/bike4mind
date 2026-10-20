@@ -52,6 +52,7 @@ import {
   type ICompletionOptions,
   type ICompletionOptionTools,
   isModelProviderConfigured,
+  isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
 import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
@@ -554,6 +555,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
   const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
 
+  // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
+  // that thinks unasked would run every request at the provider default (high on Opus 5). Any
+  // explicit effort or thinking value from the client wins.
+  const reasoningEffort =
+    options?.reasoningEffort ??
+    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+      ? 'medium'
+      : undefined);
+
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
@@ -566,7 +576,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
     ...(thinking ? { thinking } : {}),
   };

@@ -3,9 +3,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, User, TelemetryAuditLogModel } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_EXPORT_PROJECTION } from '@server/utils/telemetryProjection';
-import { getClientIp, truncateIp } from '@server/utils/ip';
+import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { regenerateUserTelemetryHashes } from '@server/utils/telemetryHashLookup';
 
 const querySchema = z.object({

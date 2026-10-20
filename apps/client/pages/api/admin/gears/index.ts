@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';

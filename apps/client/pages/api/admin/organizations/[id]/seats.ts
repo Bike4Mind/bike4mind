@@ -1,5 +1,5 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';

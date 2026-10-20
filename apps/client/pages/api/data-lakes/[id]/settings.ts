@@ -8,7 +8,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 
 /**
  * PUT /api/data-lakes/:id/settings - edit a STATIC (registry) lake's admin-settable overlay
