@@ -29,6 +29,8 @@ import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/e
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { getS3Url } from '@client/app/utils/s3Url';
+import { Resource } from 'sst';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
@@ -175,7 +177,13 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      return res.json(await signBrowserFileResponse(result));
+      const signed = await signBrowserFileResponse(result);
+      // Same URL the admin form builds (AdminModalVideoFields), so API-key callers need no bucket name.
+      return res.json(
+        adminModalMedia && result.filePath
+          ? { ...signed, mediaUrl: getS3Url({ bucket: Resource.fabFileBucket.name, key: result.filePath }) }
+          : signed
+      );
     })
   );
 

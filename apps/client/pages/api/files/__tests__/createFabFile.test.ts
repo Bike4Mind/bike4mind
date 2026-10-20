@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
@@ -70,6 +71,8 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getSettingsMap: vi.fn(async () => ({})) };
 });
+
+vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
 
 import handler from '../createFabFile';
 
@@ -459,6 +462,24 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
 
     const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
     expect(persisted.filePath).not.toMatch(/^modals\//);
+  });
+
+  it('returns a mediaUrl for an admin modal-media upload that the modal video schema accepts', async () => {
+    const { res, json } = makeRes();
+    await run(mp4(), res, asAdmin);
+
+    const sent = json.mock.calls[0][0] as { mediaUrl: string; filePath: string };
+    expect(sent.mediaUrl.endsWith(sent.filePath)).toBe(true);
+    expect(sent.mediaUrl).toContain('test-fab-bucket');
+    const schema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
+    expect(schema.safeParse({ landscapeUrl: sent.mediaUrl }).success).toBe(true);
+  });
+
+  it('omits mediaUrl for a normal upload', async () => {
+    const { res, json } = makeRes();
+    await run(body(), res, asAdmin);
+
+    expect(json.mock.calls[0][0]).not.toHaveProperty('mediaUrl');
   });
 
   it.each([
