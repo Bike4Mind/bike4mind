@@ -6,12 +6,15 @@ import { STATUS_ITEM_HEIGHT, useStatusLineCompact } from './SessionBottom/Compos
 import { FC, useState } from 'react';
 import CreditIcon from '../svgs/icons/CreditIcon';
 import { orange } from '@client/app/utils/themes/colors';
-import CreditsModal from '../subscription/CreditsModal';
+import CreditsExplanationModal from '../subscription/CreditsExplanationModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
 import { LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
+import { useLLM } from '@client/app/contexts/LLMContext';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
 
 /**
  * Default threshold below which credits are considered "low". The live value is the
@@ -20,9 +23,9 @@ import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings'
 export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
 function balanceTooltip(credits: number, lowThreshold: number): string {
-  if (credits <= 0) return 'Out of credits. Add credits to keep chatting.';
-  if (credits < lowThreshold) return 'Running low. Add credits so your work is not interrupted.';
-  return 'Your credit balance. Each answer shows what it cost. Click to add credits or see usage.';
+  if (credits <= 0) return 'No answers left on this model. Your chats and files are safe.';
+  if (credits < lowThreshold) return 'Answers left on the current model. Click to learn how credits work.';
+  return 'Answers left on the current model. Click to learn how credits work.';
 }
 
 /**
@@ -33,14 +36,23 @@ export const CreditBalanceChipView: FC<{
   credits: number;
   lowCreditsThreshold: number;
   onClick: () => void;
+  answersLeft?: number | null;
+  modelName?: string;
   /** Who pays, in a notebook the user does not own (useCreditPayerNote): an info mark and the tooltip's first line. */
   payerNote?: string | null;
-}> = ({ credits, lowCreditsThreshold, onClick, payerNote }) => {
+}> = ({ credits, lowCreditsThreshold, onClick, answersLeft, modelName, payerNote }) => {
   const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
   const balanceText = balanceTooltip(credits, lowCreditsThreshold);
   // Out of room on the status line: the number without "credits" (the icon says it; the name keeps it).
   const compact = useStatusLineCompact();
-  const shown = compact ? Math.max(0, Math.floor(credits)).toLocaleString('en-US') : formatCreditBalance(credits);
+  const answerLabel =
+    answersLeft === undefined || answersLeft === null
+      ? formatCreditBalance(credits)
+      : answersLeft < 1
+        ? '<1 answer'
+        : `${answersLeft.toLocaleString('en-US')} ${answersLeft === 1 ? 'answer' : 'answers'}`;
+  const shown =
+    compact && answersLeft !== undefined && answersLeft !== null ? answerLabel.replace(' answers', '') : answerLabel;
   const title = payerNote ? (
     <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
@@ -61,7 +73,7 @@ export const CreditBalanceChipView: FC<{
         color={color}
         onClick={onClick}
         data-testid="credit-balance-chip"
-        aria-label={`${formatCreditBalance(credits)}.${payerNote ? ` ${payerNote}.` : ''} Open credits`}
+        aria-label={`${answerLabel} left${modelName ? ` on ${modelName}` : ''}. ${formatCreditBalance(credits)}.${payerNote ? ` ${payerNote}.` : ''} Learn about credits`}
         startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
         endDecorator={
           payerNote ? (
@@ -110,6 +122,11 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
   const payerNote = useCreditPayerNote(session);
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
+  const model = useLLM(state => state.model);
+  const { data: models } = useModelInfo();
+  const selected = models?.find(candidate => candidate.id === model);
+  const answerCost = selected ? typicalAnswerCredits(selected) : null;
+  const answersLeft = answerCost ? estimateAnswerCount(credits, answerCost) : null;
   const [isOpen, setIsOpen] = useState(false);
 
   if (!enforceCredits) return null;
@@ -120,9 +137,11 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
         credits={credits}
         lowCreditsThreshold={lowCreditsThreshold}
         onClick={() => setIsOpen(true)}
+        answersLeft={answersLeft}
+        modelName={selected?.name}
         payerNote={payerNote}
       />
-      <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} />
+      <CreditsExplanationModal open={isOpen} onClose={() => setIsOpen(false)} />
     </>
   );
 };

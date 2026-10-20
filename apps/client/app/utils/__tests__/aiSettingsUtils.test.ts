@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildModelSelectionPatch,
+  buildSessionModelPatch,
   computeDefaultMaxTokens,
   getModelCreditRates,
   getModelPriceTier,
@@ -159,6 +160,21 @@ describe('buildModelSelectionPatch', () => {
     expect(buildModelSelectionPatch(model({ contextWindow: 32768, max_tokens: 16384 }))).toMatchObject({
       max_tokens: 16384,
     });
+  });
+});
+
+describe('buildSessionModelPatch', () => {
+  it('changes the active model without changing default or last-used memory', () => {
+    const patch = buildSessionModelPatch({
+      id: 'gpt-4o',
+      type: 'text',
+      contextWindow: 32768,
+      max_tokens: 16384,
+    } as ModelInfo);
+
+    expect(patch).toEqual({ model: 'gpt-4o', max_tokens: 16384 });
+    expect(patch).not.toHaveProperty('defaultTextModel');
+    expect(patch).not.toHaveProperty('lastUsedTextModel');
   });
 });
 

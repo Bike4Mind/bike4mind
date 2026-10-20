@@ -144,7 +144,8 @@ export function CreditsWarning({ show, actions }: CreditsWarningProps) {
             Out of Credits
           </Typography>
           <Typography level="body-sm" sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}>
-            Your message is saved. Pick up where you left off once you have credits.
+            Your chats and files are safe. You can still review and export your work, then continue when credits are
+            available.
           </Typography>
         </Box>
         <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>

@@ -280,3 +280,10 @@ export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
   // IMAGE_MODELS name list; video and speech-to-text land on the text slot, as before.
   ...(modelInfo.type === 'image' ? { lastUsedImageModel: modelInfo.id } : { lastUsedTextModel: modelInfo.id }),
 });
+
+/** Model patch for a temporary session choice that must not become the user's remembered default. */
+export const buildSessionModelPatch = (modelInfo: ModelInfo) => ({
+  model: modelInfo.id,
+  max_tokens: computeDefaultMaxTokens(modelInfo),
+  ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),
+});

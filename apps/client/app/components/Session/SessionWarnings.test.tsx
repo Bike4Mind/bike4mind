@@ -68,6 +68,8 @@ describe('CreditsWarning', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('credits-warning-text')).toHaveTextContent('Out of Credits');
+    expect(screen.getByTestId('session-credits-warning')).toHaveTextContent('chats and files are safe');
+    expect(screen.getByTestId('session-credits-warning')).toHaveTextContent('review and export');
     const actions = screen.getByTestId('credits-warning-actions');
     expect(within(actions).getByTestId('credit-offer-actions')).toHaveAttribute('data-moment', 'out');
   });

@@ -10,6 +10,8 @@ import {
   APP_PROMPT_TOKENS,
   estimateAnswerCount,
   formatAnswersEstimate,
+  findAffordableModelOffer,
+  preflightAnswerCredits,
   modelAnswerCost,
   typicalAnswerCredits,
   TYPICAL_ANSWER_INPUT_TOKENS,
@@ -28,6 +30,8 @@ const model = (id: string, name: string, input: number, output: number): ModelIn
 
 const SONNET_55 = model(ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'Claude Sonnet 5.5', 2, 10);
 const GPT_MINI = model(ChatModels.GPT5_4_MINI, 'GPT-5.4 Mini', 0.75, 4.5);
+
+const HAIKU_55 = model(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'Claude Haiku 5.5', 0.1, 0.5);
 
 describe('typical answer size', () => {
   it("counts the app's own system prompt, not just the user's words", () => {
@@ -65,6 +69,27 @@ describe('typicalAnswerCredits', () => {
 
   it('returns null for an unpriced model rather than calling it free', () => {
     expect(typicalAnswerCredits({ ...SONNET_55, pricing: undefined } as unknown as ModelInfo)).toBeNull();
+  });
+});
+
+describe('preflight affordability', () => {
+  it('uses a larger admission hold than the typical displayed answer', () => {
+    expect(preflightAnswerCredits(SONNET_55)!).toBeGreaterThan(typicalAnswerCredits(SONNET_55)!);
+  });
+
+  it('offers the cheapest model the balance can admit when the selected model cannot', () => {
+    const balance = preflightAnswerCredits(GPT_MINI)!;
+    const offer = findAffordableModelOffer([SONNET_55, GPT_MINI, HAIKU_55], SONNET_55.id, balance);
+
+    expect(offer?.affordable.id).toBe(HAIKU_55.id);
+    expect(offer?.current.modelName).toBe('Claude Sonnet 5.5');
+  });
+
+  it('does not offer a switch when the selected model is affordable or no alternative is', () => {
+    expect(
+      findAffordableModelOffer([SONNET_55, GPT_MINI], SONNET_55.id, preflightAnswerCredits(SONNET_55)!)
+    ).toBeNull();
+    expect(findAffordableModelOffer([SONNET_55], SONNET_55.id, 1)).toBeNull();
   });
 });
 
