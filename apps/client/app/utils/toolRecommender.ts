@@ -20,6 +20,7 @@ const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
   planet_visibility: 'Planets',
   wikipedia_on_this_day: 'On This Day',
   search_knowledge_base: 'Knowledge Base',
+  decide: 'Decisions',
   retrieve_knowledge_content: 'Knowledge Retrieve',
   optihashi_formulate: 'Problem Formulation',
   optihashi_edit_problem: 'Problem Edit',
@@ -178,6 +179,16 @@ const TOOL_PATTERNS: ToolPattern[] = [
     patterns: [
       /\b(in\s+my|from\s+my|search\s+my)\s+(files?|documents?|knowledge\s+base|uploads?)\b/i,
       /\b(check|look\s+in|find\s+in)\s+(my\s+)?(files?|documents?|knowledge\s+base)\b/i,
+    ],
+  },
+  {
+    // Explicit asks only: a generic "should I..." is a conversation, not a decision call.
+    tool: 'decide',
+    patterns: [
+      /\buse\s+the\s+decide\s+tool\b/i,
+      /\bclassif(y|ication)\b[^.]{0,40}\bprobabilit(y|ies)\b/i,
+      /\bscore\s+(this|it)\b[^.]{0,20}\b(1|one)\s*(-|to)\s*(5|five)\b/i,
+      /\bdecision\s+(call|with)\b[^.]{0,20}\bprobabilit(y|ies)\b/i,
     ],
   },
   {

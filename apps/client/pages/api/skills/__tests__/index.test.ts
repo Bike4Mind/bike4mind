@@ -35,7 +35,7 @@ vi.mock('@server/utils/orgAccess', () => ({
 }));
 
 import handler from '@pages/api/skills/index';
-import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError } from '@bike4mind/utils';
 
 const USER = 'user-1';
 const ORG = '6650000000000000000000aa';
@@ -79,20 +79,6 @@ describe('/api/skills POST — scope creation', () => {
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockCreate).not.toHaveBeenCalled();
-  });
-
-  it('refuses an adminUserIds manager who is neither owner nor legacy manager', async () => {
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: 'owner-1', managerId: 'mgr-1', adminUserIds: [USER] });
-    const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
-    await expect(handler(req, res)).rejects.toBeInstanceOf(NotFoundError);
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
-
-  it('allows the legacy managerId to create an org skill', async () => {
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: 'owner-1', managerId: USER });
-    const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
-    await handler(req, res);
-    expect(mockCreate.mock.calls[0][0].organizationId).toBe(ORG);
   });
 
   it('allows a platform admin who has no org role', async () => {

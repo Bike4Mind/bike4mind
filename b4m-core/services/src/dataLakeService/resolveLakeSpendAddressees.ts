@@ -44,7 +44,7 @@ export const MAX_ORG_IDS_TO_RESOLVE = 20;
  * suppress a lake's notifications, since the caller treats `[]` as a stable, keep-the-claim
  * outcome.
  *
- * Org-owned lake: the org's billing owner (`userId`) + `managerId` + `adminUserIds` - the
+ * Org-owned lake: the org's billing owner (`userId`) + `adminUserIds` - the
  * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights)
  * - covers `canManageLake`'s org-admin rung. Also folds in any org-principal owner/curator GRANT
  * on this specific lake (canManageLake's org-grant rung) - each such grant's `principalId` is
@@ -97,9 +97,7 @@ export async function resolveLakeSpendAddressees(
       }
       const orgs = await Promise.all(boundedOrgIds.map(id => db.organizations.findById(id)));
       orgAdminIds = orgs.flatMap(org =>
-        [org?.userId, org?.managerId, ...(org?.adminUserIds ?? [])].filter(
-          (id): id is string => !!id && id.trim().length > 0
-        )
+        [org?.userId, ...(org?.adminUserIds ?? [])].filter((id): id is string => !!id && id.trim().length > 0)
       );
     }
 

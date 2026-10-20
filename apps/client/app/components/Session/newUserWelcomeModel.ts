@@ -32,6 +32,14 @@ export function shouldShowNewUserWelcome({ sessionsLoaded, sessionCount, dismiss
   return sessionsLoaded && sessionCount === 0 && !dismissed;
 }
 
+/**
+ * A spent balance replaces the composer (CreditsWarning), so "type your own below" and the
+ * starters, which send straight away, would lead nowhere.
+ */
+export function welcomeCanStart({ enforceCredits, balance }: { enforceCredits: boolean; balance: number }): boolean {
+  return !(enforceCredits && balance <= 0);
+}
+
 interface CreditsLineArgs {
   enforceCredits: boolean;
   balance: number;

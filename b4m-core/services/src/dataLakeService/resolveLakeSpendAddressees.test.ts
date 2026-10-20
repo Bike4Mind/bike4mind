@@ -64,18 +64,15 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result).toEqual([{ userId: 'creator-1', email: 'creator@example.com' }]);
   });
 
-  it('resolves org billing owner + manager + admins for an org-owned lake', async () => {
+  it('resolves org billing owner + admins for an org-owned lake', async () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
       organizations: {
-        findById: vi
-          .fn()
-          .mockResolvedValue({ userId: 'billing-owner', managerId: 'manager-1', adminUserIds: ['admin-1'] }),
+        findById: vi.fn().mockResolvedValue({ userId: 'billing-owner', adminUserIds: ['admin-1'] }),
       },
       users: {
         findActiveEmailsByIds: emailRows([
           { id: 'billing-owner', email: 'billing@example.com' },
-          { id: 'manager-1', email: 'manager@example.com' },
           { id: 'admin-1', email: 'admin@example.com' },
         ]),
       },
@@ -83,7 +80,7 @@ describe('resolveLakeSpendAddressees', () => {
 
     const result = await resolveLakeSpendAddressees('lake-1', db, logger);
 
-    expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-owner', 'manager-1']);
+    expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-owner']);
   });
 
   it('resolves an org-principal owner/curator GRANT to ITS OWN org admins, distinct from the lake org', async () => {
@@ -139,7 +136,7 @@ describe('resolveLakeSpendAddressees', () => {
           .mockResolvedValue([{ principalType: 'user', principalId: 'individual-owner', role: 'owner' }]),
       },
       organizations: {
-        findById: vi.fn().mockResolvedValue({ userId: 'billing-owner', managerId: null, adminUserIds: ['admin-1'] }),
+        findById: vi.fn().mockResolvedValue({ userId: 'billing-owner', adminUserIds: ['admin-1'] }),
       },
       users: {
         findActiveEmailsByIds: emailRows([
@@ -160,7 +157,7 @@ describe('resolveLakeSpendAddressees', () => {
   it('falls through to the individual-owner path when the org has no resolvable admin set', async () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
-      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, managerId: null, adminUserIds: [] }) },
+      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, adminUserIds: [] }) },
       users: { findActiveEmailsByIds: emailRows([{ id: 'creator-1', email: 'creator@example.com' }]) },
     });
 
@@ -224,7 +221,7 @@ describe('resolveLakeSpendAddressees', () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
       organizations: {
-        findById: vi.fn().mockResolvedValue({ userId: 'user-a', managerId: 'user-b', adminUserIds: [] }),
+        findById: vi.fn().mockResolvedValue({ userId: 'user-a', adminUserIds: ['user-b'] }),
       },
       users: {
         findActiveEmailsByIds: emailRows([
@@ -244,7 +241,7 @@ describe('resolveLakeSpendAddressees', () => {
     const adminUserIds = Array.from({ length: MAX_LAKE_SPEND_ADDRESSEES + 5 }, (_, i) => `admin-${i}`);
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
-      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, managerId: null, adminUserIds }) },
+      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, adminUserIds }) },
       users: {
         findActiveEmailsByIds: vi.fn(async (ids: string[]) => ids.map(id => ({ id, email: `${id}@example.com` }))),
       },
@@ -262,7 +259,7 @@ describe('resolveLakeSpendAddressees', () => {
       dataLakeAccessGrants: {
         listByLake: vi.fn().mockResolvedValue([{ principalType: 'user', principalId: 'the-owner', role: 'owner' }]),
       },
-      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, managerId: null, adminUserIds }) },
+      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, adminUserIds }) },
       users: {
         findActiveEmailsByIds: vi.fn(async (ids: string[]) => ids.map(id => ({ id, email: `${id}@example.com` }))),
       },

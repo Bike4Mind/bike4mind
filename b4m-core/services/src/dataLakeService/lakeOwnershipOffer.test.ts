@@ -48,7 +48,6 @@ const offerRow = (over: Partial<IDataLakeOwnershipOfferDocument> = {}): IDataLak
 /** The roster every org-scoped case shares: both parties are members unless a test says otherwise. */
 type OrgFixture = {
   userId: string;
-  managerId?: string;
   adminUserIds: string[];
   // `permissions` is what `isOrgMember`/`orgAclRowConfersMembership` read: a roster row with none
   // does not confer membership, so the accept-time owner-rung re-check must see real permissions.
@@ -419,26 +418,6 @@ describe('acceptLakeOwnershipOffer', () => {
 
       const offer = await offerLakeOwnership(
         { userId: 'creator', isAdmin: true, organizationIds: [] },
-        lake(),
-        [ownerGrant()],
-        'recipient',
-        adapters
-      );
-      expect(offer.offeredVia).toBe('grant-owner');
-
-      await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
-
-      expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
-    });
-
-    it('accepts an offer from an owner whose only admin arm is the org managerId', async () => {
-      const { adapters, upsertGrant } = makeAdapters({
-        grants: [ownerGrant()],
-        org: { userId: 'billing', managerId: 'creator', adminUserIds: [], users: [{ userId: 'recipient' }] },
-      });
-
-      const offer = await offerLakeOwnership(
-        { userId: 'creator', isAdmin: false, administeredOrgIds: ['org1'], organizationIds: [] },
         lake(),
         [ownerGrant()],
         'recipient',

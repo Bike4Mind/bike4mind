@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 1.0.1
+
+### Patch Changes
+
+- [#5029](https://github.com/Bike4Mind/bike4mind/pull/5029) [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75) Thanks [@aflordelis](https://github.com/aflordelis)! - move the shared h0 leaves of server/utils, lib, shared, app/utils, services and config
+
 ## 1.0.0
 
 ### Major Changes

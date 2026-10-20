@@ -82,7 +82,12 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('/api/data-lakes/[id]/github-connection - appointed org admin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.orgFindById.mockResolvedValue({ id: ORG, userId: OWNER, managerId: MANAGER, adminUserIds: [APPOINTED_ADMIN] });
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN, MANAGER],
+      users: [{ userId: MANAGER, permissions: ['read'] }],
+    });
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: ORG, datalakeTag: 'datalake:lake1' });
     h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: ORG });
   });

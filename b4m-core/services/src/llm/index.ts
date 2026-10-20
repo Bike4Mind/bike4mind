@@ -25,6 +25,7 @@ export {
 export * from './sharedToolBuilder';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
+export * from './decisionProviders';
 export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {
@@ -67,3 +68,5 @@ export type {
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
 export * from './toolEchoSources';
+export { DecisionToolRequestSchema } from './tools/implementation/decide';
+export type { DecideToolFn, DecisionToolRequest } from './tools/base/types';

@@ -26,6 +26,7 @@ import type { ArtifactType } from '@bike4mind/common';
 // than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
+import { CodeBlockActionControls, useCodeBlockActionOutlet } from '@client/app/components/common/CodeBlockActions';
 
 /** How much of a non-rendering artifact's source a card shows before offering the rest. */
 const SOURCE_COLLAPSED_MAX_HEIGHT = 360;
@@ -129,6 +130,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const teamOrg = activeOrg && String(activeOrg.id) === String(shareUser?.organizationId) ? activeOrg : null;
   const { publishAndShare: publishAndShareArtifact, modal: artifactShareModal } = usePublishShare();
+  const { outputSlot, outlet } = useCodeBlockActionOutlet();
 
   const hasPreview = !!renderPreview;
   const hasSource = !!source || !!renderSource;
@@ -348,6 +350,15 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           {/* One block so the plain icons space and shrink together. Matches
               CodeArtifactPreviewCard - keep the two in sync. */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+            {source && sourceLanguage && (
+              // The card's own onClick opens the viewer. React bubbles through portals, so
+              // this also keeps clicks in the action's output from opening it. `contents`
+              // so a type with no registered action gets no empty flex item (and no gap).
+              <Box onClick={e => e.stopPropagation()} sx={{ display: 'contents' }}>
+                <CodeBlockActionControls code={source} language={sourceLanguage} outputSlot={outputSlot} />
+              </Box>
+            )}
+
             {actions.copy && source && (
               <Tooltip title={copyTooltip} placement="top">
                 <IconButton
@@ -464,6 +475,8 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             testId={`${testIdPrefix}-artifact-show-more-btn`}
           />
         )}
+
+        {outlet}
 
         {/* Stop propagation so clicks inside the modal don't reach the Card's onClick and
             open the viewer behind the open dialog. */}

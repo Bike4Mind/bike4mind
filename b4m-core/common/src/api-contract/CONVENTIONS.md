@@ -150,7 +150,9 @@ re-deciding per endpoint:
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
-| A `tool_reference` names a tool absent from the request's `tools`, or carries no string `tool_name` (native tool search models only) | `400` | `unknown_tool_reference` |
+| A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
+| A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
+| A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
 | The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |

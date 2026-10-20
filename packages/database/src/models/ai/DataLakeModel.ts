@@ -501,7 +501,7 @@ export const buildAccessibleQuery = (
   // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
   // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
   // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
-  // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
+  // (billing owner OR adminUserIds), deliberately a DIFFERENT set from the
   // `organizationIds` membership the org arm above uses: membership also decides what the account
   // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
   // this would have handed a team manager the org as somewhere to write as. The two sets are meant

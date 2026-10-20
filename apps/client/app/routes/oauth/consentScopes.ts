@@ -19,6 +19,7 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   openid: 'Confirm who you are',
   profile: 'See your name and profile details',
   email: 'See your email address',
+  offline_access: 'Stay connected to your account when you are not using the app',
   'ai:chat': 'Use your Bike4Mind credits to generate AI responses',
   'ai:generate': 'Use your Bike4Mind credits to generate AI responses, images, video and audio',
   'ai:decide': 'Use your Bike4Mind credits to answer yes/no, pick-one and rating questions',

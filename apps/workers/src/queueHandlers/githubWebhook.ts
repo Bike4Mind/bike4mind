@@ -193,10 +193,9 @@ async function processOrgWebhook(message: z.infer<typeof OrgWebhookPayloadSchema
 
     // Check if subscriber is still a member of the org (membership can change)
     const isOwner = org.userId === subscriber.userId;
-    const isManager = org.managerId === subscriber.userId;
     const isMember = org.users?.some(u => u.userId === subscriber.userId);
 
-    if (!isOwner && !isManager && !isMember) {
+    if (!isOwner && !isMember) {
       logger.warn('Subscriber no longer has org access, skipping', {
         subscriptionId: subscriber.id,
         userId: subscriber.userId,

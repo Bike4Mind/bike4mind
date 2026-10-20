@@ -46,6 +46,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     id,
     status: trace.status,
     answer: trace.answer,
+    error: trace.error,
     steps: trace.steps,
     totalIterations: trace.totalIterations,
     children,

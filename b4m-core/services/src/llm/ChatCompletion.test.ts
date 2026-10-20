@@ -2019,6 +2019,97 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    describe('data-source status copy', () => {
+      // Literal copy, not the module constants: this pins what the user reads.
+      const processStatusTurn = async (
+        messageFileIds: string[] = [],
+        { message = 'Hello', fabFileIds = [] }: { message?: string; fabFileIds?: string[] } = {}
+      ) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: message }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: message });
+
+        await service.process({
+          body: {
+            ...startQuestParams,
+            message,
+            messageFileIds,
+            fabFileIds,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          },
+          logger: mockLogger,
+        });
+
+        return vi.mocked(service.sendStatusUpdate).mock.calls.map(([, status]) => status);
+      };
+
+      it('sends neutral copy, never the data-source copy, on a source-free turn', async () => {
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Preparing context...');
+        expect(statuses).not.toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the turn has an attached file', async () => {
+        const statuses = await processStatusTurn(['file-a']);
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the session has knowledge attached', async () => {
+        // No file ids: session knowledge is the only source signal, so this pins the call site's
+        // knowledgeIds wiring - passing [] there would flip the status with every other test green.
+        mockSession.knowledgeIds = ['knowledge-a'];
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only session fab files are attached', async () => {
+        const statuses = await processStatusTurn([], { fabFileIds: ['file-a'] });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only forced retrieval is enabled', async () => {
+        mockSession.forceKnowledgeRetrieval = true;
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only the prompt contains a URL', async () => {
+        const statuses = await processStatusTurn([], { message: 'Summarize https://example.com' });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+    });
+
     it('skips a prefetched quest that invoke already saved as an error', async () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });

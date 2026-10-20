@@ -1,5 +1,38 @@
 # @bike4mind/common
 
+## 18.0.0
+
+### Major Changes
+
+- [#5034](https://github.com/Bike4Mind/bike4mind/pull/5034) [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570) Thanks [@julsanchez](https://github.com/julsanchez)! - Bind voice credit holds to their payer in the session repository contract.
+
+  Repository implementations must accept `payerId` in `openVoiceHold` and return
+  `payerId: string | null` from successful `claimVoiceHold` calls. Use `null` when a
+  legacy hold has no recorded payer. Pass the user funding the reserve when opening
+  a hold.
+
+  The unused `restoreVoiceHold` repository method and `VoiceHoldMarkers` export have
+  been removed. Consumers must remove those references; settlement rollback belongs
+  inside the transaction that claims the hold and moves credits.
+
+### Minor Changes
+
+- [#5127](https://github.com/Bike4Mind/bike4mind/pull/5127) [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753) Thanks [@onoya](https://github.com/onoya)! - edit an organization's storage limit
+
+- [#5134](https://github.com/Bike4Mind/bike4mind/pull/5134) [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - accept mid-conversation tool changes on Anthropic models
+
+### Patch Changes
+
+- [#5029](https://github.com/Bike4Mind/bike4mind/pull/5029) [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75) Thanks [@aflordelis](https://github.com/aflordelis)! - move the shared h0 leaves of server/utils, lib, shared, app/utils, services and config
+
+- [#5038](https://github.com/Bike4Mind/bike4mind/pull/5038) [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa) Thanks [@julsanchez](https://github.com/julsanchez)! - bind uploads to their measured size and moderate every animation frame
+
+- [#5062](https://github.com/Bike4Mind/bike4mind/pull/5062) [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee) Thanks [@aflordelis](https://github.com/aflordelis)! - keep a held file's stored objects through a lake purge
+
+- [#5088](https://github.com/Bike4Mind/bike4mind/pull/5088) [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f) Thanks [@erikbethke](https://github.com/erikbethke)! - let verified partner-domain emails register on invite-only instances
+
+- [#5129](https://github.com/Bike4Mind/bike4mind/pull/5129) [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54) Thanks [@dea0030](https://github.com/dea0030)! - point HELP_CENTER_PROMPT at Help Center entry points that exist
+
 ## 17.1.0
 
 ### Minor Changes

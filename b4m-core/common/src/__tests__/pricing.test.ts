@@ -150,6 +150,44 @@ describe('pricing utils', () => {
     });
   });
 
+  describe('usdToCreditsExpected', () => {
+    let usdToCreditsExpected: (usd: number, rate?: number) => number;
+
+    beforeAll(async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', undefined);
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', undefined);
+      ({ usdToCreditsExpected } = await importPricing());
+    });
+
+    afterAll(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('reports the exact fractional credit cost to two decimals', () => {
+      // $0.0123 -> 24.6 raw credits; kept fractional, unlike usdToCredits
+      expect(usdToCreditsExpected(0.0123)).toBe(24.6);
+      expect(usdToCreditsExpected(1)).toBe(2000);
+    });
+
+    it('rounds the expectation to two decimals without float noise', () => {
+      // 0.247 raw credits -> 0.25; 0.00055 USD -> 1.1, not 1.0999999999999999
+      expect(usdToCreditsExpected(0.0001235)).toBe(0.25);
+      expect(usdToCreditsExpected(0.00055)).toBe(1.1);
+    });
+
+    it('reports zero for zero, negative, and non-finite costs', () => {
+      expect(usdToCreditsExpected(0)).toBe(0);
+      expect(usdToCreditsExpected(-1)).toBe(0);
+      expect(usdToCreditsExpected(Number.NaN)).toBe(0);
+      expect(usdToCreditsExpected(Number.POSITIVE_INFINITY)).toBe(0);
+    });
+
+    it('uses an explicit rate override instead of the platform default', () => {
+      expect(usdToCreditsExpected(0.011, 100)).toBe(1.1);
+    });
+  });
+
   describe('CREDITS_PER_USD_COST export', () => {
     afterEach(() => {
       vi.unstubAllEnvs();

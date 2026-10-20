@@ -9,4 +9,11 @@ export type {
 export type { ToolCategory, ToolDescriptor, ToolEffect, ToolSource } from './toolDescriptor.js';
 export { CORE_TOOL_DESCRIPTORS } from './coreToolDescriptors.js';
 export { ToolCatalog, resolveStaticToolDescriptor } from './toolCatalog.js';
-export { toolCategory, canTrustTool, isReadOnlyTool, commandTextOf, writePathOf } from './toolPolicy.js';
+export {
+  toolCategory,
+  canTrustTool,
+  isReadOnlyTool,
+  commandTextOf,
+  writePathOf,
+  sandboxedCommandArg,
+} from './toolPolicy.js';

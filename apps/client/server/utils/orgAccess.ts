@@ -7,9 +7,9 @@
  * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`           - owner only
- * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster, or legacy `managerId`)
+ * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster)
  * - `verifyOrgAdminRead`       - owner or manager, matching `adminUserIds` without the roster row (reads only)
- * - `verifyOrgMemberOrManager` - any member, or the manager without a membership row (reads only)
+ * - `verifyOrgMemberOrManager` - any member, or a manager whose row lacks a membership permission (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
  * Security:
@@ -68,8 +68,8 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
- * Read-tier sibling of `verifyOrgAccess` for status surfaces: admits the owner, the legacy manager,
- * any `adminUserIds` manager and a platform admin. That is the same set `findIdsWithAdminRights` and
+ * Read-tier sibling of `verifyOrgAccess` for status surfaces: admits the owner, any `adminUserIds`
+ * manager and a platform admin. That is the same set `findIdsWithAdminRights` and
  * `canManageLake` resolve from the user's side, read here off the org document because the org is
  * already in hand: a manager is matched on `adminUserIds` alone, unlike `canAdministerOrganization`
  * (`b4m-core/common/src/constants/organization.ts`), which also requires a current `users[]` row - so
@@ -113,17 +113,16 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
  * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
  *
- * Four routes still spell this same bar out inline. All four answer ForbiddenError /
+ * Three routes still spell this same bar out inline. All three answer ForbiddenError /
  * BadRequestError after an unconditional lookup, so unlike this helper they DO leak which org ids
  * exist; each is left alone only because changing the status it returns is a visible API change.
  * If you touch one, move it onto this helper rather than copying the inline form again:
  * - `organizations/subscriptions/update-seats.ts:40`
  * - `stripe/portal.ts:43`
  * - `organizations/[id]/admins.ts:27-29`
- * - `organizations/[id]/manager.ts:28-32` (assign) and `:51-55` (remove)
  *
- * Grep for BOTH spellings when re-deriving this list. The last two write `org.userId === user.id`
- * into an `isOwner` local and negate it later, so a search for the `!==` form alone misses them -
+ * Grep for BOTH spellings when re-deriving this list. The last one writes `org.userId === user.id`
+ * into an `isOwner` local and negates it later, so a search for the `!==` form alone misses it -
  * which is how an earlier version of this comment came to call a two-entry list complete.
  *
  * Separately, `webhooks/github/subscriptions/index.ts:35-62` is a private copy of
@@ -188,8 +187,8 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
 }
 
 /**
- * Read-tier sibling of `verifyOrgMembership` that also admits the Team manager (and a platform
- * admin) without a membership row, for status surfaces a manager sees beside the roster they
+ * Read-tier sibling of `verifyOrgMembership` that also admits a Team manager whose `users[]` row
+ * grants no membership permission (and a platform admin), for status surfaces a manager sees beside the roster they
  * administer, such as the Team's plan. Same answer as `organizationService.get`, so the two cannot
  * disagree about who may open a Team. Never use it to guard a write.
  *
@@ -231,7 +230,7 @@ export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: strin
  * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
  * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
  * caller out of a route they could always reach. Stale pointers exist in the data (written before
- * `deleteOrganization` cleared them, and still left by `assignManager`), so validating the fallback
+ * `deleteOrganization` cleared them), so validating the fallback
  * through the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is
  * never an automatic consequence of the home-org field. Security holds either way - a non-member
  * org is never billed; the fallback just bills personally instead of failing the request.
