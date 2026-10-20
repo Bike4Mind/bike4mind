@@ -414,7 +414,8 @@ describe('ChatPage reply reader', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
     // text. Reverting to `ai-response` brings back the list-only-reply stall above.
     const source = fs.readFileSync(CHAT_PAGE, 'utf8');
-    expect(source).not.toMatch(/getByTestId\('ai-response'\)/);
+    expect(source).not.toMatch(/getByTestId\(\s*['"]ai-response['"]/);
+    expect(source).not.toMatch(/locator\(\s*['"`]\[data-testid=['"]?ai-response['"]?\]/);
     expect(source).toMatch(/isStreamComplete\(/);
   });
 });
