@@ -25,7 +25,6 @@ interface ConfidenceGateCardProps {
 const ConfidenceGateCard: FC<ConfidenceGateCardProps> = ({ executionId }) => {
   const pendingGate = useAgentExecutionStore(state => selectExecution(executionId)(state)?.pendingGate);
   const setPendingGate = useAgentExecutionStore(s => s.setPendingGate);
-  const setStatus = useAgentExecutionStore(s => s.setStatus);
   const { respondToGate } = useAgentExecutionDispatch();
 
   // Same double-click guard as `PermissionCard`: Zustand clears the gate
@@ -43,16 +42,14 @@ const ConfidenceGateCard: FC<ConfidenceGateCardProps> = ({ executionId }) => {
       if (responding.current) return;
       responding.current = true;
       respondToGate(executionId, decision);
-      // Optimistic clear hides the card immediately; the server's next event
-      // reconciles status (running on continue, completed on stop).
+      // Optimistic clear hides the card immediately. Status is left alone on
+      // purpose: only a server frame may claim the run is live again - a forced
+      // `running` here would paint "In Progress" over a pause the server has
+      // already swept. `respondToGate` re-asks for the real status if no frame
+      // follows, and the executor's `resumed` frame is what resumes the chip.
       setPendingGate(executionId, undefined);
-      // Only Proceed resumes the run - Stop is about to land as `completed`,
-      // so forcing `running` first would briefly mis-indicate progress.
-      if (decision === 'continue') {
-        setStatus(executionId, 'running');
-      }
     },
-    [executionId, respondToGate, setPendingGate, setStatus]
+    [executionId, respondToGate, setPendingGate]
   );
 
   if (!pendingGate) return null;

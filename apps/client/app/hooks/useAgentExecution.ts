@@ -758,11 +758,29 @@ export function useAgentExecutionSubscriptions(): void {
   }, [subscribeToAction, queryClient]);
 }
 
+/**
+ * How long a continued gate waits for the run to move off `paused` before the
+ * client re-asks the server for the truth. `gate_response: continue` has no ack
+ * of its own - the handler re-invokes the executor, whose `resumed` frame moves
+ * the run - and a response for a run the stale sweep already closed is dropped
+ * in silence (the gate handler returns without sending anything).
+ */
+export const GATE_CONTINUE_ACK_MS = 10_000;
+
 export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const reconnect = (sessionId?: string, executionId?: string) => {
+      sendJsonMessage({
+        action: 'agent_execute',
+        command: 'reconnect',
+        sessionId,
+        executionId,
+      } as unknown as Parameters<typeof sendJsonMessage>[0]);
+    };
+
+    return {
       start: (payload: Omit<AgentExecuteStart, 'action' | 'command'>) => {
         // Track the sessionId so the matching `execution_started` event can be
         // associated with it; the server doesn't echo sessionId back.
@@ -794,21 +812,25 @@ export function useAgentExecutionDispatch() {
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
-      respondToGate: (executionId: string, decision: 'continue' | 'stop') =>
+      respondToGate: (executionId: string, decision: 'continue' | 'stop') => {
         sendJsonMessage({
           action: 'agent_execute',
           command: 'gate_response',
           executionId,
           decision,
-        } as unknown as Parameters<typeof sendJsonMessage>[0]),
-      reconnect: (sessionId?: string, executionId?: string) =>
-        sendJsonMessage({
-          action: 'agent_execute',
-          command: 'reconnect',
-          sessionId,
-          executionId,
-        } as unknown as Parameters<typeof sendJsonMessage>[0]),
-    }),
-    [sendJsonMessage]
-  );
+        } as unknown as Parameters<typeof sendJsonMessage>[0]);
+        if (decision !== 'continue') return;
+        // A `continue` that never lands (the pause was swept to `aborted`, or
+        // the resume was rejected) leaves the run painting "Paused" forever.
+        // Re-ask once the ack window passes; a `reconnect_result` then restores
+        // the gate or the run's real terminal status.
+        setTimeout(() => {
+          const execution = useAgentExecutionStore.getState().executions[executionId];
+          if (execution?.status !== 'paused') return;
+          reconnect(execution.sessionId, executionId);
+        }, GATE_CONTINUE_ACK_MS);
+      },
+      reconnect,
+    };
+  }, [sendJsonMessage]);
 }

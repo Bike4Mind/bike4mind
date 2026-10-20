@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 
@@ -58,7 +58,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './useAgentExecution';
+import { useAgentExecutionSubscriptions, useAgentExecutionDispatch, GATE_CONTINUE_ACK_MS } from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
@@ -790,6 +790,98 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
       command: 'gate_response',
       executionId: 'exec-gate-3',
       decision: 'stop',
+    });
+  });
+
+  // `continue` has no ack of its own: the handler only re-invokes the executor,
+  // and a response for a pause the stale sweep already closed is dropped in
+  // silence. Without the re-ask the client would sit on a dead run.
+  describe('continue ack window', () => {
+    const GATE = {
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+      requestedAt: Date.now(),
+    };
+
+    const mountPausedRun = (executionId: string, sessionId: string) => {
+      useAgentExecutionStore.getState().startExecution(executionId, sessionId);
+      useAgentExecutionStore.getState().setPendingGate(executionId, GATE);
+    };
+
+    it('re-asks the server when no frame moves the run off paused', async () => {
+      vi.useFakeTimers();
+      try {
+        ws.readyState = 1; // OPEN
+        mountSubscriptions();
+        mountPausedRun('exec-gate-4', 'sess-4');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-4', 'continue');
+        ws.sendJsonMessage.mockClear();
+
+        act(() => {
+          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+        });
+
+        expect(ws.sendJsonMessage).toHaveBeenCalledWith({
+          action: 'agent_execute',
+          command: 'reconnect',
+          sessionId: 'sess-4',
+          executionId: 'exec-gate-4',
+        });
+
+        // The re-ask lands on the run's real terminal status, not a stale pause.
+        await handlers['reconnect_result']({
+          action: 'reconnect_result',
+          found: true,
+          executionId: 'exec-gate-4',
+          status: 'aborted',
+        });
+        expect(useAgentExecutionStore.getState().executions['exec-gate-4'].status).toBe('aborted');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not re-ask when a server frame resumes the run first', () => {
+      vi.useFakeTimers();
+      try {
+        mountPausedRun('exec-gate-5', 'sess-5');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-5', 'continue');
+        ws.sendJsonMessage.mockClear();
+
+        // The executor's `resumed` frame lands inside the window.
+        useAgentExecutionStore.getState().setStatus('exec-gate-5', 'running');
+        act(() => {
+          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+        });
+
+        expect(ws.sendJsonMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not arm the re-ask for a stop', () => {
+      vi.useFakeTimers();
+      try {
+        mountPausedRun('exec-gate-6', 'sess-6');
+
+        const { result } = renderHook(() => useAgentExecutionDispatch());
+        result.current.respondToGate('exec-gate-6', 'stop');
+        ws.sendJsonMessage.mockClear();
+
+        act(() => {
+          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+        });
+
+        expect(ws.sendJsonMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

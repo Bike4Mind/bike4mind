@@ -72,7 +72,7 @@ describe('ConfidenceGateCard', () => {
     expect(screen.getByText(/iteration 3/i)).toBeInTheDocument();
   });
 
-  it('Proceed sends continue, clears the gate, and optimistically resumes', () => {
+  it('Proceed sends continue and clears the gate without claiming the run is live', () => {
     mocks.pendingGate = GATE;
     renderCard();
 
@@ -81,7 +81,9 @@ describe('ConfidenceGateCard', () => {
     expect(mocks.respondToGate).toHaveBeenCalledTimes(1);
     expect(mocks.respondToGate).toHaveBeenCalledWith(EXECUTION_ID, 'continue');
     expect(mocks.setPendingGate).toHaveBeenCalledWith(EXECUTION_ID, undefined);
-    expect(mocks.setStatus).toHaveBeenCalledWith(EXECUTION_ID, 'running');
+    // Only a server frame may move the run off `paused` - a swept pause must not
+    // read "In Progress" on the strength of a click.
+    expect(mocks.setStatus).not.toHaveBeenCalled();
   });
 
   it('Stop sends stop and clears the gate without forcing running', () => {
@@ -105,5 +107,42 @@ describe('ConfidenceGateCard', () => {
     fireEvent.click(proceed);
 
     expect(mocks.respondToGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the double-click guard between pauses (regression)', () => {
+    // A run can pause at the gate more than once. The card does not unmount in
+    // between - only `pendingGate` toggles - so a guard ref that latches `true`
+    // on the first click would leave the second pause's buttons dead, holding
+    // the run's concurrent slot behind an unanswerable card. The effect keys on
+    // `pendingGate.requestedAt` so every new pause re-arms the guard.
+    mocks.pendingGate = GATE;
+    const { rerender } = render(
+      <TestWrapper>
+        <ConfidenceGateCard executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId(`confidence-gate-proceed-${EXECUTION_ID}`));
+    expect(mocks.respondToGate).toHaveBeenCalledTimes(1);
+
+    // Optimistic clear - card hides but the component stays mounted.
+    mocks.pendingGate = undefined;
+    rerender(
+      <TestWrapper>
+        <ConfidenceGateCard executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    // Second pause arrives with a fresh requestedAt.
+    mocks.pendingGate = { ...GATE, iteration: 3, requestedAt: GATE.requestedAt + 1000 };
+    rerender(
+      <TestWrapper>
+        <ConfidenceGateCard executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId(`confidence-gate-proceed-${EXECUTION_ID}`));
+    expect(mocks.respondToGate).toHaveBeenCalledTimes(2);
+    expect(mocks.respondToGate).toHaveBeenLastCalledWith(EXECUTION_ID, 'continue');
   });
 });
