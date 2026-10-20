@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
@@ -22,6 +23,7 @@ import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 import { useSkills } from './useSkills';
+import { useSkillUpload } from './SkillUploadDialog';
 
 /** What this screen is for, said on the screen so it does not have to be inferred from a name. */
 const CUSTOMIZE_INTRO = 'What tools the app can reach.';
@@ -37,6 +39,7 @@ function SkillGroup({
   empty,
   imports,
   onOpenListing,
+  onUpload,
 }: {
   title: string;
   skills: SkillSummary[];
@@ -44,6 +47,8 @@ function SkillGroup({
   /** Market imports by skill id, for the update badge. Only the account group passes it. */
   imports?: ReadonlyMap<string, SkillMarketImport>;
   onOpenListing?: (listing: SkillMarketListingRef) => void;
+  /** Upload a local skill to the account. Account rows never offer it. */
+  onUpload?: (skill: SkillSummary) => void;
 }) {
   return (
     <Box component="section" data-testid="skill-group">
@@ -127,6 +132,17 @@ function SkillGroup({
                   >
                     {skillSourceLabel(skill.source)}
                   </Chip>
+                  {onUpload && skill.source !== 'account' && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => onUpload(skill)}
+                      data-testid="skill-row-upload-btn"
+                    >
+                      Upload
+                    </Button>
+                  )}
                   {id && (
                     <IconButton
                       size="sm"
@@ -164,7 +180,10 @@ function SkillsSettings({
   sessionId: string | null;
   onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
 }) {
-  const { skills } = useSkills(sessionId);
+  const { skills, refresh } = useSkills(sessionId);
+  const upload = useSkillUpload(() => void refresh());
+  const uploadRow = (skill: SkillSummary) =>
+    void upload.start(() => window.b4m.skillMarket.readLocalSkill({ sessionId, name: skill.name }));
   const [imports, setImports] = useState<ReadonlyMap<string, SkillMarketImport>>(new Map());
   useEffect(() => {
     let live = true;
@@ -202,7 +221,7 @@ function SkillsSettings({
         ) : (
           <Stack spacing={2}>
             {[...userSkillScopes].map(([scope, scopedSkills]) => (
-              <SkillGroup key={scope} title={scope} skills={scopedSkills} empty="" />
+              <SkillGroup key={scope} title={scope} skills={scopedSkills} empty="" onUpload={uploadRow} />
             ))}
           </Stack>
         )}
@@ -214,13 +233,27 @@ function SkillsSettings({
         imports={imports}
         onOpenListing={onOpenSkillMarket}
       />
-      {onOpenSkillMarket && (
-        <Box>
+      {upload.error && (
+        <Alert color="danger" data-testid="skill-upload-pick-error">
+          {upload.error}
+        </Alert>
+      )}
+      <Stack direction="row" spacing={1}>
+        {onOpenSkillMarket && (
           <Button variant="outlined" onClick={() => onOpenSkillMarket()} data-testid="customize-skill-market-btn">
             Browse Skill Market
           </Button>
-        </Box>
-      )}
+        )}
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
+          data-testid="skill-upload-pick-btn"
+        >
+          Upload a skill...
+        </Button>
+      </Stack>
+      {upload.dialog}
     </Stack>
   );
 }

@@ -12,9 +12,11 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { SkillMarketFilters, SkillMarketListing, SkillMarketListingRef } from '@shared/skillMarket';
-import { CloseIcon, ExternalLinkIcon, SearchIcon } from './icons';
+import { CloseIcon, SearchIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { SkillListingDetail } from './SkillListingDetail';
+import { SkillListingsMine } from './SkillListingsMine';
+import { useSkillUpload } from './SkillUploadDialog';
 
 /** The web market's default (apps/client/app/routes/skills/market/index.tsx). */
 const DEFAULT_FILTERS: SkillMarketFilters = { q: '', scope: '', tools: '', minRating: 0, sort: 'top' };
@@ -79,8 +81,8 @@ function Grid({ listings, onOpen }: { listings: SkillMarketListing[]; onOpen: (i
 
 /**
  * The Skill Market as a screen beside Artifacts and Customize: browse and search the listings,
- * open one, import it. Rating, reporting, sharing and managing listings stay on the web, one
- * "Open on web" click away. `initial` opens straight onto one listing (an update badge in
+ * open one, import it; upload a local skill and manage the user's own listings. Rating,
+ * reporting and editing tags stay on the web, one "Open on web" click away. `initial` opens straight onto one listing (an update badge in
  * Customize, or an unlisted share link).
  */
 export function SkillMarketPanel({
@@ -99,6 +101,8 @@ export function SkillMarketPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillMarketListingRef | null>(initial ?? null);
+  const [tab, setTab] = useState<'browse' | 'mine'>('browse');
+  const upload = useSkillUpload();
 
   // Only the latest request lands, so a slow page for old filters cannot overwrite the new ones.
   const latest = useRef(0);
@@ -140,9 +144,21 @@ export function SkillMarketPanel({
             size="sm"
             variant="plain"
             color="neutral"
-            endDecorator={<ExternalLinkIcon />}
-            onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'mine' })}
-            data-testid="skill-market-mine-btn"
+            onClick={() => void upload.start(() => window.b4m.skillMarket.pickUploadSource())}
+            data-testid="skill-upload-pick-btn"
+          >
+            Upload a skill...
+          </Button>
+          <Button
+            size="sm"
+            variant={tab === 'mine' ? 'soft' : 'plain'}
+            color="neutral"
+            aria-pressed={tab === 'mine'}
+            onClick={() => {
+              setSelected(null);
+              setTab(tab === 'mine' ? 'browse' : 'mine');
+            }}
+            data-testid="skill-market-mine-tab"
           >
             My listings
           </Button>
@@ -161,7 +177,15 @@ export function SkillMarketPanel({
 
       <Box sx={{ flex: 1, ...scrollingColumnHostSx }}>
         <Box sx={{ ...contentColumnSx, py: 2 }}>
-          {selected ? (
+          {upload.error && (
+            <Alert color="danger" sx={{ mb: 1.5 }} data-testid="skill-upload-pick-error">
+              {upload.error}
+            </Alert>
+          )}
+          {upload.dialog}
+          {tab === 'mine' ? (
+            <SkillListingsMine />
+          ) : selected ? (
             <SkillListingDetail listingRef={selected} onBack={() => setSelected(null)} />
           ) : (
             <Stack spacing={2}>

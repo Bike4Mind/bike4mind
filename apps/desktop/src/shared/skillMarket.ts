@@ -1,4 +1,11 @@
-import type { ISkillHonestSummary, ISkillSnapshot, SkillListingVisibility, SkillRiskTier } from '@bike4mind/common';
+import type {
+  ISkillHonestSummary,
+  ISkillSnapshot,
+  SkillListingStatus,
+  SkillListingVisibility,
+  SkillReviewStatus,
+  SkillRiskTier,
+} from '@bike4mind/common';
 import type { ChatDiff } from './chat';
 
 /**
@@ -128,3 +135,130 @@ export interface SkillMarketImportsResult {
 
 /** What "Open on web" points at. Main builds the URL; the renderer never does. */
 export type SkillMarketWebTarget = { kind: 'listing'; id: string } | { kind: 'skill'; id: string } | { kind: 'mine' };
+
+/**
+ * Publishing from desktop. Main reads the SKILL.md (a catalog entry or the native picker's pick,
+ * never a path from the renderer), and every write runs only from an explicit click.
+ */
+
+/** The account-skill fields an upload sends. Built field by field in main: no allowedTools. */
+export interface SkillUploadFields {
+  name: string;
+  description: string;
+  body: string;
+  argumentHint?: string;
+  disableModelInvocation?: boolean;
+}
+
+export type SkillUploadPreview =
+  | {
+      ok: true;
+      fields: SkillUploadFields;
+      /** Frontmatter keys Bike4Mind skills have no field for, allowed-tools included. */
+      dropped: string[];
+      /** Set when the file is a Bike4Mind export (it carries the source stamp). */
+      source?: { url: string; thirdParty: boolean };
+      /** Other files beside a SKILL.md, which are not uploaded. The first few names, and the count. */
+      extraFiles: string[];
+      extraFileCount: number;
+    }
+  | { ok: false; error: string; canceled?: boolean };
+
+/** A local skill as Customize lists it; main resolves it against its own catalog. */
+export interface SkillLocalRef {
+  sessionId: string | null;
+  name: string;
+}
+
+export type SkillWriteCode = 'signed_out' | 'name_taken' | 'already_listed' | 'rate_limited' | 'exact_content';
+
+export interface SkillSaveRequest {
+  fields: SkillUploadFields;
+  mode: 'create' | 'update';
+  /** The existing own skill to overwrite, after the user chose "Update existing". */
+  targetSkillId?: string;
+}
+
+export type SkillSaveResult =
+  | {
+      ok: true;
+      skill: { id: string; name: string };
+      shadowedByLocal?: boolean;
+      /** The updated skill already has an open listing, so the next step is a new version. */
+      listing?: { id: string; name: string };
+    }
+  | {
+      ok: false;
+      error: string;
+      code?: SkillWriteCode;
+      /** On `name_taken`: the user's skill with that name. An imported one cannot be updated. */
+      existing?: { id: string; imported: boolean };
+    };
+
+export interface SkillMarketOrg {
+  id: string;
+  name: string;
+}
+
+export interface SkillMarketOrgsResult {
+  organizations: SkillMarketOrg[];
+  error?: string;
+}
+
+export interface SkillPublishRequest {
+  skillId: string;
+  visibility: SkillListingVisibility;
+  organizationId?: string;
+  tags: string[];
+}
+
+export interface SkillSubmitVersionRequest {
+  listingId: string;
+  /** Written to the listing's source skill first. Absent when that skill was just saved. */
+  fields?: SkillUploadFields;
+}
+
+/** A submitted version's scan and review state, for the result view. */
+export interface SkillSubmittedVersion {
+  version: number;
+  scanStatus: string;
+  reviewStatus: SkillReviewStatus | string;
+  riskTier?: SkillRiskTier;
+  reviewNote?: string;
+  findings: { severity: string; message: string }[];
+}
+
+export type SkillSubmitResult =
+  | { ok: true; listing: SkillMyListing; version: SkillSubmittedVersion }
+  | {
+      ok: false;
+      error: string;
+      code?: SkillWriteCode;
+      /** On `already_listed`: the listing to submit a new version to instead. */
+      listingId?: string;
+      /** A new version's account-skill write landed though the submission did not. */
+      skillUpdated?: boolean;
+    };
+
+/** A row of My listings. The share token stays in main; `hasShareLink` says whether one exists. */
+export interface SkillMyListing {
+  id: string;
+  name: string;
+  visibility: SkillListingVisibility;
+  status: SkillListingStatus | string;
+  hiddenByReports: boolean;
+  tags: string[];
+  currentVersion?: number;
+  pendingVersion?: number;
+  /** The newest version this client was sent, for its review note and risk tier. */
+  latest?: { version: number; reviewStatus: string; riskTier?: SkillRiskTier; reviewNote?: string };
+  delistedReason?: string;
+  hasShareLink: boolean;
+}
+
+export interface SkillMyListingsResult {
+  listings: SkillMyListing[];
+  error?: string;
+}
+
+export type SkillActionResult = { ok: true } | { ok: false; error: string; code?: SkillWriteCode };
